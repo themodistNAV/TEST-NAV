@@ -1,0 +1,1186 @@
+OBJECT Codeunit 9062273 NAV Smart Doc Import
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/09/16;
+    Time=[ 7:47:26 PM];
+    Modified=Yes;
+    Version List=NA2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            ReadFileAttachment;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Excel@1000000024 : Record 9062287;
+      ExcelSheet@1000000001 : Record 9062287;
+      ExcelIntegration@1000000004 : Codeunit 9062283;
+      TNLUtils@1000000000 : Codeunit 9062229;
+      "3Tier"@1000000005 : Codeunit 419;
+      ImportConfirmed@1000000006 : Boolean;
+      ImportDenied@1000000007 : Boolean;
+      F1ID@1000000013 : Integer;
+      F1Text@1000000012 : Text[50];
+      F2ID@1000000011 : Integer;
+      F2Text@1000000010 : Text[50];
+      F3ID@1000000009 : Integer;
+      F3Text@1000000008 : Text[50];
+      ProgressWindow@1000000014 : Dialog;
+      ShowingProgress@1000000015 : Boolean;
+      ProgressText@1000000016 : Text[100];
+      FormHeader@1000000017 : Record 9062289;
+      Logger@1000000018 : Record 9062280;
+      Prompts@1000000019 : Boolean;
+      FAttachMgmt@1000000020 : Codeunit 9062267;
+      FileAttachment@1000000021 : Record 9062272;
+      FunctionToCall@1000000022 : Code[20];
+      AutoInc@1000000023 : Integer;
+      TxtSmartDoc@1000000002 : TextConst 'ENU=SMARTDOC;ENG=SMARTDOC';
+      nFormValueType@1000000003 : 'FilterFieldValue,FilterFieldNo';
+      TxtCouldntFindVcf@1000000025 : TextConst 'ENU=Couldn''t find VCF at "%1";ENG=Couldn''t find VCF at "%1"';
+      String@1000000026 : Codeunit 9062236;
+
+    PROCEDURE ReadFileAttachment@1000000007() OK : Boolean;
+    VAR
+      TempFileName@1000000002 : Text[250];
+      Result@1000000001 : Boolean;
+      Cont@1000000011 : Record 5050;
+      nFormFunctions@1000000000 : Codeunit 9062274;
+      TxtReadingSheet@1000000003 : TextConst 'ENU=Reading sheet;ENG=Reading sheet';
+      TxtReadingFileAttachment@1000000004 : TextConst 'ENU=Reading file attachment: %1;ENG=Reading file attachment: %1';
+      TxtConfirmation@1000000005 : TextConst 'ENU=This looks like a vCard file. Would you like NAV to import this data into the Contact?;ENG=This looks like a vCard file. Would you like NAV to import this data into the Contact?';
+      TxtImportingvCardFile@1000000006 : TextConst 'ENU=Importing vCard file;ENG=Importing vCard file';
+    BEGIN
+      Logger.Log(TxtSmartDoc, Logger.Type::Debug, STRSUBSTNO(TxtReadingFileAttachment, TempFileName), USERID);
+      CASE UPPERCASE(FileAttachment.Extension) OF
+
+        'XLS', 'XLSX', 'XLSM':
+        BEGIN
+          ReadFileAttachmentFromExcel();
+          ShowProgressWindow;
+          SetProgressText(TxtReadingSheet);
+          IF (FindnFormSheet()) THEN
+            ReadnFormSheet();
+          CloseProgressWindow;
+          Result := TRUE;
+        END;
+
+        'VCF':
+        BEGIN
+          IF CONFIRM(TxtConfirmation) THEN BEGIN
+            ShowProgressWindow;
+            Logger.Log(TxtSmartDoc, Logger.Type::Information, TxtImportingvCardFile,  USERID);
+            SetProgressText(TxtImportingvCardFile);
+            FileAttachment.CALCFIELDS(Attachment);
+
+            TempFileName := FileAttachment.ExportServerFile(FALSE);
+
+            IF NOT Cont.GET(F1Text) THEN
+              Cont.GET(GetContactFromvCard(TempFileName));
+            ImportvCardFromFile(TempFileName,Cont);
+            Cont.MODIFY(TRUE);
+            CloseProgressWindow;
+            Result := TRUE;
+          END;
+        END;
+
+      END;
+
+      EXIT(Result);
+    END;
+
+    LOCAL PROCEDURE ReadFileAttachmentFromExcel@1000000006();
+    VAR
+      TempFileName@1000000000 : Text[250];
+    BEGIN
+      IF (FileAttachment."Excel ID" = 0) THEN
+      BEGIN
+        TempFileName := FileAttachment.ExportServerFile(FALSE);
+        ExcelIntegration.ReadExcel(TempFileName, TRUE, Excel);
+        IF (FileAttachment."No." <> '') THEN
+        BEGIN
+          FileAttachment.VALIDATE("Excel ID", Excel.ID);
+          FileAttachment.MODIFY(TRUE);
+        END;
+      END
+      ELSE
+      BEGIN
+        Excel.RESET();
+        Excel.SETRANGE(ID, FileAttachment."Excel ID");
+        Excel.SETRANGE(Type, Excel.Type::Workbook);
+        Excel.FINDFIRST();
+        ExcelIntegration.SetExcel(Excel);
+      END;
+    END;
+
+    LOCAL PROCEDURE ReadExcel@1000000010(pExcelPath@1000000001 : Text[1024];VAR pExcelId@1000000000 : Integer);
+    BEGIN
+      IF (pExcelId = 0) THEN
+      BEGIN
+        ExcelIntegration.ReadExcel(pExcelPath, TRUE, Excel);
+        pExcelId := Excel.ID;
+      END
+      ELSE
+      BEGIN
+        Excel.RESET();
+        Excel.SETRANGE(ID, pExcelId);
+        Excel.SETRANGE(Type, Excel.Type::Workbook);
+        Excel.FINDFIRST();
+        ExcelIntegration.SetExcel(Excel);
+      END;
+    END;
+
+    PROCEDURE GetFieldIDFromName@1000000001(TableID@1000000001 : Integer;FieldName@1000000000 : Text[50]) ID : Integer;
+    VAR
+      RecRef@1000000002 : RecordRef;
+      FieldRef@1000000003 : FieldRef;
+      i@1000000004 : Integer;
+    BEGIN
+      RecRef.OPEN(TableID);
+      i := 1;
+
+      REPEAT
+        FieldRef := RecRef.FIELDINDEX(i);
+        IF UPPERCASE(FieldRef.NAME) = UPPERCASE(FieldName) THEN BEGIN
+          EXIT(FieldRef.NUMBER);
+        END;
+        i += 1;
+      UNTIL i > RecRef.FIELDCOUNT;
+
+      EXIT(0);
+    END;
+
+    PROCEDURE UpdateFieldFromText@1000000002(VAR RecRef@1000000000 : RecordRef;VAR FieldRef@1000000001 : FieldRef;TextValue@1000000002 : Text[250]);
+    VAR
+      tmpInteger@1000000003 : Integer;
+      tmpDecimal@1000000004 : Decimal;
+      tmpDate@1000000005 : Date;
+      tmpTime@1000000010 : Time;
+      tmpDateTime@1000000008 : DateTime;
+      tmpOption@1000000006 : Integer;
+      tmpBool@1000000007 : Boolean;
+      TxtUpdating@1000000009 : TextConst 'ENU=For %1 updating %2 to %3 with type %4;ENG=For %1 updating %2 to %3 with type %4';
+    BEGIN
+      Logger.Log(TxtSmartDoc, Logger.Type::Information, STRSUBSTNO(TxtUpdating, RecRef.GETPOSITION, FieldRef.NAME, TextValue,
+        UPPERCASE(FORMAT(FieldRef.TYPE))), USERID);
+      CASE UPPERCASE(FORMAT(FieldRef.TYPE)) OF
+        'CODE' : FieldRef.VALIDATE(TextValue);
+        'TEXT' : FieldRef.VALIDATE(TextValue);
+        'INTEGER' :
+        BEGIN
+          EVALUATE(tmpInteger,TextValue);
+          FieldRef.VALIDATE(tmpInteger);
+        END;
+        'DECIMAL' :
+        BEGIN
+          EVALUATE(tmpDecimal,TextValue);
+          FieldRef.VALIDATE(tmpDecimal);
+        END;
+        'DATE' :
+        BEGIN
+          IF NOT EVALUATE(tmpDate,TextValue) THEN
+            EVALUATE(tmpDate,COPYSTR(TextValue,1,8));
+          FieldRef.VALIDATE(tmpDate);
+        END;
+        'TIME' :
+        BEGIN
+          IF NOT EVALUATE(tmpTime,TextValue) THEN
+            EVALUATE(tmpTime,COPYSTR(TextValue,1,8));
+          FieldRef.VALIDATE(tmpTime);
+        END;
+        'OPTION' :
+        BEGIN
+          EVALUATE(tmpOption,TextValue);
+          FieldRef.VALIDATE(tmpOption);
+        END;
+        'BOOLEAN' :
+        BEGIN
+          EVALUATE(tmpBool,TextValue);
+          FieldRef.VALIDATE(tmpBool);
+        END;
+        'DATETIME' :
+        BEGIN
+          EVALUATE(tmpDateTime,TextValue);
+          FieldRef.VALIDATE(tmpDateTime);
+        END;
+      END;
+    END;
+
+    PROCEDURE UpdateTextFromField@1000000024(pFieldRef@1000000000 : FieldRef) : Text[250];
+    VAR
+      lType@1000000001 : Text[30];
+    BEGIN
+      //DOC NA2015.1 - Updating text from field (field reference)
+      //  -> pFieldRef: The field reference
+      //  <- The value
+
+      lType := LOWERCASE(FORMAT(pFieldRef.TYPE));
+
+      CASE (lType) OF
+        'boolean',
+        'integer',
+        'biginteger',
+        'decimal',
+        'option':
+          EXIT(FORMAT(pFieldRef.VALUE, 0, 2));
+        'code',
+        'text':
+          EXIT(pFieldRef.VALUE);
+        'blob':
+          EXIT('BLOB');
+        ELSE
+          EXIT(FORMAT(pFieldRef.VALUE));
+      END;
+
+      EXIT('');
+    END;
+
+    PROCEDURE ColNumtoID@1000000005(ColNum@1000000000 : Integer) ID : Text[5];
+    VAR
+      ExcelBuff@1000000001 : TEMPORARY Record 9062715;
+    BEGIN
+      ExcelBuff.VALIDATE("Column No.",ColNum);
+      EXIT(ExcelBuff.xlColID);
+    END;
+
+    PROCEDURE ShowProgressWindow@1000000008();
+    BEGIN
+      IF NOT ShowingProgress THEN BEGIN
+        ShowingProgress := TRUE;
+        ProgressWindow.OPEN('#1#################',ProgressText);
+      END;
+    END;
+
+    PROCEDURE CloseProgressWindow@1000000009();
+    BEGIN
+      IF ShowingProgress THEN
+        ProgressWindow.CLOSE;
+    END;
+
+    PROCEDURE SetProgressText@1000000011(theText@1000000000 : Text[100]);
+    BEGIN
+      ShowProgressWindow;
+      ProgressText := theText;
+      ProgressWindow.UPDATE;
+    END;
+
+    PROCEDURE FindnFormSheet@1000000018() : Boolean;
+    VAR
+      theSheets@1000000000 : Automation "{00020813-0000-0000-C000-000000000046} 1.7:{000208D7-0000-0000-C000-000000000046}:Unknown Automation Server.Sheets";
+      i@1000000002 : Integer;
+      aSheet@1000000003 : Automation "{00020813-0000-0000-C000-000000000046} 1.7:{00020820-0000-0000-C000-000000000046}:Unknown Automation Server.Worksheet";
+    BEGIN
+      EXIT(ExcelSheet.GET(Excel.ID, ExcelSheet.Type::Sheet, 'NAV Options'));
+    END;
+
+    PROCEDURE GetnFormType@1000000019() FormType : Code[20];
+    VAR
+      ExcelCell@1000000003 : Record 9062288;
+      Found@1000000002 : Boolean;
+      LastFoundColumn@1000000001 : Integer;
+      FormRanges@1000000000 : Record 9062290;
+      TxtReadingNavOptionsSheet@1000000004 : TextConst 'ENU=Reading the NAV Options Sheet;ENG=Reading the NAV Options Sheet';
+      TxtReadingComplete@1000000005 : TextConst 'ENU=Sheet reading complete;ENG=Sheet reading complete';
+    BEGIN
+      SetProgressText(TxtReadingNavOptionsSheet);
+
+      FormHeader.SETRANGE("Workbook Name", Excel.Name);
+      IF FormHeader.FINDSET THEN
+        FormHeader.DELETEALL;
+      FormRanges.SETRANGE("Workbook Name", Excel.Name);
+      IF FormRanges.FINDSET THEN
+        FormRanges.DELETEALL;
+
+      Found := FindCellFromValue('Form Type', LastFoundColumn + 1, 1, ExcelCell);
+      IF NOT Found THEN
+        Found := FindCellFromValue('Form Code', LastFoundColumn + 1, 1, ExcelCell);
+
+      IF Found THEN BEGIN
+        LastFoundColumn := ExcelCell.Column;
+        FormHeader.INIT;
+        FormHeader."Workbook Name" := Excel.Name;
+        FormHeader."Start Address" := ExcelCell.GetAddress();
+        FormHeader.INSERT;
+        GetnFormValues(ExcelCell, FormHeader);
+        FormType := FormHeader."Document Type";
+      END;
+      SetProgressText(TxtReadingComplete);
+
+      FormHeader.SETRANGE("Workbook Name", Excel.Name);
+      IF FormHeader.FINDSET THEN
+        FormHeader.DELETEALL;
+      FormRanges.SETRANGE("Workbook Name", Excel.Name);
+      IF FormRanges.FINDSET THEN
+        FormRanges.DELETEALL;
+
+      EXIT(FormType);
+    END;
+
+    PROCEDURE ReadnFormSheet@1000000013() OK : Boolean;
+    VAR
+      ExcelCell@1000000000 : Record 9062288;
+      Found@1000000007 : Boolean;
+      LastFoundColumn@1000000008 : Integer;
+      FormRanges@1000000009 : Record 9062290;
+      FormHeader@1000000010 : Record 9062289;
+      TxtFoundHeader@1000000002 : TextConst 'ENU=Found header record;ENG=Found header record';
+      TxtReadingNavOptionsSheet@1000000001 : TextConst 'ENU=Reading the NAV Options Sheet;ENG=Reading the NAV Options Sheet';
+      ParentFormHeader@1000000003 : Record 9062289;
+    BEGIN
+      Logger.Log(TxtSmartDoc, Logger.Type::Debug, TxtReadingNavOptionsSheet, USERID);
+      SetProgressText(TxtReadingNavOptionsSheet);
+
+      FormHeader.SETRANGE("Workbook Name", Excel.Name);
+      IF FormHeader.FINDSET THEN
+        FormHeader.DELETEALL;
+      FormRanges.SETRANGE("Workbook Name", Excel.Name);
+      IF FormRanges.FINDSET THEN
+        FormRanges.DELETEALL;
+
+      LastFoundColumn := 0;
+      REPEAT
+        Logger.Log(TxtSmartDoc, Logger.Type::Debug, TxtFoundHeader, USERID);
+        Found := FindCellFromValue('Type', LastFoundColumn + 1, 2, ExcelCell);
+        IF Found THEN BEGIN
+          ExcelCell.CALCFIELDS("Workbook Name");
+          LastFoundColumn := ExcelCell.Column;
+          FormHeader.INIT;
+          FormHeader."Workbook Name" := Excel.Name;
+          FormHeader."Start Address" := ExcelCell.GetAddress();
+          FormHeader.INSERT;
+          IF NOT ImportDenied THEN
+            GetnFormValues(ExcelCell, FormHeader);
+          IF ImportConfirmed THEN
+            ProcessnFormRec(FormHeader, ParentFormHeader);
+          ParentFormHeader := FormHeader;
+          COMMIT;
+        END;
+      UNTIL NOT Found;
+
+      FormHeader.SETRANGE("Workbook Name", Excel.Name);
+      IF FormHeader.FINDSET THEN
+        FormHeader.DELETEALL;
+      FormRanges.SETRANGE("Workbook Name", Excel.Name);
+      IF FormRanges.FINDSET THEN
+        FormRanges.DELETEALL;
+    END;
+
+    PROCEDURE FindCellFromValue@1000000015(Value@1000000001 : Text[100];StartCol@1000000006 : Integer;StartRow@1000000007 : Integer;VAR ExcelCell@1000000002 : Record 9062288) : Boolean;
+    VAR
+      Column@1000000003 : Integer;
+      ColumnOffset@1000000000 : Integer;
+      Row@1000000004 : Integer;
+      RowOffset@1000000005 : Integer;
+    BEGIN
+      Column := StartCol;
+      Row := StartRow;
+
+      ExcelIntegration.FindExcelCellWithColumnRow(ExcelSheet.Name, Column, Row, ExcelCell);
+      IF (ExcelCell.Value = Value) THEN
+        EXIT(TRUE);
+
+      ColumnOffset := 0;
+      REPEAT
+        RowOffset := 0;
+        REPEAT
+          ExcelIntegration.FindExcelCellWithColumnRow(ExcelSheet.Name, Column + ColumnOffset, Row + RowOffset, ExcelCell);
+          IF (ExcelCell.Value = Value) THEN
+            EXIT(TRUE);
+          RowOffset += 1;
+        UNTIL RowOffset >= 20;
+        ColumnOffset += 1;
+      UNTIL ColumnOffset >= 20;
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE GetnFormValues@1000000014(StartExcelCell@1000000000 : Record 9062288;VAR FormHead@1000000002 : Record 9062289);
+    VAR
+      NameExcelCell@1000000007 : Record 9062288;
+      ValueExcelCell@1000000001 : Record 9062288;
+      Row@1000000011 : Integer;
+      RowOffset@1000000004 : Integer;
+      BlankCount@1000000005 : Integer;
+      ReadingRanges@1000000008 : Boolean;
+      FormRange@1000000009 : Record 9062290;
+      GotConfirm@1000000010 : Boolean;
+      TxtGettingnformValues@1000000015 : TextConst 'ENU=Getting nform values from range %1:%2;ENG=Getting nform values from range %1:%2';
+      TxtNameAt@1000000003 : TextConst 'ENU=Value at %1:%2 is: %3;ENG=Value at %1:%2 is: %3';
+      TxtValueAt@1000000016 : TextConst 'ENU=Value at %1:%2 is: %3;ENG=Value at %1:%2 is: %3';
+      TxtConfirmation@1000000018 : TextConst 'ENU=This appears to be a file that NAV can read automatically. Would you like to import the data into %1 table?;ENG=This appears to be a file that NAV can read automatically. Would you like to import the data into %1 table?';
+      TxtFilterField1Value@1000000006 : TextConst 'ENU="Filter Field 1 Value = %1";ENG="Filter Field 1 Value = %1"';
+    BEGIN
+      Logger.Log(TxtSmartDoc, Logger.Type::Debug, STRSUBSTNO(TxtGettingnformValues, StartExcelCell."Column ID", StartExcelCell."Row ID"), USERID);
+      RowOffset := 0;
+      BlankCount := 0;
+      Row := 0;
+      REPEAT
+        ExcelIntegration.FindExcelCellOffset(StartExcelCell, 0, RowOffset, NameExcelCell);
+        ExcelIntegration.FindExcelCellOffset(NameExcelCell, 1, 0, ValueExcelCell);
+        Logger.Log(TxtSmartDoc, Logger.Type::Debug, STRSUBSTNO(TxtNameAt, NameExcelCell."Column ID", NameExcelCell."Row ID", NameExcelCell.Value), USERID);
+        Logger.Log(TxtSmartDoc, Logger.Type::Debug, STRSUBSTNO(TxtValueAt, ValueExcelCell."Column ID", ValueExcelCell."Row ID", ValueExcelCell.Value), USERID);
+        IF NameExcelCell.Value = '' THEN
+          BlankCount += 1
+        ELSE BEGIN
+          IF NOT ReadingRanges THEN BEGIN
+            CASE UPPERCASE(NameExcelCell.Value) OF
+              'DOCUMENT TYPE','FORM CODE','FORM TYPE':
+                FormHead."Document Type" := ValueExcelCell.Value;
+              'TYPE' :
+                FormHead.Type := ValueExcelCell.Value;
+              'REPEATER LABEL' :
+                FormHead."Repeater Address" := ValueExcelCell.Value;
+              'TABLE' :
+                FormHead.Table := ValueExcelCell.Value;
+              'FILTER FIELD 1 NAME' :
+                FormHead."Filter Field 1 Name" := ValueExcelCell.Value;
+              'FILTER FIELD 1 VALUE' :
+                BEGIN
+                  FormHead."Filter Field 1 Value" := ValueExcelCell.Value;
+                  Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtFilterField1Value, FormHead."Filter Field 1 Value"), USERID);
+                END;
+              'FILTER FIELD 2 NAME' :
+                FormHead."Filter Field 2 Name" := ValueExcelCell.Value;
+              'FILTER FIELD 2 VALUE' :
+                FormHead."Filter Field 2 Value" := ValueExcelCell.Value;
+              'FILTER FIELD 3 NAME' :
+                FormHead."Filter Field 3 Name" := ValueExcelCell.Value;
+              'FILTER FIELD 3 VALUE' :
+                FormHead."Filter Field 3 Value" := ValueExcelCell.Value;
+              'RANGES' :
+                ReadingRanges := TRUE;
+              'NAV FIELD NAME' :
+                ReadingRanges := TRUE;
+            END;
+          END ELSE BEGIN
+            CASE UPPERCASE(NameExcelCell.Value) OF
+              'RANGES' :;
+              'NAV FIELD NAME' :;
+              ELSE BEGIN
+                Row += 1;
+                FormRange.INIT;
+                FormRange."Workbook Name" := FormHead."Workbook Name";
+                FormRange."Found at Row" := Row;
+                FormRange."Start Address" := FormHead."Start Address";
+                FormRange."NAV Field Name" := NameExcelCell.Value;
+                FormRange.Address := ValueExcelCell.Value;
+                ExcelIntegration.FindExcelCellOffset(NameExcelCell, 2, 0, ValueExcelCell);
+                IF UPPERCASE(ValueExcelCell.Value) IN ['1', 'TRUE'] THEN
+                  FormRange."Repeat on Field" := TRUE;
+                ExcelIntegration.FindExcelCellOffset(NameExcelCell, 3, 0, ValueExcelCell);
+                IF UPPERCASE(ValueExcelCell.Value) IN ['1', 'TRUE'] THEN
+                  FormRange."Allow Blank" := TRUE;
+                ExcelIntegration.FindExcelCellOffset(NameExcelCell, 4, 0, ValueExcelCell);
+                IF ValueExcelCell.Value <> '' THEN
+                  FormRange."Set-to Value Text" := ValueExcelCell.Value;
+                ExcelIntegration.FindExcelCellOffset(NameExcelCell, 5, 0, ValueExcelCell);
+                IF UPPERCASE(ValueExcelCell.Value) IN ['1', 'TRUE'] THEN
+                  FormRange."Auto Increment Field" := TRUE;
+                FormRange.INSERT;
+              END;
+            END;
+          END;
+          BlankCount := 0;
+        END;
+        RowOffset += 1;
+      UNTIL BlankCount >=3;
+
+      FormHead.MODIFY;
+      IF NOT ImportConfirmed THEN BEGIN
+        IF Prompts THEN
+          GotConfirm := CONFIRM(TxtConfirmation, TRUE, FormHead.Table)
+        ELSE GotConfirm := TRUE;
+        IF GotConfirm THEN BEGIN
+          ImportConfirmed := TRUE;
+          ImportDenied := FALSE;
+        END ELSE BEGIN
+          ImportConfirmed := FALSE;
+          ImportDenied := TRUE;
+        END;
+      END;
+    END;
+
+    PROCEDURE ProcessnFormRec@1000000016(VAR FormHeader@1000000000 : Record 9062289;ParentFormHeader@1000000053 : Record 9062289) OK : Boolean;
+    VAR
+      RepeaterExcelCell@1000000013 : Record 9062288;
+      ExcelCell@1000000015 : Record 9062288;
+      NameRefersTo@1000000017 : Text[1024];
+      RepeaterStartRange@1000000012 : Variant;
+      CurrRange@1000000019 : Variant;
+      RefToRange@1000000020 : Variant;
+      NAVObjects@1000000007 : Record 2000000001;
+      RecRef@1000000008 : RecordRef;
+      FieldRef@1000000009 : FieldRef;
+      FilterField1Filter@1000000001 : Text[100];
+      FilterField2Filter@1000000002 : Text[100];
+      FilterField3Filter@1000000003 : Text[100];
+      FilterField1ID@1000000004 : Integer;
+      FilterField2ID@1000000005 : Integer;
+      FilterField3ID@1000000006 : Integer;
+      FormRange@1000000010 : Record 9062290;
+      y@1000000014 : Integer;
+      x@1000000021 : Integer;
+      maxY@1000000022 : Integer;
+      UpdateFieldID@1000000016 : Integer;
+      UpdateFieldText@1000000018 : Text[200];
+      blankCount@1000000011 : Integer;
+      IsNewRec@1000000023 : Boolean;
+      FoundValue@1000000024 : Boolean;
+      currText@1000000026 : Text[100];
+      AutoInc@1000000027 : Integer;
+      RecRefView@1000000028 : Text[1024];
+      SkipLine@1000000029 : Boolean;
+      TxtFieldValue@1000000025 : TextConst 'ENU="%1: FormHeader.Filter Field %2 Value = %3";ENG="%1: FormHeader.Filter Field %2 Value = %3"';
+      TxtFieldText@1000000030 : TextConst 'ENU="%1: FormHeader.Filter Field %2 Text = %3";ENG="%1: FormHeader.Filter Field %2 Text = %3"';
+      TxtFieldFilter@1000000031 : TextConst 'ENU="%1: FormHeader.Filter Field %2 Filter = %3";ENG="%1: FormHeader.Filter Field %2 Filter = %3"';
+      TxtFilterFieldId@1000000032 : TextConst 'ENU="%1: Filter Field %2 ID = %3";ENG="%1: Filter Field %2 ID = %3"';
+      TxtImportingHeader@1000000033 : TextConst 'ENU=Importing Header;ENG=Importing Header';
+      TxtSetUpdateFieldFromRange@1000000034 : TextConst 'ENU=Set update field text to %1 from range;ENG=Set update field text to %1 from range';
+      TxtRangeValue@1000000035 : TextConst 'ENU=Form Range has SetTo Value Text of %1 at pos %2;ENG=Form Range has SetTo Value Text of %1 at pos %2';
+      TxtSetUpdateFieldFromSetTo@1000000036 : TextConst 'ENU=Set update field text to %1 from set to value text;ENG=Set update field text to %1 from set to value text';
+      TxtImportingLines@1000000037 : TextConst 'ENU=Importing Lines;ENG=Importing Lines';
+      TxtRangeOffsetIs@1000000038 : TextConst 'ENU=Range %1 offset is %2;ENG=Range %1 offset is %2';
+      TxtRangeOffsetFail@1000000050 : TextConst 'ENU=Range %1 offset is %2;ENG=Range %1 offset is %2';
+      TxtRecRefViewIs@1000000039 : TextConst 'ENU=RecRef view is %1;ENG=RecRef view is %1';
+      TxtCouldntFindField@1000000040 : TextConst 'ENU=Couldn''t find field in table %1 matching name %2;ENG=Couldn''t find field in table %1 matching name %2';
+      TxtUpdateFieldIs@1000000041 : TextConst 'ENU=Update field is %1 from name %2;ENG=Update field is %1 from name %2';
+      TxtLookingForText@1000000042 : TextConst 'ENU=Looking for text in sheet %1, row %2, column %3, field %4;ENG=Looking for text in sheet %1, row %2, column %3, field %4';
+      TxtGotValue@1000000049 : TextConst 'ENU=Got %1 for field %2;ENG=Got %1 for field %2';
+      TxtCurrText@1000000044 : TextConst 'ENU=Have CurrText var as %1;ENG=Have CurrText var as %1';
+      TxtInsertedNewRecord@1000000045 : TextConst 'ENU=Inserted new record into table %1 - %2;ENG=Inserted new record into table %1 - %2';
+      TxtModifiedRecord@1000000046 : TextConst 'ENU=Modified record in table %1 - %2;ENG=Modified record in table %1 - %2';
+      TxtCompletedRow@1000000047 : TextConst 'ENU=Completed row %1;ENG=Completed row %1';
+      TxtEndingOnRow@1000000048 : TextConst 'ENU=Ending on row %1;ENG=Ending on row %1';
+      TxtFoundUpdateField@1000000043 : TextConst 'ENU=Found update field ID of %1;ENG=Found update field ID of %1';
+      lModifyFormHeader@1000000051 : Boolean;
+      lFiltersPresent@1000000052 : Boolean;
+    BEGIN
+      NAVObjects.SETRANGE(Type,NAVObjects.Type::TableData);
+      NAVObjects.SETRANGE(Name,FormHeader.Table);
+      IF NOT NAVObjects.FINDSET THEN EXIT(FALSE);
+      RecRef.OPEN(NAVObjects.ID);
+
+      IF FormHeader."Filter Field 1 Value" <> '' THEN
+        FilterField1Filter := FormHeader."Filter Field 1 Value"
+      ELSE
+        FilterField1Filter := F1Text;
+      Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtFieldValue, FormHeader."Workbook Name", 1, FormHeader."Filter Field 1 Value"), USERID);
+      Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtFieldText, FormHeader."Workbook Name", 1, F1Text), USERID);
+      Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtFieldFilter, FormHeader."Workbook Name", 1, FilterField1Filter), USERID);
+
+      IF FormHeader."Filter Field 2 Value" <> '' THEN
+        FilterField2Filter := FormHeader."Filter Field 2 Value"
+      ELSE
+        FilterField2Filter := F2Text;
+      Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtFieldValue, FormHeader."Workbook Name", 2, FormHeader."Filter Field 2 Value"), USERID);
+      Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtFieldText, FormHeader."Workbook Name", 2, F2Text), USERID);
+      Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtFieldFilter, FormHeader."Workbook Name", 2, FilterField2Filter), USERID);
+
+      IF FormHeader."Filter Field 3 Value" <> '' THEN
+        FilterField3Filter := FormHeader."Filter Field 3 Value"
+      ELSE
+        FilterField3Filter := F3Text;
+      Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtFieldValue, FormHeader."Workbook Name", 3, FormHeader."Filter Field 3 Value"), USERID);
+      Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtFieldText, FormHeader."Workbook Name", 3, F3Text), USERID);
+      Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtFieldFilter, FormHeader."Workbook Name", 3, FilterField3Filter), USERID);
+
+      IF GetFieldIDFromName(RecRef.NUMBER,FormHeader."Filter Field 1 Name") <> 0 THEN
+        FilterField1ID := GetFieldIDFromName(RecRef.NUMBER,FormHeader."Filter Field 1 Name")
+      ELSE
+        FilterField1ID := F1ID;
+      IF GetFieldIDFromName(RecRef.NUMBER,FormHeader."Filter Field 2 Name") <> 0 THEN
+        FilterField2ID := GetFieldIDFromName(RecRef.NUMBER,FormHeader."Filter Field 2 Name")
+      ELSE
+        FilterField2ID := F2ID;
+      IF GetFieldIDFromName(RecRef.NUMBER,FormHeader."Filter Field 3 Name") <> 0 THEN
+        FilterField3ID := GetFieldIDFromName(RecRef.NUMBER,FormHeader."Filter Field 3 Name")
+      ELSE
+        FilterField3ID := F3ID;
+
+      IF ((FilterField1ID <> 0) AND (FilterField1Filter = '') AND (ParentFormHeader."Filter Field 1 Value" <> '')) THEN
+        FilterField1Filter := ParentFormHeader."Filter Field 1 Value";
+      IF ((FilterField2ID <> 0) AND (FilterField2Filter = '') AND (ParentFormHeader."Filter Field 2 Value" <> '')) THEN
+        FilterField2Filter := ParentFormHeader."Filter Field 2 Value";
+      IF ((FilterField3ID <> 0) AND (FilterField3Filter = '') AND (ParentFormHeader."Filter Field 3 Value" <> '')) THEN
+        FilterField3Filter := ParentFormHeader."Filter Field 3 Value";
+
+      lFiltersPresent := FALSE;
+      IF ((FilterField1ID <> 0) AND (FilterField1Filter <> '')) THEN BEGIN
+        FieldRef := RecRef.FIELD(FilterField1ID);
+        FieldRef.SETFILTER(FilterField1Filter);
+        lFiltersPresent := TRUE;
+      END;
+      IF ((FilterField2ID <> 0) AND (FilterField2Filter <> '')) THEN BEGIN
+        FieldRef := RecRef.FIELD(FilterField2ID);
+        FieldRef.SETFILTER(FilterField2Filter);
+        lFiltersPresent := TRUE;
+      END;
+      IF ((FilterField3ID <> 0) AND (FilterField3Filter <> '')) THEN BEGIN
+        FieldRef := RecRef.FIELD(FilterField3ID);
+        FieldRef.SETFILTER(FilterField3Filter);
+        lFiltersPresent := TRUE;
+      END;
+
+      Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtFilterFieldId, FormHeader."Workbook Name", 1, FilterField1ID), USERID);
+      Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtFilterFieldId, FormHeader."Workbook Name", 2, FilterField2ID), USERID);
+      Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtFilterFieldId, FormHeader."Workbook Name", 3, FilterField3ID), USERID);
+
+      CASE FormHeader.Type OF
+        'SINGLE' :
+        BEGIN
+          SetProgressText(TxtImportingHeader);
+          IF (( NOT (lFiltersPresent)) OR ( NOT (RecRef.FINDFIRST()))) THEN BEGIN
+            RecRef.INIT;
+            IF FilterField1ID <> 0 THEN BEGIN
+              FieldRef := RecRef.FIELD(FilterField1ID);
+              UpdateFieldFromText(RecRef,FieldRef,FilterField1Filter);
+            END;
+            IF FilterField2ID <> 0 THEN BEGIN
+              FieldRef := RecRef.FIELD(FilterField2ID);
+              UpdateFieldFromText(RecRef,FieldRef,FilterField2Filter);
+            END;
+            IF FilterField3ID <> 0 THEN BEGIN
+              FieldRef := RecRef.FIELD(FilterField3ID);
+              UpdateFieldFromText(RecRef,FieldRef,FilterField3Filter);
+            END;
+            RecRef.INSERT(TRUE);
+
+            lModifyFormHeader := FALSE;
+            IF ((FilterField1Filter = '') AND (FilterField1ID <> 0)) THEN
+            BEGIN
+              FieldRef := RecRef.FIELD(FilterField1ID);
+              FilterField1Filter := UpdateTextFromField(FieldRef);
+              FormHeader."Filter Field 1 Value" := FilterField1Filter;
+              F1Text := FilterField1Filter;
+              lModifyFormHeader := TRUE;
+            END;
+            IF ((FilterField2Filter = '') AND (FilterField2ID <> 0)) THEN
+            BEGIN
+              FieldRef := RecRef.FIELD(FilterField2ID);
+              FilterField2Filter := UpdateTextFromField(FieldRef);
+              FormHeader."Filter Field 2 Value" := FilterField2Filter;
+              F2Text := FilterField2Filter;
+              lModifyFormHeader := TRUE;
+            END;
+            IF ((FilterField3Filter = '') AND (FilterField3ID <> 0)) THEN
+            BEGIN
+              FieldRef := RecRef.FIELD(FilterField3ID);
+              FilterField3Filter := UpdateTextFromField(FieldRef);
+              FormHeader."Filter Field 3 Value" := FilterField3Filter;
+              F3Text := FilterField3Filter;
+              lModifyFormHeader := TRUE;
+            END;
+            IF (lModifyFormHeader) THEN
+              FormHeader.MODIFY();
+          END;
+
+          FormRange.SETRANGE("Workbook Name",FormHeader."Workbook Name");
+          FormRange.SETRANGE("Start Address",FormHeader."Start Address");
+          IF FormRange.FINDSET THEN BEGIN
+            REPEAT
+              UpdateFieldText := '';
+              UpdateFieldID := GetFieldIDFromName(RecRef.NUMBER,UPPERCASE(FormRange."NAV Field Name"));
+              Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtFoundUpdateField, UpdateFieldID), USERID);
+              IF UpdateFieldID <> 0 THEN BEGIN
+                IF (FormRange.Address <> '') THEN BEGIN
+                  IF ExcelIntegration.FindExcelCellWithAddress(ExcelSheet.Name, FormRange.Address, ExcelCell) THEN BEGIN
+                    UpdateFieldText := ExcelCell.Value;
+                    Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtSetUpdateFieldFromRange, UpdateFieldText), USERID);
+                  END;
+                END;
+                Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtRangeValue, FormRange."Set-to Value Text", FormRange.GETPOSITION), USERID);
+                IF FormRange."Set-to Value Text" <> '' THEN BEGIN
+                  UpdateFieldText := FormRange."Set-to Value Text";
+                  Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtSetUpdateFieldFromSetTo, UpdateFieldText), USERID);
+
+                END;
+                IF UpdateFieldText <> '' THEN BEGIN
+                  FieldRef := RecRef.FIELD(UpdateFieldID);
+                  UpdateFieldFromText(RecRef,FieldRef,UpdateFieldText);
+                END;
+              END;
+
+            UNTIL FormRange.NEXT = 0;
+            RecRef.MODIFY;
+
+          END;
+        END;
+        'REPEATER' :
+        BEGIN
+          SetProgressText(TxtImportingLines);
+          Logger.Log('SMARTDOC', Logger.Type::Debug, TxtImportingLines, USERID);
+
+          IF ExcelIntegration.FindExcelCellWithAddress(ExcelSheet.Name, FormHeader."Repeater Address", RepeaterExcelCell) THEN BEGIN
+            y := 0;
+            blankCount := 0;
+            FormRange.SETCURRENTKEY("Workbook Name", "Start Address", "Found at Row");
+            FormRange.SETRANGE("Workbook Name", FormHeader."Workbook Name");
+            FormRange.SETRANGE("Start Address", FormHeader."Start Address");
+            IF FormRange.FINDSET THEN BEGIN
+              REPEAT
+                IF FormRange.Address <> '' THEN BEGIN
+                  IF ExcelIntegration.FindExcelCellWithAddress(ExcelSheet.Name, FormRange.Address, ExcelCell) THEN BEGIN
+                    FormRange."Column Offset" := ExcelCell.Column - RepeaterExcelCell.Column;
+                    FormRange.MODIFY;
+                    Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtRangeOffsetIs, FormRange.Address, FormRange."Column Offset"), USERID);
+
+                  END ELSE BEGIN
+                    FormRange."Column Offset" := -1;
+                    FormRange.MODIFY;
+                    Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtRangeOffsetFail, FormRange.Address), USERID);
+                  END;
+                END;
+              UNTIL FormRange.NEXT = 0;
+              x := 1;
+              AutoInc := 0;
+              RecRefView := RecRef.GETVIEW;
+              Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtRecRefViewIs, RecRefView), USERID);
+
+              REPEAT
+                RecRef.CLOSE;
+                RecRef.OPEN(NAVObjects.ID);
+                RecRef.SETVIEW(RecRefView);
+                FoundValue := FALSE;
+                IF FormRange.FINDSET THEN BEGIN
+                  REPEAT
+                    //GET FIELDID to use
+                    UpdateFieldID := GetFieldIDFromName(RecRef.NUMBER,UPPERCASE(FormRange."NAV Field Name"));
+                    IF UpdateFieldID = 0 THEN ERROR(TxtCouldntFindField, RecRef.NAME, FormRange."NAV Field Name");
+                    Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtUpdateFieldIs, UpdateFieldID, FormRange."NAV Field Name"), USERID);
+                    FieldRef := RecRef.FIELD(UpdateFieldID);
+
+                    //GET Value to use
+                    currText := '';
+                    IF FormRange."Auto Increment Field" THEN BEGIN
+                      AutoInc += 1;
+                      currText := FORMAT(AutoInc);
+                    END;
+                    IF FormRange."Set-to Value Text" <> '' THEN BEGIN
+                      currText := FormRange."Set-to Value Text";
+                    END;
+                    IF FormRange.Address <> '' THEN BEGIN
+                      IF FormRange."Column Offset" >= 0 THEN BEGIN
+                        IF ExcelIntegration.FindExcelCellOffset(RepeaterExcelCell, FormRange."Column Offset", x, ExcelCell) THEN BEGIN
+                          Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtLookingForText, ExcelCell."Sheet Name", ExcelCell.Row, ExcelCell.Column,
+                            UpdateFieldID), USERID);
+                          Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtGotValue, ExcelCell.Value, UpdateFieldID), USERID);
+                          IF ExcelCell.Value <> '' THEN BEGIN
+                            currText := COPYSTR(ExcelCell.Value,1,100);
+                            FoundValue := TRUE;
+                          END;
+                        END ELSE currText := '';
+                      END ELSE currText := '';
+                    END;
+
+                    Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtCurrText, currText), USERID);
+
+                    IF (currText <> '') OR FormRange."Allow Blank" THEN BEGIN
+
+                      IF FormRange."Repeat on Field" THEN BEGIN
+                        FieldRef.SETFILTER(currText);
+
+                        IF NOT RecRef.FINDSET THEN BEGIN
+                          IsNewRec := TRUE;
+                          RecRef.INIT;
+                          IF FilterField1ID <> 0 THEN BEGIN
+                            FieldRef := RecRef.FIELD(FilterField1ID);
+                            UpdateFieldFromText(RecRef,FieldRef,FilterField1Filter);
+                          END;
+                          IF FilterField2ID <> 0 THEN BEGIN
+                            FieldRef := RecRef.FIELD(FilterField2ID);
+                            UpdateFieldFromText(RecRef,FieldRef,FilterField2Filter);
+                          END;
+                          IF FilterField3ID <> 0 THEN BEGIN
+                            FieldRef := RecRef.FIELD(FilterField3ID);
+                            UpdateFieldFromText(RecRef,FieldRef,FilterField3Filter);
+                          END;
+
+                        END;
+                      END;
+                      IF currText <> '' THEN BEGIN
+                        FieldRef := RecRef.FIELD(UpdateFieldID);
+                        UpdateFieldFromText(RecRef,FieldRef,currText);
+                      END;
+                    END ELSE BEGIN
+                    //blah
+                      IF (currText = '') AND NOT FormRange."Allow Blank" THEN BEGIN
+                        FoundValue := FALSE;
+                        SkipLine := TRUE;
+                      END;
+                    END;
+                  UNTIL (FormRange.NEXT = 0) OR SkipLine;
+                END;
+                IF FoundValue THEN BEGIN
+                  IF IsNewRec THEN BEGIN
+                    RecRef.INSERT(TRUE);
+                    Logger.Log('SMARTDOC', Logger.Type::Information, STRSUBSTNO(TxtInsertedNewRecord, RecRef.NAME, RecRef.RECORDID), USERID);
+
+                  END ELSE BEGIN
+                    RecRef.MODIFY(TRUE);
+                    Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtModifiedRecord, RecRef.NAME, RecRef.RECORDID), USERID);
+                  END;
+                  Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtCompletedRow, x), USERID);
+                END ELSE
+                  Logger.Log('SMARTDOC', Logger.Type::Debug, STRSUBSTNO(TxtEndingOnRow, x), USERID);
+                x += 1;
+                RecRef.CLOSE;
+              UNTIL NOT FoundValue;
+            END;
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE GetContactFromvCard@1000000025(FilePath@1000000000 : Text[1024]) ContactNo : Code[20];
+    VAR
+      theFile@1000000001 : File;
+      inst@1000000002 : InStream;
+      cName@1000000003 : Text[100];
+      cEmail@1000000004 : Text[100];
+      currline@1000000005 : Text[1024];
+      tagName@1000000006 : Text[100];
+      tagEmail@1000000007 : Text[100];
+      lineComplete@1000000008 : Boolean;
+      newLine@1000000009 : Text[1024];
+      addLine@1000000010 : Boolean;
+      tagAdd@1000000011 : Text[100];
+      tagJobTitle@1000000012 : Text[100];
+      add@1000000013 : Text[50];
+      add2@1000000014 : Text[50];
+      city@1000000015 : Text[50];
+      county@1000000016 : Text[50];
+      postcode@1000000017 : Code[10];
+      country@1000000018 : Code[10];
+      tagPhone@1000000020 : Text[50];
+      tagCompany@1000000021 : Text[50];
+      "3Tier"@1000000022 : Codeunit 419;
+      tempEmail@1000000019 : Text[250];
+      Cont@1000000023 : Record 5050;
+    BEGIN
+      FilePath := "3Tier".UploadFileSilent(FilePath);
+
+      IF NOT theFile.OPEN(FilePath) THEN BEGIN
+        Logger.Log(TxtSmartDoc, Logger.Type::Error, STRSUBSTNO(TxtCouldntFindVcf, FilePath), USERID);
+        ERROR(TxtCouldntFindVcf, FilePath);
+      END;
+      theFile.CREATEINSTREAM(inst);
+
+      tagEmail := 'EMAIL;PREF;INTERNET:';
+      REPEAT
+        newLine := '';
+
+        lineComplete := FALSE;
+        addLine := TRUE;
+        REPEAT
+          IF addLine THEN
+            newLine += currline;
+
+          IF STRPOS(currline,'=0D=0A=') <> 0 THEN BEGIN
+            addLine := TRUE;
+            lineComplete := FALSE;
+            inst.READTEXT(currline);
+          END ELSE BEGIN
+            addLine := FALSE;
+            lineComplete := TRUE;
+          END;
+
+        UNTIL lineComplete;
+        IF STRLEN(newLine) < 1000 THEN
+          currline := String.Replace(newLine,'=0D=0A=','')
+        ELSE
+          currline := newLine;
+        IF STRPOS(currline,tagEmail) = 1 THEN BEGIN
+          tempEmail := COPYSTR(currline,STRLEN(tagEmail)+1,STRLEN(currline)-STRLEN(tagEmail));
+          Cont.SETRANGE("E-Mail",tempEmail);
+          IF NOT Cont.FINDSET THEN BEGIN
+            Cont.INIT;
+            Cont.VALIDATE("E-Mail",tempEmail);
+            Cont.INSERT(TRUE);
+          END;
+          EXIT(Cont."No.");
+        END;
+
+      UNTIL inst.READTEXT(currline) = 0;
+    END;
+
+    PROCEDURE ImportvCardFromFile@1000000004(FilePath@1000000000 : Text[1024];VAR ContactRec@1000000019 : Record 5050) OK : Boolean;
+    VAR
+      theFile@1000000001 : File;
+      inst@1000000002 : InStream;
+      cName@1000000003 : Text[100];
+      cEmail@1000000004 : Text[100];
+      currline@1000000005 : Text[1024];
+      tagName@1000000006 : Text[100];
+      tagEmail@1000000007 : Text[100];
+      lineComplete@1000000008 : Boolean;
+      newLine@1000000009 : Text[1024];
+      addLine@1000000010 : Boolean;
+      tagAdd@1000000011 : Text[100];
+      tagJobTitle@1000000012 : Text[100];
+      add@1000000013 : Text[50];
+      add2@1000000014 : Text[50];
+      city@1000000015 : Text[50];
+      county@1000000016 : Text[50];
+      postcode@1000000017 : Code[10];
+      country@1000000018 : Code[10];
+      tagPhone@1000000020 : Text[50];
+      tagCompany@1000000021 : Text[50];
+      "3Tier"@1000000022 : Codeunit 419;
+    BEGIN
+      ContactRec.VALIDATE(Type,ContactRec.Type::Person);
+
+      FilePath := "3Tier".UploadFileSilent(FilePath);
+
+      IF NOT theFile.OPEN(FilePath) THEN BEGIN
+        Logger.Log(TxtSmartDoc, Logger.Type::Error, STRSUBSTNO(TxtCouldntFindVcf, FilePath), USERID);
+        ERROR(TxtCouldntFindVcf, FilePath);
+      END;
+      theFile.CREATEINSTREAM(inst);
+
+      tagName := 'FN:';
+      tagEmail := 'EMAIL;PREF;INTERNET:';
+      tagAdd := 'ADR;WORK;PREF:;;';
+      tagJobTitle := 'TITLE:';
+      tagPhone := 'TEL;WORK;VOICE:';
+      tagCompany := 'ORG:';
+      REPEAT
+        newLine := '';
+
+        lineComplete := FALSE;
+        addLine := TRUE;
+        REPEAT
+          IF addLine THEN
+            newLine += currline;
+
+          IF STRPOS(currline,'=0D=0A=') <> 0 THEN BEGIN
+            addLine := TRUE;
+            lineComplete := FALSE;
+            inst.READTEXT(currline);
+          END ELSE BEGIN
+            addLine := FALSE;
+            lineComplete := TRUE;
+          END;
+
+        UNTIL lineComplete;
+        IF STRLEN(newLine) < 1000 THEN
+          currline := String.Replace(newLine,'=0D=0A=','')
+        ELSE
+          currline := newLine;
+        IF STRPOS(currline,tagName) = 1 THEN BEGIN
+          ContactRec.VALIDATE(Name,COPYSTR(currline,STRLEN(tagName)+1,STRLEN(currline)-STRLEN(tagName)));
+        END;
+        IF STRPOS(currline,tagEmail) = 1 THEN BEGIN
+          ContactRec.VALIDATE("E-Mail",COPYSTR(currline,STRLEN(tagEmail)+1,STRLEN(currline)-STRLEN(tagEmail)));
+        END;
+        IF STRPOS(currline,tagAdd) = 1 THEN BEGIN
+          processvCardAddress(COPYSTR(currline,STRLEN(tagAdd)+1,STRLEN(currline)-STRLEN(tagAdd)),ContactRec);
+        END;
+        IF STRPOS(currline,tagJobTitle) = 1 THEN BEGIN
+          ContactRec.VALIDATE("Job Title",COPYSTR(currline,STRLEN(tagJobTitle)+1,STRLEN(currline)-STRLEN(tagJobTitle)));
+        END;
+        IF STRPOS(currline,tagPhone) = 1 THEN BEGIN
+          ContactRec.VALIDATE("Phone No.",COPYSTR(currline,STRLEN(tagPhone)+1,STRLEN(currline)-STRLEN(tagPhone)));
+        END;
+        IF STRPOS(currline,tagCompany) = 1 THEN BEGIN
+          processvCardCompany(COPYSTR(currline,STRLEN(tagCompany)+1,STRLEN(currline)-STRLEN(tagCompany)),ContactRec);
+        END;
+      UNTIL inst.READTEXT(currline) = 0;
+    END;
+
+    PROCEDURE processvCardAddress@1000000003(theLine@1000000000 : Text[1024];VAR Contact@1000000010 : Record 5050);
+    VAR
+      i@1000000007 : Integer;
+      j@1000000009 : Integer;
+      currChar@1000000008 : Char;
+      Address@1000000006 : Text[50];
+      Address2@1000000005 : Text[50];
+      City@1000000004 : Text[50];
+      County@1000000003 : Text[50];
+      PostCode@1000000002 : Code[10];
+      Country@1000000001 : Code[10];
+    BEGIN
+      i := 1;
+      j := 1;
+      REPEAT
+        currChar := theLine[i];
+        IF currChar = ';' THEN
+          j += 1
+        ELSE BEGIN
+          CASE j OF
+            1 : Address := Address + FORMAT(currChar);
+            2 : City := City + FORMAT(currChar);
+            3 : County := County + FORMAT(currChar);
+            4 : PostCode := PostCode + FORMAT(currChar);
+            5 : Country := Country + FORMAT(currChar);
+
+          END;
+        END;
+        i += 1;
+      UNTIL i > STRLEN(theLine);
+
+      Contact.VALIDATE(Address,Address);
+      Contact.VALIDATE(City,City);
+      Contact.VALIDATE(County,County);
+      Contact.VALIDATE("Post Code",PostCode);
+    END;
+
+    PROCEDURE processvCardCompany@1000000000(theLine@1000000000 : Text[1024];VAR Contact@1000000001 : Record 5050);
+    VAR
+      CompCont@1000000002 : Record 5050;
+    BEGIN
+      CompCont.SETRANGE(Type,CompCont.Type::Company);
+      CompCont.SETFILTER(Name,'*@'+theLine+'*',theLine);
+      IF CompCont.FINDSET THEN BEGIN
+        Contact.VALIDATE("Company No.",CompCont."Company No.");
+      END;
+    END;
+
+    PROCEDURE GetnFormTypeFromFile@1000000017(FilePath@1000000000 : Text[250];VAR ExcelID@1000000001 : Integer) FormType : Code[20];
+    VAR
+      FileAttachMgt@1000000003 : Codeunit 9062267;
+    BEGIN
+      ImportConfirmed := TRUE;
+      ReadExcel(FilePath, ExcelID);
+      IF (FindnFormSheet()) THEN
+        FormType := GetnFormType();
+      EXIT(FormType);
+    END;
+
+    PROCEDURE GetValueFromNFormHeader@1000000020(ValueID@1000000009 : Integer;ValueType@1000000004 : 'FilterFieldValue,FilterFieldNo') theValue : Text[50];
+    VAR
+      ExcelCell@1000000003 : Record 9062288;
+      NAVFormSheetIndex@1000000006 : Integer;
+      i@1000000005 : Integer;
+      found@1000000002 : Boolean;
+      LastFoundCol@1000000001 : Integer;
+      FormRanges@1000000000 : Record 9062290;
+      WorkbookName@1000000010 : Text[1024];
+      TxtLookingForFilterField@1000000007 : TextConst 'ENU=Looking for filter field %1;ENG=Looking for filter field %1';
+      TxtReadingOptions@1000000008 : TextConst 'ENU=Reading the NAV options sheet;ENG=Reading the NAV options sheet';
+      TxtGot@1000000011 : TextConst 'ENU=Got %1 for the filter field %2;ENG=Got %1 for the filter field %2';
+      TxtSheetReadingComplete@1000000012 : TextConst 'ENU=Sheet reading complete;ENG=Sheet reading complete';
+    BEGIN
+      Logger.Log(TxtSmartDoc, Logger.Type::Debug, STRSUBSTNO(TxtLookingForFilterField, ValueID), USERID);
+      SetProgressText(TxtReadingOptions);
+
+      FormHeader.SETRANGE("Workbook Name", Excel.Name);
+      IF FormHeader.FINDSET THEN
+        FormHeader.DELETEALL;
+      FormRanges.SETRANGE("Workbook Name", Excel.Name);
+      IF FormRanges.FINDSET THEN
+        FormRanges.DELETEALL;
+
+      LastFoundCol := 0;
+
+      found := FindCellFromValue('Type', LastFoundCol + 1, 1, ExcelCell);
+      IF found THEN BEGIN
+        LastFoundCol := ExcelCell.Column;
+        FormHeader.INIT;
+        FormHeader."Workbook Name" := Excel.Name;//WorkbookName; //DOC NA2016.16 PC 30/06/2016
+        FormHeader."Start Address" := ExcelCell.GetAddress();
+        FormHeader.INSERT;
+        GetnFormValues(ExcelCell, FormHeader);
+        IF FormHeader.FINDFIRST THEN BEGIN
+          CASE ValueType OF
+            ValueType::FilterFieldValue :
+              BEGIN
+                CASE ValueID OF
+                  1 : theValue := FormHeader."Filter Field 1 Value";
+                  2 : theValue := FormHeader."Filter Field 2 Value";
+                  3 : theValue := FormHeader."Filter Field 3 Value";
+                END;
+              END;
+            ValueType::FilterFieldNo :
+              BEGIN
+                CASE ValueID OF
+                  1 : theValue := FormHeader."Filter Field 1 Name";
+                  2 : theValue := FormHeader."Filter Field 2 Name";
+                  3 : theValue := FormHeader."Filter Field 3 Name";
+                END;
+              END;
+          END;
+        END;
+      END;
+
+      IF NOT found THEN EXIT('');
+      Logger.Log(TxtSmartDoc, Logger.Type::Debug, STRSUBSTNO(TxtGot, theValue, ValueID), USERID);
+      SetProgressText(TxtSheetReadingComplete);
+      FormHeader.SETRANGE("Workbook Name",WorkbookName);
+      IF FormHeader.FINDSET THEN
+        FormHeader.DELETEALL;
+
+      FormRanges.SETRANGE("Workbook Name",WorkbookName);
+      IF FormRanges.FINDSET THEN
+        FormRanges.DELETEALL;
+
+      EXIT(theValue);
+    END;
+
+    PROCEDURE GetValueFromNFormFile@1000000023(FilePath@1000000000 : Text[250];ValueID@1000000004 : Integer;VAR ExcelID@1000000001 : Integer;ValueType@1000000002 : 'FilterFieldValue,FilterFieldNo') theValue : Text[50];
+    VAR
+      FileAttachMgt@1000000003 : Codeunit 9062267;
+      RecRef@1000000005 : RecordRef;
+      FieldRef@1000000006 : FieldRef;
+      Tables@1000000007 : Record 2000000001;
+      Fields@1000000008 : Record 2000000041;
+    BEGIN
+      ImportConfirmed := TRUE;
+      ReadExcel(FilePath, ExcelID);
+      IF (FindnFormSheet()) THEN BEGIN
+        theValue := GetValueFromNFormHeader(ValueID,ValueType);
+        CASE ValueType OF
+          ValueType::FilterFieldValue : EXIT(theValue);
+          ValueType::FilterFieldNo :
+            BEGIN
+              Tables.SETRANGE(Type,Tables.Type::Table);
+              Tables.SETRANGE(Name,FormHeader.Table);
+              IF Tables.FINDFIRST THEN BEGIN
+                Fields.SETRANGE(TableNo,Tables.ID);
+                Fields.SETRANGE(FieldName,theValue);
+                IF Fields.FINDFIRST THEN EXIT(FORMAT(Fields."No."));
+              END;
+            END;
+        END;
+      END;
+      EXIT(theValue);
+    END;
+
+    PROCEDURE SetInputs@1000000022(theFileAttachment@1000000007 : Record 9062272;Filter1ID@1000000006 : Integer;Filter1Text@1000000005 : Text[50];Filter2ID@1000000004 : Integer;Filter2Text@1000000003 : Text[50];Filter3ID@1000000002 : Integer;Filter3Text@1000000001 : Text[50];PromptConfirm@1000000000 : Boolean);
+    BEGIN
+      FileAttachment := theFileAttachment;
+      F1ID := Filter1ID;
+      F1Text := Filter1Text;
+      F2ID := Filter2ID;
+      F2Text := Filter2Text;
+      F3ID := Filter3ID;
+      F3Text := Filter3Text;
+      Prompts := PromptConfirm;
+    END;
+
+    PROCEDURE GetLastExcelId@1000000012() : Integer;
+    BEGIN
+      EXIT(Excel.ID);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  JH 10/08/2012 - Migrated to 2013
+      //DOC NA2015.1  JH 25/07/2013 - Excels with macros supported
+      //DOC NA2015.1  JH 11/02/2014 - Filter retrieval for auto-numbered documents
+      //DOC NA2015.1  PC 14/04/2014 - Added "Time" to Field Types understood
+      //DOC NA2015.4  PC 24/10/2014 - NAV on Demand modifications
+      //DOC NA2016.10 JH 26/08/2015 - Upgraded to 2016
+      //DOC NA2016.10 AZ 15/09/2015 - Silent file upload fixes
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit used
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+      //DOC NA2016.16 PC 30/06/2016 - Fixed issue with Attaching documents based on nForm values
+    }
+    END.
+  }
+}
+

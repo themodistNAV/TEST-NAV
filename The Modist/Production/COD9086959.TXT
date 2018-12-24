@@ -1,0 +1,815 @@
+OBJECT Codeunit 9086959 nF. Matrix Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=30/10/16;
+    Time=[ 6:24:38 PM];
+    Version List=NF2016.17;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      NfSetup@1000000003 : Record 9086950;
+      NfCompany@1000000006 : Record 9086957;
+      NfUser@1000000000 : Record 9086953;
+      NfUserGroup@1000000001 : Record 9086955;
+      NfUserGroupMember@1000000005 : Record 9086956;
+      NfPermissionGroup@1000000008 : Record 9086960;
+      NfPermissionGroupMember@1000000007 : Record 9086961;
+      NfMatrixTableCombination@1000000004 : TEMPORARY Record 9086966;
+      RowNfMatrixBuffer@1000000023 : TEMPORARY Record 9086965;
+      NfIif@1000000017 : Codeunit 9086975;
+      ValueRecRef@1000000009 : RecordRef;
+      ValueRecRefOpened@1000000016 : Boolean;
+      ValueParentFldRef@1000000002 : FieldRef;
+      ValueRowFldRef@1000000010 : FieldRef;
+      ValueColumnFldRef@1000000011 : FieldRef;
+      tParent@1000000012 : TextConst 'ENU=parent;ENG=parent';
+      tRow@1000000013 : TextConst 'ENU=row;ENG=row';
+      tColumn@1000000014 : TextConst 'ENU=column;ENG=column';
+      tValue@1000000015 : TextConst 'ENU=value;ENG=value';
+      tUnsupportedTable@1000000019 : TextConst 'ENU=Unsupported %1 table: %2 (''%3'').;ENG=Unsupported %1 table: %2 (''%3'').';
+      tUnknownTable@1000000018 : TextConst 'ENU=Unknown %1 table.;ENG=Unknown %1 table.';
+      ValueTypeToSet@1000000022 : Boolean;
+      ValueTypeFldRef@1000000020 : FieldRef;
+      ValueType@1000000021 : Integer;
+
+    LOCAL PROCEDURE "--- General ---"@1000000004();
+    BEGIN
+    END;
+
+    PROCEDURE Initialise@1000000005(pParentTableId@1000000003 : Integer;pRowTableId@1000000004 : Integer;pColumnTableId@1000000005 : Integer;pShowType@1000000006 : Boolean;VAR pNfMatrixContext@1000000000 : Record 9086964;VAR pRowNfMatrixBuffer@1000000001 : Record 9086965);
+    VAR
+      lResult@1000000002 : Boolean;
+    BEGIN
+      ///<summary>Initialising matrix</summary>
+      ///<param name="pParentTableId">Parent table ID</param>
+      ///<param name="pRowTableId">Row table ID</param>
+      ///<param name="pColumnTableId">Column table ID</param>
+      ///<param name="pShowType">Show type flag</param>
+      ///<param name="pNfMatrixContext">Matrix context</param>
+      ///<param name="pRowNfMatrixBuffer">Row matrix buffer</param>
+
+      NfSetup.VerifyAndGet();
+
+      InitialiseTables(pParentTableId, pRowTableId, pColumnTableId, pShowType, pNfMatrixContext);
+      InitialiseValueRecRef(pNfMatrixContext);
+      LoadAllData(pRowNfMatrixBuffer, pNfMatrixContext);
+      UpdateColumns(pNfMatrixContext);
+      UpdatePreviousNextSetFlags(pNfMatrixContext);
+    END;
+
+    PROCEDURE Refresh@1000000023(pParentId@1000000000 : Integer;VAR pRowNfMatrixBuffer@1000000002 : Record 9086965;VAR pNfMatrixContext@1000000001 : Record 9086964);
+    VAR
+      lColumnNfMatrixBuffer@1000000003 : TEMPORARY Record 9086965;
+      lColumnIndex@1000000004 : Integer;
+      lColumnValue@1000000005 : Boolean;
+      lColumnId@1000000006 : Integer;
+    BEGIN
+      ///<summary>Refreshing matrix</summary>
+      ///<param name="pParentId">Parent ID</param>
+      ///<param name="pRowNfMatrixBuffer">Row matrix buffer</param>
+      ///<param name="pNfMatrixContext">Matrix context</param>
+
+      pNfMatrixContext."Parent ID" := pParentId;
+
+      pNfMatrixContext.GetColumnNfMatrixBuffer(lColumnNfMatrixBuffer);
+
+      UpdateColumns(pNfMatrixContext);
+      pNfMatrixContext.GetColumnNfMatrixBuffer(lColumnNfMatrixBuffer);
+
+      {^^^CLEAR(lColumnIndex);
+      pNfMatrixContext.ClearColumnCaptions();
+      pNfMatrixContext.GetColumnNfMatrixBuffer(lColumnNfMatrixBuffer);
+      lColumnNfMatrixBuffer.MODIFYALL(Index, 0);^^^}
+
+      IF (pRowNfMatrixBuffer.FINDSET(TRUE)) THEN
+      REPEAT
+        pRowNfMatrixBuffer.ClearColumnValues();
+        ValueRecRef.RESET();
+        ValueParentFldRef.SETRANGE(pNfMatrixContext."Parent ID");
+        ValueRowFldRef.SETRANGE(pRowNfMatrixBuffer."Source ID");
+        FOR lColumnIndex := 1 TO pNfMatrixContext."Column Set Columns" DO
+        BEGIN
+          lColumnId := pNfMatrixContext.ReadFromColumnIndexer(lColumnIndex);
+          lColumnNfMatrixBuffer.GET(lColumnId);
+          ValueColumnFldRef.SETRANGE(lColumnNfMatrixBuffer."Source ID");
+          lColumnValue := ( NOT (ValueRecRef.ISEMPTY()));
+          pRowNfMatrixBuffer.SetColumnValue(lColumnIndex, lColumnValue);
+        END;
+        pRowNfMatrixBuffer.MODIFY(TRUE);
+      UNTIL (pRowNfMatrixBuffer.NEXT() = 0);
+      IF (pRowNfMatrixBuffer.FINDFIRST()) THEN;
+
+      UpdatePreviousNextSetFlags(pNfMatrixContext);
+    END;
+
+    PROCEDURE Validate@1000000013(VAR pRowNfMatrixBuffer@1000000005 : Record 9086965;VAR pNfMatrixContext@1000000000 : Record 9086964;pIndex@1000000001 : Integer) : Boolean;
+    VAR
+      lValue@1000000002 : Boolean;
+    BEGIN
+      ///<summary>Validating (a value)</summary>
+      ///<param name="pRownFMatrixBuffer">Row matrix buffer</param>
+      ///<param name="pNfMatrixContext">Context</param>
+      ///<param name="pIndex">Index</param>
+      ///<returns>TRUE: Page refresh necessary, FALSE: Not</returns>
+
+      lValue := pRowNfMatrixBuffer.GetColumnValue(pIndex);
+      EXIT(SetValue(pNfMatrixContext, pRowNfMatrixBuffer, pIndex, lValue));
+    END;
+
+    PROCEDURE Finalise@1000000015(VAR pNfMatrixContext@1000000000 : Record 9086964);
+    BEGIN
+      ///<summary>Finalising matrix</summary>
+      ///<param name="pNfMatrixContext">Matrix context</param>
+
+      FinaliseValueRecRef();
+    END;
+
+    PROCEDURE Mark@1000000006(VAR pNfMatrixContext@1000000001 : Record 9086964;VAR pNfMatrixBuffer@1000000000 : Record 9086965;pMark@1000000006 : Boolean) : Boolean;
+    VAR
+      lColumnNfMatrixBuffer@1000000002 : TEMPORARY Record 9086965;
+      eNoColumns@1000000003 : TextConst 'ENU=There are no columns to mark / unmark.;ENG=There are no columns to mark / unmark.';
+      lColumns@1000000004 : Integer;
+      lResult@1000000005 : Boolean;
+    BEGIN
+      ///<summary>Marking selected records</summary>
+      ///<param name="pNfMatrixContext">Matrix context</param>
+      ///<param name="pNfMatrixBuffer">The recordset</param>
+      ///<param name="pMark">TRUE = Mark, FALSE = Unmark</param>
+      ///<returns>TRUE = Marked / unmarked, FALSE = Cancelled</returns>
+
+      lResult := FALSE;
+
+      pNfMatrixContext.GetColumnNfMatrixBuffer(lColumnNfMatrixBuffer);
+      lColumns := lColumnNfMatrixBuffer.COUNT();
+      CASE (lColumns) OF
+        0: ERROR(eNoColumns);
+        1: lResult := TRUE;
+        ELSE lResult := Select(lColumnNfMatrixBuffer);
+      END;
+
+      IF (lResult) THEN
+      BEGIN
+        IF (lColumns > 1) THEN
+          lColumnNfMatrixBuffer.SETRANGE(Selected, TRUE);
+        IF (pNfMatrixBuffer.FINDSET(TRUE)) THEN
+        REPEAT
+          IF (lColumnNfMatrixBuffer.FINDSET()) THEN
+          REPEAT
+            SetColumnValue(pNfMatrixContext, pNfMatrixBuffer, lColumnNfMatrixBuffer, pMark);
+            pNfMatrixBuffer.MODIFY();
+          UNTIL (lColumnNfMatrixBuffer.NEXT() = 0);
+        UNTIL (pNfMatrixBuffer.NEXT() = 0);
+        lColumnNfMatrixBuffer.SETRANGE(Selected);
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE ApplyQuickFilter@1000000011(VAR pRowNfMatrixBuffer@1000000001 : Record 9086965;VAR pNfMatrixContext@1000000000 : Record 9086964);
+    VAR
+      lInFilter@1000000002 : Option;
+    BEGIN
+      ///<summary>Applying quick filter</summary>
+      ///<param name="pRowNfMatrixBuffer">Row matrix buffer</param>
+      ///<param name="pNfMatrixContext">Matrix context</param>
+
+      pRowNfMatrixBuffer.SETFILTER("In Filter", '<>%1', pRowNfMatrixBuffer."In Filter"::" ");
+      IF ( NOT (pRowNfMatrixBuffer.ISEMPTY())) THEN
+        pRowNfMatrixBuffer.MODIFYALL("In Filter", pRowNfMatrixBuffer."In Filter"::" ");
+      pRowNfMatrixBuffer.SETRANGE("In Filter");
+
+      IF ((pNfMatrixContext."Row Table ID" = DATABASE::"nF. Permission Group") AND
+          (pNfMatrixContext."Quick Filter Object Type" <> pNfMatrixContext."Quick Filter Object Type"::" ") AND
+          (pNfMatrixContext."Quick Filter Object ID" <> 0)) THEN
+      BEGIN
+        RowNfMatrixBuffer.COPY(pRowNfMatrixBuffer, TRUE);
+        IF (pRowNfMatrixBuffer.FINDSET(TRUE)) THEN
+        REPEAT
+          lInFilter := pRowNfMatrixBuffer."In Filter"::" ";
+          IF (NfPermissionGroup.GET(pRowNfMatrixBuffer."Source ID")) THEN
+          BEGIN
+            NfPermissionGroup.SETRANGE("Object Type Filter", pNfMatrixContext."Quick Filter Object Type");
+            NfPermissionGroup.SETRANGE("Object ID Filter", pNfMatrixContext."Quick Filter Object ID");
+            NfPermissionGroup.CALCFIELDS("Has Permission");
+            IF (NfPermissionGroup."Has Permission") THEN
+              lInFilter := pRowNfMatrixBuffer."In Filter"::Yes;
+          END;
+          IF (pRowNfMatrixBuffer."In Filter" <> lInFilter) THEN
+          BEGIN
+            pRowNfMatrixBuffer."In Filter" := lInFilter;
+            pRowNfMatrixBuffer.MODIFY();
+          END;
+          IF (pRowNfMatrixBuffer."In Filter" = pRowNfMatrixBuffer."In Filter"::Yes) THEN
+          BEGIN
+            RowNfMatrixBuffer.GET(pRowNfMatrixBuffer.ID);
+            SetIndirectQuickFilter(RowNfMatrixBuffer);
+          END;
+        UNTIL (pRowNfMatrixBuffer.NEXT() = 0);
+        IF (pRowNfMatrixBuffer.FINDFIRST()) THEN;
+        pRowNfMatrixBuffer.SETFILTER("In Filter", '<>%1', pRowNfMatrixBuffer."In Filter"::" ");
+      END;
+    END;
+
+    LOCAL PROCEDURE SetIndirectQuickFilter@1000000021(VAR pRowNfMatrixBuffer@1000000001 : Record 9086965);
+    BEGIN
+      ///<summary>Setting indirect quick filter</summary>
+      ///<param name="pId">ID in the buffer</param>
+      ///<param name="pRowNfMatrixBuffer">The buffer</param>
+
+      IF (RowNfMatrixBuffer."Parent ID" <> 0) THEN
+      BEGIN
+        RowNfMatrixBuffer.GET(RowNfMatrixBuffer."Parent ID");
+        RowNfMatrixBuffer."In Filter" := RowNfMatrixBuffer."In Filter"::Indirectly;
+        RowNfMatrixBuffer.MODIFY();
+        SetIndirectQuickFilter(RowNfMatrixBuffer);
+      END;
+    END;
+
+    PROCEDURE GoToPreviousSet@1000000014(pParentId@1000000003 : Integer;VAR pRowNfMatrixBuffer@1000000002 : Record 9086965;VAR pNfMatrixContext@1000000001 : Record 9086964) : Boolean;
+    BEGIN
+      ///<summary>Going to previous set (if possible)</summary>
+      ///<param name="pParentId">Parent ID</param>
+      ///<param name="pRowNfMatrixBuffer">Row matrix buffer</param>
+      ///<param name="pNfMatrixContext">Matrix context</param>
+      ///<returns>TRUE = Set changed, FALSE = Nope</returns>
+
+      IF (pNfMatrixContext."Column Set Index" = 1) THEN
+        EXIT(FALSE);
+
+      IF (pNfMatrixContext."Column Set Index" < 1) THEN
+        pNfMatrixContext."Column Set Index" := 1
+      ELSE
+        pNfMatrixContext."Column Set Index" -= 1;
+
+      Refresh(pParentId, pRowNfMatrixBuffer, pNfMatrixContext);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GoToNextSet@1000000017(pParentId@1000000003 : Integer;VAR pRowNfMatrixBuffer@1000000002 : Record 9086965;VAR pNfMatrixContext@1000000001 : Record 9086964) : Boolean;
+    BEGIN
+      ///<summary>Going to next set (if possible)</summary>
+      ///<param name="pParentId">Parent ID</param>
+      ///<param name="pRowNfMatrixBuffer">Row matrix buffer</param>
+      ///<param name="pNfMatrixContext">Matrix context</param>
+      ///<returns>TRUE = Set changed, FALSE = Nope</returns>
+
+      IF (pNfMatrixContext."Column Set Index" = pNfMatrixContext."Column Maximum Set Index") THEN
+        EXIT(FALSE);
+
+      IF (pNfMatrixContext."Column Set Index" > pNfMatrixContext."Column Maximum Set Index") THEN
+        pNfMatrixContext."Column Set Index" := pNfMatrixContext."Column Maximum Set Index"
+      ELSE
+        pNfMatrixContext."Column Set Index" += 1;
+
+      UpdateColumns(pNfMatrixContext);
+      Refresh(pParentId, pRowNfMatrixBuffer, pNfMatrixContext);
+      UpdatePreviousNextSetFlags(pNfMatrixContext);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Internal ---"@1000000003();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE InitialiseTables@1000000010(pParentTableId@1000000007 : Integer;pRowTableId@1000000006 : Integer;pColumnTableId@1000000005 : Integer;pShowType@1000000002 : Boolean;VAR pNfMatrixContext@1000000000 : Record 9086964);
+    VAR
+      lnFMatrixContext@1000000004 : Record 9086964;
+      lResult@1000000003 : Boolean;
+      eUnknownTableCombination@1000000001 : TextConst 'ENU="Can''t work out ""%1"" for ""%2"" = %3 (''%4''), ""%5"" = %6 (''%7'') and ""%8"" = %9 (''%10'').";ENG="Can''t work out ""%1"" for ""%2"" = %3 (''%4''), ""%5"" = %6 (''%7'') and ""%8"" = %9 (''%10'')."';
+    BEGIN
+      ///<summary>Initialising filters</summary>
+      ///<param name="pParentTableId">Parent table ID</param>
+      ///<param name="pRowTableId">Row table ID</param>
+      ///<param name="pColumnTableId">Column table ID</param>
+      ///<param name="pShowType">Show type flag</param>
+      ///<param name="pNfMatrixContext">Matrix context</param>
+
+      pNfMatrixContext."Parent Table ID" := pParentTableId;
+      pNfMatrixContext."Row Table ID" := pRowTableId;
+      pNfMatrixContext."Column Table ID" := pColumnTableId;
+      pNfMatrixContext."Show Type" := pShowType;
+
+      CLEAR(pNfMatrixContext."Parent ID");
+
+      NfMatrixTableCombination.RESET();
+      IF (NfMatrixTableCombination.ISEMPTY()) THEN
+      BEGIN
+        NfMatrixTableCombination.Add(DATABASE::"nF. User", DATABASE::"nF. User Group", DATABASE::"nF. Company", DATABASE::"nF. User Group Member");
+        NfMatrixTableCombination.Add(DATABASE::"nF. User", DATABASE::"nF. Permission Group", DATABASE::"nF. Company", DATABASE::"nF. Permission Group Member");
+        NfMatrixTableCombination.Add(DATABASE::"nF. User Group", DATABASE::"nF. User", DATABASE::"nF. Company", DATABASE::"nF. User Group Member");
+        NfMatrixTableCombination.Add(DATABASE::"nF. User Group", DATABASE::"nF. Permission Group", DATABASE::"nF. Company", DATABASE::"nF. Permission Group Member");
+        NfMatrixTableCombination.Add(DATABASE::"nF. Permission Group", DATABASE::"nF. User", DATABASE::"nF. Company", DATABASE::"nF. Permission Group Member");
+        NfMatrixTableCombination.Add(DATABASE::"nF. Permission Group", DATABASE::"nF. User Group", DATABASE::"nF. Company", DATABASE::"nF. Permission Group Member");
+      END;
+
+      IF ( NOT (NfMatrixTableCombination.GET(pNfMatrixContext."Parent Table ID", pNfMatrixContext."Row Table ID", pNfMatrixContext."Column Table ID"))) THEN
+      BEGIN
+        pNfMatrixContext.CALCFIELDS("Parent Table Name", "Row Table Name", "Column Table Name");
+        ERROR(eUnknownTableCombination, pNfMatrixContext.FIELDNO("Value Table ID"),
+          pNfMatrixContext.FIELDCAPTION("Parent Table ID"), pNfMatrixContext."Parent Table ID", pNfMatrixContext."Parent Table Name",
+          pNfMatrixContext.FIELDCAPTION("Row Table ID"), pNfMatrixContext."Row Table ID", pNfMatrixContext."Row Table Name",
+          pNfMatrixContext.FIELDCAPTION("Column Table ID"), pNfMatrixContext."Column Table ID", pNfMatrixContext."Column Table Name");
+      END;
+
+      pNfMatrixContext."Value Table ID" := NfMatrixTableCombination."Value Table ID";
+    END;
+
+    LOCAL PROCEDURE InitialiseValueRecRef@1000000018(VAR pNfMatrixContext@1000000000 : Record 9086964);
+    BEGIN
+      ///<summary>Initialising record reference</summary>
+      ///<param name="pNfMatrixContext">Matrix context</param>
+
+      pNfMatrixContext.CALCFIELDS("Parent Table Name", "Row Table Name", "Column Table Name", "Value Table Name");
+
+      IF ( NOT (pNfMatrixContext."Value Table ID" IN [DATABASE::"nF. User Group Member", DATABASE::"nF. Permission Group Member"])) THEN
+        IF (pNfMatrixContext."Value Table ID" <> 0) THEN
+          ERROR(tUnsupportedTable, tValue, pNfMatrixContext."Value Table ID", pNfMatrixContext."Value Table Name")
+        ELSE
+          ERROR(tUnknownTable, tValue);
+
+      IF (ValueRecRefOpened) THEN
+      BEGIN
+        ValueRecRef.CLOSE();
+        ValueRecRefOpened := FALSE;
+      END;
+
+      CLEAR(ValueParentFldRef);
+      CLEAR(ValueRowFldRef);
+      CLEAR(ValueColumnFldRef);
+      CLEAR(ValueTypeToSet);
+      CLEAR(ValueTypeFldRef);
+      CLEAR(ValueType);
+
+      ValueRecRef.OPEN(pNfMatrixContext."Value Table ID");
+      CASE (pNfMatrixContext."Value Table ID") OF
+        DATABASE::"nF. User Group Member":
+          BEGIN
+            SetValueUserGroupMemberFldRef(tParent, pNfMatrixContext."Parent Table ID", pNfMatrixContext."Parent Table Name", ValueParentFldRef);
+            SetValueUserGroupMemberFldRef(tRow, pNfMatrixContext."Row Table ID", pNfMatrixContext."Row Table Name", ValueRowFldRef);
+            SetValueUserGroupMemberFldRef(tColumn, pNfMatrixContext."Column Table ID", pNfMatrixContext."Column Table Name", ValueColumnFldRef);
+          END;
+        DATABASE::"nF. Permission Group Member":
+          BEGIN
+            SetValuePermissionGroupMemberFldRef(tParent, pNfMatrixContext."Parent Table ID", pNfMatrixContext."Parent Table Name", ValueParentFldRef);
+            SetValuePermissionGroupMemberFldRef(tRow, pNfMatrixContext."Row Table ID", pNfMatrixContext."Row Table Name", ValueRowFldRef);
+            SetValuePermissionGroupMemberFldRef(tColumn, pNfMatrixContext."Column Table ID", pNfMatrixContext."Column Table Name", ValueColumnFldRef);
+          END;
+      END;
+
+      ValueRecRefOpened := TRUE;
+    END;
+
+    LOCAL PROCEDURE SetValueUserGroupMemberFldRef@1000000027(pTableType@1000000003 : Text;pTableId@1000000000 : Integer;pTableName@1000000002 : Text;VAR pFldRef@1000000001 : FieldRef);
+    BEGIN
+      ///<summary>Initialising user group member field reference</summary>
+      ///<param name="pTableType">Table type</param>
+      ///<param name="pTableId">Table ID the field should relate to</param>
+      ///<param name="pTableName">Table name</param>
+      ///<param name="pFldRef">Target field reference</param>
+
+      CASE (pTableId) OF
+        DATABASE::"nF. User": pFldRef := ValueRecRef.FIELD(NfUserGroupMember.FIELDNO("nF. User ID"));
+        DATABASE::"nF. User Group": pFldRef := ValueRecRef.FIELD(NfUserGroupMember.FIELDNO("nF. User Group ID"));
+        DATABASE::"nF. Company": pFldRef := ValueRecRef.FIELD(NfUserGroupMember.FIELDNO("nF. Company ID"));
+        ELSE ERROR(tUnsupportedTable, pTableType, pTableId, pTableName);
+      END;
+    END;
+
+    LOCAL PROCEDURE SetValuePermissionGroupMemberFldRef@1000000028(pTableType@1000000003 : Text;pTableId@1000000002 : Integer;pTableName@1000000001 : Text;VAR pFldRef@1000000000 : FieldRef);
+    BEGIN
+      ///<summary>Initialising permission group member field reference</summary>
+      ///<param name="pTableType">Table type</param>
+      ///<param name="pTableId">Table ID the field should relate to</param>
+      ///<param name="pTableName">Table name</param>
+      ///<param name="pFldRef">Target field reference</param>
+
+      CASE (pTableId) OF
+        DATABASE::"nF. User": pFldRef := ValueRecRef.FIELD(NfPermissionGroupMember.FIELDNO("nF. User / User Group ID"));
+        DATABASE::"nF. User Group": pFldRef := ValueRecRef.FIELD(NfPermissionGroupMember.FIELDNO("nF. User / User Group ID"));
+        DATABASE::"nF. Company": pFldRef := ValueRecRef.FIELD(NfPermissionGroupMember.FIELDNO("nF. Company ID"));
+        DATABASE::"nF. Permission Group": pFldRef := ValueRecRef.FIELD(NfPermissionGroupMember.FIELDNO("nF. Permisison Group ID"));
+        ELSE ERROR(tUnsupportedTable, pTableType, pTableId, pTableName);
+      END;
+
+      IF (pTableId IN [DATABASE::"nF. User", DATABASE::"nF. User Group"]) THEN
+      BEGIN
+        ValueTypeToSet := TRUE;
+        ValueTypeFldRef := ValueRecRef.FIELD(NfPermissionGroupMember.FIELDNO(Type));
+        CASE (pTableId) OF
+          DATABASE::"nF. User": ValueType := NfPermissionGroupMember.Type::User;
+          DATABASE::"nF. User Group": ValueType := NfPermissionGroupMember.Type::"User Group";
+        END;
+        ValueTypeFldRef.SETRANGE(ValueType);
+      END;
+    END;
+
+    LOCAL PROCEDURE LoadAllData@1000000016(VAR pRownFMatrixBuffer@1000000004 : Record 9086965;VAR pNfMatrixContext@1000000003 : Record 9086964);
+    VAR
+      lColumnnFMatrixBuffer@1000000002 : TEMPORARY Record 9086965;
+      lRowRecords@1000000001 : Integer;
+      lColumnRecords@1000000000 : Integer;
+    BEGIN
+      ///<summary>Loading all (row & column) data</summary>
+      ///<param name="pRownFMatrixBuffer">Row matrix buffer</param>
+      ///<param name="pNfMatrixContext">Matrix context</param>
+
+      lRowRecords := LoadData(pNfMatrixContext."Row Table ID", pRownFMatrixBuffer);
+      lColumnRecords := LoadData(pNfMatrixContext."Column Table ID", lColumnnFMatrixBuffer);
+      pNfMatrixContext.SetColumnNfMatrixBuffer(lColumnnFMatrixBuffer);
+
+      //^^^pNfMatrixContext."Column Set Size" := 20;
+      pNfMatrixContext."Column Set Size" := 5;
+      pNfMatrixContext."Column Set Index" := 1;
+      pNfMatrixContext."Column Maximum Set Index" := lColumnRecords DIV pNfMatrixContext."Column Set Size";
+      IF (lColumnRecords MOD pNfMatrixContext."Column Set Size" > 0) THEN
+        pNfMatrixContext."Column Maximum Set Index" += 1;
+      pNfMatrixContext."Column Set Columns" := lColumnRecords;
+      IF (pNfMatrixContext."Column Set Columns" > pNfMatrixContext."Column Set Size") THEN
+        pNfMatrixContext."Column Set Columns" := pNfMatrixContext."Column Set Size";
+    END;
+
+    LOCAL PROCEDURE LoadData@1000000009(pTableId@1000000000 : Integer;VAR pNfMatrixBuffer@1000000001 : Record 9086965) : Integer;
+    VAR
+      lnFMatrixBufferId@1000000003 : Integer;
+      lRecords@1000000002 : Integer;
+    BEGIN
+      ///<summary>Loading data</summary>
+      ///<param name="pTableId">Table ID</param>
+      ///<param name="pNfMatrixBuffer">Target buffer</param>
+      ///<returns>Records collected</returns>
+
+      pNfMatrixBuffer.RESET();
+      pNfMatrixBuffer.DELETEALL();
+      CLEAR(lnFMatrixBufferId);
+      CLEAR(lRecords);
+
+      CASE (pTableId) OF
+        DATABASE::"nF. User": lRecords := LoadUsers(pNfMatrixBuffer, lnFMatrixBufferId);
+        DATABASE::"nF. User Group": lRecords := LoadUserGroups(pNfMatrixBuffer, lnFMatrixBufferId);
+        DATABASE::"nF. Company": lRecords := LoadCompanies(pNfMatrixBuffer, lnFMatrixBufferId);
+        DATABASE::"nF. Permission Group": lRecords := LoadPermissionGroups(pNfMatrixBuffer, lnFMatrixBufferId);
+      END;
+
+      pNfMatrixBuffer.RESET();
+      IF (pNfMatrixBuffer.FINDFIRST()) THEN;
+
+      EXIT(lRecords);
+    END;
+
+    LOCAL PROCEDURE LoadUsers@1000000000(VAR pNfMatrixBuffer@1000000000 : Record 9086965;VAR pNfMatrixBufferId@1000000004 : Integer) : Integer;
+    VAR
+      lRecords@1000000002 : Integer;
+      lName@1000000003 : Text;
+    BEGIN
+      ///<summary>Loading users into matrix buffer</summary>
+      ///<param name="pNfMatrixBuffer">Target buffer</param>
+      ///<param name="pNfMatrixBufferId">Target buffer ID</param>
+      ///<returns>Records collected</returns>
+
+      CLEAR(lRecords);
+
+      NfUser.RESET();
+      NfUser.SETCURRENTKEY("User Name");
+      NfUser.SETRANGE(Hidden, FALSE);
+      IF (NfUser.FINDSET()) THEN
+      REPEAT
+        CASE (NfSetup."User Text in Matrixes") OF
+          NfSetup."User Text in Matrixes"::"User ID": lName:= NfUser."User ID";
+          NfSetup."User Text in Matrixes"::"User Name": lName := NfUser."User Name";
+          NfSetup."User Text in Matrixes"::"Short User ID + User Name": lName := STRSUBSTNO('%2 (%1)', NfUser."Short User ID", NfUser."User Name");
+          NfSetup."User Text in Matrixes"::"User ID + User Name": lName := STRSUBSTNO('%2 (%1)', NfUser."User ID", NfUser."User Name");
+          ELSE lName := NfUser."Short User ID";
+        END;
+        AddToBuffer(lName, '', DATABASE::"nF. User", NfUser.ID, 0, 'Strong', 'Standard', FALSE, 0, pNfMatrixBuffer, pNfMatrixBufferId);
+        lRecords += 1;
+      UNTIL (NfUser.NEXT() = 0);
+
+      EXIT(lRecords);
+    END;
+
+    LOCAL PROCEDURE LoadUserGroups@1000000001(VAR pNfMatrixBuffer@1000000000 : Record 9086965;VAR pNfMatrixBufferId@1000000003 : Integer) : Integer;
+    VAR
+      lRecords@1000000002 : Integer;
+    BEGIN
+      ///<summary>Loading groups into matrix buffer</summary>
+      ///<param name="pNfMatrixBuffer">Target buffer</param>
+      ///<param name="pNfMatrixBufferId">Target buffer ID</param>
+      ///<returns>Records collected</returns>
+
+      CLEAR(lRecords);
+
+      NfUserGroup.RESET();
+      NfUserGroup.SETCURRENTKEY(Hidden, Name);
+      NfUserGroup.SETRANGE(Hidden, FALSE);
+      IF (NfUserGroup.FINDSET()) THEN
+      REPEAT
+        AddToBuffer(NfUserGroup.Name, '', DATABASE::"nF. User Group", NfUserGroup.ID, 0, 'Strong', 'Standard', FALSE, 0, pNfMatrixBuffer, pNfMatrixBufferId);
+        lRecords += 1;
+      UNTIL (NfUserGroup.NEXT() = 0);
+
+      EXIT(lRecords);
+    END;
+
+    LOCAL PROCEDURE LoadCompanies@1000000002(VAR pNfMatrixBuffer@1000000000 : Record 9086965;VAR pNfMatrixBufferId@1000000004 : Integer) : Integer;
+    VAR
+      lRecords@1000000002 : Integer;
+      lCompaniesExist@1000000001 : Boolean;
+      lAllCompaniesName@1000000003 : Text;
+    BEGIN
+      ///<summary>Loading companies into matrix buffer</summary>
+      ///<param name="pNfMatrixBuffer">Target buffer</param>
+      ///<param name="pNfMatrixBufferId">Target buffer ID</param>
+      ///<returns>Records collected</returns>
+
+      CLEAR(lRecords);
+
+      NfCompany.RESET();
+      NfCompany.SETCURRENTKEY(Name);
+      lCompaniesExist := ( NOT (NfCompany.ISEMPTY()));
+      IF (( NOT (lCompaniesExist)) OR (NfSetup."Show All Companies")) THEN
+      BEGIN
+        lAllCompaniesName := NfCompany.GetAllCompaniesName();
+        AddToBuffer(lAllCompaniesName, '', DATABASE::"nF. Company", 0, 0, 'Strong', 'Standard', FALSE, 0, pNfMatrixBuffer, pNfMatrixBufferId);
+        lRecords += 1;
+      END;
+      IF (NfCompany.FINDSET()) THEN
+      REPEAT
+        AddToBuffer(NfCompany.Name, '', DATABASE::"nF. Company", NfCompany.ID, 0, 'Strong', 'Standard', FALSE, 0, pNfMatrixBuffer, pNfMatrixBufferId);
+        lRecords += 1;
+      UNTIL (NfCompany.NEXT() = 0);
+
+      EXIT(lRecords);
+    END;
+
+    LOCAL PROCEDURE LoadPermissionGroups@1000000012(VAR pNfMatrixBuffer@1000000000 : Record 9086965;VAR pNfMatrixBufferId@1000000001 : Integer) : Integer;
+    VAR
+      lParentIds@1000000005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.Dictionary`2";
+      lParentId@1000000006 : Integer;
+      lRecords@1000000002 : Integer;
+      lCheckedStyle@1000000003 : Text;
+      lUncheckedStyle@1000000004 : Text;
+    BEGIN
+      ///<summary>Loading permission groups into matrix buffer</summary>
+      ///<param name="pNfMatrixBuffer">Target buffer</param>
+      ///<param name="pNfMatrixBufferId">Target buffer ID</param>
+      ///<returns>Records collected</returns>
+
+      CLEAR(lRecords);
+
+      lParentIds := lParentIds.Dictionary();
+
+      NfPermissionGroup.RESET();
+      NfPermissionGroup.SETCURRENTKEY("Give Everything", Hidden, "Full Hash");
+      NfPermissionGroup.SETRANGE("Give Everything", FALSE);
+      NfPermissionGroup.SETRANGE(Hidden, FALSE);
+      IF (NfPermissionGroup.FINDSET()) THEN
+      REPEAT
+        lParentId := 0;
+        IF (NfPermissionGroup."Parent ID" <> 0) THEN
+          IF (lParentIds.ContainsKey(NfPermissionGroup."Parent ID")) THEN
+            lParentId := lParentIds.Item(NfPermissionGroup."Parent ID");
+        lCheckedStyle := NfIif.Text(NfPermissionGroup.Type = NfPermissionGroup.Type::Give, 'Strong', 'StrongAccent');
+        lUncheckedStyle := NfIif.Text(NfPermissionGroup.Type = NfPermissionGroup.Type::Give, 'Standard', 'StandardAccent');
+        AddToBuffer(NfPermissionGroup.Name, FORMAT(NfPermissionGroup.Type), DATABASE::"nF. Permission Group", NfPermissionGroup.ID,
+          NfPermissionGroup.Indentation, lCheckedStyle, lUncheckedStyle, TRUE, lParentId, pNfMatrixBuffer, pNfMatrixBufferId);
+        lParentIds.Add(NfPermissionGroup.ID, pNfMatrixBufferId);
+        lRecords += 1;
+      UNTIL (NfPermissionGroup.NEXT() = 0);
+
+      EXIT(lRecords);
+    END;
+
+    LOCAL PROCEDURE AddToBuffer@1000000007(pName@1000000008 : Text;pType@1000000006 : Text;pSourceTableId@1000000010 : Integer;pSourceId@1000000005 : Integer;pIndentation@1000000002 : Integer;pCheckedStyle@1000000003 : Text;pUncheckedStyle@1000000004 : Text;pTree@1000000007 : Boolean;pParentId@1000000009 : Integer;VAR pNfMatrixBuffer@1000000000 : Record 9086965;VAR pNfMatrixBufferId@1000000001 : Integer);
+    BEGIN
+      ///<summary>Adding one line to buffer</summary>
+      ///<param name="pName">Name</param>
+      ///<param name="pType">Type</param>
+      ///<param name="pSourceTableId">Source table ID</param>
+      ///<param name="pSourceId">Source ID</param>
+      ///<param name="pIndentation">Indentation</param>
+      ///<param name="pCheckedStyle">Checked style</param>
+      ///<param name="pUncheckedStyle">Unchecked style</param>
+      ///<param name="pTree">Tree flag</param>
+      ///<param name="pParentId">Parent ID (in a tree)</param>
+      ///<param name="pNfMatrixBuffer">Target buffer</param>
+      ///<param name="pNfMatrixBufferId">Target buffer ID</param>
+
+      pNfMatrixBufferId += 1;
+
+      pNfMatrixBuffer.INIT();
+      pNfMatrixBuffer.ID := pNfMatrixBufferId;
+      pNfMatrixBuffer.Name := pName;
+      pNfMatrixBuffer.Type := pType;
+      pNfMatrixBuffer."Source Table ID" := pSourceTableId;
+      pNfMatrixBuffer."Source ID" := pSourceId;
+      pNfMatrixBuffer.Indentation := pIndentation;
+      pNfMatrixBuffer."Checked Style" := pCheckedStyle;
+      pNfMatrixBuffer."Unchecked Style" := pUncheckedStyle;
+      pNfMatrixBuffer.Tree := pTree;
+      pNfMatrixBuffer."Parent ID" := pParentId;
+      pNfMatrixBuffer.INSERT();
+    END;
+
+    LOCAL PROCEDURE UpdateColumns@1000000008(VAR pNfMatrixContext@1000000000 : Record 9086964);
+    VAR
+      lColumnNfMatrixBuffer@1000000001 : TEMPORARY Record 9086965;
+      lColumnIndex@1000000007 : Integer;
+      lCaptions@1000000002 : ARRAY [20] OF Text;
+    BEGIN
+      ///<summary>Updating columns</summary>
+      ///<param name="pNfMatrixContext">Matrix context</param>
+
+      CLEAR(lColumnIndex);
+      pNfMatrixContext.ClearColumnCaptions();
+      pNfMatrixContext.ClearColumnIndexer();
+      pNfMatrixContext.GetColumnNfMatrixBuffer(lColumnNfMatrixBuffer);
+      lColumnNfMatrixBuffer.MODIFYALL(Index, 0);
+
+      IF (pNfMatrixContext."Column Set Index" = 0) THEN
+        pNfMatrixContext."Column Set Index" := 1;
+      IF (pNfMatrixContext."Column Set Index" > pNfMatrixContext."Column Maximum Set Index") THEN
+        pNfMatrixContext."Column Set Index" := pNfMatrixContext."Column Maximum Set Index";
+
+      IF (pNfMatrixContext."Column Set Index" > 1) THEN
+        lColumnNfMatrixBuffer.SETFILTER(ID, '>=%1', (pNfMatrixContext."Column Set Index" - 1) * pNfMatrixContext."Column Set Size" + 1)
+      ELSE
+        lColumnNfMatrixBuffer.SETRANGE(ID);
+      IF (lColumnNfMatrixBuffer.FINDSET(TRUE)) THEN
+      REPEAT
+        lColumnIndex += 1;
+        lCaptions[lColumnIndex] := lColumnNfMatrixBuffer.Name;
+        lColumnNfMatrixBuffer.Index := lColumnIndex;
+        lColumnNfMatrixBuffer.MODIFY();
+        pNfMatrixContext.WriteToColumnIndexer(lColumnIndex, lColumnNfMatrixBuffer.ID);
+      UNTIL ((lColumnNfMatrixBuffer.NEXT() = 0) OR (lColumnIndex >= pNfMatrixContext."Column Set Size"));
+
+      pNfMatrixContext.SetColumnCaptions(lCaptions);
+      pNfMatrixContext."Column Set Columns" := lColumnIndex;
+    END;
+
+    LOCAL PROCEDURE FinaliseValueRecRef@1000000019();
+    BEGIN
+      ///<summary>Finalising record reference</summary>
+
+      IF (ValueRecRefOpened) THEN
+      BEGIN
+        ValueRecRef.CLOSE();
+        ValueRecRefOpened := FALSE;
+      END;
+    END;
+
+    LOCAL PROCEDURE Select@1000000022(VAR pNfMatrixBuffer@1000000000 : TEMPORARY Record 9086965) : Boolean;
+    VAR
+      lNfSelectionBuffer@1000000001 : TEMPORARY Record 9086970;
+      lResult@1000000002 : Boolean;
+      lId@1000000003 : Integer;
+    BEGIN
+      ///<summary>Selecting buffer records</summary>
+      ///<param name="pNfMatrixBuffer">Recordset</param>
+      ///<returns>TRUE = Selected, FALSE = Cancelled</returns>
+
+      lResult := FALSE;
+
+      lId := 0;
+      IF (pNfMatrixBuffer.FINDSET()) THEN
+      REPEAT
+        lId += 1;
+        lNfSelectionBuffer.ID := lId;
+        lNfSelectionBuffer.Name := pNfMatrixBuffer.Name;
+        lNfSelectionBuffer.Selected := pNfMatrixBuffer.Selected;
+        lNfSelectionBuffer."Parent ID" := pNfMatrixBuffer.ID;
+        lNfSelectionBuffer.INSERT();
+      UNTIL (pNfMatrixBuffer.NEXT() = 0);
+      IF (lNfSelectionBuffer.FINDFIRST()) THEN;
+
+      pNfMatrixBuffer.MODIFYALL(Selected, FALSE);
+
+      IF (PAGE.RUNMODAL(0, lNfSelectionBuffer) = ACTION::LookupOK) THEN
+      BEGIN
+        lNfSelectionBuffer.SETRANGE(Selected, TRUE);
+        IF (lNfSelectionBuffer.FINDSET()) THEN
+        REPEAT
+          pNfMatrixBuffer.GET(lNfSelectionBuffer.ID);
+          pNfMatrixBuffer.Selected := TRUE;
+          pNfMatrixBuffer.MODIFY();
+        UNTIL (lNfSelectionBuffer.NEXT() = 0);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE SetValue@1000000029(VAR pNfMatrixContext@1000000000 : Record 9086964;VAR pRowNfMatrixBuffer@1000000005 : Record 9086965;pIndex@1000000001 : Integer;pValue@1000000002 : Boolean) : Boolean;
+    VAR
+      lColumnnFMatrixBuffer@1000000003 : TEMPORARY Record 9086965;
+      lValueRecordFound@1000000004 : Boolean;
+      lView@1000000007 : Text;
+      lPosition@1000000006 : Text;
+      lResult@1000000008 : Boolean;
+    BEGIN
+      ///<summary>Setting value</summary>
+      ///<param name="pNfMatrixContext">Context</param>
+      ///<param name="pRowNfMatrixBuffer">Row matrix buffer</param>
+      ///<param name="pIndex">Index</param>
+      ///<param name="pValue">Value</param>
+      ///<returns>TRUE: Page refresh necessary, FALSE: Not</returns>
+
+      pNfMatrixContext.GetColumnNfMatrixBuffer(lColumnnFMatrixBuffer);
+      lColumnnFMatrixBuffer.RESET();
+      lColumnnFMatrixBuffer.SETRANGE(Index, pIndex);
+      lColumnnFMatrixBuffer.FINDFIRST();
+      EXIT(SetColumnValue(pNfMatrixContext, pRowNfMatrixBuffer, lColumnnFMatrixBuffer, pValue));
+    END;
+
+    PROCEDURE SetColumnValue@1000000020(VAR pNfMatrixContext@1000000000 : Record 9086964;VAR pRowNfMatrixBuffer@1000000005 : Record 9086965;pColumnNfMatrixBuffer@1000000003 : TEMPORARY Record 9086965;pValue@1000000002 : Boolean) : Boolean;
+    VAR
+      lValueRecordFound@1000000004 : Boolean;
+      lView@1000000007 : Text;
+      lPosition@1000000006 : Text;
+      lResult@1000000008 : Boolean;
+      lIndex@1000000001 : Integer;
+    BEGIN
+      ///<summary>Setting context value</summary>
+      ///<param name="pNfMatrixContext">Context</param>
+      ///<param name="pRowNfMatrixBuffer">Row matrix buffer</param>
+      ///<param name="pColumnNfMatrixBuffer">Column matrix buffer</param>
+      ///<param name="pValue">Value</param>
+      ///<returns>TRUE: Page refresh necessary, FALSE: Not</returns>
+
+      lResult := FALSE;
+
+      lView := pRowNfMatrixBuffer.GETVIEW(FALSE);
+
+      ValueRecRef.RESET();
+      ValueParentFldRef.SETRANGE(pNfMatrixContext."Parent ID");
+      ValueRowFldRef.SETRANGE(pRowNfMatrixBuffer."Source ID");
+      ValueColumnFldRef.SETRANGE(pColumnNfMatrixBuffer."Source ID");
+      lValueRecordFound := ValueRecRef.FINDFIRST();
+
+      IF ((pValue) AND ( NOT (lValueRecordFound))) THEN
+      BEGIN
+        ValueRecRef.INIT();
+        IF (ValueTypeToSet) THEN
+          ValueTypeFldRef.VALIDATE(ValueType);
+        ValueParentFldRef.VALIDATE(pNfMatrixContext."Parent ID");
+        ValueRowFldRef.VALIDATE(pRowNfMatrixBuffer."Source ID");
+        ValueColumnFldRef.VALIDATE(pColumnNfMatrixBuffer."Source ID");
+        ValueRecRef.INSERT(TRUE);
+      END
+      ELSE IF (( NOT (pValue)) AND (lValueRecordFound)) THEN
+        ValueRecRef.DELETE(TRUE);
+
+      IF (pRowNfMatrixBuffer.Tree) THEN
+      BEGIN
+        lPosition := pRowNfMatrixBuffer.GETPOSITION(FALSE);
+        pRowNfMatrixBuffer.SETRANGE("Parent ID", pRowNfMatrixBuffer.ID);
+        IF (pRowNfMatrixBuffer.FINDSET()) THEN
+        BEGIN
+          lResult := TRUE;
+          REPEAT
+            lIndex := pColumnNfMatrixBuffer.Index;
+            pRowNfMatrixBuffer.SetColumnValue(lIndex, pValue);
+            pRowNfMatrixBuffer.MODIFY();
+            Validate(pRowNfMatrixBuffer, pNfMatrixContext, lIndex);
+          UNTIL (pRowNfMatrixBuffer.NEXT() = 0);
+        END;
+        pRowNfMatrixBuffer.SETRANGE("Parent ID");
+        pRowNfMatrixBuffer.SETPOSITION(lPosition);
+        pRowNfMatrixBuffer.SETRECFILTER();
+        pRowNfMatrixBuffer.FINDFIRST();
+        pRowNfMatrixBuffer.RESET();
+      END;
+
+      pRowNfMatrixBuffer.SETVIEW(lView);
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE UpdatePreviousNextSetFlags@1000000032(VAR pNfMatrixContext@1000000000 : Record 9086964);
+    BEGIN
+      ///<summary>Updating previous / next set (enable) flags</summary>
+      ///<param name="pNfMatrixContext">Matrix context</param>
+
+      pNfMatrixContext."Previous Set Enabled" := (pNfMatrixContext."Column Set Index" > 1);
+      pNfMatrixContext."Next Set Enabled" := (pNfMatrixContext."Column Set Index" < pNfMatrixContext."Column Maximum Set Index");
+    END;
+
+    BEGIN
+    {
+      ///<summary>Managing nForcement matrixes</summary>
+      ///<change version="NF2016.17" initials="JH" date="2016-04-23">Created</change>
+    }
+    END.
+  }
+}
+

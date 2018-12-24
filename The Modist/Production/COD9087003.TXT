@@ -1,0 +1,341 @@
+OBJECT Codeunit 9087003 Item Hierarchy Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/09/16;
+    Time=[ 2:31:07 PM];
+    Version List=NS2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ToItemHierarchyTmp@1000000001 : TEMPORARY Record 9087005;
+      TnpToolkit@1000000000 : Codeunit 9062230;
+
+    LOCAL PROCEDURE "--- Operations ---"@1000000004();
+    BEGIN
+    END;
+
+    PROCEDURE Up@1000000000(VAR pItemHierarchy@1000000000 : Record 9087005) : Boolean;
+    VAR
+      lNewType@1000000002 : Integer;
+      lResult@1000000001 : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Moving up in item hierarchy
+      //  <> pItemHierarchy: Item hierarchy recordset
+      //  <- TRUE: Filter changed, refresh page; FALSE: Don't bother
+
+      lResult := FALSE;
+
+      IF (pItemHierarchy.Type > pItemHierarchy.Type::Division) THEN
+      BEGIN
+        pItemHierarchy.FILTERGROUP(2);
+        lNewType := pItemHierarchy.Type - 1;
+        IF (lNewType <= pItemHierarchy.Type::Division) THEN
+          pItemHierarchy.SETRANGE("Division Code");
+        IF (lNewType <= pItemHierarchy.Type::Department) THEN
+          pItemHierarchy.SETRANGE("Department Code");
+        IF (lNewType <= pItemHierarchy.Type::Group) THEN
+          pItemHierarchy.SETRANGE("Group Code");
+        IF (lNewType <= pItemHierarchy.Type::Category) THEN
+          pItemHierarchy.SETRANGE("Category Code");
+        CASE (lNewType) OF
+          pItemHierarchy.Type::Division:
+            IF (pItemHierarchy.GET(lNewType, pItemHierarchy."Division Code")) THEN;
+          pItemHierarchy.Type::Department:
+            IF (pItemHierarchy.GET(lNewType, pItemHierarchy."Division Code", pItemHierarchy."Department Code")) THEN;
+          pItemHierarchy.Type::Group:
+            IF (pItemHierarchy.GET(lNewType, pItemHierarchy."Division Code", pItemHierarchy."Department Code",
+              pItemHierarchy."Group Code")) THEN;
+          pItemHierarchy.Type::Category:
+            IF (pItemHierarchy.GET(lNewType, pItemHierarchy."Division Code", pItemHierarchy."Department Code",
+              pItemHierarchy."Group Code", pItemHierarchy."Category Code")) THEN;
+        END;
+        pItemHierarchy.SETRANGE(Type, lNewType);
+        pItemHierarchy.FILTERGROUP(0);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE Down@1000000001(VAR pItemHierarchy@1000000000 : Record 9087005) : Boolean;
+    VAR
+      lItemHierarchy@1000000003 : Record 9087005;
+      lNewType@1000000002 : Integer;
+      lResult@1000000001 : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Moving down in item hierarchy
+      //  <> pItemHierarchy: Item hierarchy recordset
+      //  <- TRUE: Filter changed, refresh page; FALSE: Don't bother
+
+      lResult := FALSE;
+
+      IF (pItemHierarchy.Code <> '') THEN
+        IF (pItemHierarchy.Type < pItemHierarchy.Type::"Sub-Category") THEN
+        BEGIN
+          pItemHierarchy.FILTERGROUP(2);
+          CASE (pItemHierarchy.Type) OF
+            pItemHierarchy.Type::Division:
+              pItemHierarchy.SETRANGE("Division Code", pItemHierarchy."Division Code");
+            pItemHierarchy.Type::Department:
+              pItemHierarchy.SETRANGE("Department Code", pItemHierarchy."Department Code");
+            pItemHierarchy.Type::Group:
+              pItemHierarchy.SETRANGE("Group Code", pItemHierarchy."Group Code");
+            pItemHierarchy.Type::Category:
+              pItemHierarchy.SETRANGE("Category Code", pItemHierarchy."Category Code");
+          END;
+          lNewType := pItemHierarchy.Type + 1;
+          lItemHierarchy := pItemHierarchy;
+          pItemHierarchy.SETRANGE(Type, lNewType);
+          IF ( NOT (pItemHierarchy.FINDFIRST())) THEN
+          BEGIN
+            pItemHierarchy.INIT();
+            pItemHierarchy.SetSystemActivity(TRUE);
+            pItemHierarchy.VALIDATE(Type, lNewType);
+            IF (lNewType > pItemHierarchy.Type::Division) THEN
+              pItemHierarchy.VALIDATE("Division Code", lItemHierarchy."Division Code");
+            IF (lNewType > pItemHierarchy.Type::Department) THEN
+              pItemHierarchy.VALIDATE("Department Code", lItemHierarchy."Department Code");
+            IF (lNewType > pItemHierarchy.Type::Group) THEN
+              pItemHierarchy.VALIDATE("Group Code", lItemHierarchy."Group Code");
+            IF (lNewType > pItemHierarchy.Type::Category) THEN
+              pItemHierarchy.VALIDATE("Category Code", lItemHierarchy."Category Code");
+            pItemHierarchy.SetSystemActivity(FALSE);
+          END;
+          pItemHierarchy.FILTERGROUP(0);
+          lResult := TRUE;
+        END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE BlockAll@1000000002(VAR pItemHierarchy@1000000000 : Record 9087005;pBlock@1000000001 : Boolean;pInteraction@1000000002 : Boolean) : Boolean;
+    VAR
+      eConfirmation@1000000003 : TextConst 'ENU=Do you want to %1 %2 entries with the whole hierarchies beneath them?;ENG=Do you want to %1 %2 entries with the whole hierarchies beneath them?';
+      eBlock@1000000004 : TextConst 'ENU=block;ENG=block';
+      eUnblock@1000000005 : TextConst 'ENU=unblock;ENG=unblock';
+      lItemHierarchy@1000000006 : Record 9087005;
+    BEGIN
+      //DOC NS2015.3 - Blocking / unblocking all items passed with hierarchies beneath them
+      //  <> pItemHierarchy: Item hierarchy record
+      //  -> pBlock: TRUE = block, FALSE = unblock
+      //  -> pInteraction: Interaction flag
+      //  <- TRUE = amended, FALSE = cancelled
+
+      IF (pItemHierarchy.ISEMPTY) THEN
+        EXIT(FALSE);
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+      IF (pInteraction) THEN
+        IF ( NOT (CONFIRM(STRSUBSTNO(eConfirmation, TnpToolkit.IIFText(pBlock, eBlock, eUnblock), pItemHierarchy.COUNT), TRUE))) THEN
+          EXIT(FALSE);
+
+      IF (pItemHierarchy.FINDSET(TRUE)) THEN
+      REPEAT
+        Block(pItemHierarchy, pBlock, FALSE);
+      UNTIL (pItemHierarchy.NEXT() = 0);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE Block@1000000003(VAR pItemHierarchy@1000000000 : Record 9087005;pBlock@1000000001 : Boolean;pInteraction@1000000002 : Boolean) : Boolean;
+    VAR
+      eConfirmation@1000000003 : TextConst 'ENU=Do you want to %1 the current entry with the whole hierarchy beneath?;ENG=Do you want to %1 the current entry with the whole hierarchy beneath?';
+      eBlock@1000000004 : TextConst 'ENU=block;ENG=block';
+      eUnblock@1000000005 : TextConst 'ENU=unblock;ENG=unblock';
+      lItemHierarchy@1000000006 : Record 9087005;
+    BEGIN
+      //DOC NS2015.3 - Blocking / unblocking item hierarchy entry with hierarchy beneath it
+      //  <> pItemHierarchy: Item hierarchy record
+      //  -> pBlock: TRUE = block, FALSE = unblock
+      //  -> pInteraction: Interaction flag
+      //  <- TRUE = amended, FALSE = cancelled
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+      IF (pInteraction) THEN
+        IF ( NOT (CONFIRM(STRSUBSTNO(eConfirmation, TnpToolkit.IIFText(pBlock, eBlock, eUnblock)), TRUE))) THEN
+          EXIT(FALSE);
+
+      pItemHierarchy.VALIDATE(Blocked, pBlock);
+      pItemHierarchy.MODIFY(TRUE);
+
+      lItemHierarchy.RESET();
+      lItemHierarchy.SETRANGE(Type, pItemHierarchy.Type + 1);
+      lItemHierarchy.SETRANGE("Division Code", pItemHierarchy."Division Code");
+      IF (lItemHierarchy.Type >= lItemHierarchy.Type::Department) THEN
+        lItemHierarchy.SETRANGE("Department Code", pItemHierarchy."Department Code");
+      IF (lItemHierarchy.Type >= lItemHierarchy.Type::Group) THEN
+        lItemHierarchy.SETRANGE("Group Code", pItemHierarchy."Group Code");
+      IF (lItemHierarchy.Type >= lItemHierarchy.Type::Category) THEN
+        lItemHierarchy.SETRANGE("Category Code", pItemHierarchy."Category Code");
+      IF (lItemHierarchy.FINDSET(TRUE)) THEN
+      REPEAT
+        BlockAll(lItemHierarchy, pBlock, FALSE);
+      UNTIL (lItemHierarchy.NEXT() = 0);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Copying ---"@1000000005();
+    BEGIN
+    END;
+
+    PROCEDURE CopyFromSelected@1000000007(pItemHierarchy@1000000000 : Record 9087005);
+    BEGIN
+      //DOC NS2015.1 - Copying hierarchy from selected hierarchy element
+    END;
+
+    PROCEDURE CopyFrom@1000000020(pFromType@1000000011 : Integer;pFromDivisionCode@1000000010 : Code[20];pFromDepartmentCode@1000000009 : Code[20];pFromGroupCode@1000000008 : Code[20];pFromCategoryCode@1000000007 : Code[20];pToType@1000000006 : Integer;pToDivisionCode@1000000005 : Code[20];pToDepartmentCode@1000000004 : Code[20];pToGroupCode@1000000003 : Code[20];pToCategoryCode@1000000002 : Code[20];pWholeHierarchy@1000000001 : Boolean);
+    BEGIN
+      //DOC NS2015.1 - Copying hierarchy from
+      //  -> pFromType: Source type
+      //  -> pFromDivisionCode: Source division
+      //  -> pFromDepartmentCode: Source department
+      //  -> pFromGroupCode: Source group
+      //  -> pFromCategoryCode: Source category
+      //  -> pToType: Target type
+      //  -> pToDivisionCode: Target division
+      //  -> pToDepartmentCode: Target department
+      //  -> pToGroupCode: Target group
+      //  -> pToCategoryCode: Target category
+      //  -> pWholeHierarchy: Whole hierarchy flag
+
+      CopyFromInt(pFromType, pFromDivisionCode, pFromDepartmentCode, pFromGroupCode, pFromCategoryCode, pToType, pToDivisionCode, pToDepartmentCode,
+        pToGroupCode, pToCategoryCode, pWholeHierarchy, FALSE);
+    END;
+
+    LOCAL PROCEDURE CopyFromInt@1000000006(pFromType@1000000000 : Integer;pFromDivisionCode@1000000001 : Code[20];pFromDepartmentCode@1000000002 : Code[20];pFromGroupCode@1000000003 : Code[20];pFromCategoryCode@1000000004 : Code[20];pToType@1000000009 : Integer;pToDivisionCode@1000000008 : Code[20];pToDepartmentCode@1000000007 : Code[20];pToGroupCode@1000000006 : Code[20];pToCategoryCode@1000000005 : Code[20];pWholeHierarchy@1000000010 : Boolean;pRecurrency@1000000015 : Boolean);
+    VAR
+      lItemHierarchy@1000000014 : Record 9087005;
+      lFromItemHierarchy@1000000011 : Record 9087005;
+      eCantCopyToTheSamePlace@1000000012 : TextConst 'ENU=Can''t copy item hierarchy to the same place.;ENG=Can''t copy item hierarchy to the same place.';
+      lToItemHierarchy@1000000013 : Record 9087005;
+    BEGIN
+      //DOC NS2015.1 - Copying hierarchy from (internal version)
+      //  -> pFromType: Source type
+      //  -> pFromDivisionCode: Source division
+      //  -> pFromDepartmentCode: Source department
+      //  -> pFromGroupCode: Source group
+      //  -> pFromCategoryCode: Source category
+      //  -> pToType: Target type
+      //  -> pToDivisionCode: Target division
+      //  -> pToDepartmentCode: Target department
+      //  -> pToGroupCode: Target group
+      //  -> pToCategoryCode: Target category
+      //  -> pWholeHierarchy: Whole hierarchy flag
+      //  -> pRecurrency: Recurrency flag
+
+      IF ((pFromType = pToType) AND (pFromDivisionCode = pToDivisionCode) AND (pFromDepartmentCode = pToDepartmentCode) AND
+          (pFromGroupCode = pToGroupCode) AND (pFromCategoryCode = pToCategoryCode)) THEN
+        IF (pRecurrency) THEN
+          EXIT
+        ELSE
+          ERROR(eCantCopyToTheSamePlace);
+
+      IF ( NOT (pRecurrency)) THEN
+        ClearToBuffer();
+
+      lFromItemHierarchy.RESET();
+      lFromItemHierarchy.SETRANGE(Type, pFromType);
+      IF (pFromType > lFromItemHierarchy.Type::Division) THEN
+        lFromItemHierarchy.SETRANGE("Division Code", pFromDivisionCode);
+      IF (pFromType > lFromItemHierarchy.Type::Department) THEN
+        lFromItemHierarchy.SETRANGE("Department Code", pFromDepartmentCode);
+      IF (pFromType > lFromItemHierarchy.Type::Group) THEN
+        lFromItemHierarchy.SETRANGE("Group Code", pFromGroupCode);
+      IF (pFromType > lFromItemHierarchy.Type::Category) THEN
+        lFromItemHierarchy.SETRANGE("Category Code", pFromCategoryCode);
+      IF (lFromItemHierarchy.FINDSET()) THEN
+      REPEAT
+        CASE (pToType) OF
+          lToItemHierarchy.Type::Division:
+            SetHierarchy(lItemHierarchy, lFromItemHierarchy.Code, '', '', '', '');
+          lToItemHierarchy.Type::Department:
+            SetHierarchy(lItemHierarchy, pToDivisionCode, lFromItemHierarchy.Code, '', '', '');
+          lToItemHierarchy.Type::Group:
+            SetHierarchy(lItemHierarchy, pToDivisionCode, pToDepartmentCode, lFromItemHierarchy.Code, '', '');
+          lToItemHierarchy.Type::Category:
+            SetHierarchy(lItemHierarchy, pToDivisionCode, pToDepartmentCode, pToGroupCode, lFromItemHierarchy.Code, '');
+          lToItemHierarchy.Type::"Sub-Category":
+            SetHierarchy(lItemHierarchy, pToDivisionCode, pToDepartmentCode, pToGroupCode, pToCategoryCode, lFromItemHierarchy.Code);
+        END;
+        IF ( NOT (lToItemHierarchy.GET(pToType, lItemHierarchy."Division Code", lItemHierarchy."Department Code", lItemHierarchy."Group Code",
+             lItemHierarchy."Category Code", lItemHierarchy."Sub-Category Code"))) THEN
+          IF ( NOT (ToItemHierarchyTmp.GET(pToType, lItemHierarchy."Division Code", lItemHierarchy."Department Code", lItemHierarchy."Group Code",
+               lItemHierarchy."Category Code", lItemHierarchy."Sub-Category Code"))) THEN
+          BEGIN
+            CLEAR(lToItemHierarchy);
+            lToItemHierarchy.INIT();
+            lToItemHierarchy.VALIDATE(Type, pToType);
+            lToItemHierarchy.VALIDATE("Division Code", lItemHierarchy."Division Code");
+            lToItemHierarchy.VALIDATE("Department Code", lItemHierarchy."Department Code");
+            lToItemHierarchy.VALIDATE("Group Code", lItemHierarchy."Group Code");
+            lToItemHierarchy.VALIDATE("Category Code", lItemHierarchy."Category Code");
+            lToItemHierarchy.VALIDATE("Sub-Category Code", lItemHierarchy."Sub-Category Code");
+            ToItemHierarchyTmp := lToItemHierarchy;
+            ToItemHierarchyTmp.INSERT(TRUE);
+          END;
+        IF (pWholeHierarchy) THEN
+          IF ((pFromType < lFromItemHierarchy.Type::"Sub-Category") AND (pToType < lToItemHierarchy.Type::"Sub-Category")) THEN
+            CopyFromInt(pFromType + 1, lFromItemHierarchy."Division Code", lFromItemHierarchy."Department Code", lFromItemHierarchy."Group Code",
+              lFromItemHierarchy."Category Code", pToType + 1, lToItemHierarchy."Division Code", lToItemHierarchy."Department Code",
+              lToItemHierarchy."Group Code", lToItemHierarchy."Category Code", pWholeHierarchy, TRUE);
+      UNTIL (lFromItemHierarchy.NEXT() = 0);
+
+      IF ( NOT (pRecurrency)) THEN
+        FlushToBuffer();
+    END;
+
+    LOCAL PROCEDURE SetHierarchy@1000000012(VAR pItemHierarchy@1000000005 : Record 9087005;pDivisionCode@1000000003 : Code[20];pDepartmentCode@1000000002 : Code[20];pGroupCode@1000000001 : Code[20];pCategoryCode@1000000000 : Code[20];pSubCategoryCode@1000000004 : Code[20]);
+    BEGIN
+      //DOC NS2015.1 - Setting hierarchy
+      //  <> pItemHierarchy: Target hierarchy record
+      //  -> pDivisionCode: Division
+      //  -> pDepartmentCode: Department
+      //  -> pGroupCode: Group
+      //  -> pCategoryCode: Category
+      //  -> pSubCategoryCode: Sub-category
+
+      pItemHierarchy."Division Code" := pDivisionCode;
+      pItemHierarchy."Department Code" := pDepartmentCode;
+      pItemHierarchy."Group Code" := pGroupCode;
+      pItemHierarchy."Category Code" := pCategoryCode;
+      pItemHierarchy."Sub-Category Code" := pSubCategoryCode;
+    END;
+
+    LOCAL PROCEDURE ClearToBuffer@1000000024();
+    BEGIN
+      ToItemHierarchyTmp.RESET();
+      ToItemHierarchyTmp.DELETEALL();
+    END;
+
+    LOCAL PROCEDURE FlushToBuffer@1000000025();
+    VAR
+      lItemHierarchy@1000000000 : Record 9087005;
+    BEGIN
+      ToItemHierarchyTmp.RESET();
+      IF (ToItemHierarchyTmp.FINDSET()) THEN
+      REPEAT
+        lItemHierarchy := ToItemHierarchyTmp;
+        lItemHierarchy.INSERT(TRUE);
+      UNTIL (ToItemHierarchyTmp.NEXT() = 0);
+      ClearToBuffer();
+    END;
+
+    BEGIN
+    {
+      //DOC NS2015.1  JH 30/01/2014 - Created
+      //DOC NS2015.3  JH 30/07/2014 - Blocking added
+      //DOC NS2016.16 JH 07/09/2016 - nSemble 2016
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,99 @@
+OBJECT Codeunit 9062263 Enhanced Workflow Web Service
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/09/15;
+    Time=12:50:52 PM;
+    Version List=NA2016.10;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            t@1000000000 : BigText;
+            t2@1000000001 : Text[1000];
+          BEGIN
+            GetNextWFlowNotification(t,FALSE);
+            t.GETSUBTEXT(t2,1);
+            MESSAGE(t2);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TNLUtils@1000000000 : Codeunit 9062229;
+      Logger@1000000001 : Record 9062280;
+      SysB@1000000002 : Record 9062230;
+
+    PROCEDURE GetNextWFlowNotification@1000000000(VAR OutputXML@1000000008 : BigText;UseRTC@1000000000 : Boolean) Exists : Boolean;
+    VAR
+      WFlowNots@1000000003 : Record 9062261;
+      WFlow@1000000005 : Record 9062258;
+      WFlowAct@1000000006 : Record 9062266;
+      BT@1000000007 : BigText;
+    BEGIN
+      WFlowNots.SETFILTER(Type,'%1',WFlowNots.Type::PopUp);
+      WFlowNots.SETFILTER("To Name",TNLUtils.GetUserContactNo(USERID));
+      WFlowNots.SETFILTER(Sent,'%1',FALSE);
+
+      IF WFlowNots.FINDSET THEN BEGIN
+
+        TNLUtils.NotificationsToXML(OutputXML,WFlowNots,UseRTC);
+        WFlowAct.GET(WFlowNots."Workflow GUID");
+        WFlow.GET(WFlowAct."Workflow No.");
+
+        REPEAT
+          WFlowNots.FINDFIRST;
+          WFlowNots.Sent := TRUE;
+          WFlowNots."Sent Date" := TODAY;
+          WFlowNots."Sent Time" := TIME;
+          WFlowNots.MODIFY;
+        UNTIL WFlowNots.NEXT = 0;
+        EXIT(TRUE);
+      END ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE RespondToWorkflow@1000000001(GUID@1000000000 : GUID;Response@1000000001 : Code[20];ResponseText@1000000003 : Text[1024]) : Boolean;
+    VAR
+      lAutoMessageEntry@1000000002 : Record 9062278;
+    BEGIN
+      CLEAR(lAutoMessageEntry);
+      RespondToWorkflowWithAutoMsg(GUID, Response, ResponseText, lAutoMessageEntry);
+    END;
+
+    PROCEDURE RespondToWorkflowWithAutoMsg@1000000002(GUID@1000000000 : GUID;Response@1000000001 : Code[20];ResponseText@1000000003 : Text[1024];AutoMessageEntry@1000000004 : Record 9062278) : Boolean;
+    VAR
+      WFlowActLine@1000000002 : Record 9062266;
+      TxtProcessing@1000000006 : TextConst 'ENU=Processing respond-to-workflow from user ID "%1" - response: %2 value: %3 to workflow "%4";ENG=Processing respond-to-workflow from user ID "%1" - response: %2 value: %3 to workflow "%4"';
+      TxtDefaultResponse@1000000005 : TextConst 'ENU=Insert Comment Here;ENG=Insert Comment Here';
+      TxtNoWorkflowActivityLine@1000000007 : TextConst 'ENU=Didn''t get workflow activity line "%1";ENG=Didn''t get workflow activity line "%1"';
+      TxtProcessed@1000000008 : TextConst 'ENU=Succesfully processed respond-to-workflow from user "%1" - response %2 to workflow "%3";ENG=Succesfully processed respond-to-workflow from user "%1" - response %2 to workflow "%3"';
+    BEGIN
+      Logger.Log('WFLOWWS', Logger.Type::Information, STRSUBSTNO(TxtProcessing, USERID, Response, ResponseText, GUID), USERID);
+      COMMIT;
+      IF NOT WFlowActLine.GET(GUID) THEN BEGIN
+        Logger.Log('WFLOWWS', Logger.Type::Debug, STRSUBSTNO(TxtNoWorkflowActivityLine, GUID), USERID);
+        COMMIT;
+        EXIT(FALSE);
+      END;
+      WFlowActLine.DontConfirm;
+      WFlowActLine.SetUserID(AutoMessageEntry."Contact No.");
+      IF (WFlowActLine."Response Value" <> TxtDefaultResponse) THEN
+        WFlowActLine.VALIDATE("Response Value", COPYSTR(ResponseText, 1, MAXSTRLEN(WFlowActLine."Response Value")));
+      WFlowActLine.VALIDATE(Response,Response);
+      WFlowActLine.MODIFY;
+      Logger.Log('WFLOWWS', Logger.Type::Debug, STRSUBSTNO(TxtProcessed, USERID, Response, GUID), USERID);
+
+      EXIT(TRUE);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  JH 10/08/2012 - Migrated to 2013
+      //DOC NA2016.10 JH 26/08/2015 - Upgraded to 2016
+    }
+    END.
+  }
+}
+

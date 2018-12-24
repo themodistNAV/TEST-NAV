@@ -1,0 +1,184 @@
+OBJECT Codeunit 9062445 Formula Calculator
+{
+  OBJECT-PROPERTIES
+  {
+    Date=28/08/15;
+    Time=11:31:46 AM;
+    Version List=NA2016.10;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      CallLevel@1000000001 : Integer;
+      DivisionError@1000000000 : Boolean;
+
+    PROCEDURE CalculateFormula@1000000002(pFormula@1000000000 : Text;pVariables@1000000001 : ARRAY [10] OF Decimal) : Decimal;
+    VAR
+      lEngine@1000000005 : DotNet "'Microsoft.JScript, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.Microsoft.JScript.Vsa.VsaEngine";
+      lEval@1000000004 : DotNet "'Microsoft.JScript, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.Microsoft.JScript.Eval";
+      lFormula@1000000007 : Text;
+      lScript@1000000003 : Text;
+      lResult@1000000006 : Decimal;
+      lResultVariant@1000000002 : Variant;
+    BEGIN
+      //DOC NA2015.2 - Calculating formula
+      //  -> pFormula: Formula to calculate
+      //  -> pVariables: An array of variables
+      //  <- Result
+
+      lFormula := STRSUBSTNO(pFormula, 'mVar1', 'mVar2', 'mVar3', 'mVar4', 'mVar5', 'mVar6', 'mVar7', 'mVar8', 'mVar9', 'mVar10');
+      lScript := STRSUBSTNO(
+        'var mVar1 = %1; var mVar2 = %2; var mVar3 = %3; var mVar4 = %4; var mVar5 = %5; ' +
+        'var mVar6 = %6; var mVar7 = %7; var mVar8 = %8; var mVar9 = %9; var mVar10 = %10; ' +
+        '%11;',
+        FORMAT(pVariables[1], 0, 1), FORMAT(pVariables[2], 0, 1), FORMAT(pVariables[3], 0, 1), FORMAT(pVariables[4], 0, 1), FORMAT(pVariables[5], 0, 1),
+        FORMAT(pVariables[6], 0, 1), FORMAT(pVariables[7], 0, 1), FORMAT(pVariables[8], 0, 1), FORMAT(pVariables[9], 0, 1), FORMAT(pVariables[10], 0, 1),
+        lFormula);
+
+      lEngine := lEngine.CreateEngine();
+      lResultVariant := lEval.JScriptEvaluate(lScript, lEngine);
+      IF (EVALUATE(lResult, FORMAT(lResultVariant, 0, 1))) THEN;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE EvaluateExpression@9(pExpression@1001 : Text[250]) : Decimal;
+    VAR
+      lResult@1005 : Decimal;
+      lParantheses@1006 : Integer;
+      lOperator@1007 : Char;
+      lLeftOperand@1008 : Text[80];
+      lRightOperand@1009 : Text[80];
+      lLeftResult@1010 : Decimal;
+      lRightResult@1011 : Decimal;
+      lExpressionIndex@1012 : Integer;
+      lIsExpression@1013 : Boolean;
+      lIsFilter@1014 : Boolean;
+      lOperators@1015 : Text[8];
+      lOperatorIndex@1016 : Integer;
+      eCircularReference@1000000000 : TextConst 'ENU=Because of circular references, the program cannot calculate a formula.;ENG=Because of circular references, the program cannot calculate a formula.';
+      eIllegalValue@1000000001 : TextConst 'ENU=You have entered an illegal value.;ENG=You have entered an illegal value.';
+    BEGIN
+      //DOC NA2016.10 - Evaluating expression into a decimal result
+      //  -> pExpression: The expression
+      //  <- The result
+
+      lResult := 0;
+
+      CallLevel += 1;
+      IF (CallLevel > 25) THEN
+        ShowExpressionError(eCircularReference);
+
+      pExpression := DELCHR(pExpression, '<>', ' ');
+      IF (STRLEN(pExpression) > 0) THEN
+      BEGIN
+        lParantheses := 0;
+        lIsExpression := FALSE;
+        lOperators := '+-*/^%';
+        lOperatorIndex := 1;
+
+        REPEAT
+          lExpressionIndex := STRLEN(pExpression);
+          REPEAT
+            IF (pExpression[lExpressionIndex] = '(') THEN
+              lParantheses += 1
+            ELSE IF (pExpression[lExpressionIndex] = ')') THEN
+              lParantheses -= 1;
+            IF ((lParantheses = 0) AND (pExpression[lExpressionIndex] = lOperators[lOperatorIndex])) THEN
+              lIsExpression := TRUE
+            ELSE
+              lExpressionIndex -= 1;
+          UNTIL ((lIsExpression) OR (lExpressionIndex <= 0));
+          IF ( NOT (lIsExpression)) THEN
+            lOperatorIndex += 1;
+        UNTIL ((lOperatorIndex > STRLEN(lOperators)) OR (lIsExpression));
+
+        IF (lIsExpression) THEN
+        BEGIN
+          IF (lExpressionIndex > 1) THEN
+            lLeftOperand := COPYSTR(pExpression, 1, lExpressionIndex - 1)
+          ELSE
+            lLeftOperand := '';
+
+          IF (lExpressionIndex < STRLEN(pExpression)) THEN
+            lRightOperand := COPYSTR(pExpression, lExpressionIndex + 1)
+          ELSE
+            lRightOperand := '';
+
+          lOperator := pExpression[lExpressionIndex];
+
+          lLeftResult := EvaluateExpression(lLeftOperand);
+          lRightResult := EvaluateExpression(lRightOperand);
+
+          CASE (lOperator) OF
+            '^':
+              lResult := POWER(lLeftResult, lRightResult);
+            '%':
+              IF (lRightResult = 0) THEN
+              BEGIN
+                lResult := 0;
+                DivisionError := TRUE;
+              END
+              ELSE
+                lResult := 100 * lLeftResult / lRightResult;
+            '*':
+              lResult := lLeftResult * lRightResult;
+            '/':
+              IF (lRightResult = 0) THEN
+              BEGIN
+                lResult := 0;
+                DivisionError := TRUE;
+              END
+              ELSE
+                lResult := lLeftResult / lRightResult;
+            '+':
+              lResult := lLeftResult + lRightResult;
+            '-':
+              lResult := lLeftResult - lRightResult;
+          END;
+        END
+        ELSE
+          IF ((pExpression[1] = '(') AND (pExpression[STRLEN(pExpression)] = ')')) THEN
+            lResult := EvaluateExpression(COPYSTR(pExpression,2,STRLEN(pExpression) - 2))
+          ELSE
+          BEGIN
+            lIsFilter :=((STRPOS(pExpression,'..') + STRPOS(pExpression,'|') + STRPOS(pExpression,'<') +
+              STRPOS(pExpression,'>') + STRPOS(pExpression,'&') + STRPOS(pExpression,'=')) > 0);
+            IF ((STRLEN(pExpression) > 10) AND (NOT (lIsFilter))) THEN
+              EVALUATE(lResult, pExpression)
+            ELSE
+              IF ((lIsFilter) OR ( NOT (EVALUATE(lResult, pExpression)))) THEN
+                ShowExpressionError(eIllegalValue);
+          END;
+      END;
+
+      CallLevel -= 1;
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE ShowExpressionError@19(pErrorMessage@1000 : Text[100]);
+    VAR
+      eErrorMessage@1000000001 : TextConst 'ENU=%1\\ %2;ENG=%1\\ %2';
+      eErrorDetails@1000000000 : TextConst 'ENU=The error occurred when the program tried to calculate:\;ENG=The error occurred when the program tried to calculate:\';
+    BEGIN
+      //DOC NA2016.10 - Showing expression error
+      //  -> pErrorMessage: Error message
+
+      ERROR(STRSUBSTNO(eErrorMessage, pErrorMessage, eErrorDetails));
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.2  JH 08/05/2014 - Created
+      //DOC NA2016.10 JH 28/08/2015 - Upgraded to 2016, expression evaluation copied from "AccSchedMgt" codeunit
+    }
+    END.
+  }
+}
+

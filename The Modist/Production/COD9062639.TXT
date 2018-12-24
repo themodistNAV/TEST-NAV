@@ -1,0 +1,743 @@
+OBJECT Codeunit 9062639 Role Centre Toolkit
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/07/16;
+    Time=12:35:10 PM;
+    Version List=NA2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ObjectMetadata@9062230 : Record 2000000071;
+      User@9062233 : Record 2000000120;
+      UserMetadata@9062232 : Record 2000000075;
+      FileSystem@9062231 : Codeunit 9062264;
+      MultilanguageToolkit@9062235 : Codeunit 9062642;
+      ObjectFieldToolkit@9062236 : Codeunit 9062343;
+      TnpToolkit@9062237 : Codeunit 9062230;
+      XmlToolkit@9062234 : Codeunit 9062641;
+      String@1000000000 : Codeunit 9062236;
+
+    LOCAL PROCEDURE "--- General ---"@9062231();
+    BEGIN
+    END;
+
+    PROCEDURE ReadMetadata@9062251(pUserId@9062233 : Code[50];pPageId@9062232 : Integer;VAR pRoleCentreInfo@9062231 : Record 9062775;VAR pRoleCentreControlInfo@9062230 : Record 9062776);
+    BEGIN
+      //DOC NA2016.11 - Reading metadata
+      //  -> pUserId: User ID
+      //  -> pPageId: Page ID
+      //  <> pRoleCentreInfo: Target role centre info record
+      //  <> pRoleCentreControlInfo: Target role centre control info recordset
+
+      pRoleCentreInfo.RESET();
+      pRoleCentreInfo.DELETEALL();
+
+      CLEAR(pRoleCentreInfo);
+      pRoleCentreInfo.INIT();
+      pRoleCentreInfo.VALIDATE("Page ID", pPageId);
+      pRoleCentreInfo.INSERT();
+
+      ReadRoleCentreMetadata(pUserId, pPageId, pRoleCentreInfo, pRoleCentreControlInfo);
+      ReadUserMetadata(pUserId, pPageId, pRoleCentreInfo, pRoleCentreControlInfo);
+    END;
+
+    PROCEDURE WriteMetadata@9062243(pUserId@9062233 : Code[50];pPageId@9062232 : Integer;VAR pRoleCentreInfo@9062231 : Record 9062775;VAR pRoleCentreControlInfo@9062230 : Record 9062776);
+    BEGIN
+      //DOC NA2016.11 - Writing metadata
+      //  -> pUserId: User ID
+      //  -> pPageId: Page ID
+      //  <> pRoleCentreInfo: Target role centre info record
+      //  <> pRoleCentreControlInfo: Target role centre control info recordset
+
+      WriteUserMetadata(pUserId, pPageId, pRoleCentreInfo, pRoleCentreControlInfo);
+      WritePanelSelection(pUserId, pPageId, pRoleCentreInfo, pRoleCentreControlInfo);
+    END;
+
+    LOCAL PROCEDURE "--- Role Centre Metadata Read ---"@9062245();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ReadRoleCentreMetadata@9062246(pUserId@9062245 : Code[50];pPageId@9062230 : Integer;VAR pRoleCentreInfo@9062231 : Record 9062775;VAR pRoleCentreControlInfo@9062232 : Record 9062776);
+    VAR
+      lBlob@9062233 : Record 99008535;
+      lInStream@9062235 : InStream;
+      lXmlDocument@9062234 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      lXmlNamespaceManager@9062238 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+      eCantFindRoleCentreSides@9062237 : TextConst 'ENU="""Role Centre Area"" sides (left/right) can''t be found in page %1 metadata. Are you sure it is a role centre page?";ENG="""Role Centre Area"" sides (left/right) can''t be found in page %1 metadata. Are you sure it is a role centre page?"';
+      lXmlSideNodes@9062236 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      lXmlSideNode@9062239 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      lSide@9062240 : ' ,Left,Right';
+      lSideGuid@9062241 : GUID;
+      lEmptyGuid@9062242 : GUID;
+      lXmlControlNodes@9062244 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      lXmlControlNode@9062243 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      lControlSequence@9062247 : Integer;
+    BEGIN
+      //DOC NA2016.11 - Reading role centre metadata
+      //  -> pUserId: User ID
+      //  -> pPageId: Page ID
+      //  <> pRoleCentreInfo: Target role centre info record
+      //  <> pRoleCentreControlInfo: Target role centre control info recordset
+
+      CLEAR(pRoleCentreInfo);
+      pRoleCentreInfo."Page ID" := pPageId;
+
+      ExportRoleCentreMetadataToBlob(pPageId, lBlob);
+      lBlob.Blob.CREATEINSTREAM(lInStream);
+
+      lXmlDocument := lXmlDocument.XmlDocument();
+      lXmlDocument.Load(lInStream);
+      XmlToolkit.GetXmlDocumentNamespaces(lXmlDocument, 'm', lXmlNamespaceManager);
+      lXmlSideNodes := lXmlDocument.SelectNodes('/m:PageDefinition/m:Content/m:Containers[@ContainerType=''RoleCenterArea'']/m:Controls', lXmlNamespaceManager);
+      IF (ISNULL(lXmlSideNodes)) THEN
+        ERROR(eCantFindRoleCentreSides, pPageId);
+      IF (lXmlSideNodes.Count = 0) THEN
+        ERROR(eCantFindRoleCentreSides, pPageId);
+
+      FOR lSide := lSide::Left TO lSide::Right DO
+      BEGIN
+        lXmlSideNode := lXmlSideNodes.Item(lSide - 1);
+        lSideGuid := XmlToolkit.GetXmlNodeGuidAttribute(lXmlSideNode, 'ControlGUID');
+        pRoleCentreInfo.SetSide(lSide, lSideGuid <> lEmptyGuid, lSideGuid);
+        pRoleCentreInfo.MODIFY();
+        lXmlControlNodes := lXmlSideNode.SelectNodes('m:Controls', lXmlNamespaceManager);
+        CLEAR(lControlSequence);
+        FOREACH lXmlControlNode IN lXmlControlNodes DO
+          ReadRoleCentreControlMetadata(pUserId, pPageId, lSide, lXmlControlNode, lXmlNamespaceManager,
+            pRoleCentreControlInfo, lControlSequence);
+      END;
+    END;
+
+    LOCAL PROCEDURE ReadRoleCentreControlMetadata@9062235(pUserId@9062235 : Code[50];pPageId@9062237 : Integer;pSide@9062238 : Integer;pXmlControlNode@9062239 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";pXmlNamespaceManager@9062234 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";VAR pRoleCentreControlInfo@9062236 : Record 9062776;VAR pControlSequence@9062230 : Integer);
+    VAR
+      lPanelIndex@9062231 : Integer;
+      lPanelCode@9062232 : Code[20];
+      lVisible@9062233 : Boolean;
+    BEGIN
+      //DOC NA2016.11 - Reading role centre control metadata
+      //  -> pUserId: User ID
+      //  -> pPageId: Page ID
+      //  -> pSide: Side (left / right)
+      //  -> pXmlControlNode: XML control node (from metadata XML document)
+      //  -> pXmlNamespaceManager: XML namespace manager (necessary to query XML document for nodes)
+      //  <> pRoleCentreControlInfo: Target role centre control info record
+      //  <> pControlSequence: Control sequence (changed inside this function)
+
+      pControlSequence += 1;
+
+      CLEAR(pRoleCentreControlInfo);
+      pRoleCentreControlInfo.INIT();
+      pRoleCentreControlInfo.VALIDATE("Page ID", pPageId);
+      pRoleCentreControlInfo.VALIDATE("Control GUID", XmlToolkit.GetXmlNodeGuidAttribute(pXmlControlNode, 'ControlGUID'));
+      pRoleCentreControlInfo.VALIDATE("Original Side", pSide);
+      pRoleCentreControlInfo.VALIDATE("Original Sequence", pControlSequence);
+      pRoleCentreControlInfo.VALIDATE("Original Caption", FindRoleCentreControlCaption(pXmlControlNode));
+      IF (XmlToolkit.XmlElementHasAttribute(pXmlControlNode, 'Visible')) THEN
+        lVisible := XmlToolkit.GetXmlNodeBooleanAttribute(pXmlControlNode, 'Visible')
+      ELSE
+        lVisible := TRUE;
+      pRoleCentreControlInfo.VALIDATE("Original Visible", lVisible);
+      FindRoleCentreControlPanel(pUserId, pPageId, pXmlControlNode, pXmlNamespaceManager, lPanelIndex, lPanelCode);
+      pRoleCentreControlInfo.VALIDATE("Panel Index", lPanelIndex);
+      pRoleCentreControlInfo.VALIDATE("Original Panel Code", lPanelCode);
+      pRoleCentreControlInfo.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE FindRoleCentreControlCaption@9062236(pXmlControlNode@9062230 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode") : Text;
+    VAR
+      lControlCaptionML@9062233 : Text;
+      lControlCaption@9062232 : Text;
+      lControlPartPageId@9062231 : Integer;
+    BEGIN
+      //DOC NA2016.11 - Trying to find role centre control caption
+      //  -> pXmlControlNode: XML control node (from metadata XML document)
+      //  <- Caption
+
+      CLEAR(lControlCaption);
+
+      lControlCaptionML := XmlToolkit.GetXmlNodeAttribute(pXmlControlNode, 'CaptionML');
+      lControlCaption := MultilanguageToolkit.GetTextForCurrentLanguage(lControlCaptionML);
+      IF (lControlCaption = '') THEN
+        lControlCaption := MultilanguageToolkit.GetTextForLanguageCode(lControlCaptionML, 'ENU');
+      IF (lControlCaption = '') THEN
+        lControlCaption := XmlToolkit.GetXmlNodeAttribute(pXmlControlNode, 'Name');
+      IF (lControlCaption = '') THEN
+      BEGIN
+        lControlPartPageId := XmlToolkit.GetXmlNodeIntegerAttribute(pXmlControlNode, 'PagePartID');
+        IF (lControlPartPageId <> 0) THEN
+          lControlCaption := ObjectFieldToolkit.GetPageName(lControlPartPageId);
+      END;
+
+      EXIT(lControlCaption);
+    END;
+
+    LOCAL PROCEDURE FindRoleCentreControlPanel@9062238(pUserId@9062241 : Code[50];pPageId@9062240 : Integer;pXmlControlNode@9062230 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";pXmlNamespaceManager@9062236 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";VAR pPanelIndex@9062231 : Integer;VAR pPanelCode@9062232 : Code[20]);
+    VAR
+      lPanelSelection@9062235 : Record 9062371;
+      lXmlPanelIndexXPath@9062238 : Text;
+      lXmlPanelIndexNode@9062234 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      lTableId@9062237 : Integer;
+      lPanelIndex@9062239 : Integer;
+      lPanelDescription@9062242 : Text;
+    BEGIN
+      //DOC NA2016.11 - Trying to find role centre control panel
+      //  -> pUserId: User ID
+      //  -> pPageId: Page ID
+      //  -> pXmlControlNode: XML control node (from metadata XML document)
+      //  -> pXmlNamespaceManager: XML namespace manager (necessary to query XML document for nodes)
+      //  <> pPanelIndex: Target panel index
+      //  <> pPanelCode: Target panel code
+      //  <> pCaption: Source / target caption (panel information will be added to it if panel found)
+
+      CLEAR(pPanelIndex);
+      CLEAR(pPanelCode);
+
+      lTableId := XmlToolkit.GetXmlNodeIntegerAttribute(pXmlControlNode, 'RunObjectSrcTable');
+      IF (lTableId <> DATABASE::"Panel Selection") THEN
+        EXIT;
+
+      lXmlPanelIndexXPath := STRSUBSTNO('m:SubFormView/m:TableFilters[@FieldID=%1]', lPanelSelection.FIELDNO("Panel Index"));
+      lXmlPanelIndexNode := pXmlControlNode.SelectSingleNode(lXmlPanelIndexXPath, pXmlNamespaceManager);
+      IF (ISNULL(lXmlPanelIndexNode)) THEN
+        EXIT;
+
+      lPanelIndex := XmlToolkit.GetXmlNodeIntegerAttribute(lXmlPanelIndexNode, 'FilterValue');
+      IF ((lPanelIndex > 0) AND (lPanelIndex <= 10)) THEN
+        pPanelIndex := lPanelIndex;
+
+      IF (pPanelIndex <> 0) THEN
+        IF (lPanelSelection.GET(pPageId, pUserId)) THEN
+          pPanelCode := lPanelSelection.GetPanelCode(pPanelIndex);
+    END;
+
+    LOCAL PROCEDURE "--- User Metadata Read ---"@9062239();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ReadUserMetadata@9062240(pUserId@9062233 : Code[50];pPageId@9062232 : Integer;VAR pRoleCentreInfo@9062231 : Record 9062775;VAR pRoleCentreControlInfo@9062230 : Record 9062776);
+    VAR
+      lBlob@9062234 : Record 99008535;
+      lInStream@9062235 : InStream;
+      lXmlDocument@9062237 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      lXmlNamespaceManager@9062236 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+      lXmlNode@9062238 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+    BEGIN
+      //DOC NA2016.11 - Reading user metadata
+      //  -> pUserId: User ID
+      //  -> pPageId: Page ID
+      //  <> pRoleCentreInfo: Role centre info record
+      //  <> pRoleCentreControlInfo: Target role centre control info recordset
+
+      IF ( NOT (ExportUserMetadataToBlob(pUserId, pPageId, lBlob))) THEN
+        EXIT;
+      lBlob.Blob.CREATEINSTREAM(lInStream);
+
+      lXmlDocument := lXmlDocument.XmlDocument();
+      lXmlDocument.Load(lInStream);
+      XmlToolkit.GetXmlDocumentNamespaces(lXmlDocument, 'm', lXmlNamespaceManager);
+      FOREACH lXmlNode IN lXmlDocument.SelectNodes('delta/changes/move', lXmlNamespaceManager) DO
+        ReadUserMetadataMove(lXmlNode, pRoleCentreInfo, pRoleCentreControlInfo);
+      FOREACH lXmlNode IN lXmlDocument.SelectNodes('delta/changes/order', lXmlNamespaceManager) DO
+        ReadUserMetadataOrder(lXmlNode, pRoleCentreInfo, pRoleCentreControlInfo);
+      FOREACH lXmlNode IN lXmlDocument.SelectNodes('delta/changes/update', lXmlNamespaceManager) DO
+        ReadUserMetadataUpdate(lXmlNode, pRoleCentreInfo, pRoleCentreControlInfo);
+    END;
+
+    LOCAL PROCEDURE ReadUserMetadataMove@9062241(pXmlNode@9062230 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";VAR pRoleCentreInfo@9062236 : Record 9062775;VAR pRoleCentreControlInfo@9062231 : Record 9062776);
+    VAR
+      lSide@9062235 : Integer;
+    BEGIN
+      //DOC NA2016.11 - Reading user metadata move (left <-> right side)
+      //  -> pXmlNode: The XML node with information
+      //  <> pRoleCentreInfo: Role centre info record
+      //  <> pRoleCentreControlInfo: Target role centre control info recordset
+
+      IF ( NOT (FindUserMetadataSide(pXmlNode, 'destination', pRoleCentreInfo, lSide))) THEN
+        EXIT;
+      IF ( NOT (FindUserMetadataControl(pXmlNode, 'id', pRoleCentreInfo, pRoleCentreControlInfo))) THEN
+        EXIT;
+
+      pRoleCentreControlInfo.VALIDATE(Side, lSide);
+      pRoleCentreControlInfo.MODIFY();
+    END;
+
+    LOCAL PROCEDURE ReadUserMetadataOrder@9062244(pXmlNode@9062231 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";VAR pRoleCentreInfo@9062232 : Record 9062775;VAR pRoleCentreControlInfo@9062230 : Record 9062776);
+    VAR
+      lSide@9062239 : Integer;
+      lSequenceText@9062233 : Text;
+      lSequenceGuidTextBuffer@9062234 : TEMPORARY Record 9062730;
+      lSequenceGuid@9062237 : GUID;
+      lSequenceGuids@9062236 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      lSequence@9062238 : Integer;
+    BEGIN
+      //DOC NA2016.11 - Reading user metadata order (left <-> right side)
+      //  -> pXmlNode: The XML node with information
+      //  <> pRoleCentreInfo: Role centre info record
+      //  <> pRoleCentreControlInfo: Target role centre control info recordset
+
+      IF ( NOT (FindUserMetadataSide(pXmlNode, 'id', pRoleCentreInfo, lSide))) THEN
+        EXIT;
+
+      lSequenceText := XmlToolkit.GetXmlNodeAttribute(pXmlNode, 'sequence');
+      IF (lSequenceText = '') THEN
+        EXIT;
+
+      lSequenceGuids := lSequenceGuids.List();
+      String.SplitAdvanced(lSequenceText, '; ', FALSE, FALSE, lSequenceGuidTextBuffer);
+      IF (lSequenceGuidTextBuffer.FINDSET()) THEN
+      REPEAT
+        IF ( NOT (EVALUATE(lSequenceGuid, lSequenceGuidTextBuffer.Value))) THEN
+          EXIT;
+        lSequenceGuids.Add(lSequenceGuid);
+      UNTIL (lSequenceGuidTextBuffer.NEXT() = 0);
+
+      FOREACH lSequenceGuid IN lSequenceGuids DO
+        IF ( NOT (pRoleCentreControlInfo.GET(pRoleCentreInfo."Page ID", lSequenceGuid))) THEN
+          EXIT;
+
+      lSequence := 0;
+      FOREACH lSequenceGuid IN lSequenceGuids DO
+      BEGIN
+        lSequence += 1;
+        pRoleCentreControlInfo.GET(pRoleCentreInfo."Page ID", lSequenceGuid);
+        pRoleCentreControlInfo.VALIDATE(Sequence, lSequence);
+        pRoleCentreControlInfo.MODIFY();
+      END;
+    END;
+
+    LOCAL PROCEDURE ReadUserMetadataUpdate@9062247(pXmlNode@9062231 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";VAR pRoleCentreInfo@9062236 : Record 9062775;VAR pRoleCentreControlInfo@9062230 : Record 9062776);
+    VAR
+      lEmptyGuid@9062232 : GUID;
+      lName@9062233 : Text;
+      lVisible@9062235 : Boolean;
+    BEGIN
+      //DOC NA2016.11 - Reading user metadata visibility (left <-> right side)
+      //  -> pXmlNode: The XML node with information
+      //  <> pRoleCentreInfo: Role centre info record
+      //  <> pRoleCentreControlInfo: Target role centre control info recordset
+
+      IF ( NOT (FindUserMetadataControl(pXmlNode, 'id', pRoleCentreInfo, pRoleCentreControlInfo))) THEN
+        EXIT;
+
+      lName := XmlToolkit.GetXmlNodeAttribute(pXmlNode, 'name');
+      IF (lName <> 'Visible') THEN
+        EXIT;
+
+      lVisible := XmlToolkit.GetXmlNodeBooleanAttribute(pXmlNode, 'value');
+      pRoleCentreControlInfo.VALIDATE(Visible, lVisible);
+      pRoleCentreControlInfo.MODIFY();
+    END;
+
+    LOCAL PROCEDURE FindUserMetadataSide@9062258(pXmlNode@9062235 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";pAttributeName@9062236 : Text;VAR pRoleCentreInfo@9062234 : Record 9062775;VAR pSide@9062233 : Integer) : Boolean;
+    VAR
+      lRoleCentreControlInfo@9062237 : Record 9062776;
+      lSideGuid@9062232 : GUID;
+      lEmptyGuid@9062231 : GUID;
+    BEGIN
+      //DOC NA2016.11 - Trying to find user metadata side
+      //  -> pXmlNode: The XML node with information
+      //  -> pAttributeName: Attribute name
+      //  <> pRoleCentreInfo: Role centre info record
+      //  <> pSide: Target side
+      //  <- Result
+
+      pSide := lRoleCentreControlInfo.Side::" ";
+      lSideGuid := XmlToolkit.GetXmlNodeGuidAttribute(pXmlNode, pAttributeName);
+      IF (lSideGuid <> lEmptyGuid) THEN
+        pSide := pRoleCentreInfo.FindSideByGuid(lSideGuid);
+      EXIT(pSide <> lRoleCentreControlInfo.Side::" ");
+    END;
+
+    LOCAL PROCEDURE FindUserMetadataControl@9062252(pXmlNode@9062232 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";pAttributeName@9062235 : Text;VAR pRoleCentreInfo@9062231 : Record 9062775;VAR pRoleCentreControlInfo@9062230 : Record 9062776) : Boolean;
+    VAR
+      lControlGuid@9062234 : GUID;
+      lEmptyGuid@9062233 : GUID;
+    BEGIN
+      //DOC NA2016.11 - Trying to find user metadata control
+      //  -> pXmlNode: The XML node with information
+      //  -> pAttributeName: Attribute name
+      //  <> pRoleCentreInfo: Role centre info record
+      //  <> pRoleCentreControlInfo: Target role centre control info recordset
+      //  <- Result
+
+      lControlGuid := XmlToolkit.GetXmlNodeGuidAttribute(pXmlNode, pAttributeName);
+      IF (lControlGuid = lEmptyGuid) THEN
+        EXIT(FALSE);
+      EXIT(pRoleCentreControlInfo.GET(pRoleCentreInfo."Page ID", lControlGuid));
+    END;
+
+    LOCAL PROCEDURE "--- User Metadata Write ---"@9062249();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE WriteUserMetadata@9062250(pUserId@9062233 : Code[50];pPageId@9062232 : Integer;VAR pRoleCentreInfo@9062231 : Record 9062775;VAR pRoleCentreControlInfo@9062230 : Record 9062776);
+    VAR
+      lBlob@9062234 : Record 99008535;
+      lInStream@9062235 : InStream;
+      lOutStream@9062240 : OutStream;
+      lXmlDocument@9062237 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      lXmlNamespaceManager@9062236 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+      lXmlNode@9062238 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      eUnexpectedStructure@9062239 : TextConst 'ENU="User metadata have unexpected structure; ""%1"" element can''t be found.";ENG="User metadata have unexpected structure; ""%1"" element can''t be found."';
+      lFilePath@9062241 : Text;
+    BEGIN
+      //DOC NA2016.11 - Writing user metadata
+      //  -> pUserId: User ID
+      //  -> pPageId: Page ID
+      //  <> pRoleCentreInfo: Role centre info record
+      //  <> pRoleCentreControlInfo: Target role centre control info recordset
+
+      lXmlDocument := lXmlDocument.XmlDocument();
+      IF (ExportUserMetadataToBlob(pUserId, pPageId, lBlob)) THEN
+      BEGIN
+        lBlob.Blob.CREATEINSTREAM(lInStream);
+        lXmlDocument.Load(lInStream);
+        XmlToolkit.GetXmlDocumentNamespaces(lXmlDocument, 'm', lXmlNamespaceManager);
+      END
+      ELSE
+      BEGIN
+        lXmlNamespaceManager := lXmlNamespaceManager.XmlNamespaceManager(lXmlDocument.NameTable);
+        CreateUserMetadataXml(lXmlDocument, lXmlNamespaceManager);
+      END;
+
+      lXmlNode := lXmlDocument.SelectSingleNode('delta/changes', lXmlNamespaceManager);
+      IF (ISNULL(lXmlNode)) THEN
+        ERROR(eUnexpectedStructure, 'delta/changes');
+      WHILE ( NOT (ISNULL(lXmlNode.FirstChild))) DO
+        lXmlNode.RemoveChild(lXmlNode.FirstChild);
+
+      WriteUserMetadataMoves(pRoleCentreInfo, pRoleCentreControlInfo, lXmlDocument, lXmlNode);
+      WriteUserMetadataOrders(pRoleCentreInfo, pRoleCentreControlInfo, lXmlDocument, lXmlNode);
+      WriteUserMetadataUpdates(pRoleCentreInfo, pRoleCentreControlInfo, lXmlDocument, lXmlNode);
+
+      CLEAR(lBlob);
+      lBlob.Blob.CREATEOUTSTREAM(lOutStream);
+      lXmlDocument.Save(lOutStream);
+
+      ExportBlobToUserMetadata(lBlob, pUserId, pPageId);
+      //^^^ExportBlobToFile(lBlob, lFilePath, 'User Metadata Changed.xml');
+    END;
+
+    LOCAL PROCEDURE WriteUserMetadataMoves@9062255(VAR pRoleCentreInfo@9062231 : Record 9062775;VAR pRoleCentreControlInfo@9062230 : Record 9062776;pXmlDocument@9062235 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";pXmlNode@9062232 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode");
+    VAR
+      eUnexpectedStructure@9062239 : TextConst 'ENU="User metadata have unexpected structure; ""%1"" element can''t be found.";ENG="User metadata have unexpected structure; ""%1"" element can''t be found."';
+      lSideGuid@9062233 : GUID;
+      lEmptyGuid@9062234 : GUID;
+      lXmlNode@9062236 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+    BEGIN
+      //DOC NA2016.11 - Writing user metadata moves (left <-> right side)
+      //  <> pRoleCentreInfo: Role centre info record
+      //  <> pRoleCentreControlInfo: Target role centre control info recordset
+      //  -> pXmlDocument: XML document (for node manipulation)
+      //  -> pXmlNode: XML node to add moves to
+
+      pRoleCentreControlInfo.RESET();
+      IF (pRoleCentreControlInfo.FINDSET()) THEN
+      REPEAT
+        IF (pRoleCentreControlInfo.Side <> pRoleCentreControlInfo."Original Side") THEN
+        BEGIN
+          lSideGuid := pRoleCentreInfo.GetSideGuid(pRoleCentreControlInfo.Side);
+          IF (lSideGuid <> lEmptyGuid) THEN
+          BEGIN
+            lXmlNode := pXmlDocument.CreateElement('move');
+            XmlToolkit.SetXmlElementGuidAttribute(lXmlNode, 'id', pRoleCentreControlInfo."Control GUID");
+            XmlToolkit.SetXmlElementGuidAttribute(lXmlNode, 'destination', lSideGuid);
+            pXmlNode.AppendChild(lXmlNode);
+          END;
+        END;
+      UNTIL (pRoleCentreControlInfo.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE WriteUserMetadataOrders@9062259(VAR pRoleCentreInfo@9062231 : Record 9062775;VAR pRoleCentreControlInfo@9062230 : Record 9062776;pXmlDocument@9062240 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";pXmlNode@9062232 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode");
+    VAR
+      eUnexpectedStructure@9062239 : TextConst 'ENU="User metadata have unexpected structure; ""%1"" element can''t be found.";ENG="User metadata have unexpected structure; ""%1"" element can''t be found."';
+      lSide@9062233 : Integer;
+      lSideGuid@9062237 : GUID;
+      lEmptyGuid@9062234 : GUID;
+      lSequenceChanged@9062235 : Boolean;
+      lSequenceText@9062236 : Text;
+      lXmlNode@9062238 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+    BEGIN
+      //DOC NA2016.11 - Writing user metadata orders (controls left / right side)
+      //  <> pRoleCentreInfo: Role centre info record
+      //  <> pRoleCentreControlInfo: Target role centre control info recordset
+      //  -> pXmlDocument: XML document (for node manipulation)
+      //  -> pXmlNode: XML node to add moves to
+
+      FOR lSide := pRoleCentreInfo.Side::Left TO pRoleCentreInfo.Side::Right DO
+      BEGIN
+        lSideGuid := pRoleCentreInfo.GetSideGuid(lSide);
+        IF (lSideGuid <> lEmptyGuid) THEN
+        BEGIN
+          lSequenceChanged := FALSE;
+          pRoleCentreControlInfo.RESET();
+          pRoleCentreControlInfo.SETRANGE(Side, lSide);
+          IF (pRoleCentreControlInfo.FINDSET()) THEN
+          REPEAT
+            lSequenceChanged := (pRoleCentreControlInfo.Sequence <> pRoleCentreControlInfo."Original Sequence");
+          UNTIL ((pRoleCentreControlInfo.NEXT() = 0) OR (lSequenceChanged));
+
+          IF (lSequenceChanged) THEN
+          BEGIN
+            lSequenceText := '';
+            pRoleCentreControlInfo.RESET();
+            pRoleCentreControlInfo.SETCURRENTKEY("Page ID", Visible, Side, Sequence);
+            pRoleCentreControlInfo.SETRANGE(Side, lSide);
+            IF (pRoleCentreControlInfo.FINDSET()) THEN
+            REPEAT
+              IF (lSequenceText <> '') THEN
+                lSequenceText := lSequenceText + '; ';
+              lSequenceText := lSequenceText + FORMAT(pRoleCentreControlInfo."Control GUID", 0, 9);
+            UNTIL (pRoleCentreControlInfo.NEXT() = 0);
+
+            lXmlNode := pXmlDocument.CreateElement('order');
+            XmlToolkit.SetXmlElementGuidAttribute(lXmlNode, 'id', lSideGuid);
+            XmlToolkit.SetXmlElementAttribute(lXmlNode, 'sequence', lSequenceText);
+            pXmlNode.AppendChild(lXmlNode);
+          END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE WriteUserMetadataUpdates@9062257(VAR pRoleCentreInfo@9062231 : Record 9062775;VAR pRoleCentreControlInfo@9062230 : Record 9062776;pXmlDocument@9062233 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";pXmlNode@9062232 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode");
+    VAR
+      eUnexpectedStructure@9062239 : TextConst 'ENU="User metadata have unexpected structure; ""%1"" element can''t be found.";ENG="User metadata have unexpected structure; ""%1"" element can''t be found."';
+      lXmlNode@9062234 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+    BEGIN
+      //DOC NA2016.11 - Writing user metadata updates (visibility)
+      //  <> pRoleCentreInfo: Role centre info record
+      //  <> pRoleCentreControlInfo: Target role centre control info recordset
+      //  -> pXmlDocument: XML document (for node manipulation)
+      //  -> pXmlNode: XML node to add moves to
+
+      pRoleCentreControlInfo.RESET();
+      IF (pRoleCentreControlInfo.FINDSET()) THEN
+      REPEAT
+        IF (pRoleCentreControlInfo.Visible <> pRoleCentreControlInfo."Original Visible") THEN
+        BEGIN
+          lXmlNode := pXmlDocument.CreateElement('update');
+          XmlToolkit.SetXmlElementGuidAttribute(lXmlNode, 'id', pRoleCentreControlInfo."Control GUID");
+          XmlToolkit.SetXmlElementAttribute(lXmlNode, 'uri', '');
+          XmlToolkit.SetXmlElementAttribute(lXmlNode, 'name', 'Visible');
+          XmlToolkit.SetXmlElementAttribute(lXmlNode, 'value', FORMAT(pRoleCentreControlInfo.Visible, 0, 2));
+          pXmlNode.AppendChild(lXmlNode);
+        END;
+      UNTIL (pRoleCentreControlInfo.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE CreateUserMetadataXml@1000000002(pXmlDocument@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";pXmlNamespaceManager@1000000002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager");
+    VAR
+      lXmlDeltaElement@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlElement";
+      eXsdNamespace@1000000003 : TextConst 'ENU=http://www.w3.org/2001/XMLSchema;ENG=http://www.w3.org/2001/XMLSchema';
+      eXsiNamespace@1000000004 : TextConst 'ENU=http://www.w3.org/2001/XMLSchema-instance;ENG=http://www.w3.org/2001/XMLSchema-instance';
+    BEGIN
+      //DOC NA2016.16 - Creating user metadata XML
+      //  -> pXmlDocument: The XML document
+      //  -> pXmlNamespaceManager: Namespace manager
+
+      pXmlNamespaceManager.AddNamespace('xsd', eXsdNamespace);
+      pXmlNamespaceManager.AddNamespace('xsi', eXsiNamespace);
+
+      pXmlDocument.AppendChild(pXmlDocument.CreateProcessingInstruction('xml', 'version="1.0"'));
+      lXmlDeltaElement := pXmlDocument.CreateElement('delta');
+      lXmlDeltaElement.AppendChild(pXmlDocument.CreateElement('changes'));
+      pXmlDocument.AppendChild(lXmlDeltaElement);
+
+      pXmlDocument.DocumentElement.SetAttribute('xmlns:xsd', eXsdNamespace);
+      pXmlDocument.DocumentElement.SetAttribute('xmlns:xsi', eXsiNamespace);
+    END;
+
+    LOCAL PROCEDURE "--- Panel Selection Write ---"@9062248();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE WritePanelSelection@9062253(pUserId@9062233 : Code[50];pPageId@9062232 : Integer;VAR pRoleCentreInfo@9062231 : Record 9062775;VAR pRoleCentreControlInfo@9062230 : Record 9062776);
+    VAR
+      lPanelSelection@9062234 : Record 9062371;
+      lPanelCode@9062235 : Code[20];
+      lModifyPanelSelection@9062236 : Boolean;
+    BEGIN
+      //DOC NA2016.11 - Writing panel selection
+      //  -> pUserId: User ID
+      //  -> pPageId: Page ID
+      //  <> pRoleCentreInfo: Role centre info record
+      //  <> pRoleCentreControlInfo: Target role centre control info recordset
+
+      lModifyPanelSelection := FALSE;
+
+      pRoleCentreControlInfo.RESET();
+      pRoleCentreControlInfo.SETRANGE("Panel Index", 1, 10);
+      IF (pRoleCentreControlInfo.FINDSET()) THEN
+      REPEAT
+        IF (pRoleCentreControlInfo."Panel Code" <> pRoleCentreControlInfo."Original Panel Code") THEN
+        BEGIN
+          IF ( NOT (lPanelSelection.GET(pPageId, pUserId))) THEN
+          BEGIN
+            CLEAR(lPanelSelection);
+            lPanelSelection.INIT();
+            lPanelSelection.VALIDATE("Page ID", pPageId);
+            lPanelSelection.VALIDATE("User ID", pUserId);
+            lPanelSelection.INSERT(TRUE);
+          END;
+          lPanelCode := lPanelSelection.GetPanelCode(pRoleCentreControlInfo."Panel Index");
+          IF (pRoleCentreControlInfo."Panel Code" <> lPanelCode) THEN
+          BEGIN
+            lPanelSelection.SetPanelCode(pRoleCentreControlInfo."Panel Index", pRoleCentreControlInfo."Panel Code");
+            lModifyPanelSelection := TRUE;
+          END;
+        END;
+      UNTIL (pRoleCentreControlInfo.NEXT() = 0);
+
+      IF (lModifyPanelSelection) THEN
+        lPanelSelection.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Exports ---"@9062242();
+    BEGIN
+    END;
+
+    PROCEDURE ExportRoleCentreMetadataToFile@9062230(pPageId@9062230 : Integer;VAR pFilePath@9062231 : Text);
+    VAR
+      eDefaultFileName@9062236 : TextConst 'ENU=Role Centre Metadata.xml;ENG=Role Centre Metadata.xml';
+      lBlob@9062235 : Record 99008535;
+    BEGIN
+      //DOC NA2016.11 - Exporting role centre metadata to a file
+      //  -> pPageId: Page ID
+      //  <> pFilePath: Target file path
+
+      ExportRoleCentreMetadataToBlob(pPageId, lBlob);
+      ExportBlobToFile(lBlob, pFilePath, eDefaultFileName);
+    END;
+
+    PROCEDURE ExportRoleCentreMetadataToBlob@9062233(pPageId@9062230 : Integer;VAR pBlob@9062231 : Record 99008535);
+    VAR
+      lBlob@9062235 : Record 99008535;
+    BEGIN
+      //DOC NA2016.11 - Exporting role centre metadata to a BLOB
+      //  -> pPageId: Page ID
+      //  <> pBlob: Target BLOB
+
+      ObjectMetadata.GET(ObjectMetadata."Object Type"::Page, pPageId);
+      ObjectMetadata.CALCFIELDS(Metadata);
+      ObjectMetadata.TESTFIELD(Metadata);
+      pBlob.Blob := ObjectMetadata.Metadata;
+    END;
+
+    PROCEDURE ExportUserMetadataToFile@9062232(pUserId@9062237 : Code[50];pPageId@9062230 : Integer;VAR pFilePath@9062231 : Text);
+    VAR
+      eDefaultFileName@9062236 : TextConst 'ENU=User Metadata.xml;ENG=User Metadata.xml';
+      lBlob@9062235 : Record 99008535;
+    BEGIN
+      //DOC NA2016.11 - Exporting user metadata to a file
+      //  -> pUserId: User ID
+      //  -> pPageId: Page ID
+      //  <> pFilePath: Target file path
+
+      ExportUserMetadataToBlob(pUserId, pPageId, lBlob);
+      ExportBlobToFile(lBlob, pFilePath, eDefaultFileName);
+    END;
+
+    PROCEDURE ExportUserMetadataToBlob@9062237(pUserId@9062237 : Code[50];pPageId@9062230 : Integer;VAR pBlob@9062231 : Record 99008535) : Boolean;
+    VAR
+      lBlob@9062235 : Record 99008535;
+      lResult@9062232 : Boolean;
+    BEGIN
+      //DOC NA2016.11 - Exporting user metadata to a BLOB
+      //  -> pUserId: User ID
+      //  -> pPageId: Page ID
+      //  <> pBlob: Target BLOB
+      //  <- TRUE = Exported, FALSE = Not
+
+      lResult := FALSE;
+
+      User.RESET();
+      User.SETRANGE("User Name", pUserId);
+      User.FINDFIRST();
+
+      CLEAR(pBlob);
+      IF (UserMetadata.GET(User."User Security ID", pPageId, FORMAT(pPageId, 0, 1))) THEN
+      BEGIN
+        UserMetadata.CALCFIELDS("Page Metadata Delta");
+        IF (UserMetadata."Page Metadata Delta".HASVALUE()) THEN
+        BEGIN
+          pBlob.Blob := UserMetadata."Page Metadata Delta";
+          lResult := TRUE;
+        END;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE ExportBlobToUserMetadata@9062261(VAR pBlob@9062232 : Record 99008535;pUserId@9062231 : Code[50];pPageId@9062230 : Integer);
+    VAR
+      lPersonalisationId@9062233 : Code[20];
+    BEGIN
+      //DOC NA2016.11 - Exporting BLOB to user metadata
+      //  <> pBlob: The BLOB
+      //  -> pBlob: User ID
+      //  -> pPageId: Page ID
+
+      User.RESET();
+      User.SETRANGE("User Name", pUserId);
+      User.FINDFIRST();
+
+      lPersonalisationId := FORMAT(pPageId, 0, 1);
+
+      IF ( NOT (UserMetadata.GET(User."User Security ID", pPageId, lPersonalisationId))) THEN
+      BEGIN
+        CLEAR(UserMetadata);
+        UserMetadata.INIT();
+        UserMetadata.VALIDATE("User SID", User."User Security ID");
+        UserMetadata.VALIDATE("Page ID", pPageId);
+        UserMetadata.VALIDATE("Personalization ID", lPersonalisationId);
+        UserMetadata.INSERT(TRUE);
+      END;
+
+      UserMetadata.VALIDATE(Date, TODAY());
+      UserMetadata.VALIDATE(Time, TIME());
+      UserMetadata."Page Metadata Delta" := pBlob.Blob;
+      UserMetadata.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE ExportBlobToFile@9062234(VAR pBlob@9062230 : Record 99008535;pFilePath@9062231 : Text;pDefaultFileName@9062232 : Text);
+    VAR
+      eDialogTitle@9062235 : TextConst 'ENU=Save metadata to;ENG=Save metadata to';
+      eDialogFilter@9062234 : TextConst 'ENU=XML Files (*.xml)|*.xml|All Files (*.*)|*.*;ENG=XML Files (*.xml)|*.xml|All Files (*.*)|*.*';
+      eEmptyFilePath@9062233 : TextConst 'ENU=Please provide file path to export metadata to.;ENG=Please provide file path to export metadata to.';
+    BEGIN
+      //DOC NA2016.11 - Exporting given BLOB to a file
+      //  <> pBlob: The BLOB
+      //  <> pFilePath: File path
+      //  -> pDefaultFileName: Default file name
+
+      IF ((pFilePath = '') AND (GUIALLOWED())) THEN
+      BEGIN
+        pFilePath := pDefaultFileName;
+        FileSystem.ExportBlobToFile(FileSystem.Client(), pBlob, pFilePath, eDialogTitle, eDialogFilter)
+      END
+      ELSE
+        IF (pFilePath <> '') THEN
+          FileSystem.ExportBlobToFileSilent(FileSystem.Client(), pBlob, pFilePath)
+        ELSE
+          ERROR(eEmptyFilePath);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.11 JH 30/10/2015 - Created
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit
+      //DOC NA2016.15 JH 09/05/2016 - CfMD modifications
+      //DOC NA2016.16 JH 11/07/2016 - Creating user metadata if it is not there
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,623 @@
+OBJECT Codeunit 9021611 Int. Order to Sales (Yes/No)
+{
+  OBJECT-PROPERTIES
+  {
+    Date=20/09/18;
+    Time=11:25:13 AM;
+    Modified=Yes;
+    Version List=EC2016.6,OP9031;
+  }
+  PROPERTIES
+  {
+    TableNo=9021666;
+    Permissions=TableData 9021609=m;
+    OnRun=VAR
+            i@1000000000 : Integer;
+          BEGIN
+            InternetSetup.GET;
+            TESTFIELD("Internet Order Reference");
+            TESTFIELD(Status,IntOrdHead.Status::New);
+            //DOC OP9031 RK 24/02/2017 -
+            IF GUIALLOWED THEN BEGIN
+            //DOC OP9031 RK 24/02/2017 +
+            IF "Document Type" = '' THEN BEGIN
+              IF NOT CONFIRM(
+                       Text000,
+                       TRUE,FORMAT(InternetSetup."Convert To Document Type"))
+              THEN
+                EXIT;
+            END ELSE BEGIN
+              IF NOT CONFIRM(
+                       Text000,TRUE,"Document Type") THEN
+                EXIT;
+            END;
+            //DOC OP9031 RK 24/02/2017 -
+            END;
+            //DOC OP9031 RK 24/02/2017 +
+            //DOC EC2013.3.30 -
+            WaitUntilFree1;
+            TimeStart := TIME;
+            InternetOrderHeader.GET("Order Guid");
+            IF InternetOrderHeader.Status <> InternetOrderHeader.Status::New THEN BEGIN
+              SELECTLATESTVERSION;
+              InternetSetup.GET;
+              IF InternetSetup."Processing Mode" = InternetSetup."Processing Mode"::Manual THEN BEGIN
+                InternetSetup."Processing Mode" := InternetSetup."Processing Mode"::" ";
+                InternetSetup.MODIFY;
+              END;
+              //DOC OP9031 RK 24/02/2017 -
+              IF GUIALLOWED THEN
+              //DOC OP9031 RK 24/02/2017 +
+              MESSAGE(Text012,InternetOrderHeader.Status);
+              EXIT;
+            END;
+            //DOC EC2013.3.30 +
+            Code(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ModistSetup@1000000004 : Record 50000;
+      IntOrdHead@1000000036 : Record 9021666;
+      SalesHeader@1000000000 : Record 36;
+      InternetOrderLine@1000000001 : Record 9021667;
+      InternetSetup@1000000002 : Record 9021609;
+      Customer@1000000003 : Record 18;
+      InternetCustomer@1000000006 : Record 9021642;
+      InternetCustB2BRec@1190000019 : Record 9021643;
+      LabelRec@1000000009 : Record 9021618;
+      InternetOrderHeader@1000000012 : Record 9021666;
+      Item@1000000027 : Record 27;
+      WebCommentLine@1000000033 : Record 9021665;
+      LinkedAtValWeb@1000000034 : Record 9021683;
+      TotalSalesLine@1000000005 : Record 37;
+      InternetShopMgt@1000000007 : Codeunit 9021610;
+      V5andOver@1000000008 : Codeunit 9021605;
+      Text000@1000000013 : TextConst 'DAN=Vil du overf›re Internet-%1 til en salgs %1?;DEU=Wnschen Sie die Internetbestellung in einen Verkauf %1 umzuwandeln?;ENU=Do you want to convert the Internet Order to a Sales %1?;ESP=¨Desea convertir el pedido de Internet a Ventas %1?;SVE=Vill du omvandla Internet %1 till en f”rs„ljnings%1?;ENG=Do you want to convert the Internet Order to a Sales %1?';
+      Text001@1000000014 : TextConst 'ENU=Warning: Total amount on the %1 is %3 is different from total amount on the %2 which is %4.;ENG=Warning: Total amount on the %1 is %3 is different from total amount on the %2 which is %4.';
+      Text002@1000000015 : TextConst 'DAN=Salgs %1 %2 er blevet oprettet fra internet ordre %3.;DEU=Verk„ufe %1 %2 wurden von Internetbestellung %3 erzeugt.;ENU=Sales %1 %2 has been created from Internet Order %3. (2);ESP=Venta %1 %2 creada desde pedido internet  %3.;SVE=F”rs„ljning %1 %2 har skapats fr†n internet order %3.;ENG=Sales %1 %2 has been created from Internet Order %3. (2)';
+      Text003@1000000016 : TextConst 'ENU=The Internet Order Header says there should be %1 Internet Order Line(s) but there are %2. (3);ENG=The Internet Order Header says there should be %1 Internet Order Line(s) but there are %2. (3)';
+      Text004@1000000017 : TextConst 'DAN=Hvis du v‘lger nej vil kontant-salgs kunden, valgt i Internet Shop opsætning blive benyttet.;DEU=Wenn Sie nein w„hlen, wird der im Setup festgelegte Bar-Kunde genutzt.;ENU=Warning.... the Customer is over their credit limit or have an over due balance and Order will NOT be released. (4);ESP=Si elige no, se usar n los datos de cliente preseleccionado en configuraci¢n ExpandIT.;SVE=Om du v„ljer nej, kommer kontantkunden att anv„ndas.;ENG=Warning.... the Customer is over their credit limit or have an over due balance and Order will NOT be released. (4)';
+      Text005@1000000018 : TextConst 'DAN=Det var ikke mulig at bestemme hvilken %1 der skulle bruges p† salgs ordren.;DEU=Es war nicht m”glich zu bestimmen, welcher %1 fr die Verkaufsbestellung zu nutzen ist.;ENU=It was not possible to determine which %1 to use for the Sales %2 (5);ESP=No fue possible determinar qu‚ %1 utilizar para el Pedido de Venta;SVE=Det var inte m”jligt att uppt„cka vilken %1 som ska anv„ndas f”r f”rs„ljningsordern;ENG=It was not possible to determine which %1 to use for the Sales %2 (5)';
+      PromoHistProc@1190000010 : Codeunit 9021631;
+      ReleaseSalesDocument@1190000016 : Codeunit 414;
+      InternetAuto@1000000019 : Codeunit 9021621;
+      SplitOrders@1000000037 : Codeunit 9021604;
+      VersionCalls@1000000020 : Codeunit 9021662;
+      CreateIPI@1000000023 : Codeunit 9021601;
+      TextError@1190000017 : Text[250];
+      NoCounted@1190000008 : Integer;
+      NoOfSecs@1000000029 : Integer;
+      OKToReleaseOrder@1040000 : Boolean;
+      Text006@1190000011 : TextConst 'ENU=Warning.... the Customer is over their credit limit or have an over due balance. (6);ENG=Warning.... the Customer is over their credit limit or have an over due balance. (6)';
+      Text007@1190000014 : TextConst 'ENU=Cannot find Customer.  Go to Internet Customer card and use Find / Link To / Create Customer. (7);ENG=Cannot find Customer.  Go to Internet Customer card and use Find / Link To / Create Customer. (7)';
+      Text008@1190000005 : TextConst 'ENU=There are %1 Customers with the User GuID %2 but there should only be 1. (8);ENG=There are %1 Customers with the User GuID %2 but there should only be 1. (8)';
+      Text009@1190000007 : TextConst 'ENU=Cannot find any Internet Customer or B2B Customer for Bill-to Customer No. %1. (9);ENG=Cannot find any Internet Customer or B2B Customer for Bill-to Customer No. %1. (9)';
+      Text010@1190000009 : TextConst 'ENU=The Internet Customer Contact No. is blank.  You must either run Internet Automation or go to the Internet Customer card and use Find Contact and Find Customer.\\This should not happen, please call MQ. (10);ENG=The Internet Customer Contact No. is blank.  You must either run Internet Automation or go to the Internet Customer card and use Find Contact and Find Customer.\\This should not happen, please call MQ. (10)';
+      FreeToProcess@1000000025 : Boolean;
+      Text011@1000000011 : TextConst 'ENU=The "Bill-To Customer No." is points to the Label Default Customer but Internet Setup is not set to use the Internet Customer. (11);ENG=The "Bill-To Customer No." is points to the Label Default Customer but Internet Setup is not set to use the Internet Customer. (11)';
+      Text012@1000000024 : TextConst 'ENU=Someone or the Internet Automation has just changed this Order to Status %1. You need to start again. (12);ENG=Someone or the Internet Automation has just changed this Order to Status %1. You need to start again. (12)';
+      Window@1000000026 : Dialog;
+      TimeStart@1000000028 : Time;
+      Text013@1000000030 : TextConst 'ENU=This order has items that need special attention.\\Do you wish to continue? (13);ENG=This order has items that need special attention.\\Do you wish to continue? (13)';
+      Text014@1000000031 : TextConst 'ENU=Abandonned. (14);ENG=Abandonned. (14)';
+      Text015@1000000032 : TextConst 'ENU=This order has comments.\\Do you wish to continue? (15);ENG=This order has comments.\\Do you wish to continue? (15)';
+      Text016@1000000035 : TextConst 'DAN=Vil du oprette/knytte en %1 til %2?\;DEU=Wnschen Sie einen %1 zu erstellen/auszuw„hlen fr %2?\;ENU=The Internet Order is expecting %1 Web Attributes but there are only %2.  Please wait until all the lines arrive from the web. (16);ESP=¨Desea crear/seleccionar %1 para %2?\;SVE=Vill du skapa/v„lja en %1 f”r %2?\;ENG=The Internet Order is expecting %1 Web Attributes but there are only %2.  Please wait until all the lines arrive from the web. (16)';
+      Text017@1000000038 : TextConst 'ENU=Attention.........   Customer Services must contact customer because stock is low. (17);ENG=Attention.........   Customer Services must contact customer because stock is low. (17)';
+      Text018@1000000022 : TextConst 'ENU=Sales Order failed to release.  You need to go to the Sales Order and release it yourself. (18);ENG=Sales Order failed to release.  You need to go to the Sales Order and release it yourself. (18)';
+      TextDERM01@1000000039 : TextConst 'ENU=*********************************************\\Attempting to Release Sales Order.  If you do not see a message confirming the Order has been created, the Release failed and you must manually release the Order.\\**********************************************;ENG=*********************************************\\Attempting to Release Sales Order.  If you do not see a message confirming the Order has been created, the Release failed and you must manually release the Order.\\**********************************************';
+      TextDERM02@1000000040 : TextConst 'ENU=Will not attempt to release Order as OK to Release not set.;ENG=Will not attempt to release Order as OK to Release not set.';
+      NoSeriesMgt@1000000010 : Codeunit 396;
+
+    PROCEDURE Code@1000000000(VAR IntOrdHead@1000000000 : Record 9021666);
+    VAR
+      TxtBillToNetCustomerEmpty@1000000001 : TextConst 'ENU=The Bill-To Net Customer is for some reason blank. This should never happen and is a problem with the web.;ENG=The Bill-To Net Customer is for some reason blank. This should never happen and is a problem with the web.';
+      TxtRelease@1000000003 : TextConst 'ENU=RELEASE;ENG=RELEASE';
+      TxtCreateIpiMessage@1000000002 : TextConst 'ENU=User: %1, Sales Order: %2;ENG=User: %1, Sales Order: %2';
+      TxtNotSupported@1000000004 : TextConst 'ENU=Not Supported;ENG=Not Supported';
+      CustTemplate@1000000005 : Record 5105;
+      Countries@1000000006 : Record 9;
+      DefaultDim@1000000009 : Record 352;
+      DefaultDim2@1000000010 : Record 352;
+      SalesOrderIntegration@1000000007 : Codeunit 50025;
+      TxtValidationError@1000000008 : TextConst 'ENU=Order has validation errors.;ENG=Order has validation errors.';
+      IntegrationProcesssor@1000000011 : Codeunit 50005;
+    BEGIN
+      //Error hardcoded cos it should never happen.
+      IF IntOrdHead."Bill-to Net Customer No." = '' THEN
+        ERROR(TxtBillToNetCustomerEmpty);
+      //DOC OP9031 RK 27/10/2016 -
+      IF NOT SalesOrderIntegration.ValidateOrder(IntOrdHead."Order Guid") THEN BEGIN
+        COMMIT;
+        //DOC OP9031 RK 24/02/2017 -
+        IF GUIALLOWED THEN
+        //DOC OP9031 RK 24/02/2017 +
+        ERROR(TxtValidationError)
+        ELSE
+          EXIT;
+      END;
+      {
+      InternetAuto.ProcessesPriorToManualOrder;
+
+      IF (NOT Customer.GET(IntOrdHead."Sell-to Customer No.")) OR
+        (IntOrdHead."Sell-to Customer No." = '') THEN BEGIN   //DOC EC2013.3.30 add OR "Sell-to Cust No. = ''
+        IF InternetCustomer.GET(IntOrdHead."Bill-to Net Customer No.") THEN BEGIN
+          IF InternetCustomer."Contact No." = '' THEN
+            ERROR(Text010);
+          IF InternetCustomer."Customer No." = '' THEN BEGIN
+            CASE InternetSetup."Use Internet Customer" OF
+              InternetSetup."Use Internet Customer"::Always:
+              BEGIN
+                InternetSetup.TESTFIELD("Internet Customer");
+                Customer.GET(InternetSetup."Internet Customer");
+                Customer.TESTFIELD("Is a B2B Internet Customer",FALSE);
+                IntOrdHead."Sell-to Customer No." := InternetSetup."Internet Customer";
+              END;
+              InternetSetup."Use Internet Customer"::Never:
+              BEGIN
+                Customer.RESET;
+                Customer.SETRANGE("User GUID",IntOrdHead."Bill-to Net Customer No.");
+                IF Customer.FINDFIRST THEN BEGIN
+                  IF Customer.COUNT > 1 THEN
+                    ERROR(Text008,Customer.COUNT,IntOrdHead."Bill-to Net Customer No.");
+                  IntOrdHead."Sell-to Customer No." := Customer."No.";
+                END ELSE
+                  ERROR(Text007);
+              END;
+            END;
+            InternetCustomer."Customer No." := IntOrdHead."Sell-to Customer No.";
+            InternetCustomer.MODIFY;
+          END ELSE BEGIN
+            Customer.GET(InternetCustomer."Customer No.");
+            IntOrdHead."Sell-to Customer No." := InternetCustomer."Customer No.";
+          END;
+        END ELSE BEGIN
+          Customer.RESET;
+          Customer.SETRANGE("User GUID",IntOrdHead."Bill-to Net Customer No.");
+          IF Customer.FINDFIRST THEN BEGIN
+            IF Customer.COUNT > 1 THEN
+              ERROR(Text008,Customer.COUNT,IntOrdHead."Bill-to Net Customer No.");
+            //DOC EC2013.3.30 -
+            LabelRec.GET(IntOrdHead."Label Code");
+            //MQ 28/11/2012 - GW121128 IF Customer."No." = LabelRec."Default Customer" THEN BEGIN
+            IF Customer."No." = InternetSetup."Internet Customer" THEN BEGIN
+              IF InternetSetup."Use Internet Customer" <>
+                 InternetSetup."Use Internet Customer"::Always THEN
+                ERROR(Text011);
+              InternetSetup.TESTFIELD("Internet Customer");
+              Customer.GET(InternetSetup."Internet Customer");
+              Customer.TESTFIELD("Is a B2B Internet Customer",FALSE);
+            END ELSE
+            //DOC EC2013.3.30 +
+              Customer.TESTFIELD("Is a B2B Internet Customer",TRUE);
+            IntOrdHead."Sell-to Customer No." := Customer."No.";
+          END ELSE
+            ERROR(Text009,IntOrdHead."Bill-to Net Customer No.");
+        END;
+        IF IntOrdHead."Sell-to Customer No." = '' THEN
+          ERROR(Text005,Customer.TABLECAPTION,InternetSetup."Convert To Document Type");
+      END;
+      IF Customer."Is a B2B Internet Customer" THEN
+        IntOrdHead."Customer Is B2B" := TRUE;
+      }
+      ModistSetup.GET;
+      //FF-
+      IF IntOrdHead."Farfetch Order" THEN BEGIN
+        Customer.SETRANGE("Web Customer No.",IntOrdHead."Bill-to Net Customer No.");
+        IF NOT Customer.FINDFIRST THEN BEGIN
+          Customer.INIT;
+          IF ModistSetup."Farfetch Cust. No. as Cust. No" THEN
+            Customer."No." := IntOrdHead."Bill-to Net Customer No."
+          ELSE BEGIN
+            ModistSetup.TESTFIELD("Farfetch Customer Nos");
+            Customer."No." := NoSeriesMgt.GetNextNo(ModistSetup."Farfetch Customer Nos",0D,TRUE);
+            Customer."No. Series" := ModistSetup."Farfetch Customer Nos";
+          END;
+          Customer.INSERT(TRUE);
+        END;
+      END ELSE BEGIN
+      //FF+
+        Customer.SETRANGE("Web Customer No.",IntOrdHead."Bill-to Net Customer No.");
+        IF NOT Customer.FINDFIRST THEN BEGIN
+          Customer.INIT;
+          IF ModistSetup."Use Web Cust. No. as Cust ID" THEN
+            Customer."No." := UPPERCASE(IntOrdHead."Bill-to Net Customer No.")
+          ELSE
+            Customer."No." := '';
+          Customer.INSERT(TRUE);
+        //DOC OP9031 RK 21/02/2017 -
+        END;
+      END; //FF-+
+      //DOC OP9031 RK 21/02/2017 +
+        Customer.Name := IntOrdHead."Bill-to Name";
+        Customer."Name 2" := IntOrdHead."Bill-to Name 2";
+        Customer.Address := IntOrdHead."Bill-to Address";
+        Customer."Address 2" := IntOrdHead."Bill-to Address 2";
+        Customer.City := IntOrdHead."Bill-to City";
+        Customer."Application Method" := Customer."Application Method"::"Apply to Oldest";
+        IF DELCHR(IntOrdHead."Bill-to Country Code") <> '' THEN BEGIN
+          IF NOT Countries.GET(UPPERCASE(DELCHR(IntOrdHead."Bill-to Country Code"))) THEN BEGIN
+            Countries.INIT;
+            Countries.Code := UPPERCASE(DELCHR(IntOrdHead."Bill-to Country Code"));
+            Countries.Name := IntOrdHead."Bill-to Country Code";
+            Countries.INSERT;
+          END;
+        END;
+        Customer.County := IntOrdHead."Bill-to County";
+        Customer."Country/Region Code" := UPPERCASE(DELCHR(IntOrdHead."Bill-to Country Code"));
+        Customer."Post Code" := IntOrdHead."Bill-to Post Code";
+        Customer."Phone No." := IntOrdHead."Phone No.";
+        Customer."E-Mail" := IntOrdHead."Bill-to E-Mail";
+        Customer."Web Customer No." := IntOrdHead."Bill-to Net Customer No.";
+        IF ModistSetup."Internet Customer Template" <> '' THEN BEGIN
+          CustTemplate.GET(ModistSetup."Internet Customer Template");
+          IF (CustTemplate."Customer Posting Group" <> '') AND (Customer."Customer Posting Group" = '') THEN
+            Customer.VALIDATE("Customer Posting Group",CustTemplate."Customer Posting Group");
+          IF (CustTemplate."Gen. Bus. Posting Group" <> '') AND (Customer."Gen. Bus. Posting Group" = '') THEN
+            Customer.VALIDATE("Gen. Bus. Posting Group",CustTemplate."Gen. Bus. Posting Group");
+          IF (CustTemplate."VAT Bus. Posting Group" <> '') AND (Customer."VAT Bus. Posting Group" = '') THEN
+            Customer.VALIDATE("VAT Bus. Posting Group",CustTemplate."VAT Bus. Posting Group");
+          IF (CustTemplate."Payment Method Code" <> '') AND (Customer."Payment Method Code" = '') THEN
+            Customer.VALIDATE("Payment Method Code",CustTemplate."Payment Method Code");
+          IF (CustTemplate."Payment Terms Code" <> '') AND (Customer."Payment Terms Code" = '') THEN
+            Customer.VALIDATE("Payment Terms Code",CustTemplate."Payment Terms Code");
+          IF (CustTemplate."Currency Code" <> '') AND (Customer."Currency Code" = '') THEN
+            Customer.VALIDATE("Currency Code",CustTemplate."Currency Code");
+          IF (CustTemplate."Customer Price Group" <> '') AND (Customer."Customer Price Group" = '') THEN
+            Customer.VALIDATE("Customer Price Group",CustTemplate."Customer Price Group");
+          IF (CustTemplate."Global Dimension 1 Code" <> '') AND (Customer."Global Dimension 1 Code" = '') THEN
+            Customer.VALIDATE("Global Dimension 1 Code",CustTemplate."Global Dimension 1 Code");
+          IF (CustTemplate."Global Dimension 2 Code" <> '') AND (Customer."Global Dimension 2 Code" = '') THEN
+            Customer.VALIDATE("Global Dimension 2 Code",CustTemplate."Global Dimension 2 Code");
+          DefaultDim.SETRANGE("Table ID",DATABASE::"Customer Template");
+          DefaultDim.SETRANGE("No.",CustTemplate.Code);
+          IF DefaultDim.FINDFIRST THEN
+            REPEAT
+              DefaultDim2.SETRANGE("Table ID",DATABASE::Customer);
+              DefaultDim2.SETRANGE("No.",Customer."No.");
+              DefaultDim2.SETRANGE("Dimension Code",DefaultDim."Dimension Code");
+              IF DefaultDim2.ISEMPTY THEN BEGIN
+                DefaultDim2.INIT;
+                DefaultDim2."Table ID" := DATABASE::Customer;
+                DefaultDim2."Dimension Code" := DefaultDim."Dimension Code";
+                DefaultDim2."Dimension Value Code" := DefaultDim."Dimension Value Code";
+                DefaultDim2.INSERT;
+              END;
+            UNTIL DefaultDim.NEXT = 0;
+        END;
+        Customer.MODIFY;
+      //DOC OP9031 RK 21/02/2017 -
+      {
+      END ELSE BEGIN
+        //IF (Customer."E-Mail" = '') AND (IntOrdHead."Bill-to E-Mail" <> '') THEN BEGIN
+        IF (IntOrdHead."Bill-to E-Mail" <> '') THEN BEGIN
+          Customer."E-Mail" := IntOrdHead."Bill-to E-Mail";
+          Customer.MODIFY;
+        END;
+        //IF (Customer."Phone No." = '') AND (IntOrdHead."Phone No." <> '') THEN BEGIN
+        IF (IntOrdHead."Phone No." <> '') THEN BEGIN
+          Customer."Phone No." := IntOrdHead."Phone No.";
+          Customer.MODIFY;
+        END;
+      END;
+      }
+      //DOC OP9031 RK 21/02/2017 +
+      IntOrdHead.VALIDATE("Sell-to Customer No.",Customer."No.");
+      //DOC OP9031 RK 27/10/2016 +
+      IF IntOrdHead."No. Of Internet Order Lines" <> 0 THEN BEGIN
+        InternetOrderLine.RESET;
+        InternetOrderLine.SETCURRENTKEY("Order Guid","Line No.");
+        InternetOrderLine.SETRANGE("Order Guid",IntOrdHead."Order Guid");
+        NoCounted := InternetOrderLine.COUNT;
+        IF IntOrdHead."No. Of Internet Order Lines" <> NoCounted THEN
+          ERROR(Text003,IntOrdHead."No. Of Internet Order Lines",NoCounted);
+      END;
+
+      //DOC EC2013.3.40 -
+      IF IntOrdHead."No. of Web Attributes" <> 0 THEN BEGIN
+        LinkedAtValWeb.SETCURRENTKEY("Label Code","Table Name","Key Field String 1");
+        LinkedAtValWeb.SETRANGE("Label Code",IntOrdHead."Label Code");
+        LinkedAtValWeb.SETRANGE("Table Name",'ShopSalesHeader');
+        LinkedAtValWeb.SETRANGE("Key Field String 1",IntOrdHead."Order Guid");
+        NoCounted := LinkedAtValWeb.COUNT;
+        IF NoCounted <> IntOrdHead."No. of Web Attributes" THEN
+          ERROR(Text016,IntOrdHead."No. of Web Attributes",NoCounted);
+      END;
+
+      IntOrdHead."Processing In Progress" := FALSE; //DOC EC2013.3.60 used to differentiate between manual and auto
+
+      CODEUNIT.RUN(CODEUNIT::"Internet Order to Sales-Doc",IntOrdHead);
+
+      PromoHistProc.Process(IntOrdHead."Order Guid");
+
+      //DOC EC2013.3.30 -
+      SELECTLATESTVERSION;
+      InternetSetup.GET;
+      NoOfSecs := ROUND((TIME-TimeStart)/100,1); //In 10ths of a sec
+      IF NoOfSecs > InternetSetup."Max Manual Process Time -10ths" THEN BEGIN
+        InternetSetup."Max Manual Process Time -10ths" := NoOfSecs;
+        InternetSetup.MODIFY;
+      END;
+      IF InternetSetup."Processing Mode" = InternetSetup."Processing Mode"::Manual THEN BEGIN
+        InternetSetup."Processing Mode" := InternetSetup."Processing Mode"::" ";
+        InternetSetup.MODIFY;
+      END;
+
+      COMMIT;  //Add commit here as Int. Order is now processed so if Int. Auto runs
+      //it should not interfer with the rest of the code.
+      //and we may also get messages to Users below which can hold up the process.
+      //DOC EC2013.3.30 +
+
+      // Send Confirmation Mail
+      IF InternetSetup."Notify on Conversion to Doc." THEN
+        IF IntOrdHead."Bill-to E-Mail" <> '' THEN
+          InternetShopMgt.InternetOrderConverted(IntOrdHead."Bill-to E-Mail",
+                          IntOrdHead."Order Guid",IntOrdHead."Label Code")
+        ELSE BEGIN
+          IF InternetCustomer.GET(IntOrdHead."Bill-to Net Customer No.") THEN BEGIN
+            InternetCustomer.TESTFIELD("E-Mail");
+            //DOC EC2016.1.1 InternetShopMgt.InternetOrderConverted(InternetCustomer."E-Mail", "Order Guid");
+            InternetShopMgt.InternetOrderConverted(InternetCustomer."E-Mail",
+                            IntOrdHead."Order Guid",IntOrdHead."Label Code");
+          END ELSE
+            IF Customer."E-Mail" <> '' THEN
+              InternetShopMgt.InternetOrderConverted(Customer."E-Mail",
+                              IntOrdHead."Order Guid",IntOrdHead."Label Code");
+        END;
+
+      //DOC EC2013.3.80 CLEAR(SalesPost);
+      SalesHeader.GET(IntOrdHead."Converted-To Document Type",
+                      IntOrdHead."Converted-To Document No.");
+
+      //DOC EC2013.3.80 -
+      //SalesPost.SumSalesLines(
+      //  SalesHeader,
+      //  0,TotalSalesLine,TotalSalesLineLCY,
+      //  VATAmount,VATAmountText,ProfitLCY,ProfitPct,TotalAdjCostLCY);
+      //DOC EC2013.4.67 - put into CASE and called
+      //CLEAR(V5andOver);
+      //V5andOver.SalesPostSumSalesLines(SalesHeader,TotalSalesLine);
+      {
+      IF IntOrdHead."Label Code" = 'DERMAUB2B' THEN BEGIN
+        CLEAR(CustomModsDAU);
+        CustomModsDAU.SalesPostSumSalesLines(SalesHeader,TotalSalesLine)
+      END ELSE BEGIN
+        CLEAR(V5andOver);
+        V5andOver.SalesPostSumSalesLines(SalesHeader,TotalSalesLine);
+      END;
+      }
+      //DOC EC2013.3.80 +
+      //DOC EC2013.4.67 +
+      //DOC OP9031 RK 04/01/2017 -
+      //IF ROUND(IntOrdHead."Amount Including Tax",0.01) <>
+      {IF ROUND(IntOrdHead."Amount Including Tax" + IntOrdHead."Total Tax Amount",0.01) <>
+      //DOC OP9031 RK 04/01/2017 +
+         ROUND(TotalSalesLine."Amount Including VAT",0.01) THEN
+        //DOC OP9031 RK 24/02/2017 -
+        IF GUIALLOWED THEN
+        //DOC OP9031 RK 24/02/2017 +
+        MESSAGE(
+          Text001,
+          IntOrdHead.TABLECAPTION,SalesHeader.TABLECAPTION,
+          ROUND(IntOrdHead."Amount Including Tax",0.01),
+          ROUND(TotalSalesLine."Amount Including VAT",0.01));
+      }
+      OKToReleaseOrder := TRUE;
+      IF IntOrdHead."Customer Is B2B" THEN BEGIN
+        IF FailCreditLimitCheck THEN BEGIN //DOC EC2013.4.00
+          //DOC OP9031 RK 24/02/2017 -
+          IF GUIALLOWED THEN
+          //DOC OP9031 RK 24/02/2017 +
+          MESSAGE(Text004);
+          OKToReleaseOrder := FALSE;
+        END;
+      END;
+
+
+      // Finalize
+      IF InternetSetup."Show Document After Conversion" THEN BEGIN
+        CASE IntOrdHead."Converted-To Document Type" OF
+          IntOrdHead."Converted-To Document Type"::Quote:
+            VersionCalls.ShowSalesQuote(SalesHeader);  //DOC EC2015.5.04
+            //DOC EC2015.5.04 ERROR('Not Supported');  //DOC EC2013.4.00
+            //FORM.RUN(FORM::"Sales Quote",SalesHeader);
+          IntOrdHead."Converted-To Document Type"::Order:
+            VersionCalls.ShowSalesOrder(SalesHeader);  //DOC EC2013.4.00
+            //FORM.RUN(FORM::"Sales Order",SalesHeader);
+          IntOrdHead."Converted-To Document Type"::Invoice:
+            ERROR(TxtNotSupported);  //DOC EC2013.4.00
+            //FORM.RUN(FORM::"Sales Invoice",SalesHeader);
+          IntOrdHead."Converted-To Document Type"::Return:
+            VersionCalls.ShowReturnOrder(SalesHeader);  //DOC EC2013.4.00
+        END;
+      END ELSE BEGIN
+        IF OKToReleaseOrder THEN BEGIN
+            CLEAR(ReleaseSalesDocument);
+            //DOC EC2013.4.671 -
+            //DOC EC2013.4.67 -
+            //Original ReleaseSalesDocument.RUN(SalesHeader);
+            //DOC EC2013.4.671 IF NOT ReleaseSalesDocument.RUN(SalesHeader) THEN BEGIN
+            ReleaseSalesDocument.PerformManualRelease(SalesHeader);  //DOC EC2013.4.671 MQ 08/12/2014 - GW141208 - not compatible earlier versions of NAV
+            //if get compile error use the line below
+            //ReleaseSalesDocument.RUN(SalesHeader);
+            SalesHeader.GET(IntOrdHead."Converted-To Document Type",
+                    IntOrdHead."Converted-To Document No.");
+            IF SalesHeader.Status <> SalesHeader.Status::Released THEN BEGIN
+            //DOC EC2013.4.671 +
+              //CreateIPI.CreateIPI(Type,Code1,Code2,Code3,IntCustNo,ErrorDescription,
+              //                    AutoClear,MakeHidden,CustNo,MakeSorted)
+              CreateIPI.CreateIPI(0,IntOrdHead."Order Guid",'',TxtRelease,IntOrdHead."Bill-to Net Customer No.",
+                                  Text018 + ' ' + STRSUBSTNO(TxtCreateIpiMessage, USERID, SalesHeader."No."),
+                                  FALSE,FALSE,SalesHeader."Sell-to Customer No.",TRUE);
+              COMMIT;
+              //DOC OP9031 RK 24/02/2017 -
+              IF GUIALLOWED THEN
+              //DOC OP9031 RK 24/02/2017 +
+              ERROR(Text018);
+            END;
+        END;
+        //DOC OP9031 RK 18/01/2017 -
+        IF SalesHeader."No." <> IntOrdHead."Converted-To Document No." THEN
+          SalesHeader.GET(SalesHeader."Document Type"::Order,IntOrdHead."Converted-To Document No.");
+        IntegrationProcesssor.AddUpdateProcessed(SalesHeader);
+        //DOC OP9031 RK 18/01/2017 +
+        //DOC OP9031 RK 24/02/2017 -
+        IF GUIALLOWED THEN
+        //DOC OP9031 RK 24/02/2017 +
+        MESSAGE(
+          Text002,
+          IntOrdHead."Converted-To Document Type",IntOrdHead."Converted-To Document No.",
+                     IntOrdHead."Internet Order Reference");
+      END;
+      OnAfterConvertInternetOrderToSalesOrder(SalesHeader); //TMOD
+    END;
+
+    PROCEDURE WaitUntilFree1@1000000003();
+    VAR
+      TxtWindowTitle@1000000000 : TextConst 'ENU=Waiting for Internet Automation %1 seconds;ENG=Waiting for Internet Automation %1 seconds';
+    BEGIN
+      //DOC EC2013.3.30 new function
+      SELECTLATESTVERSION;
+      InternetSetup.GET;
+
+      Window.OPEN(STRSUBSTNO(TxtWindowTitle, PADSTR('#1', 6, '#')));
+
+      //Setup, if run for first time
+      IF InternetSetup."Max Secs for Manual Post" = 0 THEN BEGIN
+        InternetSetup."Max Secs for Manual Post" := 10;
+        InternetSetup.MODIFY;
+      END;
+      IF InternetSetup."Max Secs for Int. Automation" = 0 THEN BEGIN
+        InternetSetup."Max Secs for Int. Automation" := 60;
+        InternetSetup.MODIFY;
+      END;
+      IF (InternetSetup."Time Last Processed" > TIME) OR
+        (InternetSetup."Time Last Processed" = 000000T) THEN BEGIN
+        InternetSetup."Time Last Processed" := 000010T;
+        InternetSetup."Processing Mode" := InternetSetup."Processing Mode"::" ";
+        InternetSetup.MODIFY;
+      END;
+
+      //Checking if OK to go ahead
+      IF InternetSetup."Processing Mode" IN
+         [InternetSetup."Processing Mode"::" ",
+         InternetSetup."Processing Mode"::Manual] THEN BEGIN
+        InternetSetup."Processing Mode" := InternetSetup."Processing Mode"::Manual;
+        InternetSetup."Time Last Processed" := TIME;
+        InternetSetup.MODIFY;
+      END ELSE BEGIN
+        //Existing Processing Mode is Int. Automation
+        FreeToProcess := FALSE;
+        WHILE FreeToProcess = FALSE DO
+          WaitUntilFree2;
+        SELECTLATESTVERSION;
+        InternetSetup.GET;
+        InternetSetup."Processing Mode" := InternetSetup."Processing Mode"::Manual;
+        InternetSetup."Time Last Processed" := TIME;
+        InternetSetup.MODIFY;
+      END;
+      Window.CLOSE;
+    END;
+
+    PROCEDURE WaitUntilFree2@1000000004();
+    VAR
+      EarliestStartTime@1000000000 : Time;
+      TimeToGo@1000000001 : Integer;
+    BEGIN
+      //DOC EC2013.3.30 new function
+      SELECTLATESTVERSION;
+      InternetSetup.GET;
+      IF InternetSetup."Processing Mode" IN
+         [InternetSetup."Processing Mode"::" ",
+         InternetSetup."Processing Mode"::Manual] THEN BEGIN
+        FreeToProcess := TRUE;
+      END ELSE BEGIN
+        EarliestStartTime := InternetSetup."Time Last Processed" +
+          (InternetSetup."Max Secs for Int. Automation" * 1000);
+        IF EarliestStartTime > TIME THEN BEGIN
+          FreeToProcess := FALSE;
+          TimeToGo := EarliestStartTime - TIME;
+          Window.UPDATE(1,ROUND(TimeToGo/1000,1));
+          IF TimeToGo > 1000 THEN
+            SLEEP(1000)
+          ELSE
+            SLEEP(TimeToGo);
+        END ELSE
+          FreeToProcess := TRUE;
+      END;
+    END;
+
+    PROCEDURE FailCreditLimitCheck@1000000001() : Boolean;
+    VAR
+      SalesSetup@1000000000 : Record 311;
+      SalesLine@1000000001 : Record 37;
+    BEGIN
+      SalesSetup.GET;
+      IF SalesSetup."Credit Warnings" IN
+        [SalesSetup."Credit Warnings"::"Both Warnings",
+        SalesSetup."Credit Warnings"::"Credit Limit"] THEN BEGIN
+        Customer.SETFILTER("Date Filter",'..%1',TODAY);
+        Customer.CALCFIELDS("Balance (LCY)","Outstanding Orders (LCY)","Shipped Not Invoiced (LCY)");
+        SalesLine.RESET;
+        SalesLine.SETCURRENTKEY("Document Type","Bill-to Customer No.","Currency Code");
+        SalesLine.SETRANGE("Document Type",SalesLine."Document Type"::"Return Order");
+        SalesLine.SETRANGE("Bill-to Customer No.",Customer."No.");
+        SalesLine.CALCSUMS("Outstanding Amount (LCY)","Return Rcd. Not Invd. (LCY)");
+        IF ((Customer."Balance (LCY)" +
+          (Customer."Shipped Not Invoiced (LCY)" -  SalesLine."Return Rcd. Not Invd. (LCY)") +
+          Customer."Outstanding Orders (LCY)" - SalesLine."Outstanding Amount (LCY)")
+          > Customer."Credit Limit (LCY)") AND (Customer."Credit Limit (LCY)" <> 0) THEN
+          EXIT(TRUE);
+      END;
+
+      IF (SalesSetup."Credit Warnings" IN
+        [SalesSetup."Credit Warnings"::"Both Warnings",
+        SalesSetup."Credit Warnings"::"Overdue Balance"]) THEN BEGIN
+        Customer.CALCFIELDS("Balance Due (LCY)");
+        IF Customer."Balance Due (LCY)" > 0 THEN
+          EXIT(TRUE);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterConvertInternetOrderToSalesOrder@1170000000(VAR pSalesHeader@1170000000 : Record 36);
+    BEGIN
+    END;
+
+    BEGIN
+    {
+      //DOC EC2013.3.10 MQ 10/08/2012 - GW120810 Reduced CreditCheck as per Internet Automation
+      //DOC EC2013.3.20 MQ 16/10/2012 - GW121016 FINBRANDS specific code and now run a number of Processes from Internet Automation
+      //DOC EC2013.3.30 MQ 12/11/2012 - GW121112 Handle Orders with Bill-To Customer No. of Default Customer
+      //DOC EC2013.3.30 MQ 22/11/2012 - GW121122 Handle "Sell-to Customer No." = '' and a Cust. exists with a blank No.
+      //DOC EC2013.3.30 MQ 12/12/2012 - GW121212 Reduce "Another User Has Modified" messages.
+      //DOC EC2013.3.40 MQ 15/02/2013 - GW130215 Check if no items on order are not specials and Create IPIs if Comments
+      //DOC EC2013.3.40 MQ 15/02/2013 - Check correct number of Linked Attribute Value Web Entries and create IPI if not.
+      //DOC EC2013.3.40 MQ 15/02/2013 - Put all code from OnRun into new function: Code; Add Permission to Modify Internet Setup
+      //DOC EC2013.3.50 MQ 20/03/2013 - GW130320 Not do Credit Check on Costa as requested by V Cheung of Micros
+      //DOC EC2013.3.60 MQ 22/04/2013 - GW130422 TOMDIXON
+      //DOC EC2013.3.60 MQ 12/06/2013 - GW130612 Warning if Create IPI ticked.
+      //DOC EC2013.3.80 MQ 19/09/2013 - GW130919 DERMAUB2B
+      //DOC EC2013.4.00 MQ 04/11/2013 - GW131104 RTC
+      //DOC EC2013.4.00 MQ 18/01/2014 - GW140118 DERM
+      //DOC EC2013.4.67 MQ 17/10/2014 - GW141017 Change for LM
+      //DOC EC2013.4.67 MQ 28/11/2014 - GW141128 Enhanced checking of release of sales order.
+      //DOC EC2013.4.67 MQ 08/12/2014 - GW141208 Further enhanced checking of release of sales order - DERM
+      //DOC EC2015.5.02 GC 12/02/2015 - GC150212 Modified Text017
+      //DOC EC2015.5.02 MQ 16/04/2015 - GW150416 Add support for DERMUK2015 x3
+      //DOC EC2015.5.04 MQ 20/07/2015 - GW150720 Made FBDE more like FINBRANDS and added code and Global
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+      //DOC OP9031 RK 27/10/2016 - Create new customer with web customer no. if not exists, ignore internet customer table.
+      //DOC OP9031 RK 04/01/2017 - Warning of order and line total to consider duty amount
+      //DOC OP9031 RK 18/01/2017 - Send order processing update to demandware when internet order is converted to sales order.
+      //DOC OP9031 RK 21/02/2017 - Update customer address etc. even if existing.
+      //DOC OP9031 RK 24/02/2017 - Check guiallowed for messages and confirmations.
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,137 @@
+OBJECT Codeunit 356 DateComprMgt
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/11/08;
+    Time=12:00:00 PM;
+    Version List=NAVW14.00,NAVGB6.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AccountingPeriod@1000 : Record 10560;
+      Calendar@1040004 : Record 2000000007;
+      DateFormula@1040005 : DateFormula;
+      FiscYearDate@1001 : ARRAY [2] OF Date;
+      AccountingPeriodDate@1002 : ARRAY [2] OF Date;
+      Date1@1003 : Date;
+      Date2@1004 : Date;
+
+    PROCEDURE GetDateFilter@1(Date@1000 : Date;DateComprReg@1001 : Record 87;CheckFiscYearEnd@1002 : Boolean) : Text[250];
+    BEGIN
+      IF (Date = 0D) OR (Date = CLOSINGDATE(Date)) THEN
+        EXIT(FORMAT(Date));
+
+      // Year
+      IF (Date < FiscYearDate[1]) OR (Date > FiscYearDate[2]) THEN BEGIN
+        AccountingPeriod.SETRANGE("Period Type",AccountingPeriod."Period Type"::Year);
+        AccountingPeriod."Period Type" := AccountingPeriod."Period Type"::Year;
+        AccountingPeriod."Period Start" := Date;
+        AccountingPeriod.FIND('=<');
+        FiscYearDate[1] := AccountingPeriod."Period Start";
+        FiscYearDate[2] := NORMALDATE(AccountingPeriod."Period End");
+        IF CheckFiscYearEnd THEN
+          AccountingPeriod.TESTFIELD(Closed,TRUE);
+      END;
+
+      Date1 := DateComprReg."Starting Date";
+      Date2 := DateComprReg."Ending Date";
+      Maximize(Date1,FiscYearDate[1]);
+      Minimize(Date2,FiscYearDate[2]);
+      Maximize(Date1,CALCDATE('<CY+1D-1Y>',Date));
+      Minimize(Date2,CALCDATE('<CY>',Date));
+      FiscYearDate[1] := Date1;
+      FiscYearDate[2] := Date2;
+
+      IF DateComprReg."Period Length" = DateComprReg."Period Length"::Day THEN
+        EXIT(FORMAT(Date));
+
+      IF DateComprReg."Period Length" = DateComprReg."Period Length"::Year THEN
+        EXIT(STRSUBSTNO('%1..%2',Date1,Date2));
+
+      // Quarter
+      Calendar."Period Type" := Calendar."Period Type"::Quarter;
+      Calendar."Period Start" := Date;
+      FindPeriod(Calendar);
+      Maximize(Date1,Calendar."Period Start");
+      Minimize(Date2,Calendar."Period End");
+      Maximize(Date1,CALCDATE('<CQ+1D-1Q>',Date));
+      Minimize(Date2,CALCDATE('<CQ>',Date));
+
+      IF DateComprReg."Period Length" = DateComprReg."Period Length"::Quarter THEN
+        EXIT(STRSUBSTNO('%1..%2',Date1,Date2));
+
+      // Month / Period
+      AccountingPeriod.SETRANGE("Period Type",AccountingPeriod."Period Type"::Month);
+      AccountingPeriod."Period Type" := AccountingPeriod."Period Type"::Month;
+      AccountingPeriod."Period Start" := Date;
+      AccountingPeriod.FIND('=<');
+      AccountingPeriodDate[1] := AccountingPeriod."Period Start";
+      AccountingPeriodDate[2] := NORMALDATE(AccountingPeriod."Period End");
+      AccountingPeriod.SETRANGE("Period Type");///
+
+      Maximize(Date1,AccountingPeriodDate[1]);
+      Minimize(Date2,AccountingPeriodDate[2]);
+      Maximize(Date1,CALCDATE('<CM+1D-1M>',Date));
+      Minimize(Date2,CALCDATE('<CM>',Date));
+      AccountingPeriodDate[1] := Date1;
+      AccountingPeriodDate[2] := Date2;
+
+      IF DateComprReg."Period Length" IN [DateComprReg."Period Length"::Month,DateComprReg."Period Length"::Period] THEN
+        EXIT(STRSUBSTNO('%1..%2',Date1,Date2));
+
+      // Week
+      Calendar."Period Type" := Calendar."Period Type"::Week;
+      Calendar."Period Start" := Date;
+      FindPeriod(Calendar);
+      Maximize(Date1,Calendar."Period Start");
+      Minimize(Date2,Calendar."Period End");
+      Maximize(Date1,CALCDATE('<CW+1D-1W>',Date));
+      Minimize(Date2,CALCDATE('<CW>',Date));
+
+      EXIT(STRSUBSTNO('%1..%2',Date1,Date2));
+    END;
+
+    LOCAL PROCEDURE Maximize@2(VAR Date@1000 : Date;NewDate@1001 : Date);
+    BEGIN
+      IF Date < NewDate THEN
+        Date := NewDate;
+    END;
+
+    LOCAL PROCEDURE Minimize@3(VAR Date@1000 : Date;NewDate@1001 : Date);
+    BEGIN
+      IF Date > NewDate THEN
+        Date := NewDate;
+    END;
+
+    PROCEDURE FindPeriod@1040000(VAR AccCalendar@1040000 : Record 2000000007);
+    VAR
+      AccountingPeriod2@1040001 : Record 10560;
+    BEGIN
+      AccountingPeriod2.SETRANGE("Period Type",AccCalendar."Period Type");
+      AccountingPeriod2."Period Type" := AccCalendar."Period Type";
+      AccountingPeriod2."Period Start" := AccCalendar."Period Start";
+      IF AccountingPeriod2.FIND('=<') THEN
+        IF (AccountingPeriod2."Period End" >= AccCalendar."Period Start") THEN BEGIN
+          AccCalendar."Period Start" := NORMALDATE(AccountingPeriod2."Period Start");
+          AccCalendar."Period End" := NORMALDATE(AccountingPeriod2."Period End");
+          EXIT;
+        END;
+
+      AccCalendar."Period Start" := 0D;
+      AccCalendar."Period End" := 31129999D;
+      IF AccountingPeriod2.FIND('>') THEN
+        AccCalendar."Period End" := CALCDATE('<-1D>',NORMALDATE(AccountingPeriod2."Period Start"));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

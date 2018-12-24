@@ -1,0 +1,943 @@
+OBJECT Codeunit 9062475 Variant Value Processing
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Field@1000000009 : Record 2000000041;
+      String@1000000016 : Codeunit 9062236;
+      ValueType@1000000006 : 'TableFilter,RecordID,OemText,Date,Time,DateFormula,Decimal,Text,Code,Binary,BLOB,Boolean,Integer,OemCode,Option,BigInteger,Duration,GUID,DateTime';
+      ValueCalculation@1000000000 : 'Const,Range,First Record,Last Record,Random Record';
+      TableId@1000000001 : Integer;
+      FieldId@1000000002 : Integer;
+      OptionString@1000000003 : Text;
+      OptionStringSet@1000000004 : Boolean;
+      NoOfOptions@1000000005 : Integer;
+      errDateFormatError@1000000007 : TextConst 'ENU=Incorrect format. Please enter date or date formula.;ENG=Incorrect format. Please enter date or date formula.';
+      errRangeTypeInvalid@1000000008 : TextConst 'ENU=Range can be used for integer and decimal numbers and dates only.;ENG=Range can be used for integer and decimal numbers and dates only.';
+      SkipErrors@1000000010 : Boolean;
+      WasError@1000000011 : Boolean;
+      ErrorText@1000000012 : Text;
+      errTypeConversionError@1000000013 : TextConst 'ENU=Cannont convert ''%2'' into %1.;ENG=Cannont convert ''%2'' into %1.';
+      DateFormat@1000000017 : Text;
+      DateTimeFormat@1000000014 : Text;
+      errNotInTableField@1000000015 : TextConst 'ENU=The Value "%1" was not found in the Field "%2" in the Table "%3";ENG=The Value "%1" was not found in the Field "%2" in the Table "%3"';
+
+    PROCEDURE SetParameters@1000000002(newValueType@1000000002 : Integer;newTableId@1000000000 : Integer;newFieldId@1000000001 : Integer);
+    BEGIN
+      ValueType := newValueType;
+      TableId := newTableId;
+      FieldId := newFieldId;
+      OptionString := '';
+      OptionStringSet := FALSE;
+    END;
+
+    PROCEDURE SetOptionString@1000000004(newOptionString@1000000000 : Text);
+    BEGIN
+      OptionString := newOptionString;
+      OptionStringSet := TRUE;
+      ProcessOptionString();
+    END;
+
+    LOCAL PROCEDURE CheckOptionString@1000000005() : Boolean;
+    VAR
+      Field@1000000000 : Record 2000000041;
+      RecRef@1000000001 : RecordRef;
+      FldRef@1000000002 : FieldRef;
+    BEGIN
+      IF (NOT(OptionStringSet)) THEN BEGIN
+        OptionString := '';
+        OptionStringSet := TRUE;
+
+        IF (Field.GET(TableId, FieldId)) THEN BEGIN
+          IF (Field.Type = Field.Type::Option) THEN BEGIN
+            OptionString := Field.OptionString;
+          END;
+        END;
+
+        ProcessOptionString();
+      END;
+
+      EXIT(OptionString <> '');
+    END;
+
+    LOCAL PROCEDURE ProcessOptionString@1000000008();
+    VAR
+      i@1000000000 : Integer;
+    BEGIN
+      NoOfOptions := 0;
+      IF (OptionString <> '') THEN BEGIN
+        NoOfOptions := 1;
+        FOR i:=1 TO STRLEN(OptionString) DO
+          IF (OptionString[i] = ',') THEN
+            NoOfOptions += 1;
+      END;
+    END;
+
+    PROCEDURE ProcessValue@1000000001(VAR CalculationMode@1000000000 : Option;VAR TextValue@1000000012 : Text;VAR ValueIsSet@1000000011 : Boolean;VAR DateValue@1000000001 : Date;VAR TimeValue@1000000002 : Time;VAR DateTimeValue@1000000003 : DateTime;VAR DateFormulaValue@1000000004 : DateFormula;VAR DecimalValue@1000000005 : Decimal;VAR BooleanValue@1000000006 : Boolean;VAR IntegerValue@1000000007 : Integer;VAR BigIntegerValue@1000000008 : BigInteger;VAR DurationValue@1000000009 : Duration;VAR GuidValue@1000000010 : GUID);
+    BEGIN
+      CLEAR(DateValue);
+      CLEAR(TimeValue);
+      CLEAR(DateFormulaValue);
+      CLEAR(DecimalValue);
+      CLEAR(BooleanValue);
+      CLEAR(IntegerValue);
+      CLEAR(BigIntegerValue);
+      CLEAR(DurationValue);
+      CLEAR(GuidValue);
+      CLEAR(DateTimeValue);
+
+      IF (TextValue = '') THEN BEGIN
+        ValueIsSet := FALSE;
+        EXIT;
+      END;
+
+      CASE (CalculationMode) OF
+        ValueCalculation::Const:
+          ProcessSingleValue(TextValue, ValueIsSet, DateValue, TimeValue, DateTimeValue, DateFormulaValue, DecimalValue, BooleanValue,
+            IntegerValue, BigIntegerValue, DurationValue, GuidValue);
+        ValueCalculation::Range:
+          ProcessFormula(TextValue, ValueIsSet);
+      END;
+    END;
+
+    LOCAL PROCEDURE ProcessSingleValue@1000000009(VAR TextValue@1000000012 : Text;VAR ValueIsSet@1000000011 : Boolean;VAR DateValue@1000000001 : Date;VAR TimeValue@1000000002 : Time;VAR DateTimeValue@1000000003 : DateTime;VAR DateFormulaValue@1000000004 : DateFormula;VAR DecimalValue@1000000005 : Decimal;VAR BooleanValue@1000000006 : Boolean;VAR IntegerValue@1000000007 : Integer;VAR BigIntegerValue@1000000008 : BigInteger;VAR DurationValue@1000000009 : Duration;VAR GuidValue@1000000010 : GUID);
+    BEGIN
+      IF (IsEmptyValue(TextValue)) THEN BEGIN
+        ValueIsSet := FALSE;
+        EXIT;
+      END;
+
+      ValueIsSet := TRUE;
+
+      CASE (ValueType) OF
+        ValueType::Date:
+          BEGIN
+            IF (NOT(EvaluateDate(DateValue, TextValue))) THEN
+              IF (NOT(EVALUATE(DateFormulaValue, TextValue))) THEN
+                SetError(errDateFormatError);
+          END;
+        ValueType::Time: IF(NOT(EVALUATE(TimeValue, TextValue))) THEN SetTypeConversionError(TextValue);
+        ValueType::DateFormula: IF(NOT(EVALUATE(DateFormulaValue, TextValue))) THEN SetTypeConversionError(TextValue);
+        ValueType::Decimal: IF(NOT(EVALUATE(DecimalValue, TextValue))) THEN SetTypeConversionError(TextValue);
+        ValueType::OemCode,
+        ValueType::Code: TextValue := ValueAsCode(TextValue);
+        ValueType::Boolean: IF(NOT(EVALUATE(BooleanValue, TextValue))) THEN SetTypeConversionError(TextValue);
+        ValueType::Integer: IF(NOT(EVALUATE(IntegerValue, TextValue))) THEN SetTypeConversionError(TextValue);
+        ValueType::Option: IntegerValue := EvaluateOption(TextValue);
+        ValueType::BigInteger: IF(NOT(EVALUATE(BigIntegerValue, TextValue))) THEN SetTypeConversionError(TextValue);
+        ValueType::Duration: IF(NOT(EVALUATE(DurationValue, TextValue))) THEN SetTypeConversionError(TextValue);
+        ValueType::GUID: IF(NOT(EVALUATE(GuidValue, TextValue))) THEN SetTypeConversionError(TextValue);
+        ValueType::DateTime: IF(NOT(EvaluateDateTime(DateTimeValue, TextValue))) THEN SetTypeConversionError(TextValue);
+      END;
+
+      FormatValue(TextValue, ValueIsSet, DateValue, TimeValue, DateTimeValue, DateFormulaValue, DecimalValue,
+        BooleanValue, IntegerValue, BigIntegerValue, DurationValue, GuidValue);
+    END;
+
+    LOCAL PROCEDURE IsEmptyValue@1000000042(TextValue@1000000000 : Text) : Boolean;
+    BEGIN
+      CASE(ValueType) OF
+        ValueType::Date,
+        ValueType::Time,
+        ValueType::DateFormula,
+        ValueType::Decimal,
+        ValueType::Integer,
+        ValueType::BigInteger,
+        ValueType::Duration,
+        ValueType::GUID,
+        ValueType::DateTime:
+          IF (TextValue = '') THEN
+            EXIT(TRUE);
+        ValueType::Boolean:
+          IF (TextValue = '') OR (TextValue = '-1') THEN
+            EXIT(TRUE);
+        ValueType::Option:
+          IF (TextValue = '-1') THEN
+            EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE ProcessFormula@1000000006(VAR TextValue@1000000001 : Text;VAR ValueIsSet@1000000000 : Boolean);
+    VAR
+      TextPartValue@1000000013 : Text;
+      TextPartValueIsSet@1000000012 : Boolean;
+      DateValue@1000000011 : Date;
+      TimeValue@1000000010 : Time;
+      DateTimeValue@1000000009 : DateTime;
+      DateFormulaValue@1000000008 : DateFormula;
+      DecimalValue@1000000007 : Decimal;
+      BooleanValue@1000000006 : Boolean;
+      IntegerValue@1000000005 : Integer;
+      BigIntegerValue@1000000004 : BigInteger;
+      DurationValue@1000000003 : Duration;
+      GuidValue@1000000002 : GUID;
+      FormattedTextValue@1000000016 : Text;
+      LeftPartText@1000000017 : Text;
+      RightPartText@1000000019 : Text;
+      NoOfParts@1000000015 : Integer;
+      RangePos@1000000018 : Integer;
+      i@1000000014 : Integer;
+    BEGIN
+      //process formula values
+
+      ValueIsSet := TRUE;
+      NoOfParts := 1;
+      FOR i:=1 TO STRLEN(TextValue) DO
+        IF (TextValue[i] = ',') THEN
+          NoOfParts += 1;
+
+      FormattedTextValue := '';
+      FOR i:=1 TO NoOfParts DO BEGIN
+        TextPartValue := SELECTSTR(i, TextValue);
+
+        //format value or range
+        RangePos := STRPOS(TextPartValue, '..');
+        IF (RangePos > 0) THEN BEGIN
+
+          IF (NOT(ValueType IN [ValueType::Date, ValueType::Integer, ValueType::BigInteger, ValueType::Decimal])) THEN
+            SetError(errRangeTypeInvalid);
+
+          LeftPartText := '';
+          RightPartText := '';
+          IF (RangePos > 1) THEN BEGIN
+            LeftPartText := COPYSTR(TextPartValue, 1, RangePos - 1);
+            ProcessSingleValue(LeftPartText, TextPartValueIsSet, DateValue, TimeValue, DateTimeValue, DateFormulaValue, DecimalValue, BooleanValue,
+              IntegerValue, BigIntegerValue, DurationValue, GuidValue);
+          END;
+          IF (RangePos < STRLEN(TextPartValue)) THEN BEGIN
+            RightPartText := COPYSTR(TextPartValue, RangePos + 2);
+            ProcessSingleValue(RightPartText, TextPartValueIsSet, DateValue, TimeValue, DateTimeValue, DateFormulaValue, DecimalValue, BooleanValue,
+              IntegerValue, BigIntegerValue, DurationValue, GuidValue);
+          END;
+          TextPartValue := LeftPartText + '..' + RightPartText;
+        END ELSE
+          ProcessSingleValue(TextPartValue, TextPartValueIsSet, DateValue, TimeValue, DateTimeValue, DateFormulaValue, DecimalValue, BooleanValue,
+            IntegerValue, BigIntegerValue, DurationValue, GuidValue);
+
+        IF (i = 1) THEN
+          FormattedTextValue := TextPartValue
+        ELSE
+          FormattedTextValue := FormattedTextValue + ',' + TextPartValue;
+
+      END;
+
+      TextValue := FormattedTextValue;
+      ValueIsSet := (TextValue <> '');
+    END;
+
+    LOCAL PROCEDURE ValueAsCode@1000000000(TextValue@1000000000 : Text) : Code[1024];
+    BEGIN
+      EXIT(TextValue);
+    END;
+
+    LOCAL PROCEDURE EvaluateOption@1000000003(textValue@1000000000 : Text) : Integer;
+    VAR
+      OptionValue@1000000002 : Text;
+      textValueLength@1000000003 : Integer;
+      i@1000000001 : Integer;
+    BEGIN
+      IF (textValue = '') THEN
+        EXIT(0);
+      IF (CheckOptionString()) THEN BEGIN
+        textValue := UPPERCASE(textValue);
+        //check if option values and text value are equal
+        FOR i:=1 TO NoOfOptions DO BEGIN
+          OptionValue := SELECTSTR(i, OptionString);
+          IF (UPPERCASE(OptionValue) = textValue) THEN
+            EXIT(i-1);
+        END;
+        //check if option values start with text value
+        textValueLength := STRLEN(textValue);
+        FOR i:=1 TO NoOfOptions DO BEGIN
+          OptionValue := SELECTSTR(i, OptionString);
+          IF (COPYSTR(UPPERCASE(OptionValue), 1, textValueLength) = textValue) THEN
+            EXIT(i-1);
+        END;
+        //try to evaluate number
+        IF (EVALUATE(i, textValue)) THEN
+          IF (i >= 0) AND (i < NoOfOptions) THEN
+            EXIT(i);
+      END;
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE FormatValue@1000000012(VAR TextValue@1000000011 : Text;VAR ValueIsSet@1000000010 : Boolean;VAR DateValue@1000000009 : Date;VAR TimeValue@1000000008 : Time;VAR DateTimeValue@1000000007 : DateTime;VAR DateFormulaValue@1000000006 : DateFormula;VAR DecimalValue@1000000005 : Decimal;VAR BooleanValue@1000000004 : Boolean;VAR IntegerValue@1000000003 : Integer;VAR BigIntegerValue@1000000002 : BigInteger;VAR DurationValue@1000000001 : Duration;VAR GuidValue@1000000000 : GUID) : Text;
+    BEGIN
+      IF (ValueIsSet) THEN BEGIN
+        CASE (ValueType) OF
+          ValueType::Date:
+            BEGIN
+              IF (DateValue = 0D) THEN
+                TextValue := FORMAT(DateFormulaValue)
+              ELSE
+                TextValue := FormatDate(DateValue);
+            END;
+          ValueType::Time: TextValue := FORMAT(TimeValue);
+          ValueType::DateFormula: TextValue := FORMAT(DateFormulaValue);
+          ValueType::Decimal: TextValue := FORMAT(DecimalValue, 0, 9);
+          ValueType::OemCode,
+          ValueType::Code: TextValue := ValueAsCode(TextValue);
+          ValueType::Boolean: TextValue := FORMAT(BooleanValue);
+          ValueType::Integer: TextValue := FORMAT(IntegerValue);
+          ValueType::Option: TextValue := FormatOption(IntegerValue);
+          ValueType::BigInteger: TextValue := FORMAT(BigIntegerValue);
+          ValueType::Duration: TextValue := FORMAT(DurationValue);
+          ValueType::GUID: TextValue := FORMAT(GuidValue);
+          ValueType::DateTime: TextValue := FormatDateTime(DateTimeValue);
+        END;
+      END ELSE
+        TextValue := '';
+    END;
+
+    LOCAL PROCEDURE FormatOption@1000000007(optionIndex@1000000000 : Integer) : Text;
+    VAR
+      optionValue@1000000001 : Text;
+    BEGIN
+      optionValue := '';
+      IF (CheckOptionString()) THEN BEGIN
+        optionValue := '';
+        IF ((optionIndex >= 0) AND (optionIndex < NoOfOptions)) THEN
+          optionValue := SELECTSTR(optionIndex + 1, OptionString);
+      END;
+      IF (optionValue = '') THEN
+        optionValue := FORMAT(optionIndex);
+      EXIT(optionValue);
+    END;
+
+    PROCEDURE GetValue@1000000016(VAR CalculatedValue@1000000013 : Variant;VAR CalculationMode@1000000000 : Option;VAR TextValue@1000000012 : Text;VAR ValueIsSet@1000000011 : Boolean;VAR DateValue@1000000001 : Date;VAR TimeValue@1000000002 : Time;VAR DateTimeValue@1000000003 : DateTime;VAR DateFormulaValue@1000000004 : DateFormula;VAR DecimalValue@1000000005 : Decimal;VAR BooleanValue@1000000006 : Boolean;VAR IntegerValue@1000000007 : Integer;VAR BigIntegerValue@1000000008 : BigInteger;VAR DurationValue@1000000009 : Duration;VAR GuidValue@1000000010 : GUID);
+    BEGIN
+      CLEAR(CalculatedValue);
+      IF ((NOT(ValueIsSet)) AND (CalculationMode IN [ValueCalculation::Const, ValueCalculation::Range])) THEN
+        EXIT;
+
+      CASE (CalculationMode) OF
+        ValueCalculation::Const:
+          GetSingleValue(CalculatedValue, TextValue, DateValue, TimeValue, DateTimeValue, DateFormulaValue, DecimalValue, BooleanValue,
+            IntegerValue, BigIntegerValue, DurationValue, GuidValue);
+        ValueCalculation::Range:
+          GetFormulaValue(CalculatedValue, TextValue);
+      END;
+    END;
+
+    PROCEDURE GetSingleValue@1000000017(VAR CalculatedValue@1000000013 : Variant;VAR TextValue@1000000012 : Text;VAR DateValue@1000000001 : Date;VAR TimeValue@1000000002 : Time;VAR DateTimeValue@1000000003 : DateTime;VAR DateFormulaValue@1000000004 : DateFormula;VAR DecimalValue@1000000005 : Decimal;VAR BooleanValue@1000000006 : Boolean;VAR IntegerValue@1000000007 : Integer;VAR BigIntegerValue@1000000008 : BigInteger;VAR DurationValue@1000000009 : Duration;VAR GuidValue@1000000010 : GUID);
+    BEGIN
+      CASE (ValueType) OF
+        ValueType::Date:
+          BEGIN
+            IF (DateValue = 0D) THEN
+              CalculatedValue := CALCDATE(DateFormulaValue)
+            ELSE
+              CalculatedValue := DateValue;
+          END;
+        ValueType::Time: CalculatedValue := TimeValue;
+        ValueType::DateFormula: CalculatedValue := DateFormulaValue;
+        ValueType::Decimal: CalculatedValue := DecimalValue;
+        ValueType::OemText,
+        ValueType::Text: CalculatedValue := TextValue;
+        ValueType::OemCode,
+        ValueType::Code: CalculatedValue := ValueAsCode(TextValue);
+        ValueType::Boolean: CalculatedValue := BooleanValue;
+        ValueType::Integer: CalculatedValue := IntegerValue;
+        ValueType::Option: CalculatedValue := IntegerValue;
+        ValueType::BigInteger: CalculatedValue := BigIntegerValue;
+        ValueType::Duration: CalculatedValue := DurationValue;
+        ValueType::GUID: CalculatedValue := GuidValue;
+        ValueType::DateTime: CalculatedValue := DateTimeValue;
+      END;
+    END;
+
+    PROCEDURE GetFormulaValue@1000000018(VAR CalculatedValue@1000000013 : Variant;VAR TextValue@1000000012 : Text);
+    VAR
+      TextPartValue@1000000019 : Text;
+      TextPartValueIsSet@1000000018 : Boolean;
+      DateValue@1000000017 : Date;
+      TimeValue@1000000016 : Time;
+      DateTimeValue@1000000015 : DateTime;
+      DateFormulaValue@1000000014 : DateFormula;
+      DecimalValue@1000000011 : Decimal;
+      BooleanValue@1000000010 : Boolean;
+      IntegerValue@1000000009 : Integer;
+      BigIntegerValue@1000000008 : BigInteger;
+      DurationValue@1000000007 : Duration;
+      GuidValue@1000000006 : GUID;
+      FormattedTextValue@1000000005 : Text;
+      LeftPartText@1000000004 : Text;
+      RightPartText@1000000003 : Text;
+      NoOfParts@1000000002 : Integer;
+      SelectedPart@1000000020 : Integer;
+      RangePos@1000000001 : Integer;
+      i@1000000000 : Integer;
+      MaxDateValue@1000000029 : Date;
+      MaxDecimalValue@1000000025 : Decimal;
+      MaxIntegerValue@1000000023 : Integer;
+      MaxBigIntegerValue@1000000022 : BigInteger;
+    BEGIN
+      RANDOMIZE();
+
+      //process formula values
+      NoOfParts := 1;
+      FOR i:=1 TO STRLEN(TextValue) DO
+        IF (TextValue[i] = ',') THEN
+          NoOfParts += 1;
+
+      IF (NoOfParts > 1) THEN BEGIN
+        SelectedPart := RANDOM(NoOfParts);
+        TextPartValue := SELECTSTR(SelectedPart, TextValue);
+      END ELSE
+        TextPartValue := TextValue;
+
+      //get value or range
+      RangePos := STRPOS(TextPartValue, '..');
+      IF (RangePos > 0) THEN BEGIN
+
+        IF (NOT(ValueType IN [ValueType::Date, ValueType::Integer, ValueType::BigInteger, ValueType::Decimal])) THEN
+          SetError(errRangeTypeInvalid);
+
+        LeftPartText := '';
+        RightPartText := '';
+        IF (RangePos > 1) THEN BEGIN
+          LeftPartText := COPYSTR(TextPartValue, 1, RangePos - 1);
+          ProcessSingleValue(LeftPartText, TextPartValueIsSet, DateValue, TimeValue, DateTimeValue, DateFormulaValue, DecimalValue, BooleanValue,
+            IntegerValue, BigIntegerValue, DurationValue, GuidValue);
+        END;
+        IF (RangePos < STRLEN(TextPartValue)) THEN BEGIN
+          RightPartText := COPYSTR(TextPartValue, RangePos + 1);
+          ProcessSingleValue(RightPartText, TextPartValueIsSet, MaxDateValue, TimeValue, DateTimeValue, DateFormulaValue, MaxDecimalValue, BooleanValue,
+            MaxIntegerValue, MaxBigIntegerValue, DurationValue, GuidValue);
+        END;
+
+        CASE (ValueType) OF
+          ValueType::Date:
+            GetDateRangeValue(CalculatedValue, DateValue, MaxDateValue);
+          ValueType::Integer:
+            GetIntegerRangeValue(CalculatedValue, IntegerValue, MaxIntegerValue);
+          ValueType::BigInteger:
+            GetBigIntegerRangeValue(CalculatedValue, BigIntegerValue, MaxBigIntegerValue);
+          ValueType::Decimal:
+            GetDecimalRangeValue(CalculatedValue, DecimalValue, MaxDecimalValue);
+        END;
+
+      END ELSE BEGIN
+        ProcessSingleValue(TextPartValue, TextPartValueIsSet, DateValue, TimeValue, DateTimeValue, DateFormulaValue, DecimalValue, BooleanValue,
+          IntegerValue, BigIntegerValue, DurationValue, GuidValue);
+        GetSingleValue(CalculatedValue, TextPartValue, DateValue, TimeValue, DateTimeValue, DateFormulaValue, DecimalValue, BooleanValue,
+          IntegerValue, BigIntegerValue, DurationValue, GuidValue);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetDateRangeValue@1000000019(VAR CalculatedValue@1000000000 : Variant;MinValue@1000000001 : Date;MaxValue@1000000002 : Date);
+    VAR
+      RangeValue@1000000003 : Integer;
+      RandomRangeValue@1000000004 : Integer;
+      RandomValue@1000000005 : Date;
+    BEGIN
+      RangeValue := MaxValue - MinValue + 1;
+      IF (RangeValue > 1) THEN BEGIN
+        RandomRangeValue := RANDOM(RangeValue) - 1;
+        RandomValue := MinValue + RandomRangeValue;
+      END ELSE
+        RandomValue := MinValue;
+      CalculatedValue := RandomValue;
+    END;
+
+    LOCAL PROCEDURE GetIntegerRangeValue@1000000020(VAR CalculatedValue@1000000000 : Variant;MinValue@1000000001 : Integer;MaxValue@1000000002 : Integer);
+    VAR
+      RangeValue@1000000003 : Integer;
+      RandomRangeValue@1000000004 : Integer;
+      RandomValue@1000000005 : Integer;
+    BEGIN
+      RangeValue := MaxValue - MinValue + 1;
+      IF (RangeValue > 1) THEN BEGIN
+        RandomRangeValue := RANDOM(RangeValue) - 1;
+        RandomValue := MinValue + RandomRangeValue;
+      END ELSE
+        RandomValue := MinValue;
+      CalculatedValue := RandomValue;
+    END;
+
+    LOCAL PROCEDURE GetBigIntegerRangeValue@1000000021(VAR CalculatedValue@1000000000 : Variant;MinValue@1000000001 : BigInteger;MaxValue@1000000002 : BigInteger);
+    VAR
+      RangeValue@1000000003 : Integer;
+      RandomRangeValue@1000000004 : Integer;
+      RandomValue@1000000005 : BigInteger;
+    BEGIN
+      RangeValue := MaxValue - MinValue + 1;
+      IF (RangeValue > 1) THEN BEGIN
+        RandomRangeValue := RANDOM(RangeValue) - 1;
+        RandomValue := MinValue + RandomRangeValue;
+      END ELSE
+        RandomValue := MinValue;
+      CalculatedValue := RandomValue;
+    END;
+
+    LOCAL PROCEDURE GetDecimalRangeValue@1000000022(VAR CalculatedValue@1000000000 : Variant;MinValue@1000000001 : Decimal;MaxValue@1000000002 : Decimal);
+    VAR
+      RandomPrecision@1000000006 : Decimal;
+      RangeValue@1000000003 : Decimal;
+      RandomRangeValue@1000000004 : Decimal;
+      RandomValue@1000000005 : Decimal;
+    BEGIN
+      RandomPrecision := 100;
+      RangeValue := ((MaxValue - MinValue) * RandomPrecision) + 1;
+      IF (RangeValue > 1) THEN BEGIN
+        RandomRangeValue := RANDOM(RangeValue) - 1;
+        RandomValue := MinValue + (RandomRangeValue / RandomPrecision);
+      END ELSE
+        RandomValue := MinValue;
+      CalculatedValue := RandomValue;
+    END;
+
+    PROCEDURE FieldTypeToValueType@1000000011(Type@1000000000 : Integer) : Integer;
+    BEGIN
+      CASE (Type) OF
+        Field.Type::TableFilter: EXIT(ValueType::TableFilter);
+        Field.Type::RecordID: EXIT(ValueType::RecordID);
+        Field.Type::OemText: EXIT(ValueType::OemText);
+        Field.Type::Date: EXIT(ValueType::Date);
+        Field.Type::Time: EXIT(ValueType::Time);
+        Field.Type::DateFormula: EXIT(ValueType::DateFormula);
+        Field.Type::Decimal: EXIT(ValueType::Decimal);
+        Field.Type::Text: EXIT(ValueType::Text);
+        Field.Type::Code: EXIT(ValueType::Code);
+        Field.Type::Binary: EXIT(ValueType::Binary);
+        Field.Type::BLOB: EXIT(ValueType::BLOB);
+        Field.Type::Boolean: EXIT(ValueType::Boolean);
+        Field.Type::Integer: EXIT(ValueType::Integer);
+        Field.Type::OemCode: EXIT(ValueType::OemCode);
+        Field.Type::Option: EXIT(ValueType::Option);
+        Field.Type::BigInteger: EXIT(ValueType::BigInteger);
+        Field.Type::Duration: EXIT(ValueType::Duration);
+        Field.Type::GUID: EXIT(ValueType::GUID);
+        Field.Type::DateTime: EXIT(ValueType::DateTime);
+      END;
+      EXIT(ValueType::Text);
+    END;
+
+    PROCEDURE ValueTypeToFieldType@1000000013(Type@1000000000 : Integer) : Integer;
+    BEGIN
+      CASE (Type) OF
+        ValueType::TableFilter: EXIT(Field.Type::TableFilter);
+        ValueType::RecordID: EXIT(Field.Type::RecordID);
+        ValueType::OemText: EXIT(Field.Type::OemText);
+        ValueType::Date: EXIT(Field.Type::Date);
+        ValueType::Time: EXIT(Field.Type::Time);
+        ValueType::DateFormula: EXIT(Field.Type::DateFormula);
+        ValueType::Decimal: EXIT(Field.Type::Decimal);
+        ValueType::Text: EXIT(Field.Type::Text);
+        ValueType::Code: EXIT(Field.Type::Code);
+        ValueType::Binary: EXIT(Field.Type::Binary);
+        ValueType::BLOB: EXIT(Field.Type::BLOB);
+        ValueType::Boolean: EXIT(Field.Type::Boolean);
+        ValueType::Integer: EXIT(Field.Type::Integer);
+        ValueType::OemCode: EXIT(Field.Type::OemCode);
+        ValueType::Option: EXIT(Field.Type::Option);
+        ValueType::BigInteger: EXIT(Field.Type::BigInteger);
+        ValueType::Duration: EXIT(Field.Type::Duration);
+        ValueType::GUID: EXIT(Field.Type::GUID);
+        ValueType::DateTime: EXIT(Field.Type::DateTime);
+      END;
+      EXIT(Field.Type::Text);
+    END;
+
+    PROCEDURE ClearFieldRef@1000000010(VAR FieldRef@1000000000 : FieldRef);
+    VAR
+      Field@1000000001 : Record 2000000041;
+      RecordIdValue@1000000002 : RecordID;
+      TextValue@1000000003 : Text;
+      DateValue@1000000004 : Date;
+      TimeValue@1000000005 : Time;
+      DateFormulaValue@1000000006 : DateFormula;
+      DecimalValue@1000000007 : Decimal;
+      IntegerValue@1000000008 : Integer;
+      CodeValue@1000000009 : Code[10];
+      BooleanValue@1000000010 : Boolean;
+      DateTimeValue@1000000011 : DateTime;
+      BigIntegerValue@1000000012 : BigInteger;
+      DurationValue@1000000013 : Duration;
+      GuidValue@1000000014 : GUID;
+    BEGIN
+      CLEAR(RecordIdValue);
+      CLEAR(TextValue);
+      CLEAR(DateValue);
+      CLEAR(TimeValue);
+      CLEAR(DateFormulaValue);
+      CLEAR(DecimalValue);
+      CLEAR(TextValue);
+      CLEAR(CodeValue);
+      CLEAR(BooleanValue);
+      CLEAR(IntegerValue);
+      CLEAR(TextValue);
+      CLEAR(IntegerValue);
+      CLEAR(BigIntegerValue);
+      CLEAR(DurationValue);
+      CLEAR(GuidValue);
+      CLEAR(DateTimeValue);
+
+      Field.GET(FieldRef.RECORD.NUMBER, FieldRef.NUMBER);
+      CASE (Field.Type) OF
+        Field.Type::TableFilter: FieldRef.VALUE := '';
+        Field.Type::RecordID: FieldRef.VALUE := RecordIdValue;
+        Field.Type::OemText: FieldRef.VALUE := TextValue;
+        Field.Type::Date: FieldRef.VALUE := DateValue;
+        Field.Type::Time: FieldRef.VALUE := TimeValue;
+        Field.Type::DateFormula: FieldRef.VALUE := DateFormulaValue;
+        Field.Type::Decimal: FieldRef.VALUE := DecimalValue;
+        Field.Type::Text: FieldRef.VALUE := TextValue;
+        Field.Type::Code: FieldRef.VALUE := CodeValue;
+        Field.Type::Boolean: FieldRef.VALUE := BooleanValue;
+        Field.Type::Integer: FieldRef.VALUE := IntegerValue;
+        Field.Type::OemCode: FieldRef.VALUE := TextValue;
+        Field.Type::Option: FieldRef.VALUE := IntegerValue;
+        Field.Type::BigInteger: FieldRef.VALUE := BigIntegerValue;
+        Field.Type::Duration: FieldRef.VALUE := DurationValue;
+        Field.Type::GUID: FieldRef.VALUE := GuidValue;
+        Field.Type::DateTime: FieldRef.VALUE := DateTimeValue;
+      END;
+    END;
+
+    PROCEDURE CompareValue@1000000014(VAR TextValue1@1000000011 : Text;VAR DateValue1@1000000009 : Date;VAR TimeValue1@1000000008 : Time;VAR DateTimeValue1@1000000007 : DateTime;VAR DateFormulaValue1@1000000006 : DateFormula;VAR DecimalValue1@1000000005 : Decimal;VAR BooleanValue1@1000000004 : Boolean;VAR IntegerValue1@1000000003 : Integer;VAR BigIntegerValue1@1000000002 : BigInteger;VAR DurationValue1@1000000001 : Duration;VAR GuidValue1@1000000000 : GUID;VAR TextValue2@1000000021 : Text;VAR DateValue2@1000000020 : Date;VAR TimeValue2@1000000019 : Time;VAR DateTimeValue2@1000000018 : DateTime;VAR DateFormulaValue2@1000000017 : DateFormula;VAR DecimalValue2@1000000016 : Decimal;VAR BooleanValue2@1000000015 : Boolean;VAR IntegerValue2@1000000014 : Integer;VAR BigIntegerValue2@1000000013 : BigInteger;VAR DurationValue2@1000000012 : Duration;VAR GuidValue2@1000000010 : GUID) : Integer;
+    BEGIN
+      CASE (ValueType) OF
+        ValueType::Date: EXIT(CompareDate(DateValue1, DateValue2));
+        ValueType::Time:  EXIT(CompareTime(TimeValue1, TimeValue2));
+        ValueType::DateFormula: EXIT(CompareDate(CALCDATE(DateFormulaValue1), CALCDATE(DateFormulaValue2)));
+        ValueType::Decimal:  EXIT(CompareNumber(DecimalValue1, DecimalValue2));
+        ValueType::OemText,
+        ValueType::Text: EXIT(CompareText(TextValue1, TextValue2));
+        ValueType::OemCode,
+        ValueType::Code: EXIT(CompareText(ValueAsCode(TextValue1), ValueAsCode(TextValue2)));
+        ValueType::Boolean: EXIT(CompareBoolean(BooleanValue1, BooleanValue2));
+        ValueType::Integer: EXIT(CompareNumber(IntegerValue1, IntegerValue2));
+        ValueType::Option: EXIT(CompareNumber(IntegerValue1, IntegerValue2));
+        ValueType::BigInteger: EXIT(CompareNumber(BigIntegerValue1, BigIntegerValue2));
+        ValueType::Duration: EXIT(CompareDuration(DurationValue1, DurationValue2));
+        ValueType::GUID: EXIT(CompareGUID(GuidValue1, GuidValue2));
+        ValueType::DateTime: EXIT(CompareDateTime(DateTimeValue1, DateTimeValue2));
+      END;
+    END;
+
+    LOCAL PROCEDURE CompareDate@1000000015(Value1@1000000000 : Date;Value2@1000000001 : Date) : Integer;
+    BEGIN
+      IF (Value1 < Value2) THEN
+        EXIT(-1)
+      ELSE IF (Value1 > Value2) THEN
+        EXIT(1)
+      ELSE
+        EXIT(0);
+    END;
+
+    LOCAL PROCEDURE CompareTime@1000000024(Value1@1000000000 : Time;Value2@1000000001 : Time) : Integer;
+    BEGIN
+      IF (Value1 < Value2) THEN
+        EXIT(-1)
+      ELSE IF (Value1 > Value2) THEN
+        EXIT(1)
+      ELSE
+        EXIT(0);
+    END;
+
+    LOCAL PROCEDURE CompareDateTime@1000000025(Value1@1000000000 : DateTime;Value2@1000000001 : DateTime) : Integer;
+    BEGIN
+      IF (Value1 < Value2) THEN
+        EXIT(-1)
+      ELSE IF (Value1 > Value2) THEN
+        EXIT(1)
+      ELSE
+        EXIT(0);
+    END;
+
+    LOCAL PROCEDURE CompareText@1000000026(Value1@1000000000 : Text;Value2@1000000001 : Text) : Integer;
+    BEGIN
+      IF (Value1 < Value2) THEN
+        EXIT(-1)
+      ELSE IF (Value1 > Value2) THEN
+        EXIT(1)
+      ELSE
+        EXIT(0);
+    END;
+
+    LOCAL PROCEDURE CompareNumber@1000000027(Value1@1000000000 : Decimal;Value2@1000000001 : Decimal) : Integer;
+    BEGIN
+      IF (Value1 < Value2) THEN
+        EXIT(-1)
+      ELSE IF (Value1 > Value2) THEN
+        EXIT(1)
+      ELSE
+        EXIT(0);
+    END;
+
+    LOCAL PROCEDURE CompareBoolean@1000000029(Value1@1000000000 : Boolean;Value2@1000000001 : Boolean) : Integer;
+    BEGIN
+      IF (Value1 < Value2) THEN
+        EXIT(-1)
+      ELSE IF (Value1 > Value2) THEN
+        EXIT(1)
+      ELSE
+        EXIT(0);
+    END;
+
+    LOCAL PROCEDURE CompareGUID@1000000030(Value1@1000000000 : GUID;Value2@1000000001 : GUID) : Integer;
+    BEGIN
+      EXIT(CompareText(FORMAT(Value1), FORMAT(Value2)));
+    END;
+
+    LOCAL PROCEDURE CompareDuration@1000000031(Value1@1000000000 : Duration;Value2@1000000001 : Duration) : Integer;
+    BEGIN
+      IF (Value1 < Value2) THEN
+        EXIT(-1)
+      ELSE IF (Value1 > Value2) THEN
+        EXIT(1)
+      ELSE
+        EXIT(0);
+    END;
+
+    PROCEDURE SetSkipErrors@1000000037(Value@1000000000 : Boolean);
+    BEGIN
+      SkipErrors := Value;
+    END;
+
+    LOCAL PROCEDURE SetError@1000000038(ErrorTextValue@1000000000 : Text);
+    BEGIN
+      IF (SkipErrors) THEN BEGIN
+        WasError := TRUE;
+        ErrorText := ErrorTextValue;
+      END ELSE
+        ERROR(ErrorTextValue);
+    END;
+
+    LOCAL PROCEDURE SetTypeConversionError@1000000044(TextValue@1000000000 : Text);
+    BEGIN
+      SetError(STRSUBSTNO(errTypeConversionError, ValueType, TextValue));
+    END;
+
+    PROCEDURE GetError@1000000039() : Boolean;
+    BEGIN
+      EXIT(WasError);
+    END;
+
+    PROCEDURE ClearError@1000000040();
+    BEGIN
+      WasError := FALSE;
+      ErrorText := '';
+    END;
+
+    PROCEDURE GetErrorText@1000000041() : Text;
+    BEGIN
+      EXIT(ErrorText);
+    END;
+
+    PROCEDURE GetErrorState@1000000035(VAR WasErrorValue@1000000000 : Boolean;VAR ErrorTextValue@1000000001 : Text);
+    BEGIN
+      WasErrorValue := WasError;
+      ErrorTextValue := ErrorText;
+    END;
+
+    PROCEDURE SetDateFormat@1000000028(Value@1000000000 : Text);
+    BEGIN
+      DateFormat := Value;
+    END;
+
+    PROCEDURE SetDateTimeFormat@1000000034(Value@1000000000 : Text);
+    BEGIN
+      DateTimeFormat := Value;
+    END;
+
+    LOCAL PROCEDURE EvaluateDate@1000000023(VAR DateValue@1000000001 : Date;TextValue@1000000000 : Text) : Boolean;
+    VAR
+      DateTime@1000000002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.DateTime";
+      CultureInfo@1000000003 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Globalization.CultureInfo";
+      DateTimeStyles@1000000004 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Globalization.DateTimeStyles";
+      DateTimeValue@1000000005 : DateTime;
+    BEGIN
+      IF (TextValue = '') THEN BEGIN
+        DateValue := 0D;
+        EXIT(TRUE);
+      END;
+
+      IF (DateFormat = '') THEN
+        EXIT(EVALUATE(DateValue, TextValue));
+
+      IF (EVALUATE(DateTimeValue, TextValue, 9)) THEN BEGIN
+        DateValue := DT2DATE(DateTimeValue);
+        EXIT(TRUE);
+      END;
+
+      DateTime := DateTime.DateTime(2015, 1, 1);
+      IF (NOT(DateTime.TryParseExact(TextValue, DateFormat, CultureInfo.CurrentCulture, DateTimeStyles.None, DateTime))) THEN
+        EXIT(FALSE);
+
+      DateTimeValue := DateTime;
+      DateValue := DT2DATE(DateTimeValue);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE EvaluateDateTime@1000000033(VAR DateTimeValue@1000000001 : DateTime;TextValue@1000000000 : Text) : Boolean;
+    VAR
+      DateTime@1000000002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.DateTime";
+      CultureInfo@1000000003 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Globalization.CultureInfo";
+      DateTimeStyles@1000000004 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Globalization.DateTimeStyles";
+    BEGIN
+      IF (TextValue = '') THEN BEGIN
+        DateTimeValue := 0DT;
+        EXIT(TRUE);
+      END;
+
+      IF (DateTimeFormat = '') THEN
+        EXIT(EVALUATE(DateTimeValue, TextValue));
+
+
+
+      IF (NOT(DateTime.TryParseExact(TextValue, DateFormat, CultureInfo.CurrentCulture, DateTimeStyles.None, DateTime))) THEN
+        EXIT(FALSE);
+
+      DateTimeValue := DateTime;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE FormatDate@1000000043(Value@1000000000 : Date) : Text;
+    VAR
+      DateTime@1000000001 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.DateTime";
+      DateTimeValue@1000000002 : DateTime;
+    BEGIN
+      IF (DateFormat = '') THEN
+        EXIT(FORMAT(Value));
+      IF (Value = 0D) THEN
+        EXIT('');
+
+      DateTimeValue := CREATEDATETIME(Value, 120000T);
+      DateTime := DateTimeValue;
+      EXIT(DateTime.ToString(DateFormat));
+    END;
+
+    LOCAL PROCEDURE FormatDateTime@1000000045(Value@1000000000 : DateTime) : Text;
+    VAR
+      DateTime@1000000001 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.DateTime";
+    BEGIN
+      IF (DateTimeFormat = '') THEN
+        EXIT(FORMAT(Value));
+      IF (Value = 0DT) THEN
+        EXIT('');
+
+      DateTime := Value;
+      EXIT(DateTime.ToString(DateTimeFormat));
+    END;
+
+    PROCEDURE CheckAnswerInTableField@1000000032(TextValue@1000000011 : Text) OK : Boolean;
+    VAR
+      RecRef@1000000010 : RecordRef;
+      FieldRef@1000000012 : FieldRef;
+    BEGIN
+      IF (TableId = 0) OR (FieldId = 0) THEN
+        EXIT(TRUE);
+
+      RecRef.OPEN(TableId);
+      FieldRef := RecRef.FIELD(FieldId);
+      FieldRef.SETFILTER(TextValue);
+
+      IF NOT RecRef.ISEMPTY THEN
+        EXIT(TRUE)
+      ELSE BEGIN
+        WasError := TRUE;
+        ErrorText := STRSUBSTNO(errNotInTableField,TextValue,FieldRef.NAME,RecRef.NAME);
+        EXIT(FALSE);
+      END;
+    END;
+
+    PROCEDURE SetValue@1000000036(VAR VariantValue@1000000013 : Variant;VAR TextValue@1000000012 : Text;VAR DateValue@1000000001 : Date;VAR TimeValue@1000000002 : Time;VAR DateTimeValue@1000000003 : DateTime;VAR DateFormulaValue@1000000004 : DateFormula;VAR DecimalValue@1000000005 : Decimal;VAR BooleanValue@1000000006 : Boolean;VAR IntegerValue@1000000007 : Integer;VAR BigIntegerValue@1000000008 : BigInteger;VAR DurationValue@1000000009 : Duration;VAR GuidValue@1000000010 : GUID);
+    VAR
+      ValueIsSet@1000000000 : Boolean;
+    BEGIN
+      ValueIsSet := TRUE;
+
+      CASE (ValueType) OF
+        ValueType::Date: DateValue := VariantValue;
+        ValueType::Time: TimeValue := VariantValue;
+        ValueType::DateFormula: DateFormulaValue := VariantValue;
+        ValueType::Decimal: DecimalValue := VariantValue;
+        ValueType::OemText,
+        ValueType::Text,
+        ValueType::OemCode,
+        ValueType::Code: TextValue := VariantValue;
+        ValueType::Boolean: BooleanValue := VariantValue;
+        ValueType::Integer: IntegerValue := VariantValue;
+        ValueType::Option: IntegerValue := VariantValue;
+        ValueType::BigInteger: BigIntegerValue := VariantValue;
+        ValueType::Duration: DurationValue := VariantValue;
+        ValueType::GUID: GuidValue := VariantValue;
+        ValueType::DateTime: DateTimeValue := VariantValue;
+      END;
+
+      FormatValue(TextValue, ValueIsSet, DateValue, TimeValue, DateTimeValue, DateFormulaValue, DecimalValue,
+        BooleanValue, IntegerValue, BigIntegerValue, DurationValue, GuidValue);
+    END;
+
+    PROCEDURE SingleValueLookup@1000000051(VAR TextValue@1000000000 : Text) : Boolean;
+    VAR
+      NameValueBufferTemp@1000000001 : TEMPORARY Record 9062730;
+      TNPToolkit@1000000002 : Codeunit 9062230;
+      BooleanValue@1000000003 : Boolean;
+      NameValueToolkit@1000000004 : Codeunit 9062587;
+    BEGIN
+      NameValueBufferTemp.RESET();
+      NameValueBufferTemp.DELETEALL();
+
+      CASE (ValueType) OF
+        ValueType::Option:
+          BEGIN
+            String.SplitAdvanced(OptionString, ',', TRUE, TRUE, NameValueBufferTemp);
+            IF (NameValueToolkit.NameValueLookup(NameValueBufferTemp, FALSE)) THEN BEGIN
+              TextValue := NameValueBufferTemp.Name;
+              EXIT(TRUE);
+            END;
+          END;
+        ValueType::Boolean:
+          BEGIN
+            BooleanValue := FALSE;
+            NameValueBufferTemp.ID := 0;
+            NameValueBufferTemp.Name := FORMAT(BooleanValue);
+            NameValueBufferTemp.Value := NameValueBufferTemp.Name;
+            NameValueBufferTemp.INSERT();
+
+            BooleanValue := TRUE;
+            NameValueBufferTemp.ID := 1;
+            NameValueBufferTemp.Name := FORMAT(BooleanValue);
+            NameValueBufferTemp.Value := NameValueBufferTemp.Name;
+            NameValueBufferTemp.INSERT();
+
+            IF (NameValueToolkit.NameValueLookup(NameValueBufferTemp, FALSE)) THEN BEGIN
+              TextValue := FORMAT(NameValueBufferTemp.ID);
+              EXIT(TRUE);
+            END;
+
+          END;
+      END;
+      EXIT(FALSE);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.7  AZ 05/06/2015 - Added Comparison functions and additional Error Handling functions
+      //DOC NA2015.9  AZ 05/08/2015 - Object renamed
+      //DOC NA2016.10 JH 28/08/2015 - Upgraded to 2016
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit
+      //DOC NA2016.15 JH 09/05/2016 - CfMD modifications
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,128 @@
+OBJECT Codeunit 9062332 CRM Log Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE CreateBasic@1000000000(Type@1000000002 : Code[20];Subject@1000000001 : Text[250];ContactNo@1000000000 : Code[20]) EntryNo : Integer;
+    VAR
+      CRMLog@1000000003 : Record 9062392;
+      Contact@1000000004 : Record 5050;
+    BEGIN
+      //Create a Log from Just a Contact, Type and Subject
+      //NB Log is created and closed and used as a Log not an open action
+      //
+
+      Contact.GET(ContactNo);
+
+      CRMLog.INIT;
+      CRMLog.SETRANGE("Related Contact",ContactNo);
+      CRMLog.INSERT(TRUE);
+      CRMLog.VALIDATE(Type,Type);
+      CRMLog.VALIDATE(Subject,Subject);
+      CRMLog.Closed := TRUE;
+      CRMLog.MODIFY;
+      EXIT(CRMLog."Entry No.");
+    END;
+
+    PROCEDURE CreateComplex@1000000001(Type@1000000004 : Code[20];Desc@1000000003 : Text[250];ContactNo@1000000002 : Code[20];DueDate@1000000005 : Date;AssignToContact@1000000006 : Code[20]) EntryNo : Integer;
+    VAR
+      CRMLog@1000000001 : Record 9062392;
+      Contact@1000000000 : Record 5050;
+    BEGIN
+      //Create a Log from Additional parameters including Due dates
+      //NB Log is used as an Open action
+
+      CRMLog.GET(CreateBasic(Type,Desc,ContactNo));
+
+      CRMLog.VALIDATE("Due Date",DueDate);
+      CRMLog."Due Time" := 235959T;
+      CRMLog.VALIDATE("Due Time");
+      CRMLog.VALIDATE("Assigned To",AssignToContact);
+      CRMLog.Closed := FALSE;
+      CRMLog.MODIFY(TRUE);
+      EXIT(CRMLog."Entry No.");
+    END;
+
+    PROCEDURE ShowContactCard@1000000005(ContactNo@1000000000 : Record 5050);
+    VAR
+      ContactCardPage@1000000001 : Page 5050;
+      ContactRec@1000000002 : Record 5050;
+    BEGIN
+      ContactRec.GET(ContactNo) ;
+      ContactCardPage.SETTABLEVIEW(ContactRec);
+      ContactCardPage.RUN();
+    END;
+
+    PROCEDURE SendLogEmail@1000000002(VAR pCrmLogEntry@1000000002 : Record 9062392);
+    VAR
+      lContact@9062230 : Record 5050;
+      lEMail@9062231 : Record 9062281;
+      lEMailAttachment@9062233 : TEMPORARY Record 9062283;
+      lFileAttachment@9062236 : Record 9062272;
+      lEMailManagement@9062229 : Codeunit 9062617;
+      lFileAttachmentProcessing@9062237 : Codeunit 9062600;
+      lFileSystem@9062234 : Codeunit 9062264;
+      lEMailBodyText@9062232 : Text;
+      lCrmLogEntryChanged@1000000005 : Boolean;
+      eEMailAttached@1000000010 : TextConst 'ENU=Email attached to CRM Log;ENG=Email attached to CRM Log';
+    BEGIN
+      pCrmLogEntry.TESTFIELD("Related Contact");
+      lContact.GET(pCrmLogEntry."Related Contact");
+      lEMailManagement.CreateEMailToContact(lContact);
+      lEMailManagement.SetSubject(pCrmLogEntry.Subject);
+      IF (lEMailManagement.EditAndSendEMail()) THEN
+      BEGIN
+        lEMailManagement.GetEMail(lEMail);
+        lEMailManagement.GetEMailAttachments(lEMailAttachment);
+
+        lCrmLogEntryChanged := FALSE;
+        IF (lEMail.Subject <> pCrmLogEntry.Subject) THEN
+        BEGIN
+          pCrmLogEntry.VALIDATE(Subject, lEMail.Subject);
+          lCrmLogEntryChanged := TRUE;
+        END;
+        lEMailBodyText := COPYSTR(lEMail.GetBodyText(FALSE), 1, MAXSTRLEN(pCrmLogEntry.Comments));
+        IF (lEMailBodyText <> pCrmLogEntry.Comments) THEN
+        BEGIN
+          pCrmLogEntry.VALIDATE(Comments, lEMailBodyText);
+          lCrmLogEntryChanged := TRUE;
+        END;
+        IF (lCrmLogEntryChanged) THEN
+          pCrmLogEntry.MODIFY(TRUE);
+
+        lEMailAttachment.RESET();
+        IF (lEMailAttachment.FINDSET()) THEN
+        REPEAT
+          lFileAttachment.RESET();
+          lFileAttachment.SETRANGE("Table ID", DATABASE::"CRM Log Entry");
+          lFileAttachment.SETRANGE("Primary Key FieldID 1", pCrmLogEntry.FIELDNO("Entry No."));
+          lFileAttachment.SETRANGE("Primary Key Value 1", FORMAT(pCrmLogEntry."Entry No.", 0, 1));
+          lFileAttachmentProcessing.GetFromClientSilent(lFileAttachment, lEMailAttachment."File Path");
+        UNTIL (lEMailAttachment.NEXT() = 0);
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NH2015.1  IH 17/12/2012 - CRM
+      //DOC NH2015.4  JH 03/11/2014 - Upgraded to 2015
+      //DOC NH2016.10 JH 30/09/2015 - Upgraded to 2016
+      //DOC NH2016.11 JH 30/09/2015 - New version
+      //DOC NH2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

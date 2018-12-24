@@ -1,0 +1,229 @@
+OBJECT Codeunit 9062243 Bitmap Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      mOutStream@1190000009 : OutStream;
+      mBitsPerPixel@1190000015 : Integer;
+      mBytesPerPixel@1190000016 : Integer;
+      mFileSize@1190000010 : Integer;
+      mHeaderSize@1190000013 : Integer;
+      mPixelArrayOffset@1190000011 : Integer;
+      mBitmapHeaderSize@1190000012 : Integer;
+      mImageSize@1190000014 : Integer;
+      mHorizontalRes@1190000017 : Integer;
+      mVerticalRes@1190000018 : Integer;
+      mRowSize@1190000020 : Integer;
+      mRowSizeWithOffset@1190000026 : Integer;
+      mRowOffset@1190000019 : Integer;
+      tCantBeLowerThan@1190000021 : TextConst 'ENU=%1 can''t be lower than %2.;ENG=%1 can''t be lower than %2.';
+      tCantBeGreaterThan@1190000024 : TextConst 'ENU=%1 can''t be greater than %2.;ENG=%1 can''t be greater than %2.';
+      tWidth@1190000022 : TextConst 'ENU=Width;ENG=Width';
+      tHeight@1190000023 : TextConst 'ENU=Height;ENG=Height';
+      mRowContent@1190000027 : ARRAY [2] OF Record 99008535;
+      mRowOutStream@1190000025 : OutStream;
+      mRowInStream@1190000029 : InStream;
+      mColourIndex@1000000004 : ' ,Main,Alternative';
+      mRgbIndex@1000000003 : ' ,Blue,Green,Red';
+      mRgbBlobs@1000000000 : ARRAY [2,3] OF Record 99008535;
+      mRgbBytes@1000000005 : ARRAY [2,3] OF Byte;
+      mPlanningTools@1000000001 : Codeunit 9062230;
+
+    PROCEDURE CreateBitmap@1190000010(VAR pTempBlob@1190000009 : Record 99008535;pWidth@1190000010 : Integer;pHeight@1190000011 : Integer;pRed@1190000012 : Integer;pGreen@1190000013 : Integer;pBlue@1190000014 : Integer);
+    VAR
+      lOutStream@1000000001 : OutStream;
+      lRow@1190000015 : Integer;
+      lColumn@1190000016 : Integer;
+      lOffset@1190000017 : Integer;
+      lChar@1190000018 : ARRAY [3] OF Char;
+      lWritten@1190000019 : Integer;
+      lColour@1000000000 : Integer;
+      lColours@1000000002 : Integer;
+    BEGIN
+      //DOC NA2015.1 - Creating a bitmap in BLOB memory
+      //  <> pTempBlob: Target BLOB
+      //  -> pWidth: Bitmap width
+      //  -> pHeight: Bitmap height
+      //  -> pRed, pGreen, pBlue: Bitmap colour
+
+      CreateBitmapAdv(pTempBlob, pWidth, pHeight, pRed, pGreen, pBlue, FALSE, 0, 0, 0);
+    END;
+
+    PROCEDURE CreateBitmapAdv@1000000000(VAR pTempBlob@1190000009 : Record 99008535;pWidth@1190000010 : Integer;pHeight@1190000011 : Integer;pRed@1190000012 : Integer;pGreen@1190000013 : Integer;pBlue@1190000014 : Integer;pUseColour2@1000000006 : Boolean;pRed2@1000000005 : Integer;pGreen2@1000000004 : Integer;pBlue2@1000000003 : Integer);
+    VAR
+      lOutStream@1000000001 : OutStream;
+      lRow@1190000015 : Integer;
+      lColumn@1190000016 : Integer;
+      lOffset@1190000017 : Integer;
+      lChar@1190000018 : ARRAY [3] OF Char;
+      lWritten@1190000019 : Integer;
+      lColourIndex@1000000007 : Integer;
+      lRgbIndex@1000000000 : Integer;
+      lRowOutStreamIndex@1000000008 : Integer;
+      lRowOutStreamIndexMax@1000000002 : Integer;
+      lEmptyByte@1000000009 : Byte;
+    BEGIN
+      //DOC NA2015.1 - Creating a bitmap in BLOB memory (advanced version)
+      //  <> pTempBlob: Target BLOB
+      //  -> pWidth: Bitmap width
+      //  -> pHeight: Bitmap height
+      //  -> pRed, pGreen, pBlue: Bitmap colour
+      //  -> pUseColour2: Flag to use alternative colour
+      //  -> pRed2, pGreen2, pBlue2: Alternative bitmap colour
+
+      mRgbBytes[mColourIndex::Main][mRgbIndex::Blue] := pBlue;
+      mRgbBytes[mColourIndex::Main][mRgbIndex::Green] := pGreen;
+      mRgbBytes[mColourIndex::Main][mRgbIndex::Red] := pRed;
+      mRgbBytes[mColourIndex::Alternative][mRgbIndex::Blue] := pBlue2;
+      mRgbBytes[mColourIndex::Alternative][mRgbIndex::Green] := pGreen2;
+      mRgbBytes[mColourIndex::Alternative][mRgbIndex::Red] := pRed2;
+
+      // Checking whatever we can
+      CheckRange(pWidth, 1, 1024, tWidth);
+      CheckRange(pHeight, 1, 1024, tHeight);
+
+      pTempBlob.Blob.CREATEOUTSTREAM(mOutStream);
+
+      // Basic parameters
+      mBitsPerPixel := 24;
+      mHorizontalRes := 100; // Dots per inch
+      mVerticalRes := 100; // Dots per inch
+
+      // Necessary calculations
+      mBytesPerPixel := mBitsPerPixel DIV 8;
+      mHeaderSize := 14;
+      mBitmapHeaderSize := 40;
+      mPixelArrayOffset := mHeaderSize + mBitmapHeaderSize;
+      mRowSize := mBytesPerPixel * pWidth;
+      mRowOffset := mRowSize MOD 4;
+      IF (mRowOffset <> 0) THEN
+        mRowOffset := 4 - mRowOffset;
+      mRowSizeWithOffset := mRowSize + mRowOffset;
+      mImageSize := mRowSizeWithOffset * pHeight;
+      mFileSize := mPixelArrayOffset + mImageSize;
+
+      // Header
+      mPlanningTools.OneByteToStream(mOutStream, 66); // Signature character 1 (0x42)
+      mPlanningTools.OneByteToStream(mOutStream, 77); // Signature character 2 (0x4D)
+      mPlanningTools.FourBytesToStream(mOutStream, mFileSize); // File size
+      mPlanningTools.TwoBytesToStream(mOutStream, 0); // Reserved
+      mPlanningTools.TwoBytesToStream(mOutStream, 0); // Reserved
+      mPlanningTools.FourBytesToStream(mOutStream, mPixelArrayOffset); // Pixel array offset
+
+      // Bitmap header
+      mPlanningTools.FourBytesToStream(mOutStream, mBitmapHeaderSize); // This header size
+      mPlanningTools.FourBytesToStream(mOutStream, pWidth); // Image width in pixels
+      mPlanningTools.FourBytesToStream(mOutStream, pHeight); // Image height in pixels
+      mPlanningTools.TwoBytesToStream(mOutStream, 1); // Number of planes (must be 1)
+      mPlanningTools.TwoBytesToStream(mOutStream, mBitsPerPixel); // Bits per pixel (1, 4, 8, 16, 24 or 32)
+      mPlanningTools.FourBytesToStream(mOutStream, 0); // Compression used: none
+      mPlanningTools.FourBytesToStream(mOutStream, mImageSize); // Image size
+      mPlanningTools.FourBytesToStream(mOutStream, DotsPerInchToPixelsPerMeter(mHorizontalRes)); // Horizontal res. (pixels / meter)
+      mPlanningTools.FourBytesToStream(mOutStream, DotsPerInchToPixelsPerMeter(mVerticalRes)); // Vertical res. (pixels / meter)
+      mPlanningTools.FourBytesToStream(mOutStream, 0); // Number of colours in the palette (0 = default)
+      mPlanningTools.FourBytesToStream(mOutStream, 0); // Number of used colours (ignored)
+
+      // Row content
+      IF (pUseColour2) THEN
+        lRowOutStreamIndexMax := 2
+      ELSE
+        lRowOutStreamIndexMax := 1;
+
+      lColourIndex := mColourIndex::Main;
+      CLEAR(mRowContent);
+      FOR lRowOutStreamIndex := 1 TO lRowOutStreamIndexMax DO
+      BEGIN
+        IF (pUseColour2) THEN
+          IF (lRowOutStreamIndex = 1) THEN
+            lColourIndex := mColourIndex::Alternative
+          ELSE
+            lColourIndex := mColourIndex::Main;
+        mRowContent[lRowOutStreamIndex].Blob.CREATEOUTSTREAM(mRowOutStream);
+        FOR lColumn := 1 TO pWidth DO
+        BEGIN
+          FlipColourIndex(pUseColour2, lColourIndex);
+          FOR lRgbIndex := mRgbIndex::Blue TO mRgbIndex::Red DO
+          BEGIN
+            lWritten += mRowOutStream.WRITE(mRgbBytes[lColourIndex][lRgbIndex]);
+          END;
+        END;
+        IF (mRowOffset <> 0) THEN
+          FOR lOffset := 1 TO mRowOffset DO
+            lWritten += mRowOutStream.WRITE(lEmptyByte);
+      END;
+
+      // Pixels
+      FOR lRow := 1 TO pHeight DO
+      BEGIN
+        IF (pUseColour2) THEN
+        BEGIN
+          IF (lRow MOD 2 = 0) THEN
+            lRowOutStreamIndex := 2
+          ELSE
+            lRowOutStreamIndex := 1;
+        END
+        ELSE
+          lRowOutStreamIndex := 1;
+        mRowContent[lRowOutStreamIndex].Blob.CREATEINSTREAM(mRowInStream);
+        COPYSTREAM(mOutStream, mRowInStream);
+      END;
+    END;
+
+    PROCEDURE FlipColourIndex@1000000003(pUseColour2@1000000000 : Boolean;VAR pColourIndex@1000000001 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Flipping colour index (Main <-> ALternative) only if alternative colour is used; otherwise it always leaves Main
+      //  -> pUseColour2: Flag to use alternative colour
+      //  <> pColourIndex: Colour index
+
+      IF (pUseColour2) THEN
+        IF (pColourIndex = mColourIndex::Main) THEN
+          pColourIndex := mColourIndex::Alternative
+        ELSE
+          pColourIndex := mColourIndex::Main;
+    END;
+
+    PROCEDURE CheckRange@1190000015(pValue@1190000009 : Integer;pMin@1190000010 : Integer;pMax@1190000011 : Integer;pName@1190000012 : Text[50]);
+    BEGIN
+      //DOC NA2015.1 - Checking if the value is within the range
+      //  -> pValue: Value to check
+      //  -> pMin, pMax: Range
+      //  -> pName: Value name
+
+      IF (pValue < pMin) THEN
+        ERROR(tCantBeLowerThan, pName, pMin);
+      IF (pValue > pMax) THEN
+        ERROR(tCantBeGreaterThan, pName, pMax);
+    END;
+
+    LOCAL PROCEDURE DotsPerInchToPixelsPerMeter@1190000014(pDotsPerInch@1190000009 : Integer) : Integer;
+    BEGIN
+      //DOC NA2015.1 - Converting dots per inch to pixels per meter
+      //  -> pDotsPerInch: Dots per inch value
+      //  <- Pixels per meter value
+
+      EXIT(ROUND(pDotsPerInch * 28.35, 1));
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  JH 09/10/2012 - Planning Board 2013
+      //DOC NA2015.8  JH 09/07/2015 - Fixes
+      //DOC NA2016.8  JH 01/09/2015 - Upgraded to 2016
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

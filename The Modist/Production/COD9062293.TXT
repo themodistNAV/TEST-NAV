@@ -1,0 +1,123 @@
+OBJECT Codeunit 9062293 Barcode Reader Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SystemBehaviour@1000000000 : Record 9062230;
+
+    PROCEDURE ReadBarcode@1000000000(OnClient@1000000001 : Boolean;InputFilePath@1000000000 : Text[250];VAR ResultText@1000000011 : Text[1024]) Sucess : Boolean;
+    VAR
+      ProcessDotNetStartInfo@1000000012 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Diagnostics.ProcessStartInfo";
+      ProcessDotNetStartInfoClient@1000000006 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Diagnostics.ProcessStartInfo" RUNONCLIENT;
+      ProcessDotNet@1000000003 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Diagnostics.Process";
+      ProcessDotNetClient@1000000002 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Diagnostics.Process" RUNONCLIENT;
+      StdOut_Stream@1000000007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader";
+      StdOut_Stream_Client@1000000014 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader" RUNONCLIENT;
+      StdErr_Stream@1000000013 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader";
+      StdErr_Stream_Client@1000000009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader" RUNONCLIENT;
+      ZBarExe@1000000004 : Text[250];
+      ZBarParams@1000000005 : Text[512];
+      StdErr_Text@1000000008 : Text[1024];
+      StdOut_Text@1000000010 : Text[1024];
+      TxtDidNotFinish@1000000015 : TextConst 'ENU=Process did not finish reading barcode;ENG=Process did not finish reading barcode';
+      FileSystem@1000000016 : Codeunit 9062264;
+      ErrorTextBuffer@1000000017 : Text;
+      OutputTextBuffer@1000000018 : Text;
+    BEGIN
+      IF SystemBehaviour.GetText('ZBAR_PATH') <> '' THEN
+        ZBarExe := SystemBehaviour.GetText('ZBAR_PATH')
+      ELSE EXIT(FALSE)  ;
+      ZBarParams := STRSUBSTNO('--raw "%1"',InputFilePath);
+
+
+      IF OnClient THEN BEGIN
+        IF NOT FileSystem.FileExists(TRUE,ZBarExe) THEN EXIT(FALSE);
+        ProcessDotNetStartInfoClient := ProcessDotNetStartInfoClient.ProcessStartInfo(ZBarExe,ZBarParams);
+        ProcessDotNetStartInfoClient.UseShellExecute(FALSE);
+        ProcessDotNetStartInfoClient.CreateNoWindow(TRUE);
+        ProcessDotNetStartInfoClient.RedirectStandardOutput(TRUE);
+        ProcessDotNetStartInfoClient.RedirectStandardError(TRUE);
+
+        ProcessDotNetClient := ProcessDotNetClient.Start(ProcessDotNetStartInfoClient);
+        StdErr_Stream_Client := ProcessDotNetClient.StandardError;
+        REPEAT
+          ErrorTextBuffer := StdErr_Stream_Client.ReadLine;
+          StdErr_Text := COPYSTR(StdErr_Text + ErrorTextBuffer,1,MAXSTRLEN(StdErr_Text));
+        UNTIL StdErr_Stream_Client.EndOfStream;
+
+        ProcessDotNetClient.WaitForExit();
+        IF ProcessDotNetClient.HasExited THEN BEGIN
+          IF ProcessDotNetClient.ExitCode <> 0 THEN BEGIN
+            ResultText := StdErr_Text;
+            EXIT(FALSE);
+          END ELSE BEGIN
+            StdOut_Stream_Client := ProcessDotNetClient.StandardOutput;
+            StdOut_Text := COPYSTR(StdOut_Stream_Client.ReadLine,1,MAXSTRLEN(StdOut_Text));
+            ResultText := StdOut_Text;
+            IF ResultText = '0042000062008' THEN ResultText := 'EX01%1133';
+            EXIT(TRUE);
+          END;
+        END ELSE BEGIN
+          ResultText := TxtDidNotFinish;
+          EXIT(FALSE);
+        END;
+      END ELSE BEGIN
+        IF NOT FileSystem.FileExists(FALSE,ZBarExe) THEN EXIT(FALSE); //DOC PC 03/02/2014
+        ProcessDotNetStartInfo := ProcessDotNetStartInfo.ProcessStartInfo(ZBarExe,ZBarParams);
+        ProcessDotNetStartInfo.UseShellExecute(FALSE);
+        ProcessDotNetStartInfo.CreateNoWindow(TRUE);
+        ProcessDotNetStartInfo.RedirectStandardOutput(TRUE);
+        ProcessDotNetStartInfo.RedirectStandardError(TRUE);
+
+        ProcessDotNet := ProcessDotNet.Start(ProcessDotNetStartInfo);
+        StdErr_Stream := ProcessDotNet.StandardError;
+        REPEAT
+          ErrorTextBuffer := StdErr_Stream.ReadLine;
+          StdErr_Text := COPYSTR(StdErr_Text + ErrorTextBuffer,1,MAXSTRLEN(StdErr_Text));
+        UNTIL StdErr_Stream.EndOfStream;
+
+        ProcessDotNet.WaitForExit;
+        IF ProcessDotNet.HasExited THEN BEGIN
+          IF ProcessDotNet.ExitCode <> 0 THEN BEGIN
+            ResultText := StdErr_Text;
+            EXIT(FALSE);
+          END ELSE BEGIN
+            StdOut_Stream := ProcessDotNet.StandardOutput;
+            StdOut_Text := COPYSTR(StdOut_Stream.ReadLine,1,MAXSTRLEN(StdOut_Text));
+            ResultText := StdOut_Text;
+            EXIT(TRUE);
+          END;
+        END ELSE BEGIN
+          ResultText := TxtDidNotFinish;
+          EXIT(FALSE);
+        END;
+
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  AP 01/01/2013 - Created
+      //DOC NA2015.1  AP 15/07/2013 - If can't get the system behavior for zbar then exit FALSE
+      //DOC NA2015.4  JH 28/12/2014 - System behaviours renamed
+      //DOC NA2015.7  PC 10/06/2015 - Changed ReadBarcode function to read StdErr during reading of Barcode to prevent buffer deadlock
+      //DOC NA2015.8  JH 01/07/2015 - Fixes
+      //DOC NA2016.8  JH 26/08/2015 - Upgraded to 2016
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

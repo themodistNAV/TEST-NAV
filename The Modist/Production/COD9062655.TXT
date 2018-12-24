@@ -1,0 +1,411 @@
+OBJECT Codeunit 9062655 Create Incident Documents
+{
+  OBJECT-PROPERTIES
+  {
+    Date=16/11/15;
+    Time=10:57:47 AM;
+    Version List=NH2016.11;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Incident@9062231 : Record 9062305;
+      IncidentLink@1000000003 : Record 9062307;
+      CopyDocumentMgt@9062230 : Codeunit 6620;
+      IncidentToolkit@1000000002 : Codeunit 9062654;
+      CopyDocumentTypeSales@1000000001 : 'Quote,Blanket Order,Order,Invoice,Return Order,Credit Memo,Posted Shipment,Posted Invoice,Posted Return Receipt,Posted Credit Memo';
+      CopyDocumentScope@1000000000 : ',Referenced Line Only,Whole Document';
+
+    LOCAL PROCEDURE "--- Sales ---"@9062230();
+    BEGIN
+    END;
+
+    PROCEDURE CreateSalesOrder@9062232(pIncident@9062230 : Record 9062305) : Boolean;
+    VAR
+      lSalesHeader@9062232 : Record 36;
+    BEGIN
+      //DOC NH2016.11 - Creating a sales order for given incident
+      //  -> pIncident: The incident
+      //  <- TRUE = Document created, FALSE = Cancelled
+
+      EXIT(CreateSalesDocument(pIncident, lSalesHeader."Document Type"::Order));
+    END;
+
+    PROCEDURE CreateSalesInvoice@9062234(pIncident@9062230 : Record 9062305) : Boolean;
+    VAR
+      lSalesHeader@9062232 : Record 36;
+    BEGIN
+      //DOC NH2016.11 - Creating a sales invoice for given incident
+      //  -> pIncident: The incident
+      //  <- TRUE = Document created, FALSE = Cancelled
+
+      EXIT(CreateSalesDocument(pIncident, lSalesHeader."Document Type"::Invoice));
+    END;
+
+    PROCEDURE CreateSalesReturnOrder@9062235(pIncident@9062230 : Record 9062305) : Boolean;
+    VAR
+      lSalesHeader@9062232 : Record 36;
+    BEGIN
+      //DOC NH2016.11 - Creating a sales return order for given incident
+      //  -> pIncident: The incident
+      //  <- TRUE = Document created, FALSE = Cancelled
+
+      EXIT(CreateSalesDocument(pIncident, lSalesHeader."Document Type"::"Return Order"));
+    END;
+
+    LOCAL PROCEDURE CreateSalesDocument@9062236(pIncident@9062230 : Record 9062305;pDocumentType@9062232 : Integer) : Boolean;
+    VAR
+      lFromDocumentType@9062236 : Integer;
+      lToSalesHeader@9062234 : Record 36;
+      lToSalesLine@1000000005 : Record 37;
+      lCreateIncidentSalesDoc@1000000000 : Report 9062339;
+      lCopyDocument@1000000001 : Boolean;
+      lCopyDocumentScope@1000000002 : Integer;
+      lShowDocument@1000000003 : Boolean;
+      eFinalMessage@1000000004 : TextConst 'ENU=Sales %1 "%2" has been created.;ENG=Sales %1 "%2" has been created.';
+      lResult@1000000006 : Boolean;
+      lErrorMessage@1000000007 : Text;
+      eDescription@1000000008 : TextConst 'ENU=Sales %1 "%2";ENG=Sales %1 "%2"';
+    BEGIN
+      //DOC NH2016.11 - Creating a sales document for given incident
+      //  -> pIncident: The incident
+      //  -> pDocumentType: Document type
+      //  <- TRUE = Document created, FALSE = Cancelled
+
+      Incident := pIncident;
+
+      lCreateIncidentSalesDoc.Initialise(Incident, pDocumentType);
+      lCreateIncidentSalesDoc.RUNMODAL();
+      IF ( NOT (lCreateIncidentSalesDoc.GetOk())) THEN
+        EXIT(FALSE);
+      pDocumentType := lCreateIncidentSalesDoc.GetDocumentType();
+      lCopyDocument := lCreateIncidentSalesDoc.GetCopyDocument();
+      lCopyDocumentScope := lCreateIncidentSalesDoc.GetCopyDocumentScope();
+      lShowDocument := lCreateIncidentSalesDoc.GetShowDocument();
+
+      CLEAR(lToSalesHeader);
+      lToSalesHeader.INIT();
+      lToSalesHeader.VALIDATE("Document Type", pDocumentType);
+      lToSalesHeader.INSERT(TRUE);
+      IF (Incident."Customer No." <> '') THEN
+        lToSalesHeader.VALIDATE("Sell-to Customer No.", Incident."Customer No.");
+      lToSalesHeader.MODIFY(TRUE);
+
+      CLEAR(lResult);
+      IF ((lCopyDocument) AND (Incident."Related-to Sales Doc. Type" <> Incident."Related-to Sales Doc. Type"::" ") AND
+          (Incident."Related-to Sales Doc. No." <> '')) THEN
+      BEGIN
+        lFromDocumentType := IncidentSalesDocTypeToCopyDocType(Incident."Related-to Sales Doc. Type");
+        IF (lFromDocumentType >= 0) THEN
+        BEGIN
+          COMMIT;
+          lResult := CopySalesDocument(lFromDocumentType, lToSalesHeader);
+          IF (lResult) THEN
+          BEGIN
+            IF ((lCopyDocumentScope = CopyDocumentScope::"Referenced Line Only") AND (Incident."Related-to Sales Doc. Line No." <> 0)) THEN
+            BEGIN
+              lToSalesLine.RESET();
+              lToSalesLine.SETRANGE("Document Type", lToSalesHeader."Document Type");
+              lToSalesLine.SETRANGE("Document No.", lToSalesHeader."No.");
+              lToSalesLine.SETFILTER("Line No.", '<>%1', Incident."Related-to Sales Doc. Line No.");
+              lToSalesLine.DELETEALL(TRUE);
+            END;
+          END
+          ELSE
+          BEGIN
+            lErrorMessage := GETLASTERRORTEXT();
+            lToSalesHeader.DELETE(TRUE);
+          END;
+        END;
+      END
+      ELSE
+        lResult := TRUE;
+
+      IF (lResult) THEN
+        IncidentToolkit.AddIncidentLink(pIncident, DATABASE::"Sales Header", lToSalesHeader.GETPOSITION(FALSE),
+          STRSUBSTNO(eDescription, LOWERCASE(FORMAT(lToSalesHeader."Document Type")), lToSalesHeader."No."),
+          IncidentLink.Source::"New Document");
+
+      IF (lResult) THEN
+      BEGIN
+        IF (lShowDocument) THEN
+          ShowSalesDocument(lToSalesHeader)
+        ELSE
+          MESSAGE(eFinalMessage, LOWERCASE(FORMAT(lToSalesHeader."Document Type")), lToSalesHeader."No.");
+      END
+      ELSE
+        MESSAGE(lErrorMessage);
+
+      EXIT(TRUE);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE CopySalesDocument@1000000006(pFromDocumentType@1000000000 : Integer;VAR pToSalesHeader@1000000001 : Record 36);
+    BEGIN
+      //DOC NH2016.11 - Copying sales document
+      //  -> pFromDocumentType: Source document type
+      //  <> pToSalesHeader: Target sales header
+
+      CopyDocumentMgt.CopySalesDoc(pFromDocumentType, Incident."Related-to Sales Doc. No.", pToSalesHeader);
+    END;
+
+    LOCAL PROCEDURE ShowSalesDocument@9062240(pSalesHeader@9062230 : Record 36);
+    VAR
+      lPageId@9062231 : Integer;
+    BEGIN
+      //DOC NH2016.11 - Showing sales document created
+      //  -> pSalesHeader: The document header
+
+      COMMIT;
+
+      CASE (pSalesHeader."Document Type") OF
+        pSalesHeader."Document Type"::Order:
+          lPageId := PAGE::"Sales Order";
+        pSalesHeader."Document Type"::Invoice:
+          lPageId := PAGE::"Sales Invoice";
+        pSalesHeader."Document Type"::"Return Order":
+          lPageId := PAGE::"Sales Return Order";
+      END;
+
+      PAGE.RUN(lPageId, pSalesHeader);
+    END;
+
+    LOCAL PROCEDURE "--- Purchases ---"@9062231();
+    BEGIN
+    END;
+
+    PROCEDURE CreatePurchaseInvoice@1000000003(pIncident@9062230 : Record 9062305) : Boolean;
+    VAR
+      lPurchaseHeader@9062232 : Record 38;
+    BEGIN
+      //DOC NH2016.11 - Creating a purchase invoice for given incident
+      //  -> pIncident: The incident
+      //  <- TRUE = Document created, FALSE = Cancelled
+
+      EXIT(CreatePurchaseDocument(pIncident, lPurchaseHeader."Document Type"::Invoice));
+    END;
+
+    PROCEDURE CreatePurchaseReturnOrder@1000000002(pIncident@9062230 : Record 9062305) : Boolean;
+    VAR
+      lPurchaseHeader@1000000000 : Record 38;
+    BEGIN
+      //DOC NH2016.11 - Creating a purchase return order for given incident
+      //  -> pIncident: The incident
+      //  <- TRUE = Document created, FALSE = Cancelled
+
+      EXIT(CreatePurchaseDocument(pIncident, lPurchaseHeader."Document Type"::"Return Order"));
+    END;
+
+    PROCEDURE CreatePurchaseCreditMemo@1000000004(pIncident@9062230 : Record 9062305) : Boolean;
+    VAR
+      lPurchaseHeader@1000000000 : Record 38;
+    BEGIN
+      //DOC NH2016.11 - Creating a purchase credit memo for given incident
+      //  -> pIncident: The incident
+      //  <- TRUE = Document created, FALSE = Cancelled
+
+      EXIT(CreatePurchaseDocument(pIncident, lPurchaseHeader."Document Type"::"Credit Memo"));
+    END;
+
+    LOCAL PROCEDURE CreatePurchaseDocument@1000000001(pIncident@9062230 : Record 9062305;pDocumentType@9062232 : Integer) : Boolean;
+    VAR
+      lFromDocumentType@9062236 : Integer;
+      lToPurchaseHeader@9062234 : Record 38;
+      lToPurchaseLine@1000000005 : Record 39;
+      lCreateIncidentPurchDoc@1000000000 : Report 9062340;
+      lCopyDocument@1000000001 : Boolean;
+      lCopyDocumentScope@1000000002 : Integer;
+      lShowDocument@1000000003 : Boolean;
+      eFinalMessage@1000000004 : TextConst 'ENU=Purchase %1 "%2" has been created.;ENG=Purchase %1 "%2" has been created.';
+      lResult@1000000006 : Boolean;
+      lErrorMessage@1000000007 : Text;
+      eDescription@1000000008 : TextConst 'ENU=Purchase %1 "%2";ENG=Purchase %1 "%2"';
+    BEGIN
+      //DOC NH2016.11 - Creating a purchase document for given incident
+      //  -> pIncident: The incident
+      //  -> pDocumentType: Document type
+      //  <- TRUE = Document created, FALSE = Cancelled
+
+      Incident := pIncident;
+
+      lCreateIncidentPurchDoc.Initialise(Incident, pDocumentType);
+      lCreateIncidentPurchDoc.RUNMODAL();
+      IF ( NOT (lCreateIncidentPurchDoc.GetOk())) THEN
+        EXIT(FALSE);
+      pDocumentType := lCreateIncidentPurchDoc.GetDocumentType();
+      lCopyDocument := lCreateIncidentPurchDoc.GetCopyDocument();
+      lCopyDocumentScope := lCreateIncidentPurchDoc.GetCopyDocumentScope();
+      lShowDocument := lCreateIncidentPurchDoc.GetShowDocument();
+
+      CLEAR(lToPurchaseHeader);
+      lToPurchaseHeader.INIT();
+      lToPurchaseHeader.VALIDATE("Document Type", pDocumentType);
+      lToPurchaseHeader.INSERT(TRUE);
+      IF (Incident."Vendor No." <> '') THEN
+        lToPurchaseHeader.VALIDATE("Buy-from Vendor No.", Incident."Vendor No.");
+      lToPurchaseHeader.MODIFY(TRUE);
+
+      CLEAR(lResult);
+      IF ((lCopyDocument) AND (Incident."Related-to Sales Doc. Type" <> Incident."Related-to Sales Doc. Type"::" ") AND
+          (Incident."Related-to Sales Doc. No." <> '')) THEN
+      BEGIN
+        lFromDocumentType := IncidentPurchDocTypeToCopyDocType(Incident."Related-to Purch. Doc. Type");
+        IF (lFromDocumentType >= 0) THEN
+        BEGIN
+          lResult := CopyPurchaseDocument(lFromDocumentType, lToPurchaseHeader);
+          IF (lResult) THEN
+          BEGIN
+            IF ((lCopyDocumentScope = CopyDocumentScope::"Referenced Line Only") AND (Incident."Related-to Purch. Doc. Ln. No." <> 0)) THEN
+            BEGIN
+              lToPurchaseLine.RESET();
+              lToPurchaseLine.SETRANGE("Document Type", lToPurchaseHeader."Document Type");
+              lToPurchaseLine.SETRANGE("Document No.", lToPurchaseHeader."No.");
+              lToPurchaseLine.SETFILTER("Line No.", '<>%1', Incident."Related-to Purch. Doc. Ln. No.");
+              lToPurchaseLine.DELETEALL(TRUE);
+            END;
+          END
+          ELSE
+          BEGIN
+            lErrorMessage := GETLASTERRORTEXT();
+            lToPurchaseHeader.DELETE(TRUE);
+          END;
+        END;
+      END
+      ELSE
+        lResult := TRUE;
+
+      IF (lResult) THEN
+        IncidentToolkit.AddIncidentLink(pIncident, DATABASE::"Purchase Header", lToPurchaseHeader.GETPOSITION(FALSE),
+          STRSUBSTNO(eDescription, LOWERCASE(FORMAT(lToPurchaseHeader."Document Type")), lToPurchaseHeader."No."),
+          IncidentLink.Source::"New Document");
+
+      IF (lResult) THEN
+      BEGIN
+        IF (lShowDocument) THEN
+          ShowPurchaseDocument(lToPurchaseHeader)
+        ELSE
+          MESSAGE(eFinalMessage, LOWERCASE(FORMAT(lToPurchaseHeader."Document Type")), lToPurchaseHeader."No.");
+      END
+      ELSE
+        MESSAGE(lErrorMessage);
+
+      EXIT(TRUE);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE CopyPurchaseDocument@1000000007(pFromDocumentType@1000000001 : Integer;VAR pToPurchaseHeader@1000000000 : Record 38);
+    BEGIN
+      //DOC NH2016.11 - Copying purchase document
+      //  -> pFromDocumentType: Source document type
+      //  <> pToPurchaseHeader: Target purchase header
+
+      CopyDocumentMgt.CopyPurchDoc(pFromDocumentType, Incident."Related-to Purch. Doc. No.", pToPurchaseHeader);
+    END;
+
+    LOCAL PROCEDURE ShowPurchaseDocument@1000000000(pPurchaseHeader@9062230 : Record 38);
+    VAR
+      lPageId@9062231 : Integer;
+    BEGIN
+      //DOC NH2016.11 - Showing purchase document created
+      //  -> pSalesHeader: The document header
+
+      COMMIT;
+
+      CASE (pPurchaseHeader."Document Type") OF
+        pPurchaseHeader."Document Type"::Invoice:
+          lPageId := PAGE::"Purchase Invoice";
+        pPurchaseHeader."Document Type"::"Return Order":
+          lPageId := PAGE::"Purchase Return Order";
+        pPurchaseHeader."Document Type"::"Credit Memo":
+          lPageId := PAGE::"Purchase Credit Memo";
+      END;
+
+      PAGE.RUN(lPageId, pPurchaseHeader);
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@9062244();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE IncidentSalesDocTypeToCopyDocType@9062245(pIncidentSalesDocType@9062230 : Integer) : Integer;
+    VAR
+      lCopyDocumentType@9062231 : Integer;
+    BEGIN
+      //DOC NH2016.11 - Copying incident sales document type to copy document type
+      //  -> pIncidentSalesDocType: Incident sales document type
+      //  <- Copy document type
+
+      lCopyDocumentType := -1;
+
+      CASE (pIncidentSalesDocType) OF
+        Incident."Related-to Sales Doc. Type"::Quote:
+          lCopyDocumentType := CopyDocumentTypeSales::Quote;
+        Incident."Related-to Sales Doc. Type"::Order:
+          lCopyDocumentType := CopyDocumentTypeSales::Order;
+        Incident."Related-to Sales Doc. Type"::Invoice:
+          lCopyDocumentType := CopyDocumentTypeSales::Invoice;
+        Incident."Related-to Sales Doc. Type"::"Return Order":
+          lCopyDocumentType := CopyDocumentTypeSales::"Return Order";
+        Incident."Related-to Sales Doc. Type"::"Credit Memo":
+          lCopyDocumentType := CopyDocumentTypeSales::"Credit Memo";
+        Incident."Related-to Sales Doc. Type"::"Posted Shipment":
+          lCopyDocumentType := CopyDocumentTypeSales::"Posted Shipment";
+        Incident."Related-to Sales Doc. Type"::"Posted Invoice":
+          lCopyDocumentType := CopyDocumentTypeSales::"Posted Invoice";
+        Incident."Related-to Sales Doc. Type"::"Posted Return Receipt":
+          lCopyDocumentType := CopyDocumentTypeSales::"Posted Return Receipt";
+        Incident."Related-to Sales Doc. Type"::"Posted Credit Memo":
+          lCopyDocumentType := CopyDocumentTypeSales::"Posted Credit Memo";
+      END;
+
+      EXIT(lCopyDocumentType);
+    END;
+
+    LOCAL PROCEDURE IncidentPurchDocTypeToCopyDocType@1000000005(pIncidentSalesDocType@9062230 : Integer) : Integer;
+    VAR
+      lCopyDocumentType@9062231 : Integer;
+    BEGIN
+      //DOC NH2016.11 - Copying incident sales document type to copy document type
+      //  -> pIncidentSalesDocType: Incident sales document type
+      //  <- Copy document type
+
+      lCopyDocumentType := -1;
+
+      CASE (pIncidentSalesDocType) OF
+        Incident."Related-to Sales Doc. Type"::Quote:
+          lCopyDocumentType := CopyDocumentTypeSales::Quote;
+        Incident."Related-to Sales Doc. Type"::Order:
+          lCopyDocumentType := CopyDocumentTypeSales::Order;
+        Incident."Related-to Sales Doc. Type"::Invoice:
+          lCopyDocumentType := CopyDocumentTypeSales::Invoice;
+        Incident."Related-to Sales Doc. Type"::"Return Order":
+          lCopyDocumentType := CopyDocumentTypeSales::"Return Order";
+        Incident."Related-to Sales Doc. Type"::"Credit Memo":
+          lCopyDocumentType := CopyDocumentTypeSales::"Credit Memo";
+        Incident."Related-to Sales Doc. Type"::"Posted Shipment":
+          lCopyDocumentType := CopyDocumentTypeSales::"Posted Shipment";
+        Incident."Related-to Sales Doc. Type"::"Posted Invoice":
+          lCopyDocumentType := CopyDocumentTypeSales::"Posted Invoice";
+        Incident."Related-to Sales Doc. Type"::"Posted Return Receipt":
+          lCopyDocumentType := CopyDocumentTypeSales::"Posted Return Receipt";
+        Incident."Related-to Sales Doc. Type"::"Posted Credit Memo":
+          lCopyDocumentType := CopyDocumentTypeSales::"Posted Credit Memo";
+      END;
+
+      EXIT(lCopyDocumentType);
+    END;
+
+    BEGIN
+    {
+      //DOC NH2016.11 JH 11/11/2015 - Created
+    }
+    END.
+  }
+}
+

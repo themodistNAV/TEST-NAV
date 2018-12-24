@@ -1,0 +1,285 @@
+OBJECT Codeunit 9021669 CustomerTableTriggerCode
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:20 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      InternetSetup@1000000014 : Record 9021609;
+      LabelRec@1000000013 : Record 9021618;
+      InternetCustRec@1000000012 : Record 9021642;
+      InternetB2BCustRec@1000000011 : Record 9021643;
+      DefaultDimenRec@1000000010 : Record 352;
+      TextG000@1000000015 : TextConst 'ENU=Be careful as there is a potential inconsistency between a customer being an Internet Customer and having a Bill-to Customer No. on Customer No. %1.;ENG=Be careful as there is a potential inconsistency between a customer being an Internet Customer and having a Bill-to Customer No. on Customer No. %1.';
+      Text000@1040005 : TextConst 'ENU=''%1'' must be ticked while ''%2'' is ticked.;ENG=''%1'' must be ticked while ''%2'' is ticked.';
+      Text001@1040004 : TextConst 'ENU=You cannot untick ''%1'' while ''%2'' records exist.;ENG=You cannot untick ''%1'' while ''%2'' records exist.';
+      Text002@1040003 : TextConst 'ENU=Customer %1 is the Default Internet Customer and therefore you cannot untick the %2.;ENG=Customer %1 is the Default Internet Customer and therefore you cannot untick the %2.';
+      Text003@1040002 : TextConst 'ENU=Unticking the ''%1'' field means that the Customer will not be able to login to the web site.  Are you sure this is correct?;ENG=Unticking the ''%1'' field means that the Customer will not be able to login to the web site.  Are you sure this is correct?';
+      Text004@1040001 : TextConst 'ENU=Change Abandoned.;ENG=Change Abandoned.';
+      Text005@1040000 : TextConst 'ENU=An existing ''%1'' record has been found matching the ''%2'' (%3) of this %4.  Their ''%5'' has been assigned to this record.;ENG=An existing ''%1'' record has been found matching the ''%2'' (%3) of this %4.  Their ''%5'' has been assigned to this record.';
+      WebAttMgt@1190000006 : Codeunit 9021620;
+      i@1040006 : Integer;
+      iB2B@1040007 : Integer;
+      Text006@1040008 : TextConst 'ENU=The Customer %1 has %2 Internet Customers but only %3 are Internet B2B Customers.  Something is wrong.;ENG=The Customer %1 has %2 Internet Customers but only %3 are Internet B2B Customers.  Something is wrong.';
+      Text007@1190000007 : TextConst 'ENU=The system is set to use the Internet Customer on the Internet Setup.  This customer is the Internet Customer so cannot be an B2B Customer.;ENG=The system is set to use the Internet Customer on the Internet Setup.  This customer is the Internet Customer so cannot be an B2B Customer.';
+      Text008@1000000000 : TextConst 'ENU=The customer has got into an illogical situation with Is An Internet Customer being FALSE while Is A B2B Internet Customer was TRUE.  Attempting to rectify.  Please check logins manually.;ENG=The customer has got into an illogical situation with Is An Internet Customer being FALSE while Is A B2B Internet Customer was TRUE.  Attempting to rectify.  Please check logins manually.';
+
+    PROCEDURE OnInsertNotContact@1000000001(VAR CustPar@1000000000 : Record 18);
+    VAR
+      MQGlobals@1000000001 : Codeunit 9021624;
+      LabelCode@1000000002 : Code[10];
+    BEGIN
+      //DOC EC2013.3.60 -
+      //Orig Code CustPar.VALIDATE("Label Code",MQGlobals.GetLabelCode);
+      LabelCode := MQGlobals.GetLabelCode;
+      IF LabelCode = '' THEN
+        EXIT;
+      CustPar.VALIDATE("Label Code",LabelCode);
+      //DOC EC2013.3.60 +
+    END;
+
+    PROCEDURE OnDelete@1000000004(CustPar@1000000000 : Record 18);
+    VAR
+      Text000@1000000002 : TextConst 'ENU=You cannot delete a customer that has the field Is a B2B Internet Customer ticked.;ENG=You cannot delete a customer that has the field Is a B2B Internet Customer ticked.';
+      Text001@1000000001 : TextConst 'ENU=You cannot delete a customer that has the field Is An Internet Customer ticked.;ENG=You cannot delete a customer that has the field Is An Internet Customer ticked.';
+    BEGIN
+      IF CustPar."Is An Internet Customer" THEN BEGIN
+        IF CustPar."Is a B2B Internet Customer" THEN
+          ERROR(Text000);
+        ERROR(Text001,CustPar."User GUID");
+      END;
+      InternetB2BCustRec.RESET;
+      InternetB2BCustRec.SETRANGE("Customer No.",CustPar."No.");
+      InternetB2BCustRec.DELETEALL;
+
+      //SyncMgt.DeletionMgt(18,CustPar."No.",'','','','',
+      //                    '','','',CustPar."Sync Log No.",CustPar."Sync Version No.");
+
+      WebAttMgt.DeleteWebAttValuesForRecord('',18,CustPar."No.",'',0,FALSE,0);
+    END;
+
+    PROCEDURE BillToOnVal@1000000005(VAR CustPar@1000000001 : Record 18);
+    BEGIN
+      IF (CustPar."Is An Internet Customer" = TRUE) AND
+         (CustPar."Bill-to Customer No." <> '') AND
+         (GUIALLOWED = TRUE) THEN
+         MESSAGE(TextG000,CustPar."No.");
+    END;
+
+    PROCEDURE LabelCodeOnVal@1000000006(VAR CustPar@1000000000 : Record 18;xRecLabelCode@1000000003 : Code[10]);
+    VAR
+      Text000@1000000002 : TextConst 'ENU=Customer %1 can not have a label code of %2 which is associated with a different company %3.;ENG=Customer %1 can not have a label code of %2 which is associated with a different company %3.';
+      Text001@1000000001 : TextConst 'ENU=The Label Code must be %1 as it must be the same as the Internet Customer.;ENG=The Label Code must be %1 as it must be the same as the Internet Customer.';
+    BEGIN
+      IF CustPar."Label Code" <> '' THEN BEGIN
+        LabelRec.GET(CustPar."Label Code");
+        IF UPPERCASE(LabelRec."Used-in Company") <> UPPERCASE(COMPANYNAME) THEN
+          ERROR(Text000,CustPar."No.",CustPar."Label Code",LabelRec."Used-in Company"); //GW 101125
+      END;
+
+      //check the Label Code matches the one on the Internet Customer record...
+      IF InternetCustRec.GET(CustPar."User GUID") THEN BEGIN
+        IF CustPar."Label Code" <> InternetCustRec."Label Code" THEN
+          ERROR(Text001,InternetCustRec."Label Code");
+        IF CustPar."Is An Internet Customer" = FALSE THEN   //MQ GW 101004 add IF statement
+          CustPar.VALIDATE("Is An Internet Customer",TRUE);
+      END ELSE BEGIN
+        //no Internet Customer was found with the Customer's User GUID; try to find one by Customer No...
+        InternetCustRec.RESET;
+        InternetCustRec.SETCURRENTKEY("Customer No.");
+        InternetCustRec.SETRANGE("Customer No.",CustPar."No.");
+        IF InternetCustRec.FINDFIRST THEN BEGIN
+          IF CustPar."Label Code" <> InternetCustRec."Label Code" THEN
+            ERROR(Text001,InternetCustRec."Label Code");
+          //reset the Customer's User GUID from the Internet Customer record...
+          InternetCustRec.CALCFIELDS("B2B Customer");
+          IF InternetCustRec."B2B Customer" = FALSE THEN
+            CustPar."User GUID" := InternetCustRec."No.";
+          IF CustPar."Is An Internet Customer" = FALSE THEN //MQ GW 101004 add IF statement
+            CustPar.VALIDATE("Is An Internet Customer",TRUE);
+        END;
+      END;
+
+      IF (CustPar."Label Code" <> xRecLabelCode) AND
+         (CustPar."Is An Internet Customer" = TRUE) THEN
+        RunDataMgtCheck(CustPar,TRUE);
+
+      InternetSetup.GET;
+      IF InternetSetup."Maintain Label Dimensions" THEN BEGIN
+        IF DefaultDimenRec.GET(18,CustPar."No.",'LABEL') THEN BEGIN
+          IF CustPar."Label Code" = '' THEN BEGIN
+            DefaultDimenRec.DELETE;
+          END ELSE BEGIN
+            IF DefaultDimenRec."Dimension Value Code" <> CustPar."Label Code" THEN BEGIN
+              DefaultDimenRec."Dimension Value Code" := CustPar."Label Code";
+              DefaultDimenRec.MODIFY;
+            END;
+          END;
+        END ELSE BEGIN
+          IF CustPar."Label Code" <> '' THEN BEGIN
+            DefaultDimenRec.INIT;
+            DefaultDimenRec."Table ID" := 18;
+            DefaultDimenRec."No." := CustPar."No.";
+            DefaultDimenRec."Dimension Code" := 'LABEL';
+            DefaultDimenRec."Dimension Value Code" := CustPar."Label Code";
+            DefaultDimenRec.INSERT;
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE IsAnInternetCustOnVal@1000000007(VAR CustPar@1000000000 : Record 18);
+    BEGIN
+      CustPar.TESTFIELD("Label Code");
+
+      InternetSetup.GET; //DOC EC2009.2.74
+      IF CustPar."Is An Internet Customer" THEN BEGIN
+        IF (CustPar."Bill-to Customer No." <> '') AND
+           (GUIALLOWED = TRUE) THEN
+           MESSAGE(TextG000,CustPar."No.");
+
+        IF CustPar."User GUID" = '' THEN BEGIN
+          //DOC EC2009.2.74 -
+          IF CustPar."No." = InternetSetup."Internet Customer" THEN BEGIN
+            //DOC EC2013.3.30 InternetShopMgt.Randomize;
+            //DOC EC2013.3.30 CustPar."User GUID":=InternetShopMgt.GenerateGuid;
+            CustPar."User GUID":= CREATEGUID;  //DOC EC2013.3.30
+            CustPar."User GUID" := COPYSTR(CustPar."User GUID",2,36); //DOC EC2013.3.40
+          END ELSE BEGIN
+          //DOC EC2009.2.74 +
+            //check there's no Internet Customer with this Customer's No...
+            InternetCustRec.RESET;
+            InternetCustRec.SETCURRENTKEY("Customer No.");
+            InternetCustRec.SETRANGE("Customer No.",CustPar."No.");
+            i := 0;
+            iB2B := 0;
+            IF InternetCustRec.FIND('-') THEN BEGIN
+              REPEAT
+                i := i + 1;
+                InternetCustRec.CALCFIELDS("B2B Customer");
+                IF InternetCustRec."B2B Customer" THEN
+                  iB2B := iB2B + 1;
+              UNTIL InternetCustRec.NEXT = 0;
+              IF (i = 1) AND (iB2B = 0) THEN BEGIN
+                IF GUIALLOWED THEN
+                  MESSAGE(Text005,InternetCustRec.TABLECAPTION,CustPar.FIELDCAPTION("No."),CustPar."No.",
+                          CustPar.TABLECAPTION,CustPar.FIELDCAPTION("User GUID"));
+                CustPar."User GUID":=InternetCustRec."No.";
+              END;
+              IF (i > 1) AND (iB2B <> i) THEN
+                ERROR(Text006,CustPar."No.",i,iB2B);
+              //DOC EC2013.4.60 -
+              IF i =  iB2B THEN BEGIN
+                CustPar."User GUID":= CREATEGUID;
+                CustPar."User GUID" := COPYSTR(CustPar."User GUID",2,36);
+              END;
+              //DOC EC2013.4.60 +
+            END ELSE BEGIN
+              //DOC EC2013.3.30 InternetShopMgt.Randomize;
+              //DOC EC2013.3.30 CustPar."User GUID":=InternetShopMgt.GenerateGuid;
+              CustPar."User GUID":= CREATEGUID; //DOC EC2013.3.30
+              CustPar."User GUID" := COPYSTR(CustPar."User GUID",2,36); //DOC EC2013.3.40
+            END;
+          END;  //DOC EC2009.2.74
+        END;
+
+      END ELSE BEGIN
+        //DOC EC2009.2.74
+        IF CustPar."No." = InternetSetup."Internet Customer" THEN
+          ERROR(Text002,CustPar."No.",CustPar.FIELDCAPTION("Is An Internet Customer"));
+        //DOC EC2009.2.74
+        //Internet Customer flag can only be unticked if not a B2B Customer...
+        IF CustPar."Is a B2B Internet Customer" THEN BEGIN
+          //IF GUIALLOWED THEN
+            ERROR(Text000,CustPar.FIELDCAPTION("Is An Internet Customer"),
+                   CustPar.FIELDCAPTION("Is a B2B Internet Customer"));
+          //EXIT;
+        END ELSE //BEGIN
+          //IF GUIALLOWED THEN
+          IF NOT CONFIRM(Text003,FALSE,CustPar.FIELDCAPTION("Is An Internet Customer")) THEN
+            ERROR(Text004);
+        //END;
+      END;
+      RunDataMgtCheck(CustPar,TRUE);
+
+      IF CustPar."Label Code" = 'COSTA' THEN
+        CustPar.VALIDATE("Shipment Method Code"); //DOC EC2013.3.40
+    END;
+
+    PROCEDURE IsAB2BInternetCustOnVal@1000000008(VAR CustPar@1000000000 : Record 18);
+    BEGIN
+      CustPar.TESTFIELD("Label Code");
+      //DOC EC2013.4.60 -
+      //Orig CustPar.TESTFIELD("Is An Internet Customer",TRUE);
+      IF CustPar."Is a B2B Internet Customer" THEN BEGIN
+        CustPar.TESTFIELD("Is An Internet Customer",TRUE);
+      END ELSE BEGIN
+        IF CustPar."Is An Internet Customer" = FALSE THEN BEGIN
+          MESSAGE(Text008);
+          EXIT;
+        END;
+      END;
+      //DOC EC2013.4.60 +
+
+      //DOC EC2009.2.74 -  MQ 25/05/2012 - GW120525
+      IF CustPar."Is a B2B Internet Customer" THEN BEGIN
+        //must be flagged as Internet Customer...
+        IF (CustPar."Is An Internet Customer" = FALSE) THEN
+          ERROR(Text002,CustPar.FIELDCAPTION("Is An Internet Customer"),
+                        CustPar.FIELDCAPTION("Is a B2B Internet Customer"));
+        InternetSetup.GET;
+        IF InternetSetup."Use Internet Customer" =
+           InternetSetup."Use Internet Customer"::Always THEN BEGIN
+          IF CustPar."No." = InternetSetup."Internet Customer" THEN
+            ERROR(Text007);
+        END;
+      //DOC EC2009.2.74 +
+      END ELSE BEGIN
+      //IF CustPar."Is a B2B Internet Customer" = FALSE THEN BEGIN
+        //can't uncheck B2B flag if B2B logins exist...
+        InternetB2BCustRec.RESET;
+        InternetB2BCustRec.SETCURRENTKEY("Customer No.");
+        InternetB2BCustRec.SETRANGE("Customer No.",CustPar."No.");
+        InternetB2BCustRec.SETRANGE(Enable,TRUE);  //DOC EC2013.3.30
+        IF InternetB2BCustRec.FINDFIRST THEN
+          ERROR(Text001,CustPar.FIELDCAPTION("Is a B2B Internet Customer"),
+                    InternetB2BCustRec.TABLECAPTION);
+      END;
+    END;
+
+    PROCEDURE RunDataMgtCheck@1000000003(LocalCustomer@1000000000 : Record 18;CorrectData@1000000001 : Boolean);
+    VAR
+      InternetDataMgtCheckCU@1000000002 : Codeunit 9021614;
+    BEGIN
+      CLEAR(InternetDataMgtCheckCU);
+      InternetDataMgtCheckCU.CheckCustomer(LocalCustomer,CorrectData,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE);
+    END;
+
+    BEGIN
+    {
+      //DOC EC2009.2.67 MQ 01/01/2012 - Use GetLabelCode function from MQ Global Functions rather than from StdTableTrigger
+      //DOC EC2009.2.74 MQ 01/01/2012 - Code in IsAnInternetCustomerOnVal; Enhance text constant TextG000
+      //DOC EC2013.3.00 MQ 01/01/2012 - Fixing Compile errors
+      //DOC EC2013.3.30 MQ 26/11/2012 - GW121126 Add code
+      //DOC EC2013.3.30 MQ 06/12/2012 - GW121206 Use CREATEGUID
+      //DOC EC2013.3.40 MQ 14/01/2013 - GW130114 Code in IsAnInternetCustOnVal; Removed references to removed field Sync.....
+      //DOC EC2013.3.60 MQ 26/06/2013 - GW130626 Code in OnInsertNotContact
+      //DOC EC2013.4.00 MQ 26/01/2014 - GW140126 Code in IsAnInternetCustOnVal
+      //DOC EC2013.4.60 MQ 16/04/2014 - GW140416 Deal with impossible situation of trying to untick Is A B2B Internet Customer when Is An Internet Customer is not ticked.
+      //DOC EC2015.5.03 MQ 05/05/2015 - GW150505 Remove OnInsert, OnModify and OnRename cos only do DateTimeInsMod
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,509 @@
+OBJECT Codeunit 9062268 File Attachment Identification
+{
+  OBJECT-PROPERTIES
+  {
+    Date=15/09/15;
+    Time=11:52:21 AM;
+    Version List=NA2016.10;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      FileSystem@1000000000 : Codeunit 9062264;
+      Logger@1000000001 : Record 9062280;
+      nFormValueType@1000000002 : 'FilterFieldValue,FilterFieldNo';
+      TNPUtils@1000000003 : Codeunit 9062229;
+      TxtFaq@1000000004 : TextConst 'ENU=FAQ;ENG=FAQ';
+      SystemBehaviour@1000000005 : Record 9062230;
+
+    LOCAL PROCEDURE "*** DOCUMENT TYPE ***"@1000000000();
+    BEGIN
+    END;
+
+    PROCEDURE IdentifyDocumentType@1000000012(VAR Rec@1000000000 : Record 9062271);
+    VAR
+      FileAttachQueue@1000000005 : Record 9062270;
+      DocumentType@1000000004 : Record 9062268;
+      Uppercase_Filename@1000000003 : Text[250];
+      SmartDoc@1000000002 : Codeunit 9062273;
+      DocType@1000000001 : Code[20];
+      TxtIdentifiedDocumentType@1000000006 : TextConst 'ENU=Identified Doc Type %1 from File %2 using Barcode;ENG=Identified Doc Type %1 from File %2 using Barcode';
+    BEGIN
+      WITH Rec DO BEGIN
+        //Basic Value Identification
+        IF "File Extension" = '' THEN VALIDATE("File Extension",FileSystem.GetExtension(FileSystem.Client(), FilePath));
+
+        CASE "File Extension" OF
+          '.MSG' : GetEmailDetails(Rec);
+        END;
+
+        //Check if the Queue has a Hard Coded Document Type
+        IF FileAttachQueue.GET("Queue Code") THEN BEGIN
+          IF FileAttachQueue."Default Doc. Type" <> '' THEN BEGIN
+            VALIDATE("Document Type",FileAttachQueue."Default Doc. Type");
+            EXIT;
+          END;
+        END;
+
+        //Check for a Document Type using ID methods
+        CASE "File Extension" OF
+          '.XLSX','.XLSM' :
+            BEGIN
+              IF DocumentType.GET(SmartDoc.GetnFormTypeFromFile(FilePath,Rec."Excel ID")) THEN BEGIN
+                VALIDATE("Document Type",DocumentType.Code);
+                EXIT;
+              END;
+            END;
+          '.MSG','.EML' :
+            BEGIN
+              IF DocumentType.GET(MatchDocumentTypeToText(Description)) THEN BEGIN
+                VALIDATE("Document Type",DocumentType.Code);
+                EXIT;
+              END;
+            END;
+          '.JPG','.PNG','.GIF','.TIF','.BMP' :
+            BEGIN
+              IF "Barcode Text" = '' THEN
+                GetBarcodeDetails(Rec);
+              IF "Barcode Text" <> '' THEN BEGIN
+                IF DocumentType.GET(GetDocumentTypeFromBarcode("Barcode Text")) THEN BEGIN
+                  VALIDATE("Document Type",DocumentType.Code);
+                  Logger.Log(TxtFaq, Logger.Type::Debug, STRSUBSTNO(TxtIdentifiedDocumentType, DocumentType.Code, FilePath), USERID);
+                  EXIT;
+                END;
+              END;
+
+            END;
+
+        END;
+
+        //Check for a Document Type in the Filename
+        IF DocumentType.GET(MatchDocumentTypeToText(Filename)) THEN BEGIN
+          VALIDATE("Document Type",DocumentType.Code);
+          EXIT;
+        END;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE MatchDocumentTypeToText@1000000008(SearchInText@1000000000 : Text[250]) DocType : Code[20];
+    VAR
+      DocumentType@1000000002 : Record 9062268;
+      Uppercase_SearchText@1000000001 : Text[250];
+    BEGIN
+      IF DocumentType.FINDSET THEN BEGIN
+        Uppercase_SearchText := UPPERCASE(SearchInText);
+        REPEAT
+          IF STRPOS(Uppercase_SearchText,DocumentType.Code) <> 0 THEN BEGIN
+            EXIT(DocumentType.Code);
+          END;
+        UNTIL DocumentType.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE GetEmailDetails@1000000017(VAR Rec@1000000000 : Record 9062271);
+    VAR
+      Email@1000000009 : Record 9062281;
+      EmailLine@1000000008 : Record 9062282;
+      EmaiAtt@1000000007 : Record 9062283;
+      TxtCouldNotGetEMailEntryId@1000000001 : TextConst 'ENU=Could not get e-mail entry id %1;ENG=Could not get e-mail entry id %1';
+    BEGIN
+      WITH Rec DO BEGIN
+        IF "E-Mail Entry ID" <> 0 THEN BEGIN
+          IF Email.GET("E-Mail Entry ID") THEN BEGIN
+            Description := COPYSTR(Email.Subject, 1, MAXSTRLEN(Description));
+            VALIDATE("Sender Email Address",Email."Sender E-Mail");  //DOC PC 16/06/2014 NA2015.3
+            "Recipient Email Address" := '';
+          END ELSE Logger.Log(TxtFaq, Logger.Type::Error, STRSUBSTNO(TxtCouldNotGetEMailEntryId, "E-Mail Entry ID"), USERID);
+        END;
+      END;
+    END;
+
+    PROCEDURE GetBarcodeDetails@1000000006(VAR Rec@1000000000 : Record 9062271);
+    VAR
+      BarcodeMgt@1000000001 : Codeunit 9062293;
+      ResultText@1000000002 : Text[1024];
+    BEGIN
+      WITH Rec DO BEGIN
+        IF BarcodeMgt.ReadBarcode(FALSE,FilePath,ResultText) THEN BEGIN
+          VALIDATE("Barcode Text",COPYSTR(ResultText,1,MAXSTRLEN("Barcode Text")));
+        END;
+      END;
+    END;
+
+    PROCEDURE GetDocumentTypeFromBarcode@1000000009(BarcodeText@1000000000 : Text[250]) DocType : Code[20];
+    VAR
+      DocumentType@1000000001 : Record 9062268;
+      DocTypeSeparator@1000000002 : Text[10];
+    BEGIN
+      //DOC AP 12/09/2014
+      DocTypeSeparator := SystemBehaviour.GetText('DOCTYPESEP');
+
+      IF DocTypeSeparator = '' THEN
+         DocTypeSeparator := '%';
+      //DOC AP 12/09/2014
+
+      IF STRPOS(BarcodeText,'%') <> 0 THEN
+        BarcodeText := COPYSTR(BarcodeText,1,STRPOS(BarcodeText,'%')-1);
+
+      DocumentType.SETRANGE(Code,BarcodeText);
+      IF DocumentType.FINDFIRST THEN BEGIN
+        EXIT(DocumentType.Code);
+      END;
+    END;
+
+    LOCAL PROCEDURE "*** IDENTIFIED VALUES ***"@1000000001();
+    BEGIN
+    END;
+
+    PROCEDURE GetIdentifiedValues@1000000002(VAR Rec@1000000000 : Record 9062271);
+    BEGIN
+      WITH Rec DO BEGIN
+        IF "File Extension" = '' THEN VALIDATE("File Extension",FileSystem.GetExtension(FileSystem.Client(), FilePath));
+
+        CASE "File Extension" OF
+          '.XLSX' :
+            BEGIN
+              GetIdentifiedValues_Excel(Rec);
+            END;
+          '.JPG','.PNG','.GIF','.TIF','.BMP' :
+            BEGIN
+              GetIdentifiedValues_Barcode(Rec);
+            END;
+        END;
+      END;
+    END;
+
+    PROCEDURE GetIdentifiedValues_Excel@1000000003(VAR Rec@1000000000 : Record 9062271) ValuesIdentified : Boolean;
+    VAR
+      SmartDoc@1000000001 : Codeunit 9062273;
+    BEGIN
+      WITH Rec DO BEGIN
+        IF "Excel ID" = 0 THEN EXIT(FALSE);
+
+        "Identified Value 1" := SmartDoc.GetValueFromNFormFile(FilePath,1,"Excel ID",nFormValueType::FilterFieldValue);
+        "Identified Value 2" := SmartDoc.GetValueFromNFormFile(FilePath,2,"Excel ID",nFormValueType::FilterFieldValue);
+        "Identified Value 3" := SmartDoc.GetValueFromNFormFile(FilePath,3,"Excel ID",nFormValueType::FilterFieldValue);
+
+        IF NOT EVALUATE("Identified Field No. 1",SmartDoc.GetValueFromNFormFile(FilePath,1,"Excel ID",nFormValueType::FilterFieldNo)) THEN;
+        IF NOT EVALUATE("Identified Field No. 2",SmartDoc.GetValueFromNFormFile(FilePath,2,"Excel ID",nFormValueType::FilterFieldNo)) THEN;
+        IF NOT EVALUATE("Identified Field No. 3",SmartDoc.GetValueFromNFormFile(FilePath,3,"Excel ID",nFormValueType::FilterFieldNo)) THEN;
+
+      END;
+    END;
+
+    PROCEDURE GetIdentifiedValues_Barcode@1000000014(VAR Rec@1000000000 : Record 9062271) ValuesIdentified : Boolean;
+    VAR
+      CurrText@1000000001 : Text[250];
+      RemainingText@1000000002 : Text[250];
+      i@1000000003 : Integer;
+    BEGIN
+      WITH Rec DO BEGIN
+        IF "Barcode Text" = '' THEN
+          GetBarcodeDetails(Rec);
+
+        IF "Barcode Text" <> '' THEN BEGIN
+          RemainingText := "Barcode Text";
+          REPEAT
+            i += 1;
+            IF STRPOS(RemainingText,'%') = 0 THEN BEGIN
+              CurrText := RemainingText;
+              RemainingText := '';
+            END ELSE BEGIN
+              CurrText := COPYSTR(RemainingText,1,STRPOS(RemainingText,'%')-1);
+              IF STRLEN(CurrText)+1 < STRLEN(RemainingText) THEN BEGIN
+                RemainingText := COPYSTR(RemainingText,STRPOS(RemainingText,'%')+1);
+              END ELSE BEGIN
+                RemainingText := '';
+              END;
+            END;
+
+            IF CurrText <> '' THEN BEGIN
+              CASE i OF
+                1 : "Identified Value 1" := RemainingText;
+                2 : "Identified Value 2" := RemainingText;
+                3 : "Identified Value 3" := RemainingText;
+                4 : "Identified Value 4" := RemainingText;
+                5 : "Identified Value 5" := RemainingText;
+              END;
+            END;
+          UNTIL (i >= 5) OR (RemainingText = '');
+        END ELSE BEGIN
+          EXIT(FALSE);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE "*** DESTINATION RECORD ***"@1000000004();
+    BEGIN
+    END;
+
+    PROCEDURE IdentifyDestinationRecord@1000000005(VAR Rec@1000000000 : Record 9062271) RecMatched : Boolean;
+    VAR
+      DocType@1000000001 : Record 9062268;
+      FAQFunc@9062229 : Codeunit 9062265;
+      RecRef@1000000014 : RecordRef;
+      FieldRef@1000000015 : FieldRef;
+      TableID@1000000013 : Integer;
+      Field1ID@1000000012 : Integer;
+      Field2ID@1000000011 : Integer;
+      Field3ID@1000000010 : Integer;
+      Field4ID@1000000009 : Integer;
+      Field5ID@1000000008 : Integer;
+      Field1Value@1000000007 : Text[250];
+      Field2Value@1000000006 : Text[250];
+      Field3Value@1000000005 : Text[250];
+      Field4Value@1000000004 : Text[250];
+      Field5Value@1000000003 : Text[250];
+      TxtCreatingNewRecord@1000000002 : TextConst 'ENU=Creating new record to attach "%1" to;ENG=Creating new record to attach "%1" to';
+      TxtNotAutoProcessing@1000000016 : TextConst 'ENU=Not autoprocessing "%1" as table id is 0;ENG=Not autoprocessing "%1" as table id is 0';
+      TxtCreatedRecord@1000000017 : TextConst 'ENU=Created record in table %1 with pos %2;ENG=Created record in table %1 with pos %2';
+      TxtFindingARecord@1000000018 : TextConst 'ENU=Finding a record to attach "%1" to;ENG=Finding a record to attach "%1" to';
+      TxtMatchedEntry@1000000019 : TextConst 'ENU=Matched entry %1 to %2;ENG=Matched entry %1 to %2';
+      TxtMatchedEntryTooLong@1000000020 : TextConst 'ENU=Matched entry %1 to position %2 in table %3, however the position text is over 250 characters;ENG=Matched entry %1 to position %2 in table %3, however the position text is over 250 characters';
+    BEGIN
+      WITH Rec DO BEGIN
+        IF NOT DocType.GET("Document Type") THEN EXIT(FALSE);
+        //Try to set the Table/Field No./Field Values >>
+        //Table ID >>
+        CASE DocType."Match Table ID From" OF
+          DocType."Match Table ID From"::Hardcoded : TableID := DocType."Table ID";
+          DocType."Match Table ID From"::"Identified Table ID" : TableID := "Identified Table ID";
+        END;
+        //Table ID <<
+
+        //Field 1 ID >>
+        CASE DocType."Match Field 1 No. From" OF
+          DocType."Match Field 1 No. From"::Hardcoded : Field1ID := DocType."Field 1 ID";
+          DocType."Match Field 1 No. From"::"Identified Field No. 1" : Field1ID := "Identified Field No. 1";
+          DocType."Match Field 1 No. From"::"Identified Field No. 2" : Field1ID := "Identified Field No. 2";
+          DocType."Match Field 1 No. From"::"Identified Field No. 3" : Field1ID := "Identified Field No. 3";
+          DocType."Match Field 1 No. From"::"Identified Field No. 4" : Field1ID := "Identified Field No. 4";
+          DocType."Match Field 1 No. From"::"Identified Field No. 5" : Field1ID := "Identified Field No. 5";
+        END;
+        //Field 1 ID <<
+
+        //Field 2 ID >>
+        CASE DocType."Match Field 2 No. From" OF
+          DocType."Match Field 2 No. From"::Hardcoded : Field2ID := DocType."Field 2 ID";
+          DocType."Match Field 2 No. From"::"Identified Field No. 1" : Field2ID := "Identified Field No. 1";
+          DocType."Match Field 2 No. From"::"Identified Field No. 2" : Field2ID := "Identified Field No. 2";
+          DocType."Match Field 2 No. From"::"Identified Field No. 3" : Field2ID := "Identified Field No. 3";
+          DocType."Match Field 2 No. From"::"Identified Field No. 4" : Field2ID := "Identified Field No. 4";
+          DocType."Match Field 2 No. From"::"Identified Field No. 5" : Field2ID := "Identified Field No. 5";
+        END;
+        //Field 2 ID <<
+
+        //Field 3 ID >>
+        CASE DocType."Match Field 3 No. From" OF
+          DocType."Match Field 3 No. From"::Hardcoded : Field3ID := DocType."Field 3 ID";
+          DocType."Match Field 3 No. From"::"Identified Field No. 1" : Field3ID := "Identified Field No. 1";
+          DocType."Match Field 3 No. From"::"Identified Field No. 2" : Field3ID := "Identified Field No. 2";
+          DocType."Match Field 3 No. From"::"Identified Field No. 3" : Field3ID := "Identified Field No. 3";
+          DocType."Match Field 3 No. From"::"Identified Field No. 4" : Field3ID := "Identified Field No. 4";
+          DocType."Match Field 3 No. From"::"Identified Field No. 5" : Field3ID := "Identified Field No. 5";
+        END;
+        //Field 3 ID <<
+
+        //Field 4 ID >>
+        CASE DocType."Match Field 4 No. From" OF
+          DocType."Match Field 4 No. From"::Hardcoded : Field4ID := DocType."Field 4 ID";
+          DocType."Match Field 4 No. From"::"Identified Field No. 1" : Field4ID := "Identified Field No. 1";
+          DocType."Match Field 4 No. From"::"Identified Field No. 2" : Field4ID := "Identified Field No. 2";
+          DocType."Match Field 4 No. From"::"Identified Field No. 3" : Field4ID := "Identified Field No. 3";
+          DocType."Match Field 4 No. From"::"Identified Field No. 4" : Field4ID := "Identified Field No. 4";
+          DocType."Match Field 4 No. From"::"Identified Field No. 5" : Field4ID := "Identified Field No. 5";
+
+
+        END;
+        //Field 4 ID <<
+
+        //Field 5 ID >>
+        CASE DocType."Match Field 5 No. From" OF
+          DocType."Match Field 5 No. From"::Hardcoded : Field5ID := DocType."Field 5 ID";
+          DocType."Match Field 5 No. From"::"Identified Field No. 1" : Field5ID := "Identified Field No. 1";
+          DocType."Match Field 5 No. From"::"Identified Field No. 2" : Field5ID := "Identified Field No. 2";
+          DocType."Match Field 5 No. From"::"Identified Field No. 3" : Field5ID := "Identified Field No. 3";
+          DocType."Match Field 5 No. From"::"Identified Field No. 4" : Field5ID := "Identified Field No. 4";
+          DocType."Match Field 5 No. From"::"Identified Field No. 5" : Field5ID := "Identified Field No. 5";
+        END;
+        //Field 5 ID <<
+
+        //Field 1 Value >>
+        CASE DocType."Match Field 1 Value From" OF
+          DocType."Match Field 1 Value From"::Hardcoded : Field1Value := DocType."Field 1 Value";
+          DocType."Match Field 1 Value From"::Filename : Field1Value := Filename;
+          DocType."Match Field 1 Value From"::Description : Field1Value := Description;
+          DocType."Match Field 1 Value From"::"Sender E-Mail Address" : Field1Value := "Sender Email Address";
+          DocType."Match Field 1 Value From"::"Recipient E-Mail Address" : Field1Value := "Recipient Email Address";
+          DocType."Match Field 1 Value From"::"Identified Value 1" : Field1Value := "Identified Value 1";
+          DocType."Match Field 1 Value From"::"Identified Value 2" : Field1Value := "Identified Value 2";
+          DocType."Match Field 1 Value From"::"Identified Value 3" : Field1Value := "Identified Value 3";
+          DocType."Match Field 1 Value From"::"Identified Value 4" : Field1Value := "Identified Value 4";
+          DocType."Match Field 1 Value From"::"Identified Value 5" : Field1Value := "Identified Value 5";
+        END;
+        //Field 1 Value <<
+
+        //Field 2 Value >>
+        CASE DocType."Match Field 2 Value From" OF
+          DocType."Match Field 2 Value From"::Hardcoded : Field2Value := DocType."Field 2 Value";
+          DocType."Match Field 2 Value From"::Filename : Field2Value := Filename;
+          DocType."Match Field 2 Value From"::Description : Field2Value := Description;
+          DocType."Match Field 2 Value From"::"Sender E-Mail Address" : Field2Value := "Sender Email Address";
+          DocType."Match Field 2 Value From"::"Recipient E-Mail Address" : Field2Value := "Recipient Email Address";
+          DocType."Match Field 2 Value From"::"Identified Value 1" : Field2Value := "Identified Value 1";
+          DocType."Match Field 2 Value From"::"Identified Value 2" : Field2Value := "Identified Value 2";
+          DocType."Match Field 2 Value From"::"Identified Value 3" : Field2Value := "Identified Value 3";
+          DocType."Match Field 2 Value From"::"Identified Value 4" : Field2Value := "Identified Value 4";
+          DocType."Match Field 2 Value From"::"Identified Value 5" : Field2Value := "Identified Value 5";
+        END;
+        //Field 2 Value <<
+
+        //Field 3 Value >>
+        CASE DocType."Match Field 3 Value From" OF
+          DocType."Match Field 3 Value From"::Hardcoded : Field3Value := DocType."Field 3 Value";
+          DocType."Match Field 3 Value From"::Filename : Field3Value := Filename;
+          DocType."Match Field 3 Value From"::Description : Field3Value := Description;
+          DocType."Match Field 3 Value From"::"Sender E-Mail Address" : Field3Value := "Sender Email Address";
+          DocType."Match Field 3 Value From"::"Recipient E-Mail Address" : Field3Value := "Recipient Email Address";
+          DocType."Match Field 3 Value From"::"Identified Value 1" : Field3Value := "Identified Value 1";
+          DocType."Match Field 3 Value From"::"Identified Value 2" : Field3Value := "Identified Value 2";
+          DocType."Match Field 3 Value From"::"Identified Value 3" : Field3Value := "Identified Value 3";
+          DocType."Match Field 3 Value From"::"Identified Value 4" : Field3Value := "Identified Value 4";
+          DocType."Match Field 3 Value From"::"Identified Value 5" : Field3Value := "Identified Value 5";
+        END;
+        //Field 3 Value <<
+
+        //Field 4 Value >>
+        CASE DocType."Match Field 4 Value From" OF
+          DocType."Match Field 4 Value From"::Hardcoded : Field4Value := DocType."Field 4 Value";
+          DocType."Match Field 4 Value From"::Filename : Field4Value := Filename;
+          DocType."Match Field 4 Value From"::Description : Field4Value := Description;
+          DocType."Match Field 4 Value From"::"Sender E-Mail Address" : Field4Value := "Sender Email Address";
+          DocType."Match Field 4 Value From"::"Recipient E-Mail Address" : Field4Value := "Recipient Email Address";
+          DocType."Match Field 4 Value From"::"Identified Value 1" : Field4Value := "Identified Value 1";
+          DocType."Match Field 4 Value From"::"Identified Value 2" : Field4Value := "Identified Value 2";
+          DocType."Match Field 4 Value From"::"Identified Value 3" : Field4Value := "Identified Value 3";
+          DocType."Match Field 4 Value From"::"Identified Value 4" : Field4Value := "Identified Value 4";
+          DocType."Match Field 4 Value From"::"Identified Value 5" : Field4Value := "Identified Value 5";
+        END;
+        //Field 4 Value <<
+
+        //Field 5 Value >>
+        CASE DocType."Match Field 5 Value From" OF
+          DocType."Match Field 5 Value From"::Hardcoded : Field5Value := DocType."Field 5 Value";
+          DocType."Match Field 5 Value From"::Filename : Field5Value := Filename;
+          DocType."Match Field 5 Value From"::Description : Field5Value := Description;
+          DocType."Match Field 5 Value From"::"Sender E-Mail Address" : Field5Value := "Sender Email Address";
+          DocType."Match Field 5 Value From"::"Recipient E-Mail Address" : Field5Value := "Recipient Email Address";
+          DocType."Match Field 5 Value From"::"Identified Value 1" : Field5Value := "Identified Value 1";
+          DocType."Match Field 5 Value From"::"Identified Value 2" : Field5Value := "Identified Value 2";
+          DocType."Match Field 5 Value From"::"Identified Value 3" : Field5Value := "Identified Value 3";
+          DocType."Match Field 5 Value From"::"Identified Value 4" : Field5Value := "Identified Value 4";
+          DocType."Match Field 5 Value From"::"Identified Value 5" : Field5Value := "Identified Value 5";
+        END;
+        //Field 5 Value <<
+        //Try to set the Table/Field No./Field Values <<
+
+        IF DocType."Create Record" THEN BEGIN
+          Logger.Log(TxtFaq, Logger.Type::Debug, STRSUBSTNO(TxtCreatingNewRecord, Filename), USERID);
+          IF TableID = 0 THEN BEGIN
+            Logger.Log(TxtFaq, Logger.Type::Debug, STRSUBSTNO(TxtNotAutoProcessing, Filename), USERID);
+            EXIT;
+          END;
+
+          RecRef.OPEN(DocType."Table ID");
+          RecRef.INIT;
+
+          IF Field1ID <> 0 THEN BEGIN
+            FieldRef := RecRef.FIELD(Field1ID);
+            TNPUtils.SetFieldValueFromText(FieldRef,Field1Value,TRUE);
+          END;
+          IF Field2ID <> 0 THEN BEGIN
+            FieldRef := RecRef.FIELD(Field2ID);
+            TNPUtils.SetFieldValueFromText(FieldRef,Field2Value,TRUE);
+          END;
+          IF Field3ID <> 0 THEN BEGIN
+            FieldRef := RecRef.FIELD(Field3ID);
+            TNPUtils.SetFieldValueFromText(FieldRef,Field3Value,TRUE);
+          END;
+          IF Field4ID <> 0 THEN BEGIN
+            FieldRef := RecRef.FIELD(Field4ID);
+            TNPUtils.SetFieldValueFromText(FieldRef,Field4Value,TRUE);
+          END;
+          IF Field5ID <> 0 THEN BEGIN
+            FieldRef := RecRef.FIELD(Field5ID);
+            TNPUtils.SetFieldValueFromText(FieldRef,Field5Value,TRUE);
+          END;
+
+          RecRef.INSERT(TRUE);
+          RecMatched := TRUE;
+
+          Logger.Log(TxtFaq, Logger.Type::Debug, STRSUBSTNO(TxtCreatedRecord, DocType."Table ID", RecRef.GETPOSITION), USERID);
+
+        END ELSE BEGIN
+          Logger.Log(TxtFaq, Logger.Type::Debug, STRSUBSTNO(TxtFindingARecord, Filename), USERID);
+          IF TableID = 0 THEN BEGIN
+            Logger.Log(TxtFaq, Logger.Type::Debug, STRSUBSTNO(TxtNotAutoProcessing, Filename), USERID);
+            EXIT;
+          END;
+
+          RecRef.OPEN(DocType."Table ID");
+          RecMatched := RecRef.FINDSET;
+
+          IF RecMatched AND (Field1ID <> 0) THEN BEGIN
+            RecMatched := FAQFunc.MatchRecordFromText(RecRef,Field1ID,Field1Value,DocType."Match Field 1 Exactly");
+          END;
+          IF RecMatched AND (Field2ID <> 0) THEN BEGIN
+            RecMatched := FAQFunc.MatchRecordFromText(RecRef,Field2ID,Field2Value,DocType."Match Field 2 Exactly");
+          END;
+          IF RecMatched AND (Field3ID <> 0) THEN BEGIN
+            RecMatched := FAQFunc.MatchRecordFromText(RecRef,Field3ID,Field3Value,DocType."Match Field 3 Exactly");
+          END;
+          IF RecMatched AND (Field4ID <> 0) THEN BEGIN
+            RecMatched := FAQFunc.MatchRecordFromText(RecRef,Field4ID,Field4Value,DocType."Match Field 4 Exactly");
+          END;
+          IF RecMatched AND (Field5ID <> 0) THEN BEGIN
+            RecMatched := FAQFunc.MatchRecordFromText(RecRef,Field5ID,Field5Value,DocType."Match Field 5 Exactly");
+          END;
+
+          IF RecMatched THEN Logger.Log(TxtFaq, Logger.Type::Debug, STRSUBSTNO(TxtMatchedEntry, "Entry No.", RecRef.GETPOSITION), USERID); //DOC NA2015.7 PC
+        END;
+
+        IF RecMatched THEN BEGIN
+          IF STRLEN(RecRef.GETPOSITION) > MAXSTRLEN("Destination Position Text") THEN BEGIN
+            Logger.Log(TxtFaq, Logger.Type::Error, STRSUBSTNO(TxtMatchedEntryTooLong, "Entry No.", RecRef.GETPOSITION, RecRef.NAME), USERID);
+            EXIT(FALSE);
+          END;
+          VALIDATE("Destination Table ID",RecRef.NUMBER);
+          VALIDATE("Destination Position Text",RecRef.GETPOSITION);
+          EXIT(TRUE);
+        END ELSE BEGIN
+          IF DocType."Default to Last Attached Rec." THEN BEGIN
+            IF (DocType."Last Attached to Table ID" <> 0) AND (DocType."Last Attached to Position Text" <> '') THEN BEGIN
+              VALIDATE("Destination Table ID",DocType."Last Attached to Table ID");
+              VALIDATE("Destination Position Text",DocType."Last Attached to Position Text");
+              EXIT(TRUE);
+            END;
+          END;
+        END;
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  PC 01/01/2013 - Created
+      //DOC NA2015.3  AP 12/09/2014 - Added Document Type separator for barcodes as System Behaviour
+      //DOC NA2015.4  PC 24/10/2014 - NAV on Demand modifications
+      //DOC NA2016.10 JH 26/08/2015 - Upgraded to 2016
+    }
+    END.
+  }
+}
+

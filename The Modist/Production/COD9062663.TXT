@@ -1,0 +1,510 @@
+OBJECT Codeunit 9062663 Record Browser Session Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=24/05/16;
+    Time=11:46:38 AM;
+    Version List=NH2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      HtmlControlRequestProxy@1000000013 : Codeunit 9062665;
+      Initialized@1000000019 : Boolean;
+      "--- Record Browser Implementation ---"@1000000008 : Integer;
+      RecordBrowserHeader@1000000007 : Record 9062795;
+      RecordBrowserLine@1000000006 : Record 9062796;
+      RecordBrowserStack@1000000005 : TEMPORARY Record 9062797;
+      SelectedRecords@1000000009 : TEMPORARY Record 9062797;
+      SelectedRecordEntryNo@1000000010 : Integer;
+      RecordBrowserStackLevel@1000000011 : Integer;
+      ParentRecord@1000000012 : RecordRef;
+      errGetSelNotTemp@1000000004 : TextConst 'ENU=Output table for GetSelectedRecords table has to be TEMPORARY;ENG=Output table for GetSelectedRecords table has to be TEMPORARY';
+      "--- Filters Variables ---"@1000000015 : Integer;
+      CriteriaMgt@1000000016 : Codeunit 9062462;
+      CriteriaId@1000000014 : Integer;
+      FilterView@1000000017 : Text;
+      txtCriteriaName@1000000018 : TextConst 'ENU=Filter;ENG=Filter';
+
+    PROCEDURE Initialize@1000000000(VAR value@1000000000 : DotNet "'TheNavPeople.HtmlControlCommunication.9.0.0.0, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7c0c47cc7f65ff95'.TheNavPeople.HtmlControlCommunication.RequestMessageEvent";BrowserCode@1000000001 : Code[20]);
+    VAR
+      UIManipulationMgt@1000000005 : Codeunit 9062672;
+    BEGIN
+      Initialized := FALSE;
+      //initialize control and libraries
+      HtmlControlRequestProxy.SetRequestEvent(value);
+
+      //update client ui
+      UIManipulationMgt.ClearScript();
+      UIManipulationMgt.UseWindowHeight();
+      IF (UIManipulationMgt.HasScript) THEN
+        HtmlControlRequestProxy.SendJavaScriptRequest(UIManipulationMgt.GetScript);
+
+      //Initialization finished
+      Initialized := TRUE;
+
+      //select browser
+      SelectBrowser(BrowserCode);
+    END;
+
+    PROCEDURE Dispose@1000000022();
+    BEGIN
+      DeleteCriteria();
+    END;
+
+    PROCEDURE UpdateContent@1000000003(ItemList@1000000001 : Boolean;SelectedItems@1000000002 : Boolean);
+    VAR
+      DataSources@1000000000 : TEMPORARY Record 9062810;
+    BEGIN
+      IF (RecordBrowserHeader.Code <> '') THEN BEGIN
+        DataSources.InitDataSources();
+        //collect data
+        IF (ItemList) THEN
+          UpdateItemList(DataSources);
+        IF (SelectedItems) THEN
+          UpdateSelectedItemsList(DataSources);
+        //render data
+        IF (DataSources.COUNT > 0) THEN
+          HtmlControlRequestProxy.RenderViewData(DataSources);
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateItemList@1000000008(VAR DataSources@1000000009 : TEMPORARY Record 9062810);
+    VAR
+      BrowserHeader@1000000002 : Record 9062795;
+      BrowserXmlPort@1000000000 : XMLport 9062373;
+      OutputStream@1000000005 : OutStream;
+      DataSourceName@1000000008 : Text;
+    BEGIN
+      IF (RecordBrowserHeader.Code = '') THEN
+        EXIT;
+
+      DataSourceName := 'ItemList';
+      IF (RecordBrowserHeader."Show Details Page") THEN
+        IF (RecordBrowserStack.FINDLAST()) THEN
+          IF (RecordBrowserLine.GET(RecordBrowserHeader.Code, RecordBrowserStack."Record Browser Line No.")) THEN
+            IF (RecordBrowserLine.Type = RecordBrowserLine.Type::Record) THEN
+              DataSourceName := 'ItemDetails';
+
+      CLEAR(BrowserXmlPort);
+      BrowserHeader.RESET();
+      BrowserHeader.SETRANGE(Code, RecordBrowserHeader.Code);
+      BrowserHeader.SETRANGE("Criteria Id Filter", CriteriaId);
+      BrowserHeader.FINDFIRST();
+      BrowserXmlPort.SETTABLEVIEW(BrowserHeader);
+      BrowserXmlPort.SetData(RecordBrowserStack, BrowserHeader);
+
+      DataSources.InitNewDataSource(DataSourceName, '', OutputStream);
+
+      BrowserXmlPort.SETDESTINATION(OutputStream);
+      BrowserXmlPort.EXPORT();
+
+      DataSources.INSERT();
+    END;
+
+    LOCAL PROCEDURE UpdateSelectedItemsList@1000000009(VAR DataSources@1000000008 : TEMPORARY Record 9062810);
+    VAR
+      BrowserHeader@1000000006 : Record 9062795;
+      BrowserXmlPort@1000000005 : XMLport 9062375;
+      OutputStream@1000000002 : OutStream;
+    BEGIN
+      IF (RecordBrowserHeader.Code = '') THEN
+        EXIT;
+
+      CLEAR(BrowserXmlPort);
+      BrowserHeader.RESET();
+      BrowserHeader.SETRANGE(Code, RecordBrowserHeader.Code);
+      BrowserXmlPort.SETTABLEVIEW(BrowserHeader);
+      BrowserXmlPort.SetData(SelectedRecords);
+
+      DataSources.InitNewDataSource('SelectedItems', '', OutputStream);
+
+      BrowserXmlPort.SETDESTINATION(OutputStream);
+      BrowserXmlPort.EXPORT();
+
+      DataSources.INSERT();
+    END;
+
+    LOCAL PROCEDURE UpdateHtmlPart@1000000004(TargetName@1000000000 : Text;Content@1000000001 : Text);
+    BEGIN
+      IF (TargetName = '') THEN
+        TargetName := '#controlAddIn';
+      IF (COPYSTR(TargetName, 1, 1) <> '#') THEN
+        TargetName := '#' + TargetName;
+      HtmlControlRequestProxy.SendHtmlRequest(TargetName, Content, FALSE);
+    END;
+
+    LOCAL PROCEDURE "--- Record Browser Functions ---"@1000000011();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE SelectBrowser@1000000016(BrowserCode@1000000000 : Code[20]);
+    BEGIN
+      //initialize template
+      RecordBrowserHeader.GET(BrowserCode);
+      HtmlControlRequestProxy.LoadView(RecordBrowserHeader."Control Template Code", RecordBrowserHeader."Control View Code");
+
+      CreateCriteria();
+
+      ClearSelection();
+
+      ResetStack();
+
+      UpdateContent(TRUE, TRUE);
+    END;
+
+    LOCAL PROCEDURE PushLine@1000000012(VAR BrowserLine@1000000000 : Record 9062796;SourcePosition@1000000001 : Text;StackEntryType@1000000002 : Integer);
+    BEGIN
+      RecordBrowserStackLevel += 1;
+      RecordBrowserStack.INIT();
+      RecordBrowserStack.Level := RecordBrowserStackLevel;
+
+      RecordBrowserStack."Record Browser Code" := BrowserLine."Record Browser Code";
+      RecordBrowserStack."Record Browser Line No." := BrowserLine."Line No.";
+      RecordBrowserStack."Record Browser Line Level" := BrowserLine.Level;
+      RecordBrowserStack."Stack Entry Type" := StackEntryType;
+      RecordBrowserStack."Source Table No." := BrowserLine."Source Table No.";
+      RecordBrowserStack."Source Position" := SourcePosition;
+      RecordBrowserStack.INSERT();
+
+      //refresh items
+      UpdateContent(TRUE, FALSE);
+    END;
+
+    LOCAL PROCEDURE PopLine@1000000013();
+    BEGIN
+      IF (RecordBrowserStackLevel <> 0) THEN BEGIN
+        RecordBrowserStack.GET(RecordBrowserStackLevel);
+        RecordBrowserStack.DELETE();
+        RecordBrowserStackLevel -= 1;
+      END;
+
+      //refresh items
+      UpdateContent(TRUE, FALSE);
+    END;
+
+    LOCAL PROCEDURE ResetStack@1000000015();
+    BEGIN
+      RecordBrowserStackLevel := 0;
+      RecordBrowserStack.RESET();
+      RecordBrowserStack.DELETEALL();
+
+      RecordBrowserLine.RESET();
+      RecordBrowserLine.SETRANGE("Record Browser Code", RecordBrowserHeader.Code);
+      RecordBrowserLine.FINDFIRST();
+    END;
+
+    LOCAL PROCEDURE SelectRecord@1000000018(VAR BrowserLine@1000000001 : Record 9062796;RecordPosition@1000000000 : Text);
+    VAR
+      InsertRecord@1000000002 : Boolean;
+    BEGIN
+      SelectedRecords.RESET();
+      SelectedRecords.SETRANGE("Source Position", RecordPosition);
+      InsertRecord := SelectedRecords.ISEMPTY;
+      SelectedRecords.RESET();
+      IF (InsertRecord) THEN BEGIN
+        SelectedRecordEntryNo += 1;
+        SelectedRecords.INIT();
+        SelectedRecords.Level := SelectedRecordEntryNo;
+        SelectedRecords."Source Position" := RecordPosition;
+        SelectedRecords.INSERT();
+        UpdateContent(FALSE, TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE ClearSelection@1000000017();
+    BEGIN
+      SelectedRecordEntryNo := 0;
+      SelectedRecords.RESET();
+      SelectedRecords.DELETEALL();
+    END;
+
+    LOCAL PROCEDURE "--- Filters Functions ---"@1000000024();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CreateCriteria@1000000025();
+    VAR
+      Criteria@1000000000 : Record 9062626;
+    BEGIN
+      IF (CriteriaId <> 0) THEN
+        CriteriaMgt.DeleteCriteria(CriteriaId);
+      CriteriaId := CriteriaMgt.CreateCriteriaAttached(
+        DATABASE::"Record Browser Header", RecordBrowserHeader.GETPOSITION(FALSE), 0, TRUE);
+      Criteria.GET(CriteriaId);
+      Criteria.VALIDATE("Table ID", RecordBrowserHeader."Table No.");
+      Criteria.MODIFY();
+    END;
+
+    LOCAL PROCEDURE UpdateCriteriaFields@1000000026();
+    VAR
+      CriteriaField@1000000000 : Record 9062627;
+      FilterField@1000000001 : Record 9062798;
+      SourcePosition@1000000002 : Text;
+      SourceTableId@1000000003 : Integer;
+      ValidField@1000000004 : Boolean;
+    BEGIN
+      IF (CriteriaId <> 0) THEN BEGIN
+
+        CriteriaField.RESET();
+        CriteriaField.SETRANGE("Criteria ID", CriteriaId);
+        IF (NOT(CriteriaField.ISEMPTY)) THEN
+          EXIT;
+        CriteriaField.DELETEALL(TRUE);
+
+        SourcePosition := '';
+        SourceTableId := 0;
+        FilterField.RESET();
+        FilterField.SETRANGE("Record Browser Code", RecordBrowserHeader.Code);
+        IF (RecordBrowserStack.FINDLAST()) THEN BEGIN
+          FilterField.SETRANGE("Record Browser Line No.", RecordBrowserStack."Record Browser Line No.");
+          SourcePosition := RecordBrowserStack."Source Position";
+          SourceTableId := RecordBrowserStack."Source Table No.";
+        END ELSE
+          FilterField.SETRANGE("Record Browser Line No.", 0);
+        FilterField.SETRANGE("Line Type", FilterField."Line Type"::"Filter Field");
+
+        IF (FilterField.FINDSET()) THEN BEGIN
+          REPEAT
+            ValidField := TRUE;
+            IF (FilterField."Visibility Criteria ID" <> 0) AND (SourcePosition <>'') THEN
+              ValidField := CriteriaMgt.RecordInFilter(FilterField."Visibility Criteria ID", SourceTableId, SourcePosition);
+            IF (ValidField) THEN BEGIN
+              CASE (FilterField."Field Type") OF
+                FilterField."Field Type"::Field:
+                  CriteriaMgt.CreateCriteriaField(CriteriaId, FilterField."Source Field ID", '');
+                FilterField."Field Type"::"Enhanced Field":
+                  CriteriaMgt.CreateCriteriaEnhancedField(CriteriaId, 0, FilterField."Source Field ID", '');
+              END;
+            END;
+          UNTIL (FilterField.NEXT() = 0);
+        END;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE DeleteCriteria@1000000023();
+    BEGIN
+      IF (CriteriaId <> 0) THEN BEGIN
+        CriteriaMgt.DeleteCriteria(CriteriaId);
+        CriteriaId := 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE ClearCriteria@1000000027();
+    VAR
+      Criteria@1000000001 : Record 9062626;
+      CriteriaField@1000000000 : Record 9062627;
+    BEGIN
+      IF (CriteriaId <> 0) THEN BEGIN
+        CriteriaField.RESET();
+        CriteriaField.SETRANGE("Criteria ID", CriteriaId);
+        //CriteriaField.MODIFYALL(Value, '');
+        CriteriaField.DELETEALL();
+
+        Criteria.GET(CriteriaId);
+        Criteria.View := '';
+        Criteria.MODIFY();
+      END;
+    END;
+
+    PROCEDURE ShowFilter@1000000029();
+    VAR
+      Criteria@1000000000 : Record 9062626;
+      CriteriaField@1000000002 : Record 9062627;
+      Filter@1000000001 : FilterPageBuilder;
+      UseEnhancedCriteriaPage@1000000003 : Boolean;
+      ApplyFilter@1000000004 : Boolean;
+    BEGIN
+      UpdateCriteriaFields();
+      COMMIT;
+
+      //Select edit mode
+      //Currently hardcoded for demo
+      UseEnhancedCriteriaPage := FALSE;
+      ApplyFilter := FALSE;
+
+      IF (UseEnhancedCriteriaPage) THEN BEGIN
+        CriteriaMgt.EditCriteria(CriteriaId);
+        ApplyFilter := TRUE;
+      END ELSE BEGIN
+        Criteria.GET(CriteriaId);
+        CriteriaField.SETRANGE("Criteria ID", CriteriaId);
+        CriteriaField.SETRANGE("Field Type", CriteriaField."Field Type"::Field);
+        IF (CriteriaField.FINDSET()) THEN BEGIN
+          Filter.ADDTABLE(txtCriteriaName, Criteria."Table ID");
+          REPEAT
+            Filter.ADDFIELDNO(txtCriteriaName, CriteriaField."Field ID", CriteriaField.Value);
+          UNTIL (CriteriaField.NEXT() = 0);
+          IF (STRLEN(Criteria.View) > 4) THEN BEGIN
+            IF (UPPERCASE(COPYSTR(Criteria.View, 1, 4)) = 'SORT') THEN
+              Filter.SETVIEW(txtCriteriaName, Criteria.View);
+          END;
+
+          ApplyFilter := Filter.RUNMODAL();
+          IF (ApplyFilter) THEN BEGIN
+            Criteria.View := Filter.GETVIEW(txtCriteriaName, FALSE);
+            Criteria.MODIFY();
+          END;
+        END;
+      END;
+
+      IF (ApplyFilter) THEN BEGIN
+        RecordBrowserStack.RESET();
+        RecordBrowserStack.SETRANGE("Stack Entry Type", RecordBrowserStack."Stack Entry Type"::"Search Results");
+        IF (RecordBrowserStack.ISEMPTY) THEN BEGIN
+          RecordBrowserStack.RESET();
+          IF (RecordBrowserStack.FINDLAST()) THEN BEGIN
+            RecordBrowserLine.GET(RecordBrowserHeader.Code, RecordBrowserStack."Record Browser Line No.");
+            PushLine(RecordBrowserLine, RecordBrowserStack."Source Position", RecordBrowserStack."Stack Entry Type"::"Search Results");
+          END ELSE BEGIN
+            RecordBrowserLine.INIT();
+            RecordBrowserLine."Record Browser Code" := RecordBrowserHeader.Code;
+            RecordBrowserLine."Line No." := 0;
+            RecordBrowserLine."Source Table No." := RecordBrowserHeader."Table No.";
+            PushLine(RecordBrowserLine, '', RecordBrowserStack."Stack Entry Type"::"Search Results");
+          END;
+        END ELSE BEGIN
+          RecordBrowserStack.RESET();
+          UpdateContent(TRUE, FALSE);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Event Handling ---"@1000000005();
+    BEGIN
+    END;
+
+    PROCEDURE HandleControlMessage@1000000010(ControlMessage@1000000000 : DotNet "'TheNavPeople.HtmlControlCommunication.9.0.0.0, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7c0c47cc7f65ff95'.TheNavPeople.HtmlControlCommunication.ControlMessage");
+    VAR
+      LevelText@1000000004 : Text;
+      Level@1000000005 : Integer;
+      LineNoText@1000000001 : Text;
+      LineNo@1000000002 : Integer;
+      RecordPosition@1000000003 : Text;
+      ShowDetails@1000000006 : Boolean;
+    BEGIN
+      CASE (LOWERCASE(ControlMessage.Type)) OF
+        'levelclick':
+          BEGIN
+            LevelText := ControlMessage.SafeGetContent('Level');
+            IF (EVALUATE(Level, LevelText)) THEN
+              LevelClicked(Level);
+          END;
+        'itemadd',
+        'itemclick':
+          BEGIN
+            LineNoText := ControlMessage.SafeGetContent('LineNo');
+            RecordPosition := ControlMessage.SafeGetContent('RecordPos');
+            ShowDetails := ((ControlMessage.Type = 'itemclick') AND (RecordBrowserHeader."Show Details Page"));
+            IF (EVALUATE(LineNo, LineNoText)) THEN
+              ListRecordClicked(LineNo, RecordPosition, ShowDetails);
+          END;
+        'itemdelete':
+          BEGIN
+            RecordPosition := ControlMessage.SafeGetContent('RecordPos');
+            IF (RecordPosition <> '') THEN
+              RecordDeleted(RecordPosition);
+          END;
+        'gotoitem':
+          BEGIN
+            RecordPosition := ControlMessage.SafeGetContent('RecordPos');
+            MESSAGE(STRSUBSTNO('Related Item %1 Selected', RecordPosition));
+          END;
+        ELSE
+          MESSAGE(STRSUBSTNO('Unknown control message received: %1 %2 %3 %4',
+            ControlMessage.Source,
+            ControlMessage.Type,
+            ControlMessage.SafeGetContent('LineNo'),
+            ControlMessage.SafeGetContent('RecordPos')));
+      END;
+    END;
+
+    LOCAL PROCEDURE ListRecordClicked@1000000021(BrowserLineNo@1000000000 : Integer;RecordPosition@1000000001 : Text;ShowDetails@1000000002 : Boolean);
+    BEGIN
+      IF (RecordBrowserLine.GET(RecordBrowserHeader.Code, BrowserLineNo)) THEN BEGIN
+        CASE (RecordBrowserLine.Type) OF
+          RecordBrowserLine.Type::Group:
+            PushLine(RecordBrowserLine, RecordPosition, RecordBrowserStack."Stack Entry Type"::Line);
+          RecordBrowserLine.Type::Record:
+            IF (ShowDetails) THEN
+              PushLine(RecordBrowserLine, RecordPosition, RecordBrowserStack."Stack Entry Type"::Details)
+            ELSE
+              SelectRecord(RecordBrowserLine, RecordPosition);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE LevelClicked@1000000019(Level@1000000000 : Integer);
+    BEGIN
+      RecordBrowserStack.RESET();
+      RecordBrowserStack.SETFILTER(Level, '>%1', Level);
+      RecordBrowserStack.DELETEALL();
+
+      RecordBrowserStack.RESET();
+      RecordBrowserStack.SETRANGE("Stack Entry Type", RecordBrowserStack."Stack Entry Type"::"Search Results");
+      IF (RecordBrowserStack.ISEMPTY) THEN
+        ClearCriteria();
+
+      RecordBrowserStack.RESET();
+      IF (RecordBrowserStack.FINDLAST()) THEN
+        RecordBrowserStackLevel := RecordBrowserStack.Level
+      ELSE
+        RecordBrowserStackLevel := 0;
+
+      UpdateContent(TRUE, FALSE);
+    END;
+
+    LOCAL PROCEDURE RecordDeleted@1000000020(RecordPosition@1000000000 : Text);
+    VAR
+      RecordFound@1000000001 : Boolean;
+    BEGIN
+      SelectedRecords.RESET();
+      SelectedRecords.SETRANGE("Source Position", RecordPosition);
+      RecordFound := SelectedRecords.FINDFIRST();
+      IF (RecordFound) THEN
+        SelectedRecords.DELETE();
+      SelectedRecords.RESET();
+
+      IF (RecordFound) THEN
+        UpdateContent(FALSE, TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Source Table Functions ---"@1000000007();
+    BEGIN
+    END;
+
+    PROCEDURE GetSelectedRecords@1000000014(VAR OutputSelRec@1000000000 : Record 9062797) : Integer;
+    BEGIN
+      IF (NOT(OutputSelRec.ISTEMPORARY)) THEN
+        ERROR(errGetSelNotTemp);
+
+      OutputSelRec.RESET();
+      OutputSelRec.DELETEALL();
+
+      SelectedRecords.RESET();
+      IF (SelectedRecords.FINDSET()) THEN BEGIN
+        REPEAT
+          OutputSelRec.TRANSFERFIELDS(SelectedRecords);
+          OutputSelRec.INSERT();
+        UNTIL (SelectedRecords.NEXT() = 0);
+      END;
+
+      EXIT(OutputSelRec.COUNT);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.15 JH 09/05/2016 - CfMD modifications
+      //DOC NA2016.16 AZ 24/05/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

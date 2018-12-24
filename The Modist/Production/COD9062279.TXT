@@ -1,0 +1,553 @@
+OBJECT Codeunit 9062279 Exchange Integration
+{
+  OBJECT-PROPERTIES
+  {
+    Date=21/12/15;
+    Time=10:56:30 AM;
+    Version List=NA2016.12;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            FolderID@1000000000 : Text[1024];
+            FolderName@1000000001 : Text[1024];
+            ChangeKey@1000000002 : Text[1024];
+            xmldoc@1000000003 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.DOMDocument";
+            pItemCounter@1000000008 : Integer;
+            pEMailItem@1000000007 : Boolean;
+            pEMailTmp@1000000006 : Record 9062281;
+            pEMailLineTmp@1000000005 : Record 9062282;
+            pEMailAttachmentTmp@1000000004 : Record 9062283;
+            pIgnore@1000000009 : Boolean;
+          BEGIN
+            Initialise;
+            InitialiseReadingEMails;
+            GetInboxContents;
+            pItemCounter := 1;
+            ReadItem(TRUE,TRUE,pItemCounter,pEMailItem,pEMailTmp,pEMailLineTmp,pEMailAttachmentTmp,pIgnore);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EWSMgt@1000000000 : Codeunit 9062281;
+      Username@1000000001 : Text[250];
+      Password@1000000002 : Text[250];
+      MailboxEmail@1000000005 : Text;
+      ContactEmail@1000000021 : Text;
+      EWSUrl@1000000003 : Text[250];
+      nAblementSetup@1000000004 : Record 9062229;
+      itemCounter@1000000006 : Integer;
+      InboxFolderID@1000000009 : Text[1024];
+      InboxChangeKey@1000000010 : Text[1024];
+      InboxItemID@1000000007 : ARRAY [1000] OF Text[1024];
+      InboxItemChangeKey@1000000008 : ARRAY [1000] OF Text[1024];
+      InboxItemCount@1000000011 : Integer;
+      CRLF@1000000012 : Text[1];
+      CurrentItemID@1000000013 : Text[1024];
+      CurrentItemChangeKey@1000000014 : Text[1024];
+      CurrentItemXMLDoc@1000000015 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.DOMDocument";
+      TheItemType@1000000016 : 'Contact,Meeting,E-Mail,Todo';
+      TNPUtils@1000000017 : Codeunit 9062229;
+      InboxFolder@1000000018 : Text[100];
+      ArchiveFolder@1000000019 : Text[100];
+      ErrorFolder@1000000020 : Text[100];
+      SystemBehaviour@9062229 : Record 9062230;
+      AutoNavLogEntry@1000000022 : Record 9062280;
+      tAutoNavLogCode@1000000023 : TextConst 'ENU=EXCHINT;ENG=EXCHINT';
+
+    PROCEDURE Initialise@1000000010();
+    VAR
+      nAblementUser@1000000000 : Record 9062729;
+      Contact@1000000001 : Record 5050;
+      eMailboxEMailEmpty@1000000003 : TextConst 'ENU=Mailbox e-mail is empty;ENG=Mailbox e-mail is empty';
+      eAutoNavUserEMailEmpty@1000000002 : TextConst 'ENU=AutoNAV user e-mail is empty;ENG=AutoNAV user e-mail is empty';
+    BEGIN
+      //DOC NA2015.1 - Initialising Exchange
+
+      Username := EWSMgt.Get_EWSUsername;
+      Password := EWSMgt.Get_EWSPassword;
+      EWSUrl := EWSMgt.Get_EWSURL;
+
+      InboxFolder := EWSMgt.GetNoraInboxFolder();
+      ArchiveFolder := EWSMgt.GetNoraArchiveFolder();
+      ErrorFolder := EWSMgt.GetNoraErrorFolder();
+
+      nAblementSetup.GET;
+      nAblementUser.GET(nAblementSetup."E-Mail User");
+      Contact.GET(nAblementUser."Contact No.");
+      MailboxEmail := LOWERCASE(nAblementSetup."Exchange Username");
+      IF (MailboxEmail = '') THEN
+        AutoNavLogEntry.Log(tAutoNavLogCode, AutoNavLogEntry.Type::Warning, eMailboxEMailEmpty, USERID());
+      ContactEmail := LOWERCASE(Contact."E-Mail");
+      IF (ContactEmail = '') THEN
+        AutoNavLogEntry.Log(tAutoNavLogCode, AutoNavLogEntry.Type::Warning, eAutoNavUserEMailEmpty, USERID());
+
+      EWSMgt.Set_UsernamePassword(Username,Password);
+      EWSMgt.Set_DebugMode(SystemBehaviour.GetBoolean('EXCH_DEBUG_MODE'));
+
+      InitCRLF;
+    END;
+
+    PROCEDURE Finalise@1000000014();
+    BEGIN
+      //DOC NA2015.1 - Finalising Exchange
+    END;
+
+    PROCEDURE InitialiseReadingEMails@1000000007();
+    BEGIN
+      //DOC NA2015.1 - Initialising reading Exchange e-mails
+
+      itemCounter := 0;
+
+      EWSMgt.EWS_GetFolderID_DotNet(EWSUrl,Username,Password,MailboxEmail,InboxFolder,InboxFolderID,InboxChangeKey);
+      CheckExchangeFolderId(InboxFolderID, InboxFolder);
+
+      GetInboxContents;
+    END;
+
+    PROCEDURE FinaliseReadingEMails@1000000000();
+    VAR
+      xDlgConnecting@1000000000 : TextConst 'ENU=Connecting to Outlook...;ENG=Connecting to Outlook...';
+      xDlgConnected@1000000001 : TextConst 'ENU=Connected. Reading e-mails...;ENG=Connected. Reading e-mails...';
+      xDlgEMail@1000000006 : TextConst 'ENU=Processing e-mail no. %1...;ENG=Processing e-mail no. %1...';
+      xDlgFinished@1000000002 : TextConst 'ENU=Finished. Logging out from Outlook...;ENG=Finished. Logging out from Outlook...';
+      xProcessingFailedSubject@1000000008 : TextConst 'ENU=Problem with your e-mail;ENG=Problem with your e-mail';
+      xProcessingFailedBody@1000000009 : TextConst 'ENU=I got your email "%1" but there was a problem processing it - %2. Nora x.;ENG=I got your email "%1" but there was a problem processing it - %2. Nora x.';
+      xFinalMessage@1000000007 : TextConst 'ENU=%1 e-mails processed, %2 successfully, %3 with errors.;ENG=%1 e-mails processed, %2 successfully, %3 with errors.';
+    BEGIN
+      //DOC NA2015.1 - Finalising reading Exchange e-mails
+    END;
+
+    PROCEDURE ReadItem@1000000001(pReadContent@1000000005 : Boolean;pReadAttachments@1000000003 : Boolean;VAR pItemCounter@1000000015 : Integer;VAR pEMailItem@1000000012 : Boolean;VAR pEMailTmp@1000000013 : Record 9062281;VAR pEMailLineTmp@1000000014 : Record 9062282;VAR pEMailAttachmentTmp@1000000004 : Record 9062283;VAR pIgnore@1000000037 : Boolean) : Boolean;
+    VAR
+      xDlgConnecting@1000000000 : TextConst 'ENU=Connecting to Outlook...;ENG=Connecting to Outlook...';
+      xDlgConnected@1000000001 : TextConst 'ENU=Connected. Reading e-mails...;ENG=Connected. Reading e-mails...';
+      xDlgEMail@1000000006 : TextConst 'ENU=Processing e-mail no. %1...;ENG=Processing e-mail no. %1...';
+      xDlgFinished@1000000002 : TextConst 'ENU=Finished. Logging out from Outlook...;ENG=Finished. Logging out from Outlook...';
+      xProcessingFailedSubject@1000000008 : TextConst 'ENU=Problem with your e-mail;ENG=Problem with your e-mail';
+      xProcessingFailedBody@1000000009 : TextConst 'ENU=I got your email "%1" but there was a problem processing it - %2. Nora x.;ENG=I got your email "%1" but there was a problem processing it - %2. Nora x.';
+      xFinalMessage@1000000007 : TextConst 'ENU=%1 e-mails processed, %2 successfully, %3 with errors.;ENG=%1 e-mails processed, %2 successfully, %3 with errors.';
+      ItemNum@1000000010 : Integer;
+      TheItemType@1000000016 : 'Contact,Meeting,E-Mail,Todo';
+      eCouldNotGetItem@1000000017 : TextConst 'ENU=There was a problem getting the message at position %1 in the Inbox for Mailbox %2;ENG=There was a problem getting the message at position %1 in the Inbox for Mailbox %2';
+      node@1000000018 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNode";
+      node2@1000000038 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNode";
+      tmpDate@1000000019 : Date;
+      tmpTime@1000000020 : Time;
+      LineNo@1000000021 : Integer;
+      StartPos@1000000024 : Integer;
+      MaxLinePartLen@1000000022 : Integer;
+      MaxLineLen@1000000023 : Integer;
+      LineText@1000000025 : Text;
+      RemainingText@1000000026 : Text;
+      nodeList@1000000027 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNodeList";
+      AttachmentNo@1000000028 : Integer;
+      TempBLOB@1000000032 : TEMPORARY Record 99008535;
+      AttachmentName@1000000029 : Text[1024];
+      Base64Text@1000000011 : BigText;
+      IsInline@1000000033 : Boolean;
+      RecipientAdd@1000000036 : Text;
+      RecipientNodeList@1000000035 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNodeList";
+      RecipientNode@1000000034 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNode";
+      RecipientCount@1000000031 : Integer;
+      i@1000000030 : Integer;
+      eNoRecognisedRecipients@1000000039 : TextConst 'ENU=Email %1 doesn''t have any recognised recipients;ENG=Email %1 doesn''t have any recognised recipients';
+    BEGIN
+      //DOC NA2015.1 - Trying to read another Exchange item
+      //  -> pReadContent: Flag to read content
+      //  -> pReadAttachments: Flag to read attachments
+      //  <> pItemCounter: Target item counter
+      //  <> pEMailItem: TRUE = e-mail item, FALSE = something else
+      //  <> pEMailTmp: Target e-mail temporary recordset
+      //  <> pEMailLineTmp: Target e-mail line temporary recordset
+      //  <> pEMailAttachmentTmp: Target e-mail attachment temporary recordset
+      //  <- E-mail has been read / not
+
+      pEMailItem := TRUE;
+
+      IF pItemCounter >= InboxItemCount THEN EXIT(FALSE);
+
+      pItemCounter += 1;
+      ItemNum := pItemCounter;
+
+      CurrentItemID := InboxItemID[ItemNum];
+      CurrentItemChangeKey := InboxItemChangeKey[ItemNum];
+
+      IF NOT EWSMgt.EWS_GetItem_DotNet(EWSUrl,Username,Password,CurrentItemChangeKey,CurrentItemID,TheItemType::"E-Mail",CurrentItemXMLDoc) THEN
+        ERROR(eCouldNotGetItem,ItemNum,MailboxEmail);
+
+      //At this point we have the Email in XML Format
+
+      pEMailTmp.DELETEALL;
+      pEMailTmp.INIT;
+
+      pEMailTmp.ID := COPYSTR(InboxItemID[ItemNum],1,MAXSTRLEN(pEMailTmp.ID));
+
+      RecipientNodeList := CurrentItemXMLDoc.selectNodes('//t:Message/t:ToRecipients/t:Mailbox/t:EmailAddress');
+      RecipientCount := RecipientNodeList.length;
+      IF RecipientCount = 0 THEN BEGIN
+        pIgnore := TRUE;
+        EXIT(TRUE);
+      END;
+
+      i := 0;
+      pIgnore := TRUE;
+      REPEAT
+        RecipientNode := RecipientNodeList.item(i);
+        RecipientAdd := RecipientNode.text;
+        IF DELCHR(LOWERCASE(ContactEmail), '<>', ' ') = DELCHR(LOWERCASE(RecipientAdd), '<>', ' ') THEN //DOC AP NA2015.7
+          pIgnore := FALSE;
+        i += 1;
+        RecipientAdd := RecipientNode.text;
+      UNTIL ( i >= RecipientCount );
+      IF pIgnore THEN
+      BEGIN
+        AutoNavLogEntry.Log(tAutoNavLogCode, AutoNavLogEntry.Type::Warning, STRSUBSTNO(eNoRecognisedRecipients, pEMailTmp.ID), USERID());
+        EXIT(TRUE);
+      END;
+
+      node := CurrentItemXMLDoc.selectSingleNode('//t:Message/t:Subject');
+      IF NOT ISNULL(node) THEN pEMailTmp.Subject := COPYSTR(node.text,1,MAXSTRLEN(pEMailTmp.Subject));
+
+      node := CurrentItemXMLDoc.selectSingleNode('//t:Message/t:Sender/t:Mailbox/t:EmailAddress');
+      IF NOT ISNULL(node) THEN pEMailTmp."Sender E-Mail" := COPYSTR(node.text,1,MAXSTRLEN(pEMailTmp."Sender E-Mail"));
+
+      node := CurrentItemXMLDoc.selectSingleNode('//t:Message/t:Sender/t:Mailbox/t:Name');
+      IF NOT ISNULL(node) THEN pEMailTmp."Sender Name" := COPYSTR(node.text,1,MAXSTRLEN(pEMailTmp."Sender Name"));
+
+      node := CurrentItemXMLDoc.selectSingleNode('//t:Message/t:DateTimeCreated');
+      IF NOT ISNULL(node) THEN BEGIN
+        EWSMgt.Util_XMLDateToDateAndTime(node.text,tmpDate,tmpTime);
+        pEMailTmp."Creation Date Time" := CREATEDATETIME(tmpDate,tmpTime);
+      END;
+
+      node := CurrentItemXMLDoc.selectSingleNode('//t:Message/t:DateTimeReceived');
+      IF NOT ISNULL(node) THEN BEGIN
+        EWSMgt.Util_XMLDateToDateAndTime(node.text,tmpDate,tmpTime);
+        pEMailTmp."Received Date TIme" := CREATEDATETIME(tmpDate,tmpTime);
+      END;
+
+      node := CurrentItemXMLDoc.selectSingleNode('//t:Message/t:DateTimeSent');
+      IF NOT ISNULL(node) THEN BEGIN
+        EWSMgt.Util_XMLDateToDateAndTime(node.text,tmpDate,tmpTime);
+        pEMailTmp."Sent Date Time" := CREATEDATETIME(tmpDate,tmpTime);
+      END;
+
+      pEMailTmp.INSERT(TRUE);
+
+      IF pReadContent THEN BEGIN
+        //Save Content to BLOB
+        IF SaveItemContentToTempBLOB(TempBLOB) <> '' THEN BEGIN
+          pEMailTmp.Body := TempBLOB.Blob;
+          pEMailTmp.MODIFY(TRUE);
+          TempBLOB.DELETE;
+        END;
+
+        //Read Email Lines
+        pEMailLineTmp.DELETEALL;
+        node := CurrentItemXMLDoc.selectSingleNode('//t:Message/t:Body');
+        IF NOT ISNULL(node) THEN BEGIN
+          LineNo := 0;
+          MaxLinePartLen := MAXSTRLEN(pEMailLineTmp."Line (Part 1)");
+          MaxLineLen := MAXSTRLEN(LineText);
+
+          RemainingText := node.xml;
+          REPEAT
+            LineNo += 1;
+            IF STRPOS(RemainingText,CRLF) <> 0 THEN BEGIN
+              LineText := COPYSTR(RemainingText,1,STRPOS(RemainingText,CRLF)-1);
+              RemainingText := COPYSTR(RemainingText,STRPOS(RemainingText,CRLF)+1,STRLEN(RemainingText)-STRPOS(RemainingText,CRLF)+1);
+            END ELSE
+              LineText := RemainingText;
+
+            IF LineNo = 1 THEN BEGIN
+              LineText := COPYSTR(LineText,STRPOS(LineText,'>')+1,STRLEN(LineText)-STRPOS(LineText,'>'));
+              //DOC AP 02/09/2014
+              LineText := TNPUtils.RemoveEmailHTMLTags(LineText);
+              //DOC AP 02/09/2014
+            END;
+
+            pEMailLineTmp.INIT();
+            pEMailLineTmp.VALIDATE("E-Mail Entry No.", pEMailTmp."Entry No.");
+            pEMailLineTmp.VALIDATE("Line No.", LineNo);
+            pEMailLineTmp.VALIDATE("Line Type", pEMailLineTmp."Line Type"::Body);
+            pEMailLineTmp.VALIDATE("Line (Part 1)", COPYSTR(LineText, 1, 250));
+            pEMailLineTmp.VALIDATE("Line (Part 2)", COPYSTR(LineText, 251, 250));
+            pEMailLineTmp.VALIDATE("Line (Part 3)", COPYSTR(LineText, 501, 250));
+            pEMailLineTmp.VALIDATE("Line (Part 4)", COPYSTR(LineText, 751, 250));
+            pEMailLineTmp.VALIDATE("Line (Part 5)", COPYSTR(LineText, 1001, 24));
+            pEMailLineTmp.VALIDATE("End of Line", TRUE);
+            pEMailLineTmp.INSERT(TRUE);
+
+          UNTIL (STRPOS(RemainingText,CRLF) = 0);
+        END;
+      END;
+
+      IF pReadAttachments THEN BEGIN
+
+        nodeList := CurrentItemXMLDoc.selectNodes('//t:FileAttachment');
+        AttachmentNo := 0;
+        pEMailAttachmentTmp.DELETEALL;
+
+        IF nodeList.length > 0 THEN BEGIN
+          REPEAT
+            node := nodeList.item(AttachmentNo);
+            IF NOT ISNULL(node) THEN BEGIN
+              node2 := node.selectSingleNode('./t:AttachmentId/@Id');
+              IF NOT ISNULL(node2) THEN BEGIN
+                CLEAR(TempBLOB);
+                IF EWSMgt.EWS_GetAttachment_DotNet(EWSUrl,Username,Password,node2.text,AttachmentName,TempBLOB) THEN BEGIN
+                  TempBLOB.CALCFIELDS(Blob);
+                  IF TempBLOB.Blob.HASVALUE THEN BEGIN
+                    pEMailAttachmentTmp.INIT;
+                    pEMailAttachmentTmp."E-Mail Entry No." := pEMailTmp."Entry No.";
+                    pEMailAttachmentTmp."Line No." := AttachmentNo;
+                    pEMailAttachmentTmp."Display Name" := AttachmentName;
+                    pEMailAttachmentTmp."File Name" := AttachmentName;
+                    pEMailAttachmentTmp."Content BLOB" := TempBLOB.Blob;
+                    pEMailAttachmentTmp.INSERT(TRUE);
+                    TempBLOB.DELETEALL;
+                  END;
+                END;
+              END;
+            END;
+            AttachmentNo += 1;
+          UNTIL AttachmentNo >= nodeList.length;
+        END;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE MoveItem@1000000003(pSuccess@1000000000 : Boolean) Moved : Boolean;
+    VAR
+      DestFolderID@1000000001 : Text[1024];
+      DestFolderName@1000000002 : Text[250];
+      eNoDestFolder@1000000003 : TextConst 'ENU=Could not move Item as could not find the Folder %1;ENG=Could not move Item as could not find the Folder %1';
+    BEGIN
+      //DOC NA2015.1 - Moving item to archive / error folder
+      //  -> pSuccess: TRUE = move to archive folder, FALSE = move to error folder
+
+      IF CurrentItemID = '' THEN EXIT(FALSE);
+      IF pSuccess THEN DestFolderName := ArchiveFolder ELSE DestFolderName := ErrorFolder;
+
+      GetFolderId(DestFolderID,DestFolderName);
+
+      IF DestFolderID = '' THEN ERROR(eNoDestFolder,DestFolderName);
+
+      EXIT(EWSMgt.EWS_MoveItem_DotNet(EWSUrl,Username,Password,CurrentItemID,CurrentItemChangeKey,DestFolderID));
+    END;
+
+    PROCEDURE SaveItem@1000000005(pPath@1000000000 : Text[1024]);
+    VAR
+      TempBLOB@1000000001 : TEMPORARY Record 99008535;
+      FileName@1000000002 : Text[250];
+    BEGIN
+      //DOC NA2015.1 - Saving item
+      //  -> pPath: Path to save the item to
+
+      FileName := SaveItemContentToTempBLOB(TempBLOB);
+      IF FileName <> '' THEN BEGIN
+        IF pPath[STRLEN(pPath)] = '\' THEN pPath += FileName;
+        TempBLOB.CALCFIELDS(Blob);
+        TempBLOB.Blob.EXPORT(pPath);
+        TempBLOB.DELETE;
+      END;
+    END;
+
+    PROCEDURE SaveItemAttachments@1000000004(pDirectory@1000000000 : Text[1024]) Success : Boolean;
+    VAR
+      eCouldNotGetItem@1000000001 : TextConst 'ENU=There was a problem getting the Item ID %1 from Mailbox %2;ENG=There was a problem getting the Item ID %1 from Mailbox %2';
+      node@1000000004 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNode";
+      node2@1000000007 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNode";
+      nodeList@1000000003 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNodeList";
+      TempBLOB@1000000002 : TEMPORARY Record 99008535;
+      AttachmentNo@1000000006 : Integer;
+      AttachmentName@1000000008 : Text[1024];
+      IsInline@1000000005 : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Saving item attachments to
+      //  -> pDirectory: Directory to save them to
+
+      IF ISNULL(CurrentItemXMLDoc) THEN BEGIN
+        IF (CurrentItemID = '') OR (CurrentItemChangeKey = '') THEN EXIT(FALSE);
+        IF NOT EWSMgt.EWS_GetItem_DotNet(EWSUrl,Username,Password,CurrentItemChangeKey,CurrentItemID,TheItemType::"E-Mail",CurrentItemXMLDoc) THEN
+          ERROR(eCouldNotGetItem,CurrentItemID,MailboxEmail);
+      END;
+
+      nodeList := CurrentItemXMLDoc.selectNodes('//t:FileAttachment');
+      AttachmentNo := 0;
+
+      IF nodeList.length > 0 THEN BEGIN
+        REPEAT
+          node := nodeList.item(AttachmentNo);
+          IF NOT ISNULL(node) THEN BEGIN
+            node2 := node.selectSingleNode('./t:AttachmentId/@Id');
+            IF NOT ISNULL(node2) THEN BEGIN
+              CLEAR(TempBLOB);
+              IF EWSMgt.EWS_GetAttachment_DotNet(EWSUrl,Username,Password,node2.text,AttachmentName,TempBLOB) THEN BEGIN
+                TempBLOB.CALCFIELDS(Blob);
+                IF TempBLOB.Blob.HASVALUE THEN BEGIN
+                  TempBLOB.Blob.EXPORT(pDirectory + '\' + AttachmentName);
+                  TempBLOB.DELETEALL;
+                END;
+              END;
+            END;
+          END;
+          AttachmentNo += 1;
+        UNTIL AttachmentNo >= nodeList.length;
+      END;
+    END;
+
+    PROCEDURE GetFolderId@1000000009(VAR pFolderId@1000000006 : Text[92];VAR pFolderName@1000000005 : Text[250]) : Boolean;
+    VAR
+      lResult@1000000000 : Boolean;
+      xmldoc@1000000001 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.DOMDocument";
+      ChangeKey@1000000003 : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Returning folder ID (and name)
+      //  <> pFolderId: Target folder ID
+      //  <> pFolderName: Target folder name
+      //  <- Result
+
+      EWSMgt.EWS_GetFolderID_DotNet(EWSUrl,Username,Password,MailboxEmail,pFolderName,pFolderId,ChangeKey);
+      CheckExchangeFolderId(pFolderId, pFolderName);
+    END;
+
+    PROCEDURE GetEMailFromBlob@1000000006(pTempBlob@1000000000 : Record 99008535;pReadContent@1000000008 : Boolean;pReadAttachments@1000000007 : Boolean;VAR pEMailTmp@1000000006 : Record 9062281;VAR pEMailLineTmp@1000000005 : Record 9062282;VAR pEMailAttachmentTmp@1000000004 : Record 9062283);
+    BEGIN
+      //DOC NA2015.1 - Getting e-mail from BLOB
+      //  -> pTempBlob: The BLOB
+      //  -> pReadContent: Flag to read content
+      //  -> pReadAttachments: Flag to read attachments
+      //  <> pEMailTmp: Target e-mail temporary recordset
+      //  <> pEMailLineTmp: Target e-mail line temporary recordset
+      //  <> pEMailAttachmentTmp: Target e-mail attachment temporary recordset
+
+      NotImplementedYet();
+    END;
+
+    LOCAL PROCEDURE NotImplementedYet@1000000002();
+    VAR
+      xNotImplementedYet@1000000000 : TextConst 'ENU=Exchange engine hasn''t been implemented yet.;ENG=Exchange engine hasn''t been implemented yet.';
+    BEGIN
+      //DOC NA2015.1 - Showing message about engine not being implemented yet
+
+      ERROR(xNotImplementedYet);
+    END;
+
+    PROCEDURE "---Local Functions---"@1000000011();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE SaveItemContentToTempBLOB@1000000008(VAR TempBLOB@1000000005 : TEMPORARY Record 99008535) FileName : Text[250];
+    VAR
+      node@1000000003 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNode";
+      nodeList@1000000002 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNodeList";
+      Base64Text@1000000000 : BigText;
+      eCouldNotGetItem@1000000004 : TextConst 'ENU=There was a problem getting the Item ID %1 from Mailbox %2;ENG=There was a problem getting the Item ID %1 from Mailbox %2';
+    BEGIN
+      IF ISNULL(CurrentItemXMLDoc) THEN BEGIN
+        IF (CurrentItemID = '') OR (CurrentItemChangeKey = '') THEN EXIT('');
+        IF NOT EWSMgt.EWS_GetItem_DotNet(EWSUrl,Username,Password,CurrentItemChangeKey,CurrentItemID,TheItemType::"E-Mail",CurrentItemXMLDoc) THEN
+          ERROR(eCouldNotGetItem,CurrentItemID,MailboxEmail);
+      END;
+
+      node := CurrentItemXMLDoc.selectSingleNode('//t:Message/t:MimeContent');
+      IF NOT ISNULL(node) THEN BEGIN
+        Base64Text.ADDTEXT(node.text);
+        EWSMgt.XML_SaveBase64ToTempBLOB(Base64Text,TempBLOB);
+        node := CurrentItemXMLDoc.selectSingleNode('//t:Message/t:Subject');
+        IF NOT ISNULL(node) THEN
+          IF STRLEN(node.text) > 0 THEN BEGIN
+            FileName := (COPYSTR(node.text,1,MAXSTRLEN(FileName)-4) + '.eml');
+            TNPUtils.MakeValidFilename(FileName);
+            EXIT(FileName);
+          END;
+        node := CurrentItemXMLDoc.selectSingleNode('//t:Message/t:ItemId/@Id');
+        EXIT('Untitled.eml');
+      END;
+    END;
+
+    LOCAL PROCEDURE GetInboxContents@1000000012() NumMessages : Integer;
+    VAR
+      xmldoc@1000000000 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.DOMDocument";
+      nodeList@1000000002 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNodeList";
+      node@1000000004 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNode";
+      node2@1000000007 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNode";
+      attributes@1000000001 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNamedNodeMap";
+      attribute@1000000003 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMAttribute";
+      eCouldNotReadInbox@1000000005 : TextConst 'ENU=There was a problem getting the list of messages from the Inbox for Mailbox %1;ENG=There was a problem getting the list of messages from the Inbox for Mailbox %1';
+      i@1000000006 : Integer;
+      eItemID@1000000008 : TextConst 'ENU=There was a problem getting the Item ID for the message at position %1 in the Inbox of Mailbox %2;ENG=There was a problem getting the Item ID for the message at position %1 in the Inbox of Mailbox %2';
+      eChangeKey@1000000009 : TextConst 'ENU=There was a problem getting the ChangeKey for the message at position %1 in the Inbox of Mailbox %2;ENG=There was a problem getting the ChangeKey for the message at position %1 in the Inbox of Mailbox %2';
+    BEGIN
+      IF NOT EWSMgt.EWS_FindItem_DotNet(EWSUrl,Username,Password,InboxFolderID,InboxChangeKey,xmldoc) THEN
+        ERROR(eCouldNotReadInbox,MailboxEmail);
+
+      nodeList := xmldoc.selectNodes('//t:Message');
+      IF ISNULL(nodeList) THEN EXIT(0);
+
+      InboxItemCount := nodeList.length;
+      IF InboxItemCount = 0 THEN EXIT(0);
+
+      CLEAR(InboxItemID);
+      CLEAR(InboxItemChangeKey);
+
+      i := 0;
+      REPEAT
+        node := nodeList.item(i);
+        i += 1;
+        node2 := node.selectSingleNode('./t:ItemId/@Id');
+        IF ISNULL(node2) THEN ERROR(eItemID,i,MailboxEmail);
+        InboxItemID[i] := node2.text;
+
+        node2 := node.selectSingleNode('./t:ItemId/@ChangeKey');
+        IF ISNULL(node2) THEN ERROR(eChangeKey,i,MailboxEmail);
+        InboxItemChangeKey[i] := node2.text;
+
+      UNTIL i >= InboxItemCount;
+    END;
+
+    LOCAL PROCEDURE InitCRLF@1000000015();
+    BEGIN
+      CRLF := ' ';
+      CRLF[1] := 13;
+    END;
+
+    LOCAL PROCEDURE "--- TH.F ---"@1000000016();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CheckExchangeFolderId@1000000017(pFolderId@1000000000 : Text;pFolderName@1000000001 : Text);
+    VAR
+      eUnknownFolder@1000000002 : TextConst 'ENU=Unknown e-mail folder: "%1";ENG=Unknown e-mail folder: "%1"';
+    BEGIN
+      //DOC NA2016.12 - Checking Exchange folder ID
+      //  -> pFolderId: Folder ID
+      //  -> pFolderName: Folder name
+
+      IF (pFolderId = '') THEN
+      BEGIN
+        COMMIT;
+        ERROR(eUnknownFolder, pFolderName);
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  PC 24/09/2012 - Created
+      //DOC NA2015.3  AP 02/09/2014 - removed HTML tags from email lines
+      //DOC NA2015.4  PC 24/10/2014 - NAV on Demand modifications
+      //DOC NA2015.7  AP 14/05/2015 - Changed code which checks whether email is for nOra to use ContactEmail not MailboxEmail
+      //DOC NA2016.10 JH 27/08/2015 - Upgraded to 2016
+      //DOC NA2016.11 AP 05/11/2015 - Change the MailboxEmail to use the nAblementSetup."Reply From Email Address" instead of Exchange Username
+      //DOC NA2016.11 JH 06/11/2015 - Checking if inbox folder can be found
+      //DOC NA2016.12 JH 14/12/2015 - Bugfixing
+    }
+    END.
+  }
+}
+

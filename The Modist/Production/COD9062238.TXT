@@ -1,0 +1,513 @@
+OBJECT Codeunit 9062238 Table Filter Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=28/01/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.12;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TableFilterField@1000000004 : Record 9062429;
+      NameValueToolkit@1000000005 : Codeunit 9062587;
+      SmartFilterManagement@1000000006 : Codeunit 9062231;
+      String@1000000000 : Codeunit 9062236;
+      TnpUtils@1000000003 : Codeunit 9062229;
+      TnpToolkit@1000000002 : Codeunit 9062230;
+
+    PROCEDURE "--- General ---"@1000000005();
+    BEGIN
+    END;
+
+    PROCEDURE DeleteTableFilter@1000000007(pParentTableId@1000000002 : Integer;pParentPosition@1000000001 : Text[250]);
+    VAR
+      lTableFilterField@1000000000 : Record 9062429;
+    BEGIN
+      //DOC NA2015.1 - Deleting table filter
+      //  -> pParentTableId: Parent table ID
+      //  -> pParentPosition: Parent position
+
+      lTableFilterField.RESET();
+      lTableFilterField.SETRANGE("Parent Table ID", pParentTableId);
+      lTableFilterField.SETRANGE("Parent Position", pParentPosition);
+      lTableFilterField.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE DeleteTableFilterForField@1000000001(pParentTableId@1000000002 : Integer;pParentPosition@1000000001 : Text[250];pParentFieldId@1000000003 : Integer);
+    VAR
+      lTableFilterField@1000000000 : Record 9062429;
+    BEGIN
+      //DOC NA2015.1 - Deleting table filter for the field
+      //  -> pParentTableId: Parent table ID
+      //  -> pParentPosition: Parent position
+      //  -> pParentFieldId: Parent field ID
+
+      lTableFilterField.RESET();
+      lTableFilterField.SETRANGE("Parent Table ID", pParentTableId);
+      lTableFilterField.SETRANGE("Parent Position", pParentPosition);
+      lTableFilterField.SETRANGE("Parent Field ID", pParentFieldId);
+      lTableFilterField.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE UpdateTableFilter@1000000004(pTableFilterField@1000000000 : Record 9062429;pDeleting@1000000001 : Boolean);
+    VAR
+      lRecordRef@1000000003 : RecordRef;
+      lFieldRef@1000000004 : FieldRef;
+      lTableFilterText@1000000002 : Text[250];
+    BEGIN
+      //DOC NA2015.1 - Updating table filter
+      //  -> pTableFilterField: The field
+      //  -> pDeleting: Deleting flag
+
+      IF ((pTableFilterField."Parent Table ID" = 0) OR (pTableFilterField."Parent Position" = '') OR (pTableFilterField."Parent Field ID" = 0)) THEN
+        EXIT;
+
+      CreateTableFilterTextForField(pTableFilterField, pDeleting, lTableFilterText);
+
+      lRecordRef.OPEN(pTableFilterField."Parent Table ID");
+      lRecordRef.SETPOSITION(pTableFilterField."Parent Position");
+      lRecordRef.SETRECFILTER();
+      IF (lRecordRef.FINDFIRST()) THEN
+        IF (lRecordRef.FIELDEXIST(pTableFilterField."Parent Field ID")) THEN
+        BEGIN
+          lFieldRef := lRecordRef.FIELD(pTableFilterField."Parent Field ID");
+          lFieldRef.VALUE := lTableFilterText;
+          lRecordRef.MODIFY();
+        END;
+      lRecordRef.CLOSE();
+    END;
+
+    PROCEDURE CreateTableFilterText@1000000002(pParentTableId@1000000001 : Integer;pParentPosition@1000000002 : Text[250];pParentFieldId@1000000003 : Integer;VAR pTableFilterText@1000000000 : Text[250]);
+    VAR
+      lTableFilterField@1000000004 : Record 9062429;
+    BEGIN
+      //DOC NA2015.1 - Creating table filter text for given parent table, position and field
+      //  -> pParentTableId: Parent table ID
+      //  -> pParentPosition: Parent position
+      //  -> pParentFieldId: Parent field ID
+      //  <> pTableFilterText: Text to update
+
+      lTableFilterField."Parent Table ID" := pParentTableId;
+      lTableFilterField."Parent Position" := pParentPosition;
+      lTableFilterField."Parent Field ID" := pParentFieldId;
+
+      CreateTableFilterTextForField(lTableFilterField, FALSE, pTableFilterText);
+    END;
+
+    PROCEDURE CreateTableFilterTextForField@1000000003(pTableFilterField@1000000001 : Record 9062429;pDeleting@1000000003 : Boolean;VAR pTableFilterText@1000000000 : Text[250]);
+    VAR
+      lTableFilterField@1000000002 : Record 9062429;
+      eFilter@1000000006 : TextConst 'ENU=WHERE(%1);ENG=WHERE(%1)';
+      eAnd@1000000005 : TextConst 'ENU=,;ENG=,';
+      tFieldFilter@1000000004 : TextConst 'ENU="%1=FILTER(%2)";ENG="%1=FILTER(%2)"';
+    BEGIN
+      //DOC NA2015.1 - Creating table filter text for given table filter field
+      //  -> pTableFilterField: The field
+      //  -> pDeleting: Deleting flag
+      //  <> pTableFilterText: Text to update
+
+      IF ((pTableFilterField."Parent Table ID" = 0) OR (pTableFilterField."Parent Position" = '') OR (pTableFilterField."Parent Field ID" = 0)) THEN
+        EXIT;
+
+      pTableFilterText := '';
+
+      TableFilterField.RESET();
+      TableFilterField.SETRANGE("Parent Table ID", pTableFilterField."Parent Table ID");
+      TableFilterField.SETRANGE("Parent Position", pTableFilterField."Parent Position");
+      TableFilterField.SETRANGE("Parent Field ID", pTableFilterField."Parent Field ID");
+      IF (TableFilterField.FINDSET()) THEN
+      REPEAT
+        IF (TableFilterField.ID = pTableFilterField.ID) THEN
+        BEGIN
+          IF ( NOT (pDeleting)) THEN
+            lTableFilterField := pTableFilterField
+          ELSE
+            CLEAR(lTableFilterField);
+        END
+        ELSE
+          lTableFilterField := TableFilterField;
+        IF (lTableFilterField.ID <> 0) THEN
+          IF ((lTableFilterField."Table ID" <> 0) AND (lTableFilterField."Field ID" <> 0) AND (lTableFilterField.Filter <> '')) THEN
+          BEGIN
+            lTableFilterField.CALCFIELDS("Field Name");
+            IF (pTableFilterText <> '') THEN
+              pTableFilterText := pTableFilterText + eAnd;
+            pTableFilterText := pTableFilterText + STRSUBSTNO(tFieldFilter, lTableFilterField."Field Name", lTableFilterField.Filter);
+          END;
+      UNTIL (TableFilterField.NEXT() = 0);
+
+      IF (pTableFilterText <> '') THEN
+        pTableFilterText := STRSUBSTNO(eFilter, pTableFilterText);
+    END;
+
+    PROCEDURE EditTableFilter@1000000000(pParentTableId@1000000003 : Integer;pParentPosition@1000000002 : Text[250];pParentFieldId@1000000001 : Integer;pTableId@1000000004 : Integer;VAR pTableFilterText@1000000000 : Text[250]) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Editing table filter
+      //  -> pParentTableId: Parent table ID
+      //  -> pParentPosition: Parent position
+      //  -> pParentFieldId: Parent field ID
+      //  -> pTableId: Table ID
+      //  <> pTableFilterText: Text to update
+      //  <- OK: filter confirmed, FALSE: cancelled
+
+      EXIT(EditTableFilterA(pParentTableId, pParentPosition, pParentFieldId, pTableId, 0, pTableFilterText));
+    END;
+
+    PROCEDURE EditTableFilterA@1000000012(pParentTableId@1000000003 : Integer;pParentPosition@1000000002 : Text[250];pParentFieldId@1000000001 : Integer;pTableId@1000000004 : Integer;pRecTableId@1000000008 : Integer;VAR pTableFilterText@1000000000 : Text[250]) : Boolean;
+    VAR
+      lTableFilterField@1000000005 : Record 9062429;
+      lTableFilterText@1000000006 : Text[250];
+      lResult@1000000007 : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Editing table filter (advanced version)
+      //  -> pParentTableId: Parent table ID
+      //  -> pParentPosition: Parent position
+      //  -> pParentFieldId: Parent field ID
+      //  -> pTableId: Table ID
+      //  -> pRecTableId: Rec. table ID
+      //  <> pTableFilterText: Text to update
+      //  <- OK: filter confirmed, FALSE: cancelled
+
+      IF ((pParentTableId = 0) OR (pParentPosition = '') OR (pParentFieldId = 0)) THEN
+        EXIT;
+
+      lTableFilterText := pTableFilterText;
+
+      lTableFilterField.RESET();
+      lTableFilterField.SETCURRENTKEY("Parent Table ID", "Parent Position", "Parent Field ID", Sequence);
+      lTableFilterField.FILTERGROUP(2);
+      lTableFilterField.SETRANGE("Parent Table ID", pParentTableId);
+      lTableFilterField.SETRANGE("Parent Position", pParentPosition);
+      lTableFilterField.SETRANGE("Parent Field ID", pParentFieldId);
+      lTableFilterField.SETRANGE("Table ID", pTableId);
+      lTableFilterField.SETRANGE("Rec. Table ID", pRecTableId);
+      lTableFilterField.FILTERGROUP(0);
+      IF (PAGE.RUNMODAL(0, lTableFilterField) = ACTION::LookupOK) THEN
+        lResult := TRUE
+      ELSE
+        pTableFilterText := lTableFilterText;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE "--- Copying and Moving ---"@1000000023();
+    BEGIN
+    END;
+
+    PROCEDURE CopyTableFilterFields@1000000024(pFromParentTableId@1000000001 : Integer;pFromParentPosition@1000000000 : Text[250];pToParentTableId@1000000003 : Integer;pToParentPosition@1000000002 : Text[250];pOverwrite@1000000004 : Boolean);
+    BEGIN
+      //DOC NA2015.1 - Copying table filter fields
+      //  -> pFromParentTableId: Source parent table ID
+      //  -> pFromParentPosition: Source parent position
+      //  -> pToParentTableId: Target parent table ID
+      //  -> pToParentPosition: Target parent position
+      //  -> pOverwrite: Overwrite if target exist (otherwise - error)
+
+      CopyTableFilterFieldsAdv(pFromParentTableId, pFromParentPosition, 0, pToParentTableId, pToParentPosition, 0, pOverwrite);
+    END;
+
+    PROCEDURE CopyTableFilterFieldsAdv@1000000017(pFromParentTableId@1000000001 : Integer;pFromParentPosition@1000000000 : Text[250];pFromParentFieldId@1000000004 : Integer;pToParentTableId@1000000003 : Integer;pToParentPosition@1000000002 : Text[250];pToParentFieldId@1000000005 : Integer;pOverwrite@1000000008 : Boolean);
+    VAR
+      lFromTableFilterField@1000000006 : Record 9062429;
+      lToParentFieldId@1000000007 : Integer;
+    BEGIN
+      //DOC NA2015.1 - Copying table filter fields (advanced version)
+      //  -> pFromParentTableId: Source parent table ID
+      //  -> pFromParentPosition: Source parent position
+      //  -> pFromParentFieldId: Source parent field ID
+      //  -> pToParentTableId: Target parent table ID
+      //  -> pToParentPosition: Target parent position
+      //  -> pToParentFieldId: Target parent field ID
+      //  -> pOverwrite: Overwrite if target exist (otherwise - error)
+
+      lFromTableFilterField.RESET();
+      lFromTableFilterField.SETRANGE("Parent Table ID", pFromParentTableId);
+      lFromTableFilterField.SETRANGE("Parent Position", pFromParentPosition);
+      IF (pFromParentFieldId <> 0) THEN
+        lFromTableFilterField.SETRANGE("Parent Field ID", pFromParentFieldId);
+      IF (lFromTableFilterField.FINDSET()) THEN
+      REPEAT
+        IF (pToParentFieldId <> 0) THEN
+          lToParentFieldId := pToParentFieldId
+        ELSE
+          lToParentFieldId := lFromTableFilterField."Parent Field ID";
+        CopyTableFilterField(
+          lFromTableFilterField."Parent Table ID", lFromTableFilterField."Parent Position", lFromTableFilterField."Parent Field ID", lFromTableFilterField.ID,
+          pToParentTableId, pToParentPosition, lToParentFieldId, lFromTableFilterField.ID,
+          pOverwrite);
+      UNTIL (lFromTableFilterField.NEXT() = 0);
+    END;
+
+    PROCEDURE CopyTableFilterField@1000000020(pFromParentTableId@1000000001 : Integer;pFromParentPosition@1000000000 : Text[250];pFromParentFieldId@1000000004 : Integer;pFromId@1000000009 : Integer;pToParentTableId@1000000003 : Integer;pToParentPosition@1000000002 : Text[250];pToParentFieldId@1000000005 : Integer;pToId@1000000010 : Integer;pOverwrite@1000000008 : Boolean);
+    VAR
+      lFromTableFilterField@1000000006 : Record 9062429;
+      lToTableFilterField@1000000007 : Record 9062429;
+      eCantCopyToItself@1000000011 : TextConst 'ENU=Can''t copy "%1" ''%2'' to itself.;ENG=Can''t copy "%1" ''%2'' to itself.';
+      eExistsAlready@1000000012 : TextConst 'ENU="""%1"" ''%2"" exists already, can''t overwrite it.";ENG="""%1"" ''%2"" exists already, can''t overwrite it."';
+    BEGIN
+      //DOC NA2015.1 - Copying one table filter field
+      //  -> pFromParentTableId: Source parent table ID
+      //  -> pFromParentPosition: Source parent position
+      //  -> pFromParentFieldId: Source parent field ID
+      //  -> pFromID: Source ID
+      //  -> pToParentTableId: Target parent table ID
+      //  -> pToParentPosition: Target parent position
+      //  -> pToParentFieldId: Target parent field ID
+      //  -> pToId: Target ID
+      //  -> pOverwrite: Overwrite if target exist (otherwise - error)
+
+      lFromTableFilterField.GET(pFromParentTableId, pFromParentPosition, pFromParentFieldId, pFromId);
+
+      IF ((pFromParentTableId = pToParentTableId) AND (pFromParentPosition = pToParentPosition) AND (pFromParentFieldId = pToParentFieldId) AND (pFromId = pToId)) THEN
+        ERROR(eCantCopyToItself, lFromTableFilterField.TABLECAPTION, lFromTableFilterField.GETPOSITION(TRUE));
+      IF (lToTableFilterField.GET(pToParentTableId, pToParentPosition, pToParentFieldId, pToId)) THEN
+        IF (pOverwrite) THEN
+          lToTableFilterField.DELETE(TRUE)
+        ELSE
+          ERROR(eExistsAlready, lToTableFilterField.TABLECAPTION, lToTableFilterField.GETPOSITION(TRUE));
+
+      lToTableFilterField.INIT();
+      lToTableFilterField.VALIDATE("Parent Table ID", pToParentTableId);
+      lToTableFilterField.VALIDATE("Parent Position", pToParentPosition);
+      lToTableFilterField.VALIDATE("Parent Field ID", pToParentFieldId);
+      lToTableFilterField.VALIDATE(ID, pToId);
+      lToTableFilterField.TRANSFERFIELDS(lFromTableFilterField, FALSE);
+      lToTableFilterField.INSERT(TRUE);
+    END;
+
+    PROCEDURE MoveTableFilterFields@1000000031(pFromParentTableId@1000000001 : Integer;pFromParentPosition@1000000000 : Text[250];pToParentTableId@1000000003 : Integer;pToParentPosition@1000000002 : Text[250]);
+    BEGIN
+      //DOC NA2015.1 - Moving table filter fields
+      //  -> pFromParentTableId: Source parent table ID
+      //  -> pFromParentPosition: Source parent position
+      //  -> pToParentTableId: Target parent table ID
+      //  -> pToParentPosition: Target parent position
+
+      MoveTableFilterFieldsAdv(pFromParentTableId, pFromParentPosition, 0, pToParentTableId, pToParentPosition, 0);
+    END;
+
+    PROCEDURE MoveTableFilterFieldsAdv@1000000030(pFromParentTableId@1000000001 : Integer;pFromParentPosition@1000000000 : Text[250];pFromParentFieldId@1000000004 : Integer;pToParentTableId@1000000003 : Integer;pToParentPosition@1000000002 : Text[250];pToParentFieldId@1000000005 : Integer);
+    VAR
+      lFromTableFilterField@1000000006 : Record 9062429;
+    BEGIN
+      //DOC NA2015.1 - Copying table filter fields (advanced version)
+      //  -> pFromParentTableId: Source parent table ID
+      //  -> pFromParentPosition: Source parent position
+      //  -> pFromParentFieldId: Source parent field ID
+      //  -> pToParentTableId: Target parent table ID
+      //  -> pToParentPosition: Target parent position
+      //  -> pToParentFieldId: Target parent field ID
+
+      CopyTableFilterFieldsAdv(pFromParentTableId, pFromParentPosition, pFromParentFieldId, pToParentTableId, pToParentPosition, pToParentFieldId, TRUE);
+
+      lFromTableFilterField.RESET();
+      lFromTableFilterField.SETRANGE("Parent Table ID", pFromParentTableId);
+      lFromTableFilterField.SETRANGE("Parent Position", pFromParentPosition);
+      IF (pFromParentFieldId <> 0) THEN
+        lFromTableFilterField.SETRANGE("Parent Field ID", pFromParentFieldId);
+      lFromTableFilterField.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE MoveTableFilterField@1000000029(pFromParentTableId@1000000001 : Integer;pFromParentPosition@1000000000 : Text[250];pFromParentFieldId@1000000004 : Integer;pFromId@1000000009 : Integer;pToParentTableId@1000000003 : Integer;pToParentPosition@1000000002 : Text[250];pToParentFieldId@1000000005 : Integer;pToId@1000000010 : Integer);
+    VAR
+      lFromTableFilterField@1000000006 : Record 9062429;
+      eCantCopyToItself@1000000011 : TextConst 'ENU=Can''t copy "%1" ''%2'' to itself.;ENG=Can''t copy "%1" ''%2'' to itself.';
+      eExistsAlready@1000000012 : TextConst 'ENU="""%1"" ''%2"" exists already, can''t overwrite it.";ENG="""%1"" ''%2"" exists already, can''t overwrite it."';
+    BEGIN
+      //DOC NA2015.1 - Copying one table filter field
+      //  -> pFromParentTableId: Source parent table ID
+      //  -> pFromParentPosition: Source parent position
+      //  -> pFromParentFieldId: Source parent field ID
+      //  -> pFromID: Source ID
+      //  -> pToParentTableId: Target parent table ID
+      //  -> pToParentPosition: Target parent position
+      //  -> pToParentFieldId: Target parent field ID
+      //  -> pToId: Target ID
+
+      CopyTableFilterField(pFromParentTableId, pFromParentPosition, pFromParentFieldId, pFromId, pToParentTableId, pToParentPosition, pToParentFieldId, pToId, TRUE);
+
+      lFromTableFilterField.GET(pFromParentTableId, pFromParentPosition, pFromParentFieldId, pFromId);
+      lFromTableFilterField.DELETE(TRUE);
+    END;
+
+    PROCEDURE "--- Tools ---"@1000000006();
+    BEGIN
+    END;
+
+    PROCEDURE FilterLookup@1000000008(VAR pTableFilterField@1000000000 : Record 9062429) : Boolean;
+    VAR
+      lField@1000000001 : Record 2000000041;
+      lResult@1000000006 : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Doing filter lookup if possible
+      //  <> pTableFilterField: The table filter field record
+      //  <- Lookup result
+
+      IF ((pTableFilterField."Table ID" = 0) OR (pTableFilterField."Field ID" = 0)) THEN
+        EXIT;
+      IF ( NOT (lField.GET(pTableFilterField."Table ID", pTableFilterField."Field ID"))) THEN
+        EXIT;
+
+      lResult := FALSE;
+
+      IF (FALSE) THEN
+      BEGIN
+      END
+      ELSE
+        CASE (lField.Type) OF
+          lField.Type::Option:
+            lResult := FilterLookupForOption(pTableFilterField, lField);
+          lField.Type::Boolean:
+            lResult := FilterLookupForBoolean(pTableFilterField);
+        END;
+
+      IF ( NOT (lResult)) THEN
+        lResult := FilterAssist(pTableFilterField);
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE FilterLookupForOption@1000000010(VAR pTableFilterField@1000000001 : Record 9062429;pField@1000000005 : Record 2000000041) : Boolean;
+    VAR
+      lNameValueBufferTmp@1000000002 : TEMPORARY Record 9062730;
+      lNameValueBufferSelected@1000000006 : TEMPORARY Record 9062730;
+      lTableRef@1000000004 : RecordRef;
+      lFieldRef@1000000003 : FieldRef;
+      lResult@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Doing filter lookup for option field
+      //  <> pTableFilterField: The table filter field record
+      //  -> pField: Field record
+      //  <- Lookup result
+
+      lTableRef.OPEN(pTableFilterField."Table ID");
+      lFieldRef := lTableRef.FIELD(pTableFilterField."Field ID");
+      String.SplitAdvanced(lFieldRef.OPTIONCAPTION, ',', TRUE, TRUE, lNameValueBufferTmp);
+      NameValueToolkit.SelectNameValueRecordsByName(lNameValueBufferTmp, pTableFilterField.Filter, '|', FALSE, TRUE);
+      IF (NameValueToolkit.NameValueLookupWithSelection(lNameValueBufferTmp, FALSE)) THEN
+      BEGIN
+        lNameValueBufferSelected := lNameValueBufferTmp;
+
+        pTableFilterField.Filter := '';
+        lNameValueBufferTmp.RESET();
+        lNameValueBufferTmp.SETRANGE(Selected, TRUE);
+        IF (lNameValueBufferTmp.FINDSET()) THEN
+          REPEAT
+            IF (pTableFilterField.Filter <> '') THEN
+              pTableFilterField.Filter := pTableFilterField.Filter + '|';
+            pTableFilterField.Filter := pTableFilterField.Filter + lNameValueBufferTmp.Name;
+          UNTIL (lNameValueBufferTmp.NEXT() = 0)
+        ELSE
+          pTableFilterField.Filter := lNameValueBufferSelected.Name;
+        lResult := TRUE;
+      END;
+      lTableRef.CLOSE();
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE FilterLookupForBoolean@1000000011(VAR pTableFilterField@1000000002 : Record 9062429) : Boolean;
+    VAR
+      lNameValueBufferTmp@1000000001 : TEMPORARY Record 9062730;
+      lResult@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Doing filter lookup for boolean field
+      //  <> pTableFilterField: The table filter field record
+      //  <- Lookup result
+
+      lResult := FALSE;
+
+      NameValueToolkit.AddToNameValueBuffer(lNameValueBufferTmp, 0, FORMAT(FALSE));
+      NameValueToolkit.AddToNameValueBuffer(lNameValueBufferTmp, 1, FORMAT(TRUE));
+      IF (NameValueToolkit.NameValueLookup(lNameValueBufferTmp, FALSE)) THEN
+      BEGIN
+        pTableFilterField.Filter := lNameValueBufferTmp.Name;
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE FilterAssist@1000000009(VAR pTableFilterField@1000000000 : Record 9062429) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Doing filter assist
+      //  <> pTableFilterField: The table filter field record
+      //  <- Assist result
+
+      EXIT(SmartFilterManagement.SmartFilterLookup(pTableFilterField.Filter));
+    END;
+
+    PROCEDURE RecFieldAssist@1000000013(pRecTableId@1000000000 : Integer;VAR pTableFilterField@1000000001 : Record 9062429) : Boolean;
+    VAR
+      lField@1000000004 : Record 2000000041;
+      lObjectFieldLookups@1000000002 : Codeunit 9062343;
+      lRecFieldId@1000000003 : Integer;
+      lResult@1000000005 : Boolean;
+      eRecField@1000000006 : TextConst 'ENU=Rec."%1";ENG=Rec."%1"';
+    BEGIN
+      //DOC NA2015.1 - Doing "Rec" field assist
+      //  -> pRecTableId: Rec. table ID
+      //  <> pTableFilterField: The table filter field record
+      //  <- Assist result
+
+      lResult := FALSE;
+
+      IF (pRecTableId <> 0) THEN
+        IF (lObjectFieldLookups.FieldLookup(pRecTableId, lRecFieldId)) THEN
+          IF (lField.GET(pRecTableId, lRecFieldId)) THEN
+          BEGIN
+            pTableFilterField.Filter := pTableFilterField.Filter + STRSUBSTNO(eRecField, lField.FieldName);
+            lResult := TRUE;
+          END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE RecFieldHelp@1000000015();
+    VAR
+      eMessage1@1000000000 : TextConst 'ENU=You can use "Rec" fields to build your filter depending on values of fields of the current record your smart list is shown next to.;ENG=You can use "Rec" fields to build your filter depending on values of fields of the current record your smart list is shown next to.';
+      eMessage2@1000000001 : TextConst 'ENU=For instance - "Payment Journal" form shows "Gen. Journal Line" table records and you can use its "Account No." field value (where a vendor number is stored for payment journal) to filter your smart list for only documents from this vendor.;ENG=For instance - "Payment Journal" form shows "Gen. Journal Line" table records and you can use its "Account No." field value (where a vendor number is stored for payment journal) to filter your smart list for only documents from this vendor.';
+      eMessage3@1000000002 : TextConst 'ENU=Your "Rec" field can be inserted as ''Rec."Field Name"'' or ''Rec.[Field Name]'' into your filter, but you can use a lookup for "Rec" fields making the exercise much easier.;ENG=Your "Rec" field can be inserted as ''Rec."Field Name"'' or ''Rec.[Field Name]'' into your filter, but you can use a lookup for "Rec" fields making the exercise much easier.';
+      eMessage4@1000000003 : TextConst 'ENU=Having your "Rec" field added, you can use further "Rec" field functions to modify the filter behaviour;ENG=Having your "Rec" field added, you can use further "Rec" field functions to modify the filter behaviour';
+    BEGIN
+      //DOC NA2015.1 - Showing "Rec" field help
+
+      MESSAGE(eMessage1 + '\\' + eMessage2 + '\\' + eMessage3 + '\\' + eMessage4);
+    END;
+
+    PROCEDURE RecFieldFunctionAssist@1000000014(VAR pTableFilterField@1000000000 : Record 9062429) : Boolean;
+    VAR
+      lFunction@1000000001 : Text[50];
+      lResult@1000000002 : Boolean;
+      eFunction@1000000003 : TextConst 'ENU=%1(%2);ENG=%1(%2)';
+    BEGIN
+      //DOC NA2015.1 - Doing filter assist
+      //  <> pTableFilterField: The table filter field record
+      //  <- Assist result
+
+      lResult := TnpUtils.GetRecFieldFunctionLookup(lFunction);
+
+      IF (lResult) THEN
+        pTableFilterField.Filter := STRSUBSTNO(eFunction, lFunction, pTableFilterField.Filter);
+
+      EXIT(lResult);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  JH 02/09/2013 - Created
+      //DOC NA2016.10 JH 26/08/2015 - Upgraded to 2016
+      //DOC NA2016.12 JH 28/01/2016 - Smart filters
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit used
+    }
+    END.
+  }
+}
+

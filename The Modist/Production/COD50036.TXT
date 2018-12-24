@@ -1,0 +1,761 @@
+OBJECT Codeunit 50036 3PL Order Export XML v1New
+{
+  OBJECT-PROPERTIES
+  {
+    Date=16/10/17;
+    Time=11:39:03 AM;
+    Modified=Yes;
+    Version List=OP9031,OP10933,OP11536,IN45270;
+  }
+  PROPERTIES
+  {
+    TableNo=9062734;
+    OnRun=VAR
+            AutoNAVToolkit@1000000000 : Codeunit 9062602;
+            AutoNAVTask@1000000001 : Record 9062734;
+            WebIntegrationManagement@1000000002 : Codeunit 50100;
+          BEGIN
+            ModistSetup.GET;
+            //DOC OP11536 RK 04/10/17 -
+            SalesPayment.SETCURRENTKEY("Payment Type","Sales Order No.");
+            //DOC OP11536 RK 04/10/17 +
+            //DOC OP10933 CB 15/06/17 -
+            ExportXML;
+            {
+            IF NOT ExportXML THEN
+              AutoNAVToolkit.AddEntryForTask(Rec,'The export of the XML document failed. The document could not being copied to the outbound path.',2);
+            }
+            //DOC OP10933 CB 15/06/17 +
+            COMMIT;
+            //DOC OP10933 CB 15/06/17 -
+            ExportXMLPR;
+            {
+            IF NOT ExportXMLPR THEN
+              AutoNAVToolkit.AddEntryForTask(Rec,'The export of the XML document failed. The document could not being copied to the outbound path.',2);
+            //DOC OP10933 CB 15/06/17 +
+            }
+            COMMIT;
+            IntegrationProcessingGroup.GET(ModistSetup."3PL Integration Type",ModistSetup."3PL Order Group");
+            IF IntegrationProcessingGroup."Enable SFTP Connect" THEN
+              //DOC OP10933 CB 15/06/17 -
+              //UploadtoFTP(ModistSetup."3PL Order Group");
+              {
+              IF NOT UploadtoFTP(ModistSetup."3PL Order Group") THEN
+                AutoNAVToolkit.AddEntryForTask(Rec,'The FTP upload failed. Please check the connection details and permissions on the ftp folder.',2);
+              }
+              //DOC OP10933 CB 15/06/17 +
+            IntegrationProcessingGroup.GET(ModistSetup."3PL Integration Type",ModistSetup."3PL Purchase Return Group");
+            IF IntegrationProcessingGroup."Enable SFTP Connect" THEN
+              UploadtoFTP(ModistSetup."3PL Purchase Return Group");
+              //DOC OP10933 CB 15/06/17 -
+              //UploadtoFTP(ModistSetup."3PL Purchase Return Group");
+              {
+              IF NOT UploadtoFTP(ModistSetup."3PL Purchase Return Group") THEN
+                AutoNAVToolkit.AddEntryForTask(Rec,'The FTP upload failed. Please check the connection details and permissions on the ftp folder.',2);
+              }
+              //DOC OP10933 CB 15/06/17 +
+
+            //DOC OP10933 CB 04/07/17 -
+            IF FILE.EXISTS(WebIntegrationManagement.Nav3PLOrderFileName) THEN
+              AutoNAVToolkit.AddEntryForTask(Rec,'The export of the XML document failed. The document could not being copied to the outbound path.',2);
+            //DOC OP10933 CB 04/07/17 +
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ModistSetup@1000000000 : Record 50000;
+      IntegrationProcessingGroup@1000000001 : Record 50007;
+      Country@1000000002 : Record 9;
+      SalesPayment@1000000003 : Record 50008;
+      CODPayment@1000000004 : Decimal;
+      CODText@1000000005 : Text;
+
+    LOCAL PROCEDURE ExportXML@1000000001() : Boolean;
+    VAR
+      XMLDoc@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLWriter@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlWriter";
+      Item@1000000004 : Record 27;
+      ItemXRef@1000000007 : Record 5717;
+      ShipMethod@1000000012 : Record 10;
+      WebIntegrationManagement@1000000005 : Codeunit 50100;
+      IntegrationProcessStaging@1000000014 : Record 50004;
+      Customer@1000000006 : Record 18;
+      SalesHeader@1000000011 : Record 36;
+      SalesHeaderArchive@1000000020 : Record 5107;
+      SalesLine@1000000003 : Record 37;
+      SalesLineArchive@1000000021 : Record 5108;
+      IntegrationProcessStagingToUpdate@1000000008 : Record 50004;
+      FileName@1000000009 : Text;
+      ShipCost@1000000013 : Decimal;
+      PromotionSalesLines@1000000002 : TEMPORARY Record 37;
+      TempSalesLine@1000000015 : TEMPORARY Record 37;
+      PromotionTotal@1000000010 : Decimal;
+      LineTotal@1000000016 : Decimal;
+      LinePromotion@1000000017 : Decimal;
+      ShipDiscount@1000000018 : Decimal;
+      ShipLineNo@1000000019 : Integer;
+    BEGIN
+      //iterate through unprocessed documents in new process table
+      IntegrationProcessStaging.RESET;
+      IntegrationProcessStaging.SETCURRENTKEY("Integration Type","Group Code",Processed);
+      IntegrationProcessStaging.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+      IntegrationProcessStaging.SETRANGE("Group Code",ModistSetup."3PL Order Group");
+      IntegrationProcessStaging.SETRANGE(Processed,FALSE);
+
+      IF IntegrationProcessStaging.FINDSET THEN BEGIN
+        IntegrationProcessingGroup.GET(ModistSetup."3PL Integration Type",ModistSetup."3PL Order Group");
+        CLEAR(XMLWriter);//IN45270
+        XMLWriter := XMLWriter.Create(WebIntegrationManagement.Nav3PLOrderFileName);
+        XMLWriter.WriteStartElement('SalesOrders');
+        REPEAT
+          //IN45270-
+          TempSalesLine.DELETEALL;
+          PromotionSalesLines.DELETEALL;
+          PromotionTotal := 0;
+          LinePromotion := 0;
+          LineTotal := 0;
+          ShipCost := 0;
+          ShipDiscount := 0;
+          ShipLineNo := 0;
+          CODPayment := 0;
+          //IN45270+
+          IF IntegrationProcessStaging."Status Attribute" = 'CANCELLED' THEN BEGIN
+            XMLWriter.WriteStartElement('SalesOrder');
+              IF SalesHeader.GET(SalesHeader."Document Type"::Order,IntegrationProcessStaging."Document No.") THEN BEGIN
+                IF SalesHeader."Internet Order Reference" = '' THEN
+                  XMLWriter.WriteElementString('No',IntegrationProcessStaging."Document No.")
+                ELSE
+                  XMLWriter.WriteElementString('No',SalesHeader."Internet Order Reference");
+              END ELSE
+                XMLWriter.WriteElementString('No',IntegrationProcessStaging."Document No.");
+              XMLWriter.WriteElementString('Status','CANCEL');
+      //DOC OP9031 RK 06/03/17 -
+              SalesHeaderArchive.RESET;  ///IN45270
+              SalesHeaderArchive.SETRANGE("Document Type",SalesHeaderArchive."Document Type"::Order);
+              SalesHeaderArchive.SETRANGE("No.",IntegrationProcessStaging."Document No.");
+              IF SalesHeaderArchive.FINDLAST THEN BEGIN
+                PromotionTotal := 0;
+                LinePromotion := 0;//IN45270
+                LineTotal := 0;
+                TempSalesLine.DELETEALL;
+                PromotionSalesLines.DELETEALL;
+                XMLWriter.WriteElementString('CurrencyCode',SalesHeaderArchive."Currency Code");
+                XMLWriter.WriteElementString('CustomerNo',SalesHeaderArchive."Bill-to Customer No.");
+                XMLWriter.WriteElementString('CustomerName',SalesHeaderArchive."Bill-to Name" + ' ' + SalesHeaderArchive."Bill-to Name 2");
+                XMLWriter.WriteElementString('CustomerAddress1',SalesHeaderArchive."Bill-to Address");
+                XMLWriter.WriteElementString('CustomerAddress2',SalesHeaderArchive."Bill-to Address 2");
+                XMLWriter.WriteElementString('CustomerAddress3',SalesHeaderArchive."Bill-to Address 3");
+                XMLWriter.WriteElementString('CustomerCity',SalesHeaderArchive."Bill-to City");
+                XMLWriter.WriteElementString('CustomerCounty',SalesHeaderArchive."Bill-to County");
+                XMLWriter.WriteElementString('CustomerPostCode',SalesHeaderArchive."Bill-to Post Code");
+                CLEAR(Country);
+                IF Country.GET(SalesHeaderArchive."Bill-to Country/Region Code") THEN;
+                XMLWriter.WriteElementString('CustomerCountryCode',Country.Name);
+                XMLWriter.WriteElementString('CustomerPhoneNo',SalesHeaderArchive."Bill-to Phone No.");
+                XMLWriter.WriteElementString('CustomerEMail',SalesHeaderArchive."Bill-to E-Mail");
+                XMLWriter.WriteElementString('OrderDate',FORMAT(SalesHeaderArchive."Order Date",0,9));
+                ShipCost := 0;
+                ShipDiscount := 0;
+                ShipLineNo := 0;
+                SalesLineArchive.RESET;
+                SalesLineArchive.SETRANGE("Document Type",SalesHeaderArchive."Document Type");
+                SalesLineArchive.SETRANGE("Document No.",SalesHeaderArchive."No.");
+                SalesLineArchive.SETRANGE(Type,SalesLineArchive.Type::"G/L Account");
+                SalesLineArchive.SETFILTER("No.",'<>%1','');
+                IF SalesLineArchive.FINDSET THEN
+                  REPEAT
+                    CASE SalesLineArchive."Line Type" OF
+                      SalesLineArchive."Line Type"::Shipping:
+                        BEGIN
+                          ShipMethod.SETRANGE("G/L Account No.",SalesLineArchive."No.");
+                          IF NOT ShipMethod.ISEMPTY THEN
+                            ShipCost := ShipCost + SalesLineArchive."Line Amount";
+                          ShipLineNo := SalesLineArchive."Parent Line No.";
+                        END;
+                      SalesLineArchive."Line Type"::Promotion:
+                        BEGIN
+                          PromotionSalesLines.INIT;
+                          PromotionSalesLines.TRANSFERFIELDS(SalesLineArchive);
+                          PromotionSalesLines."Document Type" := SalesLineArchive."Document Type";
+                          PromotionSalesLines."Document No." := SalesLineArchive."Document No.";
+                          IF SalesLineArchive."Parent Line No." = 0 THEN
+                            PromotionTotal := PromotionTotal + SalesLineArchive."Line Amount"
+                          ELSE IF SalesLineArchive."Parent Line No." = ShipLineNo THEN
+                            ShipDiscount := ShipDiscount + SalesLineArchive."Line Amount";
+                          PromotionSalesLines.INSERT;
+                        END;
+                    END;
+                  UNTIL SalesLineArchive.NEXT = 0;
+                PromotionSalesLines.RESET;
+                SalesLineArchive.SETRANGE(Type,SalesLineArchive.Type::Item);
+                IF SalesLineArchive.FINDSET THEN
+                  REPEAT
+                    TempSalesLine.INIT;
+                    TempSalesLine.TRANSFERFIELDS(SalesLineArchive);
+                    TempSalesLine."Document Type" := SalesLineArchive."Document Type";
+                    TempSalesLine."Document No." := SalesLineArchive."Document No.";
+                    PromotionSalesLines.SETRANGE("Parent Line No.",SalesLineArchive."Parent Line No.");
+                    IF PromotionSalesLines.FINDSET THEN
+                      REPEAT
+                        TempSalesLine."Line Amount" := TempSalesLine."Line Amount" + PromotionSalesLines."Line Amount";
+                      UNTIL PromotionSalesLines.NEXT = 0;
+                  //DOC OP11536 RK 05/09/17 -
+                    TempSalesLine."Unit Price" := ROUND(TempSalesLine."Line Amount" / TempSalesLine.Quantity,0.01);
+                  //DOC OP11536 RK 05/09/17 +
+                    TempSalesLine.INSERT;
+                    LineTotal := LineTotal + TempSalesLine."Line Amount";
+                  UNTIL SalesLineArchive.NEXT = 0;
+                TempSalesLine.RESET;
+                IF PromotionTotal <> 0 THEN BEGIN
+                  IF TempSalesLine.FINDSET THEN
+                    REPEAT
+                      IF TempSalesLine."Line Amount" <> 0 THEN BEGIN
+                        LinePromotion := ROUND((PromotionTotal * (TempSalesLine."Line Amount" / LineTotal)),0.01);
+                        TempSalesLine."Line Amount" := TempSalesLine."Line Amount" + LinePromotion;
+                        TempSalesLine."Unit Price" := ROUND(TempSalesLine."Line Amount" / TempSalesLine.Quantity,0.01);
+                        TempSalesLine.MODIFY;
+                      END;
+                    UNTIL TempSalesLine.NEXT = 0;
+                END;
+                XMLWriter.WriteElementString('ShippingCost',FORMAT(ShipCost + ShipDiscount,0,1));
+                XMLWriter.WriteElementString('ShippingMethod',SalesHeaderArchive."Shipment Method Code");
+                XMLWriter.WriteElementString('ShippingAgent',SalesHeaderArchive."Shipping Agent Code");
+                XMLWriter.WriteElementString('ShippingAgentService',SalesHeaderArchive."Shipping Agent Service Code");
+                XMLWriter.WriteElementString('ShippingName',SalesHeaderArchive."Ship-to Name" + ' ' + SalesHeaderArchive."Ship-to Name 2");
+                XMLWriter.WriteElementString('ShippingAddress',SalesHeaderArchive."Ship-to Address");
+                XMLWriter.WriteElementString('ShippingAddress2',SalesHeaderArchive."Ship-to Address 2");
+                XMLWriter.WriteElementString('ShippingAddress3',SalesHeaderArchive."Ship-to Address 3");
+                XMLWriter.WriteElementString('ShippingCity',SalesHeaderArchive."Ship-to City");
+                XMLWriter.WriteElementString('ShippingCounty',SalesHeaderArchive."Ship-to County");
+                XMLWriter.WriteElementString('ShippingPostCode',SalesHeaderArchive."Ship-to Post Code");
+                CLEAR(Country);
+                IF Country.GET(SalesHeaderArchive."Ship-to Country/Region Code") THEN;
+                XMLWriter.WriteElementString('ShippingCountryCode',Country.Name);
+                XMLWriter.WriteElementString('ShippingPhoneNo',SalesHeaderArchive."Ship-to Phone No.");
+                XMLWriter.WriteElementString('ShippingInstructions',SalesHeaderArchive."Shipping Instructions");
+                IF SalesHeaderArchive.Gift = TRUE THEN
+                  XMLWriter.WriteElementString('IsGift','True')
+                ELSE
+                  XMLWriter.WriteElementString('IsGift','False');
+                XMLWriter.WriteElementString('GiftMessage',SalesHeaderArchive."Gift Message");
+              //DOC OP11536 RK 31/08/17 -
+                XMLWriter.WriteElementString('PaymentMethod',SalesHeaderArchive."Payment Method Code");
+              //DOC OP11536 RK 31/08/17 +
+              //DOC OP11536 RK 07/09/17 -
+                XMLWriter.WriteElementString('PackageType',SalesHeaderArchive."Package Type");
+              //DOC OP11536 RK 07/09/17 +
+              //DOC OP11536 RK 04/10/17 -
+                CODPayment := 0;
+                SalesPayment.SETRANGE("Payment Type",SalesPayment."Payment Type"::COD);
+                SalesPayment.SETRANGE("Sales Order No.",SalesHeaderArchive."No.");
+                IF SalesPayment.FINDFIRST THEN BEGIN
+                  CODPayment := SalesPayment.Amount;
+                END;
+                IF CODPayment = 0 THEN
+                  CODText := ''
+                ELSE
+                  CODText := FORMAT(CODPayment,0,'<Integer><Decimals,3>');
+                XMLWriter.WriteElementString('PendingCODAmount',CODText);
+              //DOC OP11536 RK 04/10/17 +
+                TempSalesLine.RESET;
+                IF TempSalesLine.FINDSET THEN BEGIN
+                  XMLWriter.WriteStartElement('SalesOrderLines');
+                  REPEAT
+                    XMLWriter.WriteStartElement('SalesOrderLine');
+                    XMLWriter.WriteElementString('LineNo',FORMAT(TempSalesLine."Line No."));
+                    Item.GET(TempSalesLine."No.");
+                    IF TempSalesLine."Variant Code" <> '' THEN
+                      XMLWriter.WriteElementString('SKUNumber',TempSalesLine."No." + '-' + TempSalesLine."Variant Code")
+                    ELSE
+                      XMLWriter.WriteElementString('SKUNumber',TempSalesLine."No.");
+                    XMLWriter.WriteElementString('Description',TempSalesLine.Description);
+                    XMLWriter.WriteElementString('EAN',GetEANcode(TempSalesLine."No.",TempSalesLine."Variant Code"));
+                    XMLWriter.WriteElementString('LocationCode',TempSalesLine."Location Code");
+                    XMLWriter.WriteElementString('BinCode',TempSalesLine."Bin Code");
+                    XMLWriter.WriteElementString('Quantity',FORMAT(TempSalesLine.Quantity));
+                    XMLWriter.WriteElementString('GrossPrice',FORMAT(TempSalesLine."Unit Price",0,'<Integer><Decimals,3>'));
+                    XMLWriter.WriteElementString('Amount',FORMAT(TempSalesLine."Line Amount",0,'<Integer><Decimals,3>'));
+                    XMLWriter.WriteElementString('HSCode',Item."Tariff No.");
+                    XMLWriter.WriteElementString('DutyAmount',FORMAT(TempSalesLine."Total Duty Amount",0,'<Integer><Decimals,3>'));
+                  //DOC OP11536 RK 31/08/17 -
+                    //XMLWriter.WriteElementString('ImportTaxAmount','0.00');
+                    XMLWriter.WriteElementString('ImportTaxAmount',FORMAT(TempSalesLine."Product Tax Amount",0,'<Integer><Decimals,3>'));
+                  //DOC OP11536 RK 31/08/17 +
+                    XMLWriter.WriteEndElement; //SalesOrderLine
+                  UNTIL TempSalesLine.NEXT = 0;
+                  XMLWriter.WriteEndElement; //SalesOrderLines
+                END;
+              END;
+      //DOC OP9031 RK 06/03/17 +
+            XMLWriter.WriteEndElement; // </SalesOrder>
+          END ELSE BEGIN
+            IF SalesHeader.GET(SalesHeader."Document Type"::Order,IntegrationProcessStaging."Document No.") THEN BEGIN
+              Customer.GET(SalesHeader."Sell-to Customer No.");
+            //DOC OP9031 RK 07/02/17 -
+              PromotionTotal := 0;
+              LinePromotion := 0;//IN45270
+              LineTotal := 0;
+              TempSalesLine.DELETEALL;
+              PromotionSalesLines.DELETEALL;
+            //DOC OP9031 RK 07/02/17 +
+              XMLWriter.WriteStartElement('SalesOrder');
+                //XMLWriter.WriteElementString('No',SalesHeader."No.");
+              //DOC OP9031 RK 05/04/17 -
+                //XMLWriter.WriteElementString('No',SalesHeader."Internet Order Reference");
+                IF SalesHeader."Internet Order Reference" = '' THEN
+                  XMLWriter.WriteElementString('No',IntegrationProcessStaging."Document No.")
+                ELSE
+                  XMLWriter.WriteElementString('No',SalesHeader."Internet Order Reference");
+              //DOC OP9031 RK 05/04/17 +
+                //XMLWriter.WriteElementString('Status',FORMAT(SalesHeader."GAC Order Status"));
+                XMLWriter.WriteElementString('Status','NEW');
+                XMLWriter.WriteElementString('CurrencyCode',SalesHeader."Currency Code");
+              //DOC OP9031 RK 20/02/17 -
+                //XMLWriter.WriteElementString('CustomerNo',SalesHeader."Sell-to Customer No.");
+                //XMLWriter.WriteElementString('CustomerName',SalesHeader."Sell-to Customer Name" + ' ' + SalesHeader."Sell-to Customer Name 2");
+                //XMLWriter.WriteElementString('CustomerAddress1',SalesHeader."Sell-to Address");
+                //XMLWriter.WriteElementString('CustomerAddress2',SalesHeader."Sell-to Address 2");
+                //XMLWriter.WriteElementString('CustomerCity',SalesHeader."Sell-to City");
+                //XMLWriter.WriteElementString('CustomerCounty',SalesHeader."Sell-to County");
+                //XMLWriter.WriteElementString('CustomerPostCode',SalesHeader."Sell-to Post Code");
+                //XMLWriter.WriteElementString('CustomerCountryCode',SalesHeader."Sell-to Country/Region Code");
+                XMLWriter.WriteElementString('CustomerNo',SalesHeader."Bill-to Customer No.");
+                XMLWriter.WriteElementString('CustomerName',SalesHeader."Bill-to Name" + ' ' + SalesHeader."Bill-to Name 2");
+                XMLWriter.WriteElementString('CustomerAddress1',SalesHeader."Bill-to Address");
+                XMLWriter.WriteElementString('CustomerAddress2',SalesHeader."Bill-to Address 2");
+                XMLWriter.WriteElementString('CustomerAddress3',SalesHeader."Bill-to Address 3");
+                XMLWriter.WriteElementString('CustomerCity',SalesHeader."Bill-to City");
+                XMLWriter.WriteElementString('CustomerCounty',SalesHeader."Bill-to County");
+                XMLWriter.WriteElementString('CustomerPostCode',SalesHeader."Bill-to Post Code");
+                CLEAR(Country);
+                IF Country.GET(SalesHeader."Bill-to Country/Region Code") THEN;
+                XMLWriter.WriteElementString('CustomerCountryCode',Country.Name);
+              //DOC OP9031 RK 20/02/17 +
+                XMLWriter.WriteElementString('CustomerPhoneNo',SalesHeader."Bill-to Phone No.");
+                XMLWriter.WriteElementString('CustomerEMail',Customer."E-Mail");
+                XMLWriter.WriteElementString('OrderDate',FORMAT(SalesHeader."Order Date",0,9));
+                ShipCost := 0;
+                ShipDiscount := 0;
+                ShipLineNo := 0;
+                SalesLine.RESET;
+                SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+                SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+                SalesLine.SETRANGE(Type,SalesLine.Type::"G/L Account");
+                SalesLine.SETFILTER("No.",'<>%1','');
+                IF SalesLine.FINDSET THEN
+                  REPEAT
+                //DOC OP9031 RK 07/02/17 -
+                    //ShipMethod.SETRANGE("G/L Account No.",SalesLine."No.");
+                    //IF NOT ShipMethod.ISEMPTY THEN
+                    //  ShipCost := ShipCost + SalesLine."Line Amount";
+                    CASE SalesLine."Line Type" OF
+                      SalesLine."Line Type"::Shipping:
+                        BEGIN
+                          ShipMethod.SETRANGE("G/L Account No.",SalesLine."No.");
+                          IF NOT ShipMethod.ISEMPTY THEN
+                            ShipCost := ShipCost + SalesLine."Line Amount";
+                          ShipLineNo := SalesLine."Parent Line No.";
+                        END;
+                      SalesLine."Line Type"::Promotion:
+                        BEGIN
+                          PromotionSalesLines.INIT;
+                          PromotionSalesLines := SalesLine;
+                          IF SalesLine."Parent Line No." = 0 THEN
+                            PromotionTotal := PromotionTotal + SalesLine."Line Amount"
+                          ELSE IF SalesLine."Parent Line No." = ShipLineNo THEN
+                            ShipDiscount := ShipDiscount + SalesLine."Line Amount";
+                          PromotionSalesLines.INSERT;
+                        END;
+                    END;
+                  UNTIL SalesLine.NEXT = 0;
+                  PromotionSalesLines.RESET;
+                  SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+                  IF SalesLine.FINDSET THEN
+                    REPEAT
+                      TempSalesLine.INIT;
+                      TempSalesLine := SalesLine;
+                      PromotionSalesLines.SETRANGE("Parent Line No.",SalesLine."Parent Line No.");
+                      IF PromotionSalesLines.FINDSET THEN
+                        REPEAT
+                          TempSalesLine."Line Amount" := TempSalesLine."Line Amount" + PromotionSalesLines."Line Amount";
+                        UNTIL PromotionSalesLines.NEXT = 0;
+                      //DOC OP11536 RK 05/09/17 -
+                        TempSalesLine."Unit Price" := ROUND(TempSalesLine."Line Amount" / TempSalesLine.Quantity,0.01);
+                      //DOC OP11536 RK 05/09/17 +
+                      TempSalesLine.INSERT;
+                      LineTotal := LineTotal + TempSalesLine."Line Amount";
+                    UNTIL SalesLine.NEXT = 0;
+                    TempSalesLine.RESET;
+                    IF PromotionTotal <> 0 THEN BEGIN
+                      IF TempSalesLine.FINDSET THEN
+                        REPEAT
+                          IF TempSalesLine."Line Amount" <> 0 THEN BEGIN
+                            LinePromotion := ROUND((PromotionTotal * (TempSalesLine."Line Amount" / LineTotal)),0.01);
+                            TempSalesLine."Line Amount" := TempSalesLine."Line Amount" + LinePromotion;
+                            TempSalesLine."Unit Price" := ROUND(TempSalesLine."Line Amount" / TempSalesLine.Quantity,0.01);
+                            TempSalesLine.MODIFY;
+                          END;
+                        UNTIL TempSalesLine.NEXT = 0;
+                    END;
+                //DOC OP9031 RK 07/02/17 +
+                XMLWriter.WriteElementString('ShippingCost',FORMAT(ShipCost + ShipDiscount,0,1));
+                XMLWriter.WriteElementString('ShippingMethod',SalesHeader."Shipment Method Code");
+                XMLWriter.WriteElementString('ShippingAgent',SalesHeader."Shipping Agent Code");
+                XMLWriter.WriteElementString('ShippingAgentService',SalesHeader."Shipping Agent Service Code");
+              //DOC OP9031 RK 31/01/17 -
+                XMLWriter.WriteElementString('ShippingName',SalesHeader."Ship-to Name" + ' ' + SalesHeader."Ship-to Name 2");
+              //DOC OP9031 RK 31/01/17 +
+              //DOC OP9031 RK 01/02/17 -
+                //XMLWriter.WriteElementString('ShippingAddress',SalesHeader."Ship-to Address" + ' ' + SalesHeader."Ship-to Address 2" + ' ' + SalesHeader."Ship-to Address 3");
+                XMLWriter.WriteElementString('ShippingAddress',SalesHeader."Ship-to Address");
+                XMLWriter.WriteElementString('ShippingAddress2',SalesHeader."Ship-to Address 2");
+                XMLWriter.WriteElementString('ShippingAddress3',SalesHeader."Ship-to Address 3");
+              //DOC OP9031 RK 01/02/17 +
+                XMLWriter.WriteElementString('ShippingCity',SalesHeader."Ship-to City");
+                XMLWriter.WriteElementString('ShippingCounty',SalesHeader."Ship-to County");
+                XMLWriter.WriteElementString('ShippingPostCode',SalesHeader."Ship-to Post Code");
+              //DOC OP9031 RK 20/02/17 -
+                CLEAR(Country);
+                IF Country.GET(SalesHeader."Ship-to Country/Region Code") THEN;
+                //XMLWriter.WriteElementString('ShippingCountryCode',SalesHeader."Ship-to Country/Region Code");
+                XMLWriter.WriteElementString('ShippingCountryCode',Country.Name);
+              //DOC OP9031 RK 20/02/17 +
+                XMLWriter.WriteElementString('ShippingPhoneNo',SalesHeader."Ship-to Phone No.");
+                XMLWriter.WriteElementString('ShippingInstructions',SalesHeader."Shipping Instructions");
+                IF SalesHeader.Gift = TRUE THEN
+                  XMLWriter.WriteElementString('IsGift','True')
+                ELSE
+                  XMLWriter.WriteElementString('IsGift','False');
+                XMLWriter.WriteElementString('GiftMessage',SalesHeader."Gift Message");
+              //DOC OP11536 RK 31/08/17 -
+                XMLWriter.WriteElementString('PaymentMethod',SalesHeader."Payment Method Code");
+              //DOC OP11536 RK 31/08/17 +
+              //DOC OP11536 RK 07/09/17 -
+                XMLWriter.WriteElementString('PackageType',SalesHeader."Package Type");
+              //DOC OP11536 RK 07/09/17 +
+              //DOC OP11536 RK 04/10/17 -
+                CODPayment := 0;
+                SalesPayment.SETRANGE("Payment Type",SalesPayment."Payment Type"::COD);
+                SalesPayment.SETRANGE("Sales Order No.",SalesHeader."No.");
+                IF SalesPayment.FINDFIRST THEN BEGIN
+                  CODPayment := SalesPayment.Amount;
+                END;
+                IF CODPayment = 0 THEN
+                  CODText := ''
+                ELSE
+                  CODText := FORMAT(CODPayment,0,'<Integer><Decimals,3>');
+                XMLWriter.WriteElementString('PendingCODAmount',CODText);
+              //DOC OP11536 RK 04/10/17 +
+              //DOC OP9031 RK 07/02/17 -
+                TempSalesLine.RESET;
+                //SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+                //SalesLine.SETFILTER(Quantity,'<>%1',0);
+                //IF SalesLine.FINDFIRST THEN BEGIN
+                IF TempSalesLine.FINDSET THEN BEGIN
+                  XMLWriter.WriteStartElement('SalesOrderLines');
+                  REPEAT
+                    XMLWriter.WriteStartElement('SalesOrderLine');
+                    XMLWriter.WriteElementString('LineNo',FORMAT(TempSalesLine."Line No."));
+                    Item.GET(TempSalesLine."No.");
+                    IF TempSalesLine."Variant Code" <> '' THEN
+                      XMLWriter.WriteElementString('SKUNumber',TempSalesLine."No." + '-' + TempSalesLine."Variant Code")
+                    ELSE
+                      XMLWriter.WriteElementString('SKUNumber',TempSalesLine."No.");
+                    XMLWriter.WriteElementString('Description',TempSalesLine.Description);
+                    XMLWriter.WriteElementString('EAN',GetEANcode(TempSalesLine."No.",TempSalesLine."Variant Code"));
+                    XMLWriter.WriteElementString('LocationCode',TempSalesLine."Location Code");
+                    XMLWriter.WriteElementString('BinCode',TempSalesLine."Bin Code");
+                    XMLWriter.WriteElementString('Quantity',FORMAT(TempSalesLine.Quantity));
+                    XMLWriter.WriteElementString('GrossPrice',FORMAT(TempSalesLine."Unit Price",0,'<Integer><Decimals,3>'));
+                    XMLWriter.WriteElementString('Amount',FORMAT(TempSalesLine."Line Amount",0,'<Integer><Decimals,3>'));
+                    XMLWriter.WriteElementString('HSCode',Item."Tariff No.");
+                    XMLWriter.WriteElementString('DutyAmount',FORMAT(TempSalesLine."Total Duty Amount",0,'<Integer><Decimals,3>'));
+                  //DOC OP11536 RK 31/08/17 -
+                    //XMLWriter.WriteElementString('ImportTaxAmount','0.00');
+                    XMLWriter.WriteElementString('ImportTaxAmount',FORMAT(TempSalesLine."Product Tax Amount",0,'<Integer><Decimals,3>'));
+                  //DOC OP11536 RK 31/08/17 +
+                    XMLWriter.WriteEndElement; //SalesOrderLine
+                  //UNTIL SalesLine.NEXT = 0;
+                  UNTIL TempSalesLine.NEXT = 0;
+                //DOC OP9031 RK 07/02/17 +
+                  XMLWriter.WriteEndElement; //SalesOrderLines
+                END;
+              XMLWriter.WriteEndElement; // </SalesOrder>
+            END;
+          END;
+          //Mark the staging record as processed
+          IntegrationProcessStagingToUpdate.GET(IntegrationProcessStaging."Entry No.");
+          IntegrationProcessStagingToUpdate.Processed := TRUE;
+          IntegrationProcessStagingToUpdate.MODIFY;
+
+        UNTIL IntegrationProcessStaging.NEXT = 0;
+        XMLWriter.WriteEndElement; // </SalesOrders>
+        XMLWriter.Flush;
+      END;
+      //Add code here to handle SFTP transfer
+      //DOC OP10933 CB 15/06/2017 -
+      {
+      IF FILE.EXISTS(WebIntegrationManagement.Nav3PLOrderFileName) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+      }
+      //DOC OP10933 CB 15/06/2017 +
+    END;
+
+    LOCAL PROCEDURE ExportXMLPR@1000000002() : Boolean;
+    VAR
+      XMLDoc@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLWriter@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlWriter";
+      Item@1000000004 : Record 27;
+      ItemXRef@1000000007 : Record 5717;
+      ShipMethod@1000000012 : Record 10;
+      WebIntegrationManagement@1000000005 : Codeunit 50100;
+      IntegrationProcessStaging@1000000014 : Record 50004;
+      Vendor@1000000006 : Record 23;
+      PurchHeader@1000000011 : Record 38;
+      PurchLine@1000000003 : Record 39;
+      IntegrationProcessStagingToUpdate@1000000008 : Record 50004;
+      IntegrationProcessingGroup@1000000010 : Record 50007;
+      FileName@1000000009 : Text;
+      ShipCost@1000000013 : Decimal;
+    BEGIN
+      //iterate through unprocessed documents in new process table
+      IntegrationProcessStaging.RESET;
+      IntegrationProcessStaging.SETCURRENTKEY("Integration Type","Group Code",Processed);
+      IntegrationProcessStaging.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+      IntegrationProcessStaging.SETRANGE("Group Code",ModistSetup."3PL Purchase Return Group");
+      IntegrationProcessStaging.SETRANGE(Processed,FALSE);
+
+      IF IntegrationProcessStaging.FINDSET THEN BEGIN
+        IntegrationProcessingGroup.GET(ModistSetup."3PL Integration Type",ModistSetup."3PL Purchase Return Group");
+        XMLWriter := XMLWriter.Create(WebIntegrationManagement.Nav3PLPurchReturnFileName);
+        XMLWriter.WriteStartElement('PurchaseReturnOrders');
+        REPEAT
+          IF IntegrationProcessStaging."Status Attribute" = 'CANCELLED' THEN BEGIN
+            XMLWriter.WriteStartElement('PurchaseReturnOrder');
+              XMLWriter.WriteElementString('No',IntegrationProcessStaging."Document No.");
+              XMLWriter.WriteElementString('Status','CANCEL');
+            XMLWriter.WriteEndElement; // </SalesOrder>
+          END ELSE BEGIN
+            IF PurchHeader.GET(PurchHeader."Document Type"::"Return Order",IntegrationProcessStaging."Document No.") THEN BEGIN
+              Vendor.GET(PurchHeader."Buy-from Vendor No.");
+              XMLWriter.WriteStartElement('PurchaseReturnOrder');
+                XMLWriter.WriteElementString('No',PurchHeader."No.");
+                //XMLWriter.WriteElementString('Status',FORMAT(PurchHeader."GAC Order Status"));
+                XMLWriter.WriteElementString('Status','NEW');
+                XMLWriter.WriteElementString('VendorNo',PurchHeader."Buy-from Vendor No.");
+                XMLWriter.WriteElementString('VendorName',PurchHeader."Buy-from Vendor Name" + ' ' + PurchHeader."Buy-from Vendor Name 2");
+                XMLWriter.WriteElementString('VendorAddress1',PurchHeader."Buy-from Address");
+                XMLWriter.WriteElementString('VendorAddress2',PurchHeader."Buy-from Address 2");
+                XMLWriter.WriteElementString('VendorCity',PurchHeader."Buy-from City");
+                XMLWriter.WriteElementString('VendorCounty',PurchHeader."Buy-from County");
+                XMLWriter.WriteElementString('VendorPostCode',PurchHeader."Buy-from Post Code");
+              //DOC OP9031 RK 20/02/17 -
+                CLEAR(Country);
+                IF Country.GET(PurchHeader."Buy-from Country/Region Code") THEN;
+                //XMLWriter.WriteElementString('VendorCountryCode',PurchHeader."Buy-from Country/Region Code");
+                XMLWriter.WriteElementString('VendorCountryCode',Country.Name);
+              //DOC OP9031 RK 20/02/17 +
+                XMLWriter.WriteElementString('VendorPhoneNo',Vendor."Phone No.");
+                XMLWriter.WriteElementString('VendorEMail',Vendor."E-Mail");
+                XMLWriter.WriteElementString('OrderDate',FORMAT(PurchHeader."Order Date",0,9));
+                ShipCost := 0;
+                PurchLine.RESET;
+                PurchLine.SETRANGE("Document Type",PurchHeader."Document Type");
+                PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+                PurchLine.SETRANGE(Type,PurchLine.Type::"G/L Account");
+                PurchLine.SETFILTER("No.",'<>%1','');
+                {IF PurchLine.FINDFIRST THEN
+                  REPEAT
+                    ShipMethod.SETRANGE("G/L Account No.",PurchLine."No.");
+                    IF NOT ShipMethod.ISEMPTY THEN
+                      ShipCost := ShipCost + PurchLine."Line Amount";
+                  UNTIL PurchLine.NEXT = 0;
+                XMLWriter.WriteElementString('ShippingCost',FORMAT(ShipCost));}
+                XMLWriter.WriteElementString('ShippingMethod',PurchHeader."Shipment Method Code");
+                XMLWriter.WriteElementString('ShippingAgent',PurchHeader."Shipping Agent Code");
+                //XMLWriter.WriteElementString('ShippingAgentService','');
+              //DOC OP9031 RK 31/01/17 -
+                XMLWriter.WriteElementString('ShippingName',PurchHeader."Ship-to Name" + ' ' + PurchHeader."Ship-to Name 2");
+              //DOC OP9031 RK 31/01/17 +
+              //DOC OP9031 RK 01/02/17 -
+                //XMLWriter.WriteElementString('ShippingAddress',PurchHeader."Ship-to Address" + ' ' + PurchHeader."Ship-to Address 2");
+                XMLWriter.WriteElementString('ShippingAddress',PurchHeader."Ship-to Address");
+                XMLWriter.WriteElementString('ShippingAddress2',PurchHeader."Ship-to Address 2");
+              //DOC OP9031 RK 01/02/17 +
+                XMLWriter.WriteElementString('ShippingCity',PurchHeader."Ship-to City");
+                XMLWriter.WriteElementString('ShippingCounty',PurchHeader."Ship-to County");
+                XMLWriter.WriteElementString('ShippingPostCode',PurchHeader."Ship-to Post Code");
+              //DOC OP9031 RK 20/02/17 -
+                CLEAR(Country);
+                IF Country.GET(PurchHeader."Ship-to Country/Region Code") THEN;
+                //XMLWriter.WriteElementString('ShippingCountryCode',PurchHeader."Ship-to Country/Region Code");
+                XMLWriter.WriteElementString('ShippingCountryCode',Country.Name);
+              //DOC OP9031 RK 20/02/17 +
+                XMLWriter.WriteElementString('ShippingInstructions',PurchHeader."Shipping Instructions");
+                PurchLine.SETRANGE(Type,PurchLine.Type::Item);
+                PurchLine.SETFILTER(Quantity,'<>%1',0);
+                IF PurchLine.FINDSET THEN BEGIN
+                  XMLWriter.WriteStartElement('PurchaseReturnOrderLines');
+                  REPEAT
+                    XMLWriter.WriteStartElement('PurchaseReturnOrderLine');
+                    Item.GET(PurchLine."No.");
+                    XMLWriter.WriteElementString('LineNo',FORMAT(PurchLine."Line No."));
+                    IF PurchLine."Variant Code" <> '' THEN
+                      XMLWriter.WriteElementString('SKUNumber',PurchLine."No." + '-' + PurchLine."Variant Code")
+                    ELSE
+                      XMLWriter.WriteElementString('SKUNumber',PurchLine."No.");
+                    XMLWriter.WriteElementString('Description',PurchLine.Description);
+                    XMLWriter.WriteElementString('EAN',GetEANcode(PurchLine."No.",PurchLine."Variant Code"));
+                    XMLWriter.WriteElementString('LocationCode',PurchLine."Location Code");
+                    XMLWriter.WriteElementString('Quantity',FORMAT(PurchLine.Quantity));
+                    XMLWriter.WriteElementString('GrossPrice',FORMAT(PurchLine."Unit Cost",0,'<Integer><Decimals,3>'));
+                    XMLWriter.WriteElementString('Amount',FORMAT(PurchLine."Line Amount",0,'<Integer><Decimals,3>'));
+                    //XMLWriter.WriteElementString('HSCode',Item."HS Code");
+                    //XMLWriter.WriteElementString('DutyAmount','0.00');
+                    //XMLWriter.WriteElementString('ImportTaxAmount','0.00');
+                    XMLWriter.WriteEndElement; //PurchaseReturnOrderLine
+                  UNTIL PurchLine.NEXT = 0;
+                  XMLWriter.WriteEndElement; //PurchaseReturnOrderLines
+                END;
+              XMLWriter.WriteEndElement; // </PurchaseReturnOrder>
+            END;
+          END;
+          //Mark the staging record as processed
+          IntegrationProcessStagingToUpdate.GET(IntegrationProcessStaging."Entry No.");
+          IntegrationProcessStagingToUpdate.Processed := TRUE;
+          IntegrationProcessStagingToUpdate.MODIFY;
+        UNTIL IntegrationProcessStaging.NEXT = 0;
+        XMLWriter.WriteEndElement; // </PurchaseReturnOrders>
+        XMLWriter.Flush;
+      END;
+      //Add code here to handle SFTP transfer
+
+      //DOC OP10933 CB 15/06/2017 -
+      {
+      IF FILE.EXISTS(WebIntegrationManagement.Nav3PLOrderFileName) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+      }
+      //DOC OP10933 CB 15/06/2017 +
+    END;
+
+    LOCAL PROCEDURE UploadtoFTP@1000000003(GroupCode@1000000000 : Code[10]) : Boolean;
+    VAR
+      WebIntegrationManagement@1000000002 : Codeunit 50100;
+    BEGIN
+      //IntegrationProcessingGroup.GET(ModistSetup."3PL Integration Type",GroupCode);
+      IF ModistSetup."FTP temporary file extension" <> '' THEN BEGIN
+        WebIntegrationManagement.RenameFiles(IntegrationProcessingGroup."Working Location",'.xml',ModistSetup."FTP temporary file extension");
+        WebIntegrationManagement.UploadftpFiles(IntegrationProcessingGroup."Working Location",IntegrationProcessingGroup."Archive Location",ModistSetup."FTP temporary file extension",'.xml',
+                                                  ModistSetup."Demandware Export SFTP Server",IntegrationProcessingGroup."FTP Folder",TRUE);
+        //DOC OP10933 CB 15/06/2017 -
+        IF CheckFileExistsOnFTP(IntegrationProcessingGroup."Working Location",IntegrationProcessingGroup."Archive Location",ModistSetup."FTP temporary file extension",'.xml',
+                                                  ModistSetup."Demandware Export SFTP Server",IntegrationProcessingGroup."FTP Folder",TRUE) THEN
+          EXIT(TRUE)
+        ELSE
+          EXIT(FALSE);
+        //DOC OP10933 CB 15/06/2017 +
+      END ELSE BEGIN
+        WebIntegrationManagement.RenameFiles(IntegrationProcessingGroup."Working Location",'.xml','.tmp');
+        WebIntegrationManagement.UploadftpFiles(IntegrationProcessingGroup."Working Location",IntegrationProcessingGroup."Archive Location",'.tmp','.xml',
+                                                  ModistSetup."Demandware Export SFTP Server",IntegrationProcessingGroup."FTP Folder",TRUE);
+        //DOC OP10933 CB 15/06/2017 -
+        IF CheckFileExistsOnFTP(IntegrationProcessingGroup."Working Location",IntegrationProcessingGroup."Archive Location",'.tmp','.xml',
+                                                  ModistSetup."Demandware Export SFTP Server",IntegrationProcessingGroup."FTP Folder",TRUE) THEN
+          EXIT(TRUE)
+        ELSE
+          EXIT(FALSE);
+        //DOC OP10933 CB 15/06/2017 +
+      END;
+    END;
+
+    LOCAL PROCEDURE AppendStrings@1000000000(string1@1000000000 : Text;string2@1000000001 : Text;string3@1000000002 : Text) : Text;
+    VAR
+      tempString@1000000003 : Text;
+    BEGIN
+      IF string1 <> '' THEN
+        tempString := tempString + string1;
+
+      IF string2 <> '' THEN
+        tempString := tempString + ' ' + string2;
+
+      IF string3 <> '' THEN
+        tempString := tempString + ' ' + string3;
+
+      EXIT(tempString);
+    END;
+
+    LOCAL PROCEDURE GetEANcode@1000000014(ItemNo@1000000000 : Code[20];VariantCode@1000000001 : Code[10]) : Text;
+    VAR
+      ItemCrossReference@1000000002 : Record 5717;
+    BEGIN
+      //this function returns the EAN Barcode from the Item Cross reference table
+      ItemCrossReference.SETRANGE("Item No.",ItemNo);
+      ItemCrossReference.SETRANGE("Variant Code",VariantCode);
+      ItemCrossReference.SETRANGE("Cross-Reference Type",ItemCrossReference."Cross-Reference Type"::"Bar Code");
+      ItemCrossReference.SETRANGE("Cross-Reference Type No.",'EAN');
+      IF ItemCrossReference.FINDFIRST THEN
+        EXIT(ItemCrossReference."Cross-Reference No.")
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE CheckFileExistsOnFTP@1000000010(FolderPath@1000000003 : Text;ArchivePath@1000000004 : Text;fromExtension@1000000006 : Text;toExtension@1000000005 : Text;sftpServerCode@1000000007 : Code[20];ftpFolderPath@1000000008 : Text;Renameonftp@1000000009 : Boolean) : Boolean;
+    VAR
+      FileRec@1000000000 : Record 2000000022;
+      sftpServer@1000000002 : Record 9062267;
+      sftpIntegration@1000000001 : Codeunit 9062505;
+      ItExists@1000000010 : Boolean;
+    BEGIN
+      //DOC OP10933 CB 15/06/2017 -
+      IF COPYSTR(fromExtension,1,1) <> '.' THEN
+        fromExtension := '.' + fromExtension;
+      IF COPYSTR(toExtension,1,1) <> '.' THEN
+        toExtension := '.' + toExtension;
+      IF COPYSTR(FolderPath,STRLEN(FolderPath)) <> '\' THEN
+        FolderPath := FolderPath + '\';
+      IF COPYSTR(ftpFolderPath,STRLEN(ftpFolderPath)) <> '/' THEN
+        ftpFolderPath := ftpFolderPath + '/';
+      FileRec.SETRANGE(Path,FolderPath);
+      FileRec.SETRANGE("Is a file",TRUE);
+      FileRec.SETFILTER(Name,'%1','*' + fromExtension);
+      IF FileRec.FINDFIRST THEN BEGIN
+        sftpServer.GET(sftpServerCode);
+        sftpIntegration.Connect(sftpServer.Address,sftpServer.Port,sftpServer.Login,sftpServer.Password);
+        IF NOT sftpIntegration.FileExists(ftpFolderPath,FileRec.Name) THEN
+          ItExists := (FALSE)
+        ELSE
+          ItExists := TRUE;
+        sftpIntegration.Disconnect();
+        CLEAR(sftpIntegration);
+      END;
+      EXIT (ItExists);
+      //DOC OP10933 CB 15/06/2017 +
+    END;
+
+    BEGIN
+    {
+      //DOC OP9031 RK 31/01/17 - Add ship-to name.
+      //DOC OP9031 RK 01/02/17 - Split address in 3 fields.
+      //DOC OP9031 RK 07/02/17 - Send discounted prices (after promotion) to GAC.
+      //DOC OP9031 RK 20/02/17 - Send billing address including address 3.
+      //DOC OP9031 RK 20/02/17 - Use country name instead of country code.
+      //DOC OP9031 RK 06/03/17 - Send order information from archive for cancelled order.
+      //DOC OP9031 RK 05/04/17 - Use sales order number if internet order number is blank.
+      //DOC OP10933 CB 15/06/17 - Error handling to send emails with autonav
+      //DOC OP11536 RK 31/08/17 - Send payment method on order.
+      //DOC OP11536 RK 31/08/17 - Populate tax amounts.
+      //DOC OP11536 RK 05/09/17 - Recalculate unit price for line level promotion as well.
+      //DOC OP11536 RK 07/09/17 - Add package type to GAC export.
+      //DOC OP11536 RK 04/10/17 - Add new element <PendingCODAmount>
+      //DOC IN45270 TB 16/10/17 - Clear/Initialise Decimal/Integer Variables, replace FindFirsts in Loop with Findset and clear XMLWrite on each Sales Order
+    }
+    END.
+  }
+}
+

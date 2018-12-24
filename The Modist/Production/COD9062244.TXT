@@ -1,0 +1,392 @@
+OBJECT Codeunit 9062244 System Image Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      tSetupMissing@1000000001 : TextConst 'ENU=Setup Missing;ENG=Setup Missing';
+      tLastSysBGroupSysB@1000000000 : TextConst 'ENU=LAST_SYSIMG_GROUP;ENG=LAST_SYSIMG_GROUP';
+      SystemBehaviour@1000000002 : Record 9062230;
+      SystemImage@1000000005 : Record 9062240;
+      SystemImageGroup@1000000004 : Record 9062242;
+
+    PROCEDURE "--- Filter ---"@1000000002();
+    BEGIN
+    END;
+
+    PROCEDURE InitialiseFilter@1000000007(VAR pGroupCode@1000000000 : Code[50];VAR pSearch@1000000002 : Text;VAR pGroupEnabled@1000000003 : Boolean;VAR pSystemImage@1000000001 : Record 9062240);
+    BEGIN
+      //DOC NA2015.4 - Initialising filter
+      //  <> pGroupCode: Target group
+      //  <> pSearch: Target search
+      //  <> pGroupEnabled: Target "Group Enabled" flag
+      //  <> pSystemImage: Recordset to filter
+
+      FindGroup(pGroupCode, pSystemImage);
+      pSearch := '';
+      pGroupEnabled := TRUE;
+
+      FilterRecordset('', pGroupCode, pSystemImage);
+    END;
+
+    PROCEDURE SaveFilter@1000000016(pGroupCode@1000000000 : Code[50];pSearch@1000000001 : Text);
+    BEGIN
+      //DOC NA2015.4 - Saving filter
+      //  -> pGroupCode: Group
+      //  -> pSearch: Search
+
+      SystemBehaviour.SetUserText(tLastSysBGroupSysB, USERID, pGroupCode, TRUE);
+    END;
+
+    PROCEDURE ValidateFilter@1000000006(VAR pGroupCode@1000000000 : Code[50];pSearch@1000000007 : Text;VAR pGroupEnabled@1000000008 : Boolean;VAR pSystemImage@1000000002 : Record 9062240);
+    VAR
+      eUnknownGroup@1000000006 : TextConst 'ENU=Unknown group: "%1".;ENG=Unknown group: "%1".';
+    BEGIN
+      //DOC NA2015.4 - Validating filter
+      //  <> pGroupCode: Source / target group
+      //  -> pSearch: Search
+      //  <> pGroupEnabled: Target "Group Enabled" flag
+      //  <> pSystemImage: Recordset to filter
+
+      pSearch := DELCHR(pSearch, '<>', ' ');
+      pGroupEnabled := (pSearch = '');
+      IF (pGroupEnabled) THEN
+        FindGroup(pGroupCode, pSystemImage)
+      ELSE
+        pGroupCode := '';
+
+      IF (pGroupEnabled) THEN
+        ValidateGroup(pGroupCode, pSystemImage)
+      ELSE
+        ValidateSearch(pSearch, pSystemImage);
+    END;
+
+    LOCAL PROCEDURE ValidateGroup@1000000020(VAR pGroupCode@1000000000 : Code[50];VAR pSystemImage@1000000007 : Record 9062240);
+    VAR
+      lGroupCode@1000000005 : Code[50];
+      lFilter@1000000003 : ARRAY [3] OF Text;
+      lFilterIndex@1000000004 : Integer;
+      lFound@1000000002 : Boolean;
+      eUnknownGroup@1000000006 : TextConst 'ENU=Unknown group: "%1".;ENG=Unknown group: "%1".';
+    BEGIN
+      //DOC NA2015.4 - Validating group
+      //  <> pGroupCode: Source / target group
+      //  <> pSystemImage: Recordset to filter
+
+      lGroupCode := pGroupCode;
+
+      IF (pGroupCode <> '') THEN
+      BEGIN
+        lFilter[1] := pGroupCode;
+        lFilter[2] := pGroupCode + '*';
+        lFilter[3] := '*' + pGroupCode + '*';
+        lFound := FALSE;
+
+        FOR lFilterIndex := 1 TO ARRAYLEN(lFilter) DO
+          IF ( NOT (lFound)) THEN
+          BEGIN
+            SystemImageGroup.RESET();
+            SystemImageGroup.SETFILTER(Code, lFilter[lFilterIndex]);
+            lFound := SystemImageGroup.FINDFIRST();
+            IF (lFound) THEN
+            BEGIN
+              pGroupCode := SystemImageGroup.Code;
+              lFilterIndex := ARRAYLEN(lFilter);
+            END;
+          END;
+
+        IF ( NOT (lFound)) THEN
+          ERROR(eUnknownGroup, pGroupCode);
+      END;
+
+      FilterRecordset('', pGroupCode, pSystemImage);
+    END;
+
+    LOCAL PROCEDURE ValidateSearch@1000000008(pSearch@1000000000 : Text[250];VAR pSystemImage@1000000005 : Record 9062240);
+    VAR
+      lSystemImageTmp@1000000003 : TEMPORARY Record 9062240;
+      lFilter@1000000002 : Text;
+      lField@1000000004 : ' ,Code,Description';
+    BEGIN
+      //DOC NA2015.4 - Validating search
+      //  -> pSearch: The search
+      //  <> pSystemImage: Recordset to filter
+
+      lFilter := '@*' + pSearch + '*';
+
+      FOR lField := lField::Code TO lField::Description DO
+      BEGIN
+        SystemImage.RESET();
+        CASE (lField) OF
+          lField::Code: SystemImage.SETFILTER(Code, lFilter);
+          lField::Description: SystemImage.SETFILTER(Description, lFilter);
+        END;
+        IF (SystemImage.FINDSET()) THEN
+        REPEAT
+          IF ( NOT (lSystemImageTmp.GET(SystemImage.Code))) THEN
+          BEGIN
+            lSystemImageTmp := SystemImage;
+            lSystemImageTmp.INSERT();
+          END;
+        UNTIL (SystemImage.NEXT() = 0);
+      END;
+
+      lFilter := '';
+      lSystemImageTmp.RESET();
+      IF (lSystemImageTmp.FINDSET()) THEN
+      REPEAT
+        IF (lFilter <> '') THEN
+          lFilter := lFilter + '|';
+        lFilter := lFilter + lSystemImageTmp.Code;
+      UNTIL (lSystemImageTmp.NEXT() = 0);
+      IF (lFilter = '') THEN
+        lFilter := '0&1';
+
+      FilterRecordset(lFilter, '', pSystemImage);
+    END;
+
+    PROCEDURE GroupLookup@1000000005(VAR pGroupCode@1000000001 : Code[50];VAR pSystemImage@1000000000 : Record 9062240) : Boolean;
+    VAR
+      lGroupCode@1000000002 : Code[50];
+      lResult@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Group lookup
+      //  <> pGroupCode: Source / target group
+      //  <> pSystemImage: Recordset to filter
+      //  <- Lookup result
+
+      lGroupCode := pGroupCode;
+
+      SystemImageGroup.RESET();
+      IF (pGroupCode <> '') THEN
+      BEGIN
+        SystemImageGroup.SETRANGE(Code, pGroupCode);
+        IF (SystemImageGroup.FINDFIRST()) THEN;
+        SystemImageGroup.SETRANGE(Code);
+      END;
+
+      IF (PAGE.RUNMODAL(0, SystemImageGroup) = ACTION::LookupOK) THEN
+      BEGIN
+        pGroupCode := SystemImageGroup.Code;
+        FilterRecordset('', pGroupCode, pSystemImage);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE PreviousGroup@1000000001(VAR pGroupCode@1000000000 : Code[50];VAR pSystemImage@1000000004 : Record 9062240) : Boolean;
+    VAR
+      lPreviousGroupCode@1000000002 : Code[50];
+      lGroupChanged@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Going to previous group
+      //  <> pGroupCode: The current group / target group
+      //  <> pSystemImage: Recordset to filter
+      //  <- TRUE = Group changed, FALSE = Not
+
+      lPreviousGroupCode := pGroupCode;
+
+      IF (pGroupCode <> '') THEN
+        IF (SystemImageGroup.GET(pGroupCode)) THEN
+        BEGIN
+          SystemImageGroup.RESET();
+          SystemImageGroup.SETFILTER(Code, '<%1', pGroupCode);
+          IF (SystemImageGroup.FINDLAST()) THEN
+            pGroupCode := SystemImageGroup.Code
+          ELSE
+            pGroupCode := '';
+        END
+        ELSE
+          pGroupCode := '';
+
+      lGroupChanged := (pGroupCode <> lPreviousGroupCode);
+      IF (lGroupChanged) THEN
+        FilterRecordset('', pGroupCode, pSystemImage);
+
+      EXIT(lGroupChanged);
+    END;
+
+    PROCEDURE NextGroup@1000000003(VAR pGroupCode@1000000000 : Code[50];VAR pSystemImage@1000000004 : Record 9062240) : Boolean;
+    VAR
+      lNextGroupCode@1000000002 : Code[50];
+      lGroupChanged@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Going to next group
+      //  <> pGroupCode: The current group / target group
+      //  <> pSystemImage: Recordset to filter
+      //  <- TRUE = Group changed, FALSE = Not
+
+      lNextGroupCode := pGroupCode;
+
+      IF (pGroupCode = '') THEN
+      BEGIN
+        SystemImageGroup.RESET();
+        IF (SystemImageGroup.FINDFIRST()) THEN
+          pGroupCode := SystemImageGroup.Code;
+        IF (pGroupCode = '') THEN
+          IF (SystemImageGroup.NEXT() <> 0) THEN
+            pGroupCode := SystemImageGroup.Code;
+      END
+      ELSE
+        IF (SystemImageGroup.GET(pGroupCode)) THEN
+        BEGIN
+          SystemImageGroup.RESET();
+          SystemImageGroup.SETFILTER(Code, '>%1', pGroupCode);
+          IF (SystemImageGroup.FINDFIRST()) THEN
+            pGroupCode := SystemImageGroup.Code;
+        END
+        ELSE
+          pGroupCode := '';
+
+      lGroupChanged := (pGroupCode <> lNextGroupCode);
+      IF (lGroupChanged) THEN
+        FilterRecordset('', pGroupCode, pSystemImage);
+
+      EXIT(lGroupChanged);
+    END;
+
+    LOCAL PROCEDURE FilterRecordset@1000000012(pCodeFilter@1000000000 : Text;pGroupFilter@1000000001 : Code[50];VAR pSystemImage@1000000003 : Record 9062240);
+    BEGIN
+      //DOC NA2015.4 - Filtering recordset
+      //  -> pCodeFilter: Code filter
+      //  -> pGroupCodeFilter: Group filter
+      //  <> pSystemImage: Recordset to filter
+
+      pSystemImage.FILTERGROUP(2);
+      IF (pCodeFilter <> '') THEN
+        pSystemImage.SETFILTER(Code, pCodeFilter)
+      ELSE
+        pSystemImage.SETRANGE(Code);
+      IF ((pGroupFilter <> '') OR (pCodeFilter = '')) THEN
+        pSystemImage.SETRANGE("Group Code", pGroupFilter)
+      ELSE
+        pSystemImage.SETRANGE("Group Code");
+      pSystemImage.FILTERGROUP(0);
+
+      IF (pSystemImage.FINDFIRST()) THEN;
+    END;
+
+    LOCAL PROCEDURE FindGroup@1000000000(VAR pGroupCode@1000000001 : Code[50];VAR pSystemImage@1000000003 : Record 9062240);
+    VAR
+      lFilterGroup@1000000002 : Integer;
+    BEGIN
+      //DOC NA2015.4 - Trying to find system behaviour group
+      //  <> pGroupCode: Current / target group
+      //  <> pSystemImage: Recordset
+
+      IF (pGroupCode = '') THEN
+        pGroupCode := SystemBehaviour.GetText(tLastSysBGroupSysB);
+
+      IF (pGroupCode = '') THEN
+      BEGIN
+        FOR lFilterGroup := 5 DOWNTO 0 DO
+        BEGIN
+          pSystemImage.FILTERGROUP(lFilterGroup);
+          IF (pSystemImage.GETFILTER("Group Code") <> '') THEN
+          BEGIN
+            pGroupCode := pSystemImage.GETRANGEMIN("Group Code");
+            lFilterGroup := 0;
+          END;
+        END;
+        pSystemImage.FILTERGROUP(0);
+      END;
+
+      IF (pGroupCode = '') THEN
+      BEGIN
+        SystemImage.RESET();
+        SystemImage.SETRANGE("Group Code", '');
+        IF (SystemImage.ISEMPTY) THEN
+        BEGIN
+          SystemImageGroup.RESET();
+          SystemImageGroup.SETFILTER(Code, '<>''''');
+          IF (SystemImageGroup.FINDFIRST()) THEN
+            pGroupCode := SystemImageGroup.Code;
+        END;
+      END;
+    END;
+
+    PROCEDURE ShowGroups@1000000004(pGroupCode@1000000000 : Code[20];pSearch@1000000001 : Text);
+    BEGIN
+      //DOC NA2015.4 - Showing groups
+      //  -> pGroupCode: Group
+      //  -> pSearch: Search
+
+      SaveFilter(pGroupCode, pSearch);
+
+      SystemImageGroup.RESET();
+      PAGE.RUN(0, SystemImageGroup);
+    END;
+
+    PROCEDURE "--- Group Filter ---"@1000000017();
+    BEGIN
+    END;
+
+    PROCEDURE InitialiseGroupFilter@1000000019(VAR pSystemImageGroup@1000000004 : Record 9062242);
+    VAR
+      lGroup@1000000001 : Code[20];
+      lGroupEnabled@1000000003 : Boolean;
+      lSearch@1000000002 : Text;
+    BEGIN
+      //DOC NA2015.4 - Initialising group filter
+      //  <> pSystemImageGroup: Target group
+
+      InitialiseFilter(lGroup, lSearch, lGroupEnabled, SystemImage);
+      IF (lGroup <> '') THEN
+        IF ( NOT (pSystemImageGroup.GET(lGroup))) THEN
+          IF (pSystemImageGroup.FINDFIRST()) THEN;
+    END;
+
+    PROCEDURE SaveGroupFilter@1000000021(pGeneralLookup@1000000001 : Record 9062232);
+    BEGIN
+      //DOC NA2015.4 - Saving group filter
+      //  -> pGeneralLookup: The current group
+
+      SaveFilter(pGeneralLookup.Code, '');
+    END;
+
+    PROCEDURE "--- Image Library ---"@1000000010();
+    BEGIN
+    END;
+
+    PROCEDURE LoadImageFromLibrary@1000000009(VAR pImage@1000000000 : Record 9062240;pImageSelection@1000000003 : Integer) : Boolean;
+    VAR
+      lImages@1000000002 : Page 9062238;
+    BEGIN
+      //DOC NA2015.1 - Loading image from library
+      //  <> pSystemImage: Target image
+      //  <> pImageSelection: Target image selection (image / alternative image)
+      //  <- TRUE: Confirmed, FALSE: Not
+
+      CLEAR(lImages);
+      lImages.LOOKUPMODE(TRUE);
+      IF (lImages.RUNMODAL() <> ACTION::LookupOK) THEN
+        EXIT(FALSE);
+
+      lImages.GETRECORD(pImage);
+      pImage.CALCFIELDS(Image, "Alternative Image");
+      pImageSelection := lImages.GetImageSelection();
+      EXIT(TRUE);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.4  JH 04/02/2015 - Completely redesigned
+      //DOC NA2016.4  JH 26/08/2015 - Upgraded to 2016
+      //DOC NA2016.15 JH 20/04/2016 - Groups changed
+    }
+    END.
+  }
+}
+

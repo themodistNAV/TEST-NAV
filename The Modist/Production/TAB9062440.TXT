@@ -1,0 +1,341 @@
+OBJECT Table 9062440 Purch. Inv. Matching Batch
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.15;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               CheckNoSeries;
+               IF Code = '' THEN BEGIN
+                 Code := NoSeriesMgt.GetNextNo(tNoSeriesCode,TODAY,TRUE);
+               END;
+
+               IF "Date Created" = 0D THEN "Date Created" := TODAY;
+               IF "Created By" = '' THEN "Created By" := USERID;
+             END;
+
+    OnDelete=VAR
+               BatchLines@1000000000 : Record 9062441;
+             BEGIN
+               BatchLines.SETRANGE("Batch Code",Code);
+               IF BatchLines.FINDSET THEN BatchLines.DELETEALL(TRUE);
+             END;
+
+    CaptionML=[ENU=Purch. Inv. Matching Batch;
+               ENG=Purch. Inv. Matching Batch];
+    LookupPageID=Page80014;
+    DrillDownPageID=Page80014;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Code                ;Code20        ;CaptionML=[ENU=Code;
+                                                              ENG=Code] }
+    { 2   ;   ;Description         ;Text100       ;CaptionML=[ENU=Description;
+                                                              ENG=Description] }
+    { 3   ;   ;Date Created        ;Date          ;CaptionML=[ENU=Date Created;
+                                                              ENG=Date Created] }
+    { 4   ;   ;Created By          ;Code50        ;CaptionML=[ENU=Created By;
+                                                              ENG=Created By] }
+    { 100 ;   ;No. Matched Lines   ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Purch. Inv. Matching Line" WHERE (Batch Code=FIELD(Code),
+                                                                                                        Match Status=FILTER(Matched|Within Tolerance)));
+                                                   CaptionML=[ENU=No. Matched Lines;
+                                                              ENG=No. Matched Lines];
+                                                   Editable=No }
+    { 101 ;   ;No. UnMatched Lines ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Purch. Inv. Matching Line" WHERE (Batch Code=FIELD(Code),
+                                                                                                        Match Status=FILTER(Waiting to Match|Outside Tolerance)));
+                                                   CaptionML=[ENU=No. UnMatched Lines;
+                                                              ENG=No. UnMatched Lines];
+                                                   Editable=No }
+    { 102 ;   ;No. Posted Lines    ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Purch. Inv. Matching Line" WHERE (Batch Code=FIELD(Code),
+                                                                                                        Posting Status=CONST(Posted)));
+                                                   CaptionML=[ENU=No. Posted Lines;
+                                                              ENG=No. Posted Lines];
+                                                   Editable=No }
+    { 103 ;   ;No. Unposted Lines  ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Purch. Inv. Matching Line" WHERE (Batch Code=FIELD(Code),
+                                                                                                        Posting Status=FILTER(<>Posted)));
+                                                   CaptionML=[ENU=No. Unposted Lines;
+                                                              ENG=No. Unposted Lines];
+                                                   Editable=No }
+    { 104 ;   ;Batch Total         ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Purch. Inv. Matching Line"."Invoice Amount" WHERE (Batch Code=FIELD(Code)));
+                                                   CaptionML=[ENU=Batch Total;
+                                                              ENG=Batch Total];
+                                                   Editable=No }
+    { 105 ;   ;Invoice Scaning Folder;Text250     ;CaptionML=[ENU=Invoice Scaning Folder;
+                                                              ENG=Invoice Scaning Folder] }
+    { 106 ;   ;Show Complete Invoices;Boolean     ;CaptionML=[ENU=Show Complete Invoices;
+                                                              ENG=Show Complete Invoices] }
+    { 107 ;   ;Show Incomplete Invoices;Boolean   ;CaptionML=[ENU=Show Incomplete Invoices;
+                                                              ENG=Show Incomplete Invoices] }
+    { 108 ;   ;No. Lines           ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Purch. Inv. Matching Line" WHERE (Batch Code=FIELD(Code)));
+                                                   CaptionML=[ENU=No. Lines;
+                                                              ENG=No. Lines];
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Code                                    ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      NoSeriesMgt@1000000000 : Codeunit 396;
+      tNoSeriesCode@1000000001 : TextConst 'ENU=PIMATCHING;ENG=PIMATCHING';
+      tNoSeriesDescription@1000000002 : TextConst 'ENU=Purchase Invoice Matching (Batch);ENG=Purchase Invoice Matching (Batch)';
+      tNoSeriesStartingNo@1000000003 : TextConst 'ENU=PIMB000001;ENG=PIMB000001';
+      NoSeriesToolkit@1000000004 : Codeunit 9062598;
+
+    PROCEDURE MatchLines@1000000000(SuppressDialog@1000000002 : Boolean);
+    VAR
+      BatchLine@1000000000 : Record 9062441;
+      PInvMatch@1000000001 : Codeunit 9062349;
+      eNoLinesFound@1000000003 : TextConst 'ENU=No lines with ''''%1'''' ''Complete'' or with ''''%2'''' ''Waiting to Match'' have been found.;ENG=No lines with ''''%1'''' ''Complete'' or with ''''%2'''' ''Waiting to Match'' have been found.';
+    BEGIN
+      BatchLine.SETRANGE("Batch Code",Code);
+      BatchLine.SETRANGE(Status,BatchLine.Status::Complete);
+      BatchLine.SETRANGE("Invalid P.O",FALSE);
+      BatchLine.SETRANGE("Invalid Del. Note. No.",FALSE);
+      BatchLine.SETFILTER("Match Status",'%1',BatchLine."Match Status"::"Waiting to Match");
+      IF NOT BatchLine.FINDSET THEN BEGIN
+        IF (NOT SuppressDialog) THEN
+          MESSAGE(eNoLinesFound, BatchLine.FIELDCAPTION(Status), BatchLine.FIELDCAPTION("Match Status"));
+        EXIT;
+      END ELSE BEGIN
+        REPEAT
+          PInvMatch.POMatch(BatchLine,SuppressDialog);
+        UNTIL BatchLine.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE PostInvoices@1000000001(SuppressDialog@1000000000 : Boolean);
+    VAR
+      BatchLines@1000000005 : Record 9062441;
+      PurchHead@1000000004 : Record 38;
+      PurchPost@1000000003 : Codeunit 90;
+      IncomingDocument@9062230 : Record 130;
+      eConfirmation@1000000001 : TextConst 'ENU=Are you sure you want to post the invoices?;ENG=Are you sure you want to post the invoices?';
+    BEGIN
+      IF (NOT SuppressDialog) THEN BEGIN
+        IF (NOT CONFIRM(eConfirmation)) THEN EXIT;
+      END;
+      CheckLineAmountDifferences();
+      BatchLines.RESET();
+      BatchLines.SETRANGE("Batch Code",Code);
+      BatchLines.SETRANGE("Posting Status",BatchLines."Posting Status"::"Ready to Post");
+      IF BatchLines.FINDSET THEN BEGIN
+        REPEAT
+          IF PurchHead.GET(PurchHead."Document Type"::Invoice,BatchLines."Invoice No.") THEN BEGIN
+            PurchPost.RUN(PurchHead);
+            BatchLines."Posting Status" := BatchLines."Posting Status"::Posted;
+            BatchLines.MODIFY(TRUE);
+            PostIncomingDocument(BatchLines);
+          END;
+        UNTIL BatchLines.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE CarryOutActions@1000000002(SuppressDialog@1000000002 : Boolean);
+    VAR
+      PIMatching@1000000000 : Codeunit 9062349;
+      BatchLines@1000000005 : Record 9062441;
+      PurchHead@1000000004 : Record 38;
+      PurchPost@1000000003 : Codeunit 90;
+      CreateMISCInv@1000000001 : Integer;
+    BEGIN
+
+      BatchLines.SETRANGE("Batch Code",Code);
+      BatchLines.SETFILTER("Next Action",'<>%1',BatchLines."Next Action"::" ");
+      BatchLines.SETRANGE("Posting Status",BatchLines."Posting Status"::" ");
+      IF BatchLines.FINDSET THEN BEGIN
+        REPEAT
+          PIMatching.TakeAction(BatchLines,SuppressDialog);
+        UNTIL BatchLines.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE CreateMISCInv@1000000003(SuppressDialog@1000000004 : Boolean);
+    VAR
+      BatchLine@1000000003 : Record 9062441;
+      PInvMatch@1000000002 : Codeunit 9062349;
+      PHeader@1000000001 : Record 38;
+      PLine@1000000000 : Record 39;
+      eNoMiscInvoiceLinesFound@1000000005 : TextConst 'ENU=No MISC invoice lines have been found;ENG=No MISC invoice lines have been found';
+    BEGIN
+      BatchLine.SETRANGE("Batch Code",Code);
+      BatchLine.SETRANGE("MISC Invoice",TRUE);
+      IF NOT BatchLine.FINDSET THEN BEGIN
+        IF (NOT SuppressDialog) THEN
+          MESSAGE(eNoMiscInvoiceLinesFound);
+        EXIT;
+      END ELSE BEGIN
+        REPEAT
+        IF BatchLine."Invoice No." = '' THEN
+          BatchLine.CreateInvoice(NOT(GUIALLOWED));
+        UNTIL BatchLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckLineAmountDifferences@1000000004();
+    VAR
+      PurchInvMatchingLine@1000000000 : Record 9062441;
+    BEGIN
+      PurchInvMatchingLine.SETRANGE("Batch Code",Code);
+      PurchInvMatchingLine.SETRANGE("Match Status",PurchInvMatchingLine."Match Status"::Matched);
+      PurchInvMatchingLine.SETRANGE("Posting Status",PurchInvMatchingLine."Posting Status"::"Ready to Post");
+      IF PurchInvMatchingLine.FINDSET THEN
+      REPEAT
+        PurchInvMatchingLine.CALCFIELDS("Unposted Invoice Amount");
+        IF PurchInvMatchingLine."Invoice Amount When Matched" <> PurchInvMatchingLine."Unposted Invoice Amount" THEN BEGIN
+          PurchInvMatchingLine."Posting Status" := PurchInvMatchingLine."Posting Status"::" ";
+          PurchInvMatchingLine."Match Status"   := PurchInvMatchingLine."Match Status"::"Waiting to Match";
+          PurchInvMatchingLine.MODIFY;
+        END;
+      UNTIL PurchInvMatchingLine.NEXT = 0;
+    END;
+
+    PROCEDURE CreateAutoProcessDocumentsJob@1000000005();
+    VAR
+      JobQueueEntry@1000000000 : Record 472;
+      DailyUpdateQst@1000000001 : TextConst 'ENU=A job queue entry for daily process of scanned documents has been created.\\Do you want to open the Job Queue Entries window?;ENG=A job queue entry for daily process of scanned documents has been created.\\Do you want to open the Job Queue Entries window?';
+    BEGIN
+      JobQueueEntry.ScheduleRecurrentJobQueueEntry(JobQueueEntry."Object Type to Run"::Codeunit,CODEUNIT::"Process Inv. Match. Documents");
+      IF CONFIRM(DailyUpdateQst) THEN
+        PAGE.RUN(PAGE::"Job Queue Entry Card",JobQueueEntry);
+    END;
+
+    PROCEDURE GetIncomingDocuments@9062230();
+    VAR
+      IncomingDocument@9062230 : Record 130;
+      PurchInvMatchingLine@9062231 : Record 9062441;
+      PurchInvMatchingLine1@9062232 : Record 9062441;
+    BEGIN
+      IncomingDocument.SETRANGE("OCR Status",IncomingDocument."OCR Status"::Success);
+      IncomingDocument.SETRANGE(Posted,FALSE);
+      IF IncomingDocument.FINDSET THEN
+      REPEAT
+        PurchInvMatchingLine.RESET;
+        PurchInvMatchingLine1.RESET;
+        PurchInvMatchingLine.SETCURRENTKEY("Incoming Document");
+        PurchInvMatchingLine.SETRANGE("Incoming Document",IncomingDocument."Entry No.");
+        IF NOT PurchInvMatchingLine.FINDSET THEN BEGIN
+          PurchInvMatchingLine1.SETFILTER("Batch Code",PurchInvMatchingLine."Batch Code");
+          IF PurchInvMatchingLine1.FINDLAST THEN;
+          PurchInvMatchingLine.INIT;
+          PurchInvMatchingLine.VALIDATE("Batch Code",Code);
+          PurchInvMatchingLine.VALIDATE("Line No.",PurchInvMatchingLine1."Line No." + 10000);
+          PurchInvMatchingLine.VALIDATE("Vendor No. Filter",IncomingDocument."Vendor No.");
+          PurchInvMatchingLine.VALIDATE("Invoice Amount",IncomingDocument."Amount Excl. VAT");
+          PurchInvMatchingLine.VALIDATE("Purch. Order No.",IncomingDocument."Order No.");
+          PurchInvMatchingLine.VALIDATE("Document Date",IncomingDocument."Document Date");
+          PurchInvMatchingLine.VALIDATE("Document Due Date",IncomingDocument."Due Date");
+          PurchInvMatchingLine.VALIDATE("Vendor Invoice No.",IncomingDocument."Vendor Invoice No.");
+          PurchInvMatchingLine.VALIDATE("Incoming Document",IncomingDocument."Entry No.");
+          PurchInvMatchingLine.INSERT;
+        END;
+      UNTIL IncomingDocument.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CheckNoSeries@9062231();
+    BEGIN
+      NoSeriesToolkit.CreateNoSeriesAdv(tNoSeriesCode, tNoSeriesDescription, TRUE, FALSE, tNoSeriesStartingNo);
+    END;
+
+    LOCAL PROCEDURE PostIncomingDocument@9062234(PurchInvMatchingLine@9062230 : Record 9062441);
+    VAR
+      IncomingDocument@9062231 : Record 130;
+    BEGIN
+      IF(PurchInvMatchingLine."Incoming Document" <> 0) THEN BEGIN
+        IF IncomingDocument.GET(PurchInvMatchingLine."Incoming Document") THEN BEGIN
+          IncomingDocument.VALIDATE("Document Type",IncomingDocument."Document Type"::"Purchase Invoice");
+          IncomingDocument.VALIDATE("Document No.",PurchInvMatchingLine."Alocated Invoice No.");
+          IncomingDocument.VALIDATE(Posted,TRUE);
+          IncomingDocument.MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE ImportFromCamera@9062232(FileName@9062230 : Text;FilePath@9062231 : Text);
+    VAR
+      PurchInvMatchingLine@9062232 : Record 9062441;
+      FileManagement@9062233 : Codeunit 419;
+      TempBlob@9062234 : TEMPORARY Record 99008535;
+      File@9062237 : File;
+      InStream@9062236 : InStream;
+      OutStream@9062235 : OutStream;
+      SystemBehaviour@9062238 : Record 9062230;
+      OCRFolder@9062239 : Text;
+      SystemBehaviourCard@9062240 : Page 9062231;
+      FileSystem@9062241 : Codeunit 9062264;
+      PurchaseInvoiceMatching@9062242 : Codeunit 9062349;
+      OCRManagement@9062243 : Codeunit 9062426;
+      ExistingScaningFolder@9062244 : Text;
+      eConfirmation@1000000000 : TextConst 'ENU=The default scanning folder is not setup. Would you like to set it up now?;ENG=The default scanning folder is not setup. Would you like to set it up now?';
+      eFolder@1000000001 : TextConst 'ENU=Import From Camera;ENG=Import From Camera';
+    BEGIN
+      IF (FileName = '') OR (FilePath = '') THEN
+        EXIT;
+      OCRFolder := SystemBehaviour.GetText('INV_M_SCAN_FOLDER');
+      IF OCRFolder = '' THEN BEGIN
+        IF CONFIRM(eConfirmation, TRUE) THEN BEGIN
+          SystemBehaviour.SETFILTER(SystemBehaviour.Code,'INV_M_SCAN_FOLDER');
+          SystemBehaviour.SETFILTER(SystemBehaviour."User ID",'');
+          IF SystemBehaviour.FINDFIRST THEN BEGIN
+            SystemBehaviourCard.SETRECORD(SystemBehaviour);
+            IF (SystemBehaviourCard.RUNMODAL = ACTION::OK) THEN
+             OCRFolder := SystemBehaviour.GetText('INV_M_SCAN_FOLDER');
+          END;
+        END;
+      END;
+      IF OCRFolder = '' THEN
+        EXIT;
+
+      OCRFolder := STRSUBSTNO('%1\%2',OCRFolder,eFolder);
+
+      FileSystem.CreateFolder(FALSE,OCRFolder);
+
+      IF (OCRFolder <> '') THEN BEGIN
+        File.OPEN(FilePath);
+        File.CREATEINSTREAM(InStream);
+        TempBlob.Blob.CREATEOUTSTREAM(OutStream);
+        COPYSTREAM(OutStream,InStream);
+        File.CLOSE;
+        IF ERASE(FilePath) THEN;
+        FileManagement.BLOBExportToServerFile(TempBlob,STRSUBSTNO('%1\%2',OCRFolder,FileName));
+        ExistingScaningFolder := Rec."Invoice Scaning Folder";
+        Rec."Invoice Scaning Folder" := OCRFolder;
+        OCRManagement.ProcessDocumentsFromFolder(Rec);
+
+        PurchInvMatchingLine.SETRANGE("Batch Code",Rec.Code);
+        IF PurchInvMatchingLine.FINDSET THEN BEGIN
+          MatchLines(TRUE);
+          PostInvoices(TRUE);
+        END;
+      END;
+        FileSystem.DeleteFileIfExists(FALSE,STRSUBSTNO('%1\%2',OCRFolder,FileName));
+        FileSystem.DeleteFolderIfExists(FALSE,OCRFolder,TRUE);
+        Rec."Invoice Scaning Folder" := ExistingScaningFolder;
+    END;
+
+    BEGIN
+    {
+      //DOC NH2015.4  AP 01/04/2014 - Added "Invoice Scaning Folder" field
+      //DOC NH2015.8  AP 13/07/2015 - Fixes, amendments
+      //DOC NH2016.10 JH 01/10/2015 - Upgraded to 2016
+      //DOC NH2016.15 JH 15/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

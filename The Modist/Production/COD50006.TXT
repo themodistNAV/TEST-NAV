@@ -1,0 +1,125 @@
+OBJECT Codeunit 50006 Order Cancellation Managment
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/06/18;
+    Time=[ 3:51:15 PM];
+    Modified=Yes;
+    Version List=OP9031;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    LOCAL PROCEDURE CanCancelFullOrder@1000000001(OrderNo@1000000000 : Code[20]) : Boolean;
+    VAR
+      SalesHeader@1000000001 : Record 36;
+      SalesLine@1000000002 : Record 37;
+      retVal@1000000003 : Boolean;
+    BEGIN
+      //This function checks if the order should be cancelled in full or
+      //if there are specific lines that need cancellation
+      IF SalesHeader.GET(SalesHeader."Document Type"::Order,OrderNo) THEN BEGIN
+        SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+        SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+        SalesLine.SETRANGE("Line Status",SalesLine."Line Status"::Cancelled);
+        retVal := NOT SalesLine.FINDFIRST;
+      END;
+
+      EXIT(retVal);
+    END;
+
+    PROCEDURE CancelOrder@1000000003(VAR SalesHeader@1000000000 : Record 36);
+    VAR
+      SalesLine@1000000001 : Record 37;
+      ArchiveManagement@1000000002 : Codeunit 5063;
+      IntegrationProcessProcessor@1000000003 : Codeunit 50005;
+      SalesOrderToDelete@1000000004 : Record 36;
+      SalesLinesToDelete@1000000005 : Record 37;
+      OriginalStatus@1000000006 : Code[30];
+      ReleaseSalesDoc@1000000007 : Codeunit 414;
+      IsReleased@1000000008 : Boolean;
+      SalesPayProcessing@1000000009 : Codeunit 50026;
+      GACOrderUpdateFunctions@1000000010 : Codeunit 50017;
+      ErrOrderCancelNotAllowed@1000000011 : TextConst 'ENU=Order %1 has lines packed or picked or shipped, so cancellation not allowed.;ENG=Order %1 has lines packed or picked or shipped, so cancellation not allowed.';
+    BEGIN
+      //This function is used from the cancel order action on the sales card
+      //and is used to Cancel an order
+      SalesHeader.TESTFIELD("Reason Code");
+
+      IF CanCancelFullOrder(SalesHeader."No.") THEN BEGIN  //Checks if the full order should be canceled or only some lines for full order
+      //DOC OP9031 RK 01/03/17 -
+        IF NOT GACOrderUpdateFunctions.CheckCancelChangeAllowed(SalesHeader."No.",0) THEN
+          ERROR(STRSUBSTNO(ErrOrderCancelNotAllowed,SalesHeader."No."));
+      //DOC OP9031 RK 01/03/17 +
+        SalesHeader."Order Status" := 'CANCELLED'; //Mark the order as having been been cancelled
+        SalesHeader.MODIFY;
+        SalesLine.SETRANGE("Document Type",SalesLine."Document Type"::Order); //Mark the lines to cancel
+        SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+        IF SalesLine.FINDSET THEN
+          SalesLine.MODIFYALL("Line Status",SalesLine."Line Status"::Cancelled);
+
+        ArchiveManagement.ArchSalesDocumentNoConfirm(SalesHeader);   //Archive the order
+        IntegrationProcessProcessor.AddUpdateCancelled(SalesHeader); //Send Order Update to Demandware
+
+        //## Send cancellation update to 3PL here
+      //DOC OP9031 RK 24/11/2016 -
+        IntegrationProcessProcessor.Add3PLOrderCancellation(SalesHeader);
+      //DOC OP9031 RK 24/11/2016 +
+        //## Send payment cancellation to Paypal or Cybersource here
+      //DOC OP9031 RK 24/01/2017 -
+        SalesPayProcessing.VoidOrderPayments(SalesHeader."No.");
+      //DOC OP9031 RK 24/01/2017 +
+        SalesOrderToDelete.GET(SalesOrderToDelete."Document Type"::Order,SalesHeader."No."); //Delete the order.
+        SalesOrderToDelete.DELETE(TRUE);
+      END ELSE BEGIN  //Cancel selected lines
+        //if the order is releases we will re open it
+        IsReleased:=(SalesHeader.Status = SalesHeader.Status::Released);
+        IF IsReleased THEN
+          ReleaseSalesDoc.PerformManualReopen(SalesHeader);
+        OriginalStatus := SalesHeader."Order Status";
+        SalesHeader."Order Status" := 'PROCESSING'; //Mark the order as having been been cancelled
+        SalesHeader.MODIFY;
+        ArchiveManagement.ArchSalesDocumentNoConfirm(SalesHeader);
+        IntegrationProcessProcessor.AddUpdateProcessed(SalesHeader); //use the Processed update
+
+        //## Send cancellation update to 3PL here
+
+        //## Send payment cancellation to Paypal or Cybersource here
+
+        //Delete lines
+        SalesLinesToDelete.SETRANGE("Document Type",SalesLinesToDelete."Document Type"::Order);
+        SalesLinesToDelete.SETRANGE("Document No.",SalesHeader."No.");
+        SalesLinesToDelete.SETRANGE("Line Status",SalesLinesToDelete."Line Status"::Cancelled);
+        IF SalesLinesToDelete.FINDSET THEN
+          SalesLinesToDelete.DELETEALL(TRUE);
+
+        //Revert order status
+        SalesHeader."Order Status" := OriginalStatus; //Mark the order as having been been cancelled
+        SalesHeader.MODIFY;
+        //if the order was released we will re release it
+        IF IsReleased THEN
+          ReleaseSalesDoc.PerformManualRelease(SalesHeader);
+        //DOC OP9031 RK 18/01/2017 -
+        SalesPayProcessing.RecalculateOrderCapture(SalesHeader."No.");
+        //DOC OP9031 RK 18/01/2017 +
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC OP9031 LF 03/11/2016 - Functionality to facilitate order cancellation
+      //DOC OP9031 RK 24/11/2016 - Create integration log to pass cancellation call to 3PL.
+      //DOC OP9031 RK 18/01/2017 - Reduce capture amount on cancellation of lines.
+      //DOC OP9031 RK 24/01/2017 - Void payments on cancellation of order.
+      //DOC OP9031 RK 01/03/17 - Disallow cancelling of line of GAC has sent pack, pick or ship status.
+    }
+    END.
+  }
+}
+

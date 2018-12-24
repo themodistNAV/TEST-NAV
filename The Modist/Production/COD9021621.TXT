@@ -1,0 +1,1525 @@
+OBJECT Codeunit 9021621 Internet Automation
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:18 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 9021609=m;
+    OnRun=VAR
+            Txt100@1000000000 : TextConst 'ENU=Total Time %9, UpdateCusts %1:%5 (Time:No. Recs), CreateContacts %2:%6, CustSubs %3:%7,ContactQuestionAnswers %4:%8,;ENG=Total Time %9, UpdateCusts %1:%5 (Time:No. Recs), CreateContacts %2:%6, CustSubs %3:%7,ContactQuestionAnswers %4:%8,';
+            Txt101@1000000001 : TextConst 'ENU=ConvertInternetOrders %1:%4, CheckOpenIPIs %2:%5, CheckForInvalidNotInIPIs %3:%6;ENG=ConvertInternetOrders %1:%4, CheckOpenIPIs %2:%5, CheckForInvalidNotInIPIs %3:%6';
+            Txt102@1000000002 : TextConst 'ENU=PayCustomerAccounts %1:%2, StartupProcedures %3:%4, ProcessWebFieldUpdates %5:%6;ENG=PayCustomerAccounts %1:%2, StartupProcedures %3:%4, ProcessWebFieldUpdates %5:%6';
+          BEGIN
+            //UpdateCustomersContacts needs to be first, otherwise we will just
+            //update customers/contacts we have only just created.
+
+            WaitUntilFree1;
+            TimeStartOverall := TIME;
+
+            IF InternetSetup."Run in Interrogation Mode" THEN BEGIN
+              TimeStart := TIME;
+              NoOfRecords[5] := 0;
+            END;
+
+            StartUpProcedures;
+            COMMIT;
+            IF InternetSetup."Run in Interrogation Mode" THEN BEGIN
+              TimeDiff[9] := TIME - TimeStart;
+              TimeStart := TIME;
+            END;
+
+            SplitMultipleOrders.ProcessAllPossibleSplitOrders;
+            COMMIT;
+
+            UpdateCustomersContacts;
+            COMMIT;
+            IF InternetSetup."Run in Interrogation Mode" THEN BEGIN
+              TimeDiff[1] := TIME - TimeStart;
+              TimeStart := TIME;
+            END;
+
+            CreateContacts;
+            COMMIT;
+            IF InternetSetup."Run in Interrogation Mode" THEN BEGIN
+              TimeDiff[2] := TIME - TimeStart;
+              TimeStart := TIME;
+            END;
+
+            ProcessCustomerSubscriptions;
+            COMMIT;
+            IF InternetSetup."Run in Interrogation Mode" THEN BEGIN
+              TimeDiff[3] := TIME - TimeStart;
+              TimeStart := TIME;
+            END;
+
+
+            ProcessContactQuestionAnswers; //DOC EC2013.4.60 enabled
+            COMMIT;
+            IF InternetSetup."Run in Interrogation Mode" THEN BEGIN
+              TimeDiff[4] := TIME - TimeStart;
+              TimeStart := TIME;
+            END;
+
+            //needs to be above CheckForInvalidNotInIPI so to update Customer Account first.
+            COMMIT;
+            IF InternetSetup."Run in Interrogation Mode" THEN BEGIN
+              TimeDiff[8] := TIME - TimeStart;
+              TimeStart := TIME;
+            END;
+
+            ConvertInternetOrders('');
+            COMMIT;
+            IF InternetSetup."Run in Interrogation Mode" THEN BEGIN
+              TimeDiff[5] := TIME - TimeStart;
+              TimeStart := TIME;
+            END;
+
+            CheckOpenIPIs;
+            COMMIT;
+            IF InternetSetup."Run in Interrogation Mode" THEN BEGIN
+              TimeDiff[6] := TIME - TimeStart;
+              TimeStart := TIME;
+            END;
+
+            CheckForInvalidNotInIPI;
+            COMMIT;
+            IF InternetSetup."Run in Interrogation Mode" THEN BEGIN
+              TimeDiff[7] := TIME - TimeStart;
+              TimeStart := TIME;
+            END;
+
+            ProcessWebFieldUpdates;
+            COMMIT;
+            IF InternetSetup."Run in Interrogation Mode" THEN BEGIN
+              TimeDiff[10] := TIME - TimeStart;
+              TimeStart := TIME;
+            END;
+
+            PromoHistProc.Process('');
+            ProcessWebFileDownload; //DOC EC2015.5.02
+
+            IF (InternetSetup."Run in Interrogation Mode" = TRUE) AND (GUIALLOWED = TRUE) THEN BEGIN
+              TimeDiff[11] := TimeDiff[1] + TimeDiff[2] +TimeDiff[3] +TimeDiff[4] +TimeDiff[5]
+                              +TimeDiff[6] +TimeDiff[7] +TimeDiff[8] +TimeDiff[9] +TimeDiff[10];
+              TextStr[1] := STRSUBSTNO(Txt100,TimeDiff[1],TimeDiff[2],TimeDiff[3],TimeDiff[4],NoOfRecords[1],NoOfRecords[2],NoOfRecords[3],NoOfRecords[4],TimeDiff[10]);
+              TextStr[2] := STRSUBSTNO(Txt101,TimeDiff[5],TimeDiff[6],TimeDiff[7],NoOfRecords[5],NoOfRecords[6],NoOfRecords[7]);
+              TextStr[3] := STRSUBSTNO(Txt102,TimeDiff[8],NoOfRecords[8],TimeDiff[9],NoOfRecords[9],TimeDiff[10],NoOfRecords[10]);
+              MESSAGE('%1 %2 %3',TextStr[1],TextStr[2],TextStr[3]);
+            END;
+
+            SELECTLATESTVERSION;
+            InternetSetup.GET;
+            TimeDiff[12] := ROUND((TIME - TimeStartOverall)/1000,1); //In seconds
+            IF TimeDiff[12] > InternetSetup."Max Int. Auto Process Time" THEN
+              InternetSetup."Max Int. Auto Process Time" := TimeDiff[12];
+            InternetSetup."Av. Int. Auto Process Time" := ROUND(
+              ((InternetSetup."No. of Times Int. Process Run" * InternetSetup."Av. Int. Auto Process Time") +
+              TimeDiff[12]) / (InternetSetup."No. of Times Int. Process Run" + 1),1);
+              InternetSetup."No. of Times Int. Process Run" :=
+                                    InternetSetup."No. of Times Int. Process Run" + 1;
+            IF InternetSetup."Processing Mode" = InternetSetup."Processing Mode"::"Internet Automation" THEN
+              InternetSetup."Processing Mode" := InternetSetup."Processing Mode"::" ";
+            InternetSetup.MODIFY;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SubscriptRec@1040000 : Record 9021653;
+      IntProcessIssue@1040001 : Record 9021669;
+      IntProcessIssue1@1040045 : Record 9021669;
+      CustSubRec@1040003 : Record 9021654;
+      CustSubRec1@1040002 : Record 9021654;
+      ContactRec@1040007 : Record 5050;
+      Text001@1040005 : TextConst 'ENU=Cannot find Subscription for Customer Subscription. (1);ENG=Cannot find Subscription for Customer Subscription. (1)';
+      Text002@1040006 : TextConst 'ENU=A contact with the right UserGUID does not exist for Customer Subscription even though the internet customer has a contact. (2);ENG=A contact with the right UserGUID does not exist for Customer Subscription even though the internet customer has a contact. (2)';
+      InternetCustRec@1040008 : Record 9021642;
+      InternetCustRec1@1040009 : Record 9021642;
+      Customer@1040010 : Record 18;
+      Text003@1040011 : TextConst 'ENU=Matches found for Internet Customer %1. You must manually decide to either match the Internet Customer or create a new contact. (3);ENG=Matches found for Internet Customer %1. You must manually decide to either match the Internet Customer or create a new contact. (3)';
+      InternetOrderHeadRec@1040012 : Record 9021666;
+      InternetOrderHeadRec1@1040014 : Record 9021666;
+      InternetOrderLine@1000000012 : Record 9021667;
+      InternetCustB2BRec@1040021 : Record 9021643;
+      InternetSetup@1040013 : Record 9021609;
+      Text004@1040015 : TextConst 'ENU=Unable to determine Customer No. as can''t get Internet Customer and setup does not allow use of default Customer. (4);ENG=Unable to determine Customer No. as can''t get Internet Customer and setup does not allow use of default Customer. (4)';
+      Text005@1040016 : TextConst 'ENU=Could not convert Internet Order to an %1 as unable to determine customer no. (5);ENG=Could not convert Internet Order to an %1 as unable to determine customer no. (5)';
+      ContBusRelRec@1040004 : Record 5054;
+      DefaultDimen@1040023 : Record 352;
+      SalesHeader@1040033 : Record 36;
+      TotalSalesLine@1040036 : Record 37;
+      CountryRegionRec@1040044 : Record 9;
+      FieldUpdate@1190000023 : Record 9021607;
+      FieldUpdate1@1190000024 : Record 9021607;
+      SalesHead@1040051 : Record 36;
+      SalesLine@1040052 : Record 37;
+      SalesSetup@1040053 : Record 311;
+      Item@1000000023 : Record 27;
+      WebCommentLine@1000000025 : Record 9021665;
+      LinkedAtValWeb@1000000027 : Record 9021683;
+      InternetOrdertoSalesDoc@1040017 : Codeunit 9021612;
+      Text006@1040018 : TextConst 'ENU=Could not convert Internet Order to an %1 as conversion process failed. (6);ENG=Could not convert Internet Order to an %1 as conversion process failed. (6)';
+      InternetShopMgt@1040019 : Codeunit 9021610;
+      Text007@1040020 : TextConst 'ENU=Order processed OK but could not send confirmation email as Internet Customer %1 does not have an email address. (7);ENG=Order processed OK but could not send confirmation email as Internet Customer %1 does not have an email address. (7)';
+      Text008@1040022 : TextConst 'ENU=Internet Customer %1 does not have a Label Code. (8);ENG=Internet Customer %1 does not have a Label Code. (8)';
+      Text009@1040024 : TextConst 'ENU=The User GuID on Customer %1 should be the same as the "No." on the Internet Customer %2. (9);ENG=The User GuID on Customer %1 should be the same as the "No." on the Internet Customer %2. (9)';
+      Text010@1040025 : TextConst 'ENU=The Label Code on the Customer %1 does not agree with the Label Code on the Internet Customer %2. (10);ENG=The Label Code on the Customer %1 does not agree with the Label Code on the Internet Customer %2. (10)';
+      Text011@1040026 : TextConst 'ENU=Customer No. %1 has a User GuID linking it to Internet Customer %2 but the Contact %3 is not linked to the Customer. (11);ENG=Customer No. %1 has a User GuID linking it to Internet Customer %2 but the Contact %3 is not linked to the Customer. (11)';
+      Text012@1040027 : TextConst 'ENU=Label Code on Internet Customer %1 does not agree with Label Code on %2. (12);ENG=Label Code on Internet Customer %1 does not agree with Label Code on %2. (12)';
+      Text013@1040028 : TextConst 'ENU=Internet Customer %1 is a B2B Customer but can not find the contact. (13);ENG=Internet Customer %1 is a B2B Customer but can not find the contact. (13)';
+      Text014@1040029 : TextConst 'ENU=The Internet Customer %1 needs to have a contact. This must be fixed before Internet Order can be processed. (14);ENG=The Internet Customer %1 needs to have a contact. This must be fixed before Internet Order can be processed. (14)';
+      Text015@1040030 : TextConst 'ENU=The Internet Order and the Internet Customer %1 have different Label Codes. (15);ENG=The Internet Order and the Internet Customer %1 have different Label Codes. (15)';
+      ReleaseSalesDocument@1190000017 : Codeunit 414;
+      PromoHistProc@1190000019 : Codeunit 9021631;
+      SplitMultipleOrders@1000000031 : Codeunit 9021604;
+      V5AndOver@1000000034 : Codeunit 9021605;
+      IssueText@1040034 : Text[1024];
+      Text016@1040032 : TextConst 'ENU=Warning: Total amount on the %1 is different from total amount on the %2. This has been processed so you must investigate. (16);ENG=Warning: Total amount on the %1 is different from total amount on the %2. This has been processed so you must investigate. (16)';
+      TextStr@1000000020 : ARRAY [3] OF Text[250];
+      Text017@1040043 : TextConst 'ENU=Cannot create a customer as the country %1 does not have a Internet Customer Template set up. (17);ENG=Cannot create a customer as the country %1 does not have a Internet Customer Template set up. (17)';
+      Text018@1040046 : TextConst 'ENU=The subscription does not have a Segment No. (18);ENG=The subscription does not have a Segment No. (18)';
+      Text019@1040047 : TextConst 'ENU=Could not create a Segment Line for this customer subscription. (19);ENG=Could not create a Segment Line for this customer subscription. (19)';
+      Text020@1040048 : TextConst 'ENU=Could not convert the Internet Questionnaire Answer. Either the Internet Customer record does not exist or has no Contact. (20);ENG=Could not convert the Internet Questionnaire Answer. Either the Internet Customer record does not exist or has no Contact. (20)';
+      Text021@1040049 : TextConst 'ENU=The key ''%1'' could not be found on the table ''%2''. (21);ENG=The key ''%1'' could not be found on the table ''%2''. (21)';
+      ModContact@1000000000 : Boolean;
+      Text022@1000000001 : TextConst 'ENU=The Internet Customer has a Customer No. but no Contact - this should not be possible.  Please clear the Customer No. and then establish a link to the Contact manually. (22);ENG=The Internet Customer has a Customer No. but no Contact - this should not be possible.  Please clear the Customer No. and then establish a link to the Contact manually. (22)';
+      ModCust@1000000005 : Boolean;
+      ModInternetSetup@1000000011 : Boolean;
+      OKToReleaseOrder@1040035 : Boolean;
+      FreeToProcess@1000000002 : Boolean;
+      CustNo@1000000003 : Code[20];
+      Text023@1000000004 : TextConst 'ENU=Customer %1 is linked to Contact No. %2 but the Customer has a User Guid linking it to a different Internet Customer. (23);ENG=Customer %1 is linked to Contact No. %2 but the Customer has a User Guid linking it to a different Internet Customer. (23)';
+      TimeStart@1000000007 : Time;
+      TimeStartOverall@1000000022 : Time;
+      TimeDiff@1000000008 : ARRAY [12] OF Integer;
+      NoOfRecords@1000000006 : ARRAY [10] OF Integer;
+      i@1000000028 : Integer;
+      DateToCheckInternetCusts@1000000009 : Date;
+      LatestDateInternetCustsAreMod@1000000010 : Date;
+      Text024@1000000013 : TextConst 'ENU=The Internet Order Header says there should be %1 line(s) but there are %2. [This error does NOT set the Internet Order to Invalid] (24);ENG=The Internet Order Header says there should be %1 line(s) but there are %2. [This error does NOT set the Internet Order to Invalid] (24)';
+      DateTimeToCheckInternetCusts@1000000014 : DateTime;
+      Text025@1000000015 : TextConst 'ENU=The Internet Customer is a B2B Customer but the B2B Customer has no contact. (25);ENG=The Internet Customer is a B2B Customer but the B2B Customer has no contact. (25)';
+      Text026@1000000016 : TextConst 'ENU=The Internet B2B Customer %1 has a contact no. of %2 but cannot find this contact. (26);ENG=The Internet B2B Customer %1 has a contact no. of %2 but cannot find this contact. (26)';
+      Text027@1000000017 : TextConst 'ENU=The Customer No. %1 on the Internet Customer does not agree with the Customer No.%2 on the Internet B2B Customer. (27);ENG=The Customer No. %1 on the Internet Customer does not agree with the Customer No.%2 on the Internet B2B Customer. (27)';
+      Text028@1000000018 : TextConst 'ENU=The Contact %1 has a UserGuid linking it to Internet B2B Customer No. %2 but the Contact is not linked to any customer. (28);ENG=The Contact %1 has a UserGuid linking it to Internet B2B Customer No. %2 but the Contact is not linked to any customer. (28)';
+      Text029@1000000019 : TextConst 'ENU=The Internet B2B Customer No. %2 that is a LogIn for Customer No. %3 is linked to Contact No. %1 but the Contact is linked to Customer No. %4. (29);ENG=The Internet B2B Customer No. %2 that is a LogIn for Customer No. %3 is linked to Contact No. %1 but the Contact is linked to Customer No. %4. (29)';
+      Text030@1000000021 : TextConst 'ENU=The Contact %1 is linked to the Internet B2B Customer No. %2 but the UserGuid on the Contact is not the Internet B2B Customers No. (30);ENG=The Contact %1 is linked to the Internet B2B Customer No. %2 but the UserGuid on the Contact is not the Internet B2B Customers No. (30)';
+      Text031@1040050 : TextConst 'ENU=%1 successfully created but failed to release Sales %1.  You must manually release it. (31);ENG=%1 successfully created but failed to release Sales %1.  You must manually release it. (31)';
+      Text032@1190000007 : TextConst 'ENU=There are %1 Customers with the User GuID %2. (32);ENG=There are %1 Customers with the User GuID %2. (32)';
+      Text033@1190000009 : TextConst 'ENU=Failed to process Payment Entry. (33);ENG=Failed to process Payment Entry. (33)';
+      Text034@1190000010 : TextConst 'ENU=The Customer %1 is Blocked.;ENG=The Customer %1 is Blocked.';
+      Text035@1190000011 : TextConst 'ENU=The Internet Order Header is expecting %1 Payment Entries but there are only %2 Entries. [This error does NOT set the Internet Order to Invalid] (35);ENG=The Internet Order Header is expecting %1 Payment Entries but there are only %2 Entries. [This error does NOT set the Internet Order to Invalid] (35)';
+      Text036@1190000012 : TextConst 'ENU=Could not convert Internet Order to an %1 as conversion process failed.  %1 %2 was created and then deleted. (36);ENG=Could not convert Internet Order to an %1 as conversion process failed.  %1 %2 was created and then deleted. (36)';
+      Text037@1190000013 : TextConst 'ENU=Could not convert Internet Order to an %1 as conversion process failed.  %1 %2 was created but not found so could NOT delete.(37);ENG=Could not convert Internet Order to an %1 as conversion process failed.  %1 %2 was created but not found so could NOT delete.(37)';
+      Text038@1190000016 : TextConst 'ENU=The customer is over their credit limit or had an overdue balance.  %1 %2 was not released. (38);ENG=The customer is over their credit limit or had an overdue balance.  %1 %2 was not released. (38)';
+      Text039@1190000020 : TextConst 'ENU=Cannot create a customer as the country %1 does not have a B2B Customer Template set up. (39);ENG=Cannot create a customer as the country %1 does not have a B2B Customer Template set up. (39)';
+      Text040@1190000021 : TextConst 'ENU=Beware: An %1 may have been partially created as the process failed during its creation. THIS REQUIRES IMMEDIATE ATTENTION (40);ENG=Beware: An %1 may have been partially created as the process failed during its creation. THIS REQUIRES IMMEDIATE ATTENTION (40)';
+      Text041@1190000025 : TextConst 'ENU=%1 Creation Failed at some point.  You need to run this manually. (41);ENG=%1 Creation Failed at some point.  You need to run this manually. (41)';
+      Text042@1190000026 : TextConst 'ENU=Bill-to Net Customer No. must not be blank - there is a serious problem on the web. (42);ENG=Bill-to Net Customer No. must not be blank - there is a serious problem on the web. (42)';
+      Text043@1190000022 : TextConst 'ENU=THIS REQUIRES URGENT ATTENTION. Conversion process failed.  %1 %2 was created but not fully processed.(43);ENG=THIS REQUIRES URGENT ATTENTION. Conversion process failed.  %1 %2 was created but not fully processed.(43)';
+      Text044@1190000028 : TextConst 'ENU=Update of field from web failed. (44);ENG=Update of field from web failed. (44)';
+      Text045@1190000029 : TextConst 'ENU=Internet Automation encountered untrapped error trying to Process Field Update. (45);ENG=Internet Automation encountered untrapped error trying to Process Field Update. (45)';
+      Text046@1190000030 : TextConst 'ENU=This Internet Order is not linked to a Internet Customer but is linked to Customer No. %1 but that customer must be a B2B Customer.;ENG=This Internet Order is not linked to a Internet Customer but is linked to Customer No. %1 but that customer must be a B2B Customer.';
+      Text047@1000000024 : TextConst 'ENU=The Internet Order has items that need special attention. Please manually review. (47);ENG=The Internet Order has items that need special attention. Please manually review. (47)';
+      Text048@1000000026 : TextConst 'ENU=Attention Only.........   Comments Exist on Internet Order. (48);ENG=Attention Only.........   Comments Exist on Internet Order. (48)';
+      Text049@1000000029 : TextConst 'ENU=The Internet Order Header is expecting %1 Linked Attribute Value Web Entries but there are only %2 Entries. [This error does NOT set the Internet Order to Invalid] (49);ENG=The Internet Order Header is expecting %1 Linked Attribute Value Web Entries but there are only %2 Entries. [This error does NOT set the Internet Order to Invalid] (49)';
+      Text050@1000000030 : TextConst 'ENU=The Internet Order Header is expecting %1 Linked Attribute Value Web Entries yet there are %2 Entries. Something is seriously wrong. (50);ENG=The Internet Order Header is expecting %1 Linked Attribute Value Web Entries yet there are %2 Entries. Something is seriously wrong. (50)';
+      Text051@1000000032 : TextConst 'ENU=Enabled Internet B2B Login %1 already exists with this email address of %2.  The system cannot use this method to create another B2B Login with the same email address.;ENG=Enabled Internet B2B Login %1 already exists with this email address of %2.  The system cannot use this method to create another B2B Login with the same email address.';
+      TxtCommentIpi@1000000035 : TextConst 'ENU=COMMENT;ENG=COMMENT';
+      TxtQuote@1000000036 : TextConst 'ENU=Quote;ENG=Quote';
+      TxtOrder@1000000037 : TextConst 'ENU=Order;ENG=Order';
+      TxtInvoice@1000000038 : TextConst 'ENU=Invoice;ENG=Invoice';
+
+    PROCEDURE ProcessesPriorToManualOrder@1000000002();
+    BEGIN
+      InternetSetup.GET;
+
+      UpdateCustomersContacts;
+      COMMIT;
+      CreateContacts;
+      COMMIT;
+      ProcessCustomerSubscriptions;
+      COMMIT;
+
+      ProcessContactQuestionAnswers; //DOC EC2013.4.60 enabled
+      COMMIT;
+
+      ProcessWebFieldUpdates;
+      COMMIT;
+
+      PromoHistProc.Process('');
+      ProcessWebFileDownload; //DOC EC2015.5.02
+    END;
+
+    PROCEDURE CreateContacts@1040003();
+    VAR
+      Text100@1000000000 : TextConst 'ENU=Error 120525 in CreateContacts - call MQ;ENG=Error 120525 in CreateContacts - call MQ';
+    BEGIN
+      InternetCustRec.RESET;
+      InternetCustRec.SETCURRENTKEY("Contact No.");
+      InternetCustRec.SETRANGE("Contact No.",'');
+      InternetCustRec.SETRANGE("Not Active",FALSE);
+      IF InternetSetup."Run in Interrogation Mode" THEN
+        NoOfRecords[2] := InternetCustRec.COUNT;
+      IF InternetCustRec.FIND('-') THEN
+      REPEAT
+        IF InternetCustRec."Customer No." <> '' THEN
+          ERROR(Text100);
+        IF InternetCustRec."Label Code" = '' THEN BEGIN
+          //First check there is a label code - there should always be one.
+          IssueText := STRSUBSTNO(Text008,InternetCustRec.Contact);
+          CreateIPI(2,InternetCustRec."No.",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,'');
+        END ELSE BEGIN
+          InternetCustRec.CALCFIELDS("B2B Customer");
+          //Check if B2B
+          IF InternetCustRec."B2B Customer" THEN BEGIN
+            //If B2B
+            InternetCustB2BRec.GET(InternetCustRec."No.");
+            InternetCustRec1 := InternetCustRec;
+            InternetCustRec1."Customer No." := InternetCustB2BRec."Customer No.";
+            IF InternetCustB2BRec."Contact No." = '' THEN BEGIN
+              ContactRec.RESET;
+              ContactRec.SETCURRENTKEY("User GuID");
+              ContactRec.SETRANGE("User GuID",InternetCustRec."No.");
+              IF ContactRec.FINDFIRST THEN BEGIN
+                CustNo := FindCustNoFromContact(ContactRec."Company No.");
+                IF CustNo = '' THEN BEGIN
+                  IssueText := STRSUBSTNO(Text028,ContactRec."No.",InternetCustRec."No.");
+                  CreateIPI(2,InternetCustRec."No.",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,'');
+                END ELSE BEGIN
+                  IF InternetCustB2BRec."Customer No." = CustNo THEN BEGIN
+                    IF ContactRec."Label Code" = '' THEN BEGIN
+                      ContactRec."Label Code" := InternetCustRec."Label Code";
+                      //NOTE: need to update Customer."Label Code" as well (maybe)
+                      //Call Validate in case of Cust. Spec code
+                      ContactRec.VALIDATE("Is An Internet Customer",TRUE);
+                      ContactRec.MODIFY;
+                      InternetCustRec1."Contact No." := InternetCustB2BRec."Contact No.";
+                      IntCustProcessed(InternetCustRec1);
+                    END ELSE BEGIN
+                      IF ContactRec."Label Code" <> InternetCustRec."Label Code" THEN BEGIN
+                        IssueText := STRSUBSTNO(Text012,InternetCustRec.Contact,InternetCustRec.FIELDCAPTION("Contact No."));
+                        CreateIPI(2,InternetCustRec."No.",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,
+                                  InternetCustB2BRec."Customer No.");
+                      END ELSE BEGIN
+                        IF ContactRec."Is An Internet Customer" = FALSE THEN BEGIN
+                          ContactRec.VALIDATE("Is An Internet Customer",TRUE);
+                          ContactRec.MODIFY;
+                        END;
+                        InternetCustRec1."Contact No." := InternetCustB2BRec."Contact No.";
+                        IntCustProcessed(InternetCustRec1);
+                      END;
+                    END;
+                  END ELSE BEGIN
+                    //Internet B2B Customer No. is not Contact customer no.
+                    IssueText := STRSUBSTNO(Text029,ContactRec."No.",InternetCustRec."No.",
+                                            InternetCustB2BRec."Customer No.",CustNo);
+                    CreateIPI(2,InternetCustRec."No.",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,
+                              InternetCustB2BRec."Customer No.");
+                  END;
+                END;
+              END ELSE BEGIN
+                //No contact can be establised.
+                IssueText := STRSUBSTNO(Text013,InternetCustB2BRec."No.");
+                CreateIPI(2,InternetCustRec."No.",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,'');
+              END;
+            END ELSE BEGIN
+              //Internet B2B Customer has a contact no.
+              IF ContactRec.GET(InternetCustB2BRec."Contact No.") THEN BEGIN
+                CustNo := FindCustNoFromContact(ContactRec."Company No.");
+                IF CustNo = '' THEN BEGIN
+                  IssueText := STRSUBSTNO(Text028,ContactRec."No.",InternetCustRec."No.");
+                  CreateIPI(2,InternetCustRec."No.",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,'');
+                END ELSE BEGIN
+                  IF InternetCustB2BRec."Customer No." = CustNo THEN BEGIN
+                    IF ContactRec."Label Code" = '' THEN BEGIN
+                      ContactRec."Label Code" := InternetCustRec."Label Code";
+                      //NOTE: need to update Customer."Label Code" as well (maybe)
+                      //Call Validate in case of Cust. Spec code
+                      ContactRec.VALIDATE("Is An Internet Customer",TRUE);
+                      ContactRec.MODIFY;
+                      InternetCustRec1."Contact No." := InternetCustB2BRec."Contact No.";
+                      IntCustProcessed(InternetCustRec1);
+                    END ELSE BEGIN
+                      IF ContactRec."Label Code" <> InternetCustRec."Label Code" THEN BEGIN
+                        IssueText := STRSUBSTNO(Text012,InternetCustRec.Contact,InternetCustRec.FIELDCAPTION("Contact No."));
+                        CreateIPI(2,InternetCustRec."No.",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,
+                                  InternetCustB2BRec."Customer No.");
+                      END ELSE BEGIN
+                        IF ContactRec."Is An Internet Customer" = FALSE THEN BEGIN
+                          ContactRec.VALIDATE("Is An Internet Customer",TRUE);
+                          ContactRec.MODIFY;
+                        END;
+                        InternetCustRec1."Contact No." := InternetCustB2BRec."Contact No.";
+                        IntCustProcessed(InternetCustRec1);
+                      END;
+                    END;
+                  END ELSE BEGIN
+                    //Customer on Internet B2B Customer is not Customer from Contact  Text029 2
+                    IssueText := STRSUBSTNO(Text029,ContactRec."No.",InternetCustRec."No.",
+                                            InternetCustB2BRec."Customer No.",CustNo);
+                    CreateIPI(2,InternetCustRec."No.",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,
+                              InternetCustB2BRec."Customer No.");
+                  END;
+                END;
+                IF ContactRec."User GuID" = '' THEN BEGIN
+                  ContactRec."User GuID" := InternetCustRec."No.";
+                  ContactRec.MODIFY;
+                END ELSE BEGIN
+                  IF ContactRec."User GuID" <> InternetCustRec."No." THEN BEGIN
+                    //UserGuid on Contact does not agree with No on Internet Customer
+                    IssueText := STRSUBSTNO(Text030,ContactRec."No.",InternetCustRec."No.");
+                    CreateIPI(2,InternetCustRec."No.",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,
+                              InternetCustB2BRec."Customer No.");
+                  END;
+                END;
+              END ELSE BEGIN
+                //Cannot get Contact.
+                IssueText := STRSUBSTNO(Text026,InternetCustB2BRec."No.",InternetCustB2BRec."Contact No.");
+                CreateIPI(2,InternetCustRec."No.",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,'');
+              END;
+            END;
+          END ELSE BEGIN
+            //If not B2B
+            ContactRec.RESET;
+            ContactRec.SETCURRENTKEY("User GuID");
+            ContactRec.SETRANGE("User GuID",InternetCustRec."No.");
+            IF ContactRec.FINDFIRST THEN BEGIN
+              IF (ContactRec."Label Code" <> InternetCustRec."Label Code") AND
+                 (ContactRec."Label Code" <> '') THEN BEGIN
+                IssueText := STRSUBSTNO(Text012,InternetCustRec.Contact,InternetCustRec.FIELDCAPTION("Contact No."));
+                CreateIPI(2,InternetCustRec."No.",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,
+                          InternetCustRec."Customer No.");
+              END ELSE BEGIN
+                ModContact := FALSE;
+                IF ContactRec."Label Code" = '' THEN BEGIN
+                  ModContact := TRUE;
+                  ContactRec."Label Code" := InternetCustRec."Label Code";
+                END;
+                IF ContactRec."Is An Internet Customer" = FALSE THEN BEGIN
+                  ContactRec.VALIDATE("Is An Internet Customer",TRUE);
+                  ModContact := TRUE;
+                END;
+                IF ModContact THEN BEGIN
+                  ContactRec."Last Date Modified" := TODAY;
+                  ContactRec.MODIFY;
+                END;
+                InternetCustRec1 := InternetCustRec;
+                InternetCustRec1."Contact No." := ContactRec."No.";
+                //Finding Customer that is linked to the Contact.
+                CustNo := FindCustNoFromContact(ContactRec."No.");
+                IF CustNo = '' THEN BEGIN
+                  IntCustProcessed(InternetCustRec1);
+                  InternetCustRec1.UpdateToContact;
+                END ELSE BEGIN
+                  Customer.GET(CustNo);
+                  IF (InternetCustRec1."Label Code" <> Customer."Label Code") AND
+                     (Customer."Label Code" <> '') THEN BEGIN
+                    IssueText := STRSUBSTNO(Text012,InternetCustRec.Contact,InternetCustRec.FIELDCAPTION("Customer No."));
+                    CreateIPI(2,InternetCustRec."No.",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,CustNo);
+                  END ELSE BEGIN
+                    IF (Customer."User GUID" <> '') AND (Customer."User GUID" <> InternetCustRec1."No.") THEN BEGIN
+                      IssueText := STRSUBSTNO(Text023,Customer."No.",ContactRec."No.");
+                      CreateIPI(2,InternetCustRec."No.",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,CustNo);
+                    END ELSE BEGIN
+                      IF Customer."User GUID" = '' THEN BEGIN
+                        Customer."User GUID" := InternetCustRec."No.";
+                        Customer.VALIDATE("Is An Internet Customer",TRUE);
+                        //DOC EC2015.5.03 Customer.DateTimeInsertedModified := CURRENTDATETIME;
+                        Customer.MODIFY;
+                      END;
+                      InternetCustRec1."Customer No." := CustNo;
+                      IntCustProcessed(InternetCustRec1);
+                      InternetCustRec1.UpdateToContact;
+                      InternetCustRec1.UpdateToCustomer;
+                    END;
+                  END;
+                END;
+              END;
+            END ELSE BEGIN
+              //Not B2B and not find Contact from User Guid.
+              CLEAR(ContactRec);
+              ContactRec.RESET;
+              IF InternetCustRec.FindContact(InternetCustRec,ContactRec,TRUE) THEN BEGIN
+                IssueText := STRSUBSTNO(Text003,InternetCustRec.Contact);
+                CreateIPI(2,InternetCustRec."No.",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,
+                          InternetCustRec."Customer No.");
+              END ELSE BEGIN
+                IF InternetCustRec."B2B Registration" THEN BEGIN
+                  CountryRegionRec.GET(InternetCustRec."Country Code");
+                  IF CountryRegionRec."B2B Customer Template" = '' THEN BEGIN
+                    IssueText := STRSUBSTNO(Text039,InternetCustRec."Country Code");
+                    CreateIPI(2,InternetCustRec."No.",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,'');
+                  END ELSE BEGIN
+                    InternetCustB2BRec.RESET;
+                    InternetCustB2BRec.SETRANGE("Label Code",InternetCustRec."Label Code");
+                    InternetCustB2BRec.SETRANGE("Code Login",InternetCustRec.Login);
+                    InternetCustB2BRec.SETRANGE(Enable,TRUE);
+                    IF InternetCustB2BRec.FINDFIRST THEN BEGIN
+                      IssueText := STRSUBSTNO(Text051,InternetCustB2BRec."No.",InternetCustRec.Login);
+                      CreateIPI(2,InternetCustRec."No.",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,'');
+                    END ELSE BEGIN
+                      InternetCustRec1 := InternetCustRec;
+                      InternetCustRec1.CreateContact2;
+                      IntCustProcessed(InternetCustRec1);
+                    END;
+                  END;
+                END ELSE BEGIN
+                  InternetCustRec1 := InternetCustRec;
+                  InternetCustRec1.CreateContact2;
+                  IntCustProcessed(InternetCustRec1);
+                END;
+              END;
+            END;
+          END;
+        END;
+      UNTIL InternetCustRec.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateCustomersContacts@1040000();
+    VAR
+      TextDate@1000000000 : Text[30];
+    BEGIN
+      IF InternetSetup."Date Internet Cust Update" = 0D THEN
+        DateToCheckInternetCusts := 0D
+      ELSE BEGIN
+        IF InternetSetup."Max No. of Days Run Sync" = 0 THEN
+          DateToCheckInternetCusts := CALCDATE('<-2D>',InternetSetup."Date Internet Cust Update")
+        ELSE BEGIN
+          TextDate := '-' + FORMAT(InternetSetup."Max No. of Days Run Sync") + 'D';
+          DateToCheckInternetCusts := CALCDATE(TextDate,InternetSetup."Date Internet Cust Update");
+        END;
+      END;
+      DateTimeToCheckInternetCusts := CREATEDATETIME(DateToCheckInternetCusts,0T);
+
+      InternetCustRec.RESET;
+      InternetCustRec.SETCURRENTKEY("Last DateTime Modified");
+      InternetCustRec.SETFILTER("Last DateTime Modified",'>=%1|%2',DateTimeToCheckInternetCusts,0DT);
+      InternetCustRec.SETRANGE("Not Active",FALSE);
+      InternetCustRec.SETFILTER("Contact No.",'<>%1','');
+
+      ModInternetSetup := FALSE;
+      IF InternetSetup."Run in Interrogation Mode" THEN
+        NoOfRecords[1] := InternetCustRec.COUNT;
+      IF InternetCustRec.FIND('-') THEN
+      REPEAT
+        IF (InternetCustRec."Last DateTime Modified" <> InternetCustRec."Last DateTime Processed") OR
+           (InternetCustRec."Last DateTime Modified" = 0DT) THEN BEGIN
+          //Do not update Customer or Contact if it is a B2B, otherwise code as before
+          //except reordered so do not run UpdateToContact and UpdateToCustomer
+          InternetCustRec.CALCFIELDS("B2B Customer");
+          IF NOT (InternetCustRec."B2B Customer") THEN BEGIN
+            IF NOT InternetCustRec."B2B Registration" THEN BEGIN
+              IF InternetCustRec."Customer No." = '' THEN BEGIN
+                IF InternetCustRec."Contact No." <> '' THEN
+                  InternetCustRec.UpdateToContact;
+              END ELSE BEGIN
+                InternetCustRec.UpdateToContact;
+                InternetCustRec.UpdateToCustomer;
+              END;
+            END;
+          END;
+          InternetCustRec1 := InternetCustRec;
+          IntCustProcessed(InternetCustRec1);
+          IF InternetCustRec1."Last Date Modified" > InternetSetup."Date Internet Cust Update" THEN BEGIN
+            InternetSetup."Date Internet Cust Update" := InternetCustRec1."Last Date Modified";
+            ModInternetSetup := TRUE;
+          END;
+        END;
+      UNTIL InternetCustRec.NEXT = 0;
+
+      IF ModInternetSetup THEN
+        InternetSetup.MODIFY;
+    END;
+
+    PROCEDURE ConvertInternetOrders@1040001(InOrderGuid@1000000000 : Text[38]);
+    BEGIN
+      CLEAR(InternetOrderHeadRec1);
+      InternetOrderHeadRec1.INIT;
+      InternetOrderHeadRec.RESET;
+      IF InOrderGuid = '' THEN BEGIN
+        InternetOrderHeadRec.SETCURRENTKEY("Converted-To Document No.");
+        InternetOrderHeadRec.SETRANGE("Converted-To Document No.",'');
+        //Actually only want New documents but since New Document will have a blank "Converted to Doc No.
+        //this seems a good way of getting to the right records quickly without adding a key.
+        InternetOrderHeadRec.SETRANGE("Processing In Progress",FALSE);  //Do not process manual
+        InternetOrderHeadRec.SETRANGE(Status,InternetOrderHeadRec.Status::New);
+        //DOC EC2015.5.04 InternetOrderHeadRec.SETFILTER("Label Code",'<>%1','FINBRANDS');
+      END ELSE BEGIN
+        InternetOrderHeadRec.GET(InOrderGuid);
+        InternetOrderHeadRec.SETRANGE("Order Guid",InOrderGuid);
+      END;
+
+      IF InternetSetup."Run in Interrogation Mode" THEN
+        NoOfRecords[5] := InternetOrderHeadRec.COUNT;
+      IF InternetOrderHeadRec.FIND('-') THEN
+      REPEAT
+        InternetOrderHeadRec1 := InternetOrderHeadRec;
+        IF InternetOrderHeadRec."Sell-to Customer No." = '' THEN BEGIN
+          IF InternetCustRec.GET(InternetOrderHeadRec."Bill-to Net Customer No.") THEN BEGIN
+            IF InternetOrderHeadRec."Label Code" <> InternetCustRec."Label Code" THEN BEGIN
+              IssueText := STRSUBSTNO(Text015,InternetCustRec.Contact);
+              CreateIPI(0,InternetOrderHeadRec."Order Guid",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,
+                        InternetCustRec."Customer No.");
+            END ELSE BEGIN
+              //Order Header Sell-to No is blank, Got Internet Cust and label codes match between Order Header and Internet Customer
+              IF InternetCustRec."Customer No." = '' THEN BEGIN
+                IF InternetCustRec."Contact No." = '' THEN BEGIN
+                  IssueText := STRSUBSTNO(Text014,InternetCustRec.Contact);
+                  CreateIPI(0,InternetOrderHeadRec."Order Guid",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,
+                            InternetCustRec."Customer No.");
+                END ELSE BEGIN
+                  //Internet Customer Customer No is blank but got Contact No
+                  IF Customer.GET(FindCustNoFromContact(InternetCustRec."Contact No.")) THEN BEGIN
+                    IF (Customer."Label Code" = InternetCustRec."Label Code") OR
+                       (Customer."Label Code" = '') THEN BEGIN
+                      IF (Customer."User GUID" = InternetCustRec."No.") OR (Customer."User GUID" = '') THEN BEGIN
+                        InternetCustRec."Customer No." := Customer."No.";
+                        InternetCustRec.MODIFY;
+                        InternetOrderHeadRec1."Customer Is B2B" := Customer."Is a B2B Internet Customer";
+                        InternetOrderHeadRec1."Sell-to Customer No." := Customer."No.";
+                        InternetOrderHeadRec1.MODIFY;
+                        ModCust := FALSE;
+                        IF Customer."Label Code" = '' THEN BEGIN
+                          ModCust := TRUE;
+                          Customer.VALIDATE("Label Code",InternetCustRec."Label Code");
+                        END;
+                        IF Customer."User GUID" = '' THEN BEGIN
+                          Customer."User GUID" := InternetCustRec."No.";
+                          ModCust := TRUE;
+                        END;
+                        IF ModCust THEN BEGIN
+                          Customer.VALIDATE("Is An Internet Customer",TRUE);
+                          //DOC EC2015.5.03 Customer.DateTimeInsertedModified := CURRENTDATETIME;
+                          Customer.MODIFY;
+                        END;
+                      END ELSE BEGIN
+                        //Error here as Customer User GuID should equal InternetCustRec."No."
+                        IssueText := STRSUBSTNO(Text009,Customer."No.",InternetCustRec.Contact);
+                        CreateIPI(0,InternetOrderHeadRec."Order Guid",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,
+                                  Customer."No.");
+                      END;
+                    END ELSE BEGIN
+                      //Error here as Customer Label Code should equal InternetCustRec Label Code
+                      IssueText := STRSUBSTNO(Text010,Customer."No.",InternetCustRec.Contact);
+                      CreateIPI(0,InternetOrderHeadRec."Order Guid",'','',InternetCustRec."No.",IssueText,TRUE,FALSE,
+                                Customer."No.");
+                    END;
+                  END ELSE BEGIN
+                    //Could not get customer via Business Rel from Contact
+                    //Need to create a Customer from Contact here
+                    ContactRec.GET(InternetCustRec."Contact No.");
+                    IF InternetSetup."Use Internet Customer" = InternetSetup."Use Internet Customer"::Always THEN BEGIN
+                      InternetSetup.TESTFIELD("Internet Customer");
+                      InternetSetup.TESTFIELD("Internet Contact Company No.");
+                      InternetOrderHeadRec1."Sell-to Customer No." := InternetSetup."Internet Customer";
+                      InternetOrderHeadRec1.MODIFY;
+                      InternetCustRec."Customer No." := Customer."No.";
+                      InternetCustRec.MODIFY;
+                      ContactRec.Type := ContactRec.Type::Person;
+                      ContactRec."Lookup Contact No." := ContactRec."No.";
+                      ContactRec."Company No." := InternetSetup."Internet Contact Company No.";
+                      ContactRec.MODIFY;
+                    END ELSE BEGIN
+                      CountryRegionRec.GET(InternetCustRec."Country Code");
+                      IF CountryRegionRec."B2C Customer Template" = '' THEN BEGIN
+                        IssueText := STRSUBSTNO(Text017,InternetCustRec."Country Code");
+                        CreateIPI(2,InternetOrderHeadRec."Bill-to Net Customer No.",'','',InternetCustRec."No.",IssueText,
+                                  TRUE,FALSE,'');
+                      END ELSE BEGIN
+                        ContactRec.SetHideValidationDialog(TRUE);
+                        ContactRec.CreateCustomer(CountryRegionRec."B2C Customer Template");
+                        InternetCustRec1.GET(InternetOrderHeadRec."Bill-to Net Customer No.");
+                        CustNo := FindCustNoFromContact(ContactRec."No.");
+                        InternetCustRec1."Customer No." := CustNo;
+                        InternetCustRec1.MODIFY;
+                        IF InternetSetup."Maintain Label Dimensions" THEN BEGIN
+                          DefaultDimen.INIT;
+                          DefaultDimen."Table ID" := 18;
+                          DefaultDimen."No." := InternetCustRec1."Customer No.";
+                          DefaultDimen."Dimension Code" := 'LABEL';
+                          DefaultDimen."Dimension Value Code" := ContactRec."Label Code";
+                          IF DefaultDimen.INSERT THEN;
+                        END;
+                        InternetOrderHeadRec1."Sell-to Customer No." := InternetCustRec1."Customer No.";
+                        InternetOrderHeadRec1.MODIFY;
+                      END;
+                    END;
+                  END;
+                END;
+              END ELSE BEGIN
+                InternetCustRec.CALCFIELDS("B2B Customer");
+                InternetOrderHeadRec1."Customer Is B2B" := InternetCustRec."B2B Customer";
+                InternetOrderHeadRec1."Sell-to Customer No." := InternetCustRec."Customer No.";
+                InternetOrderHeadRec1.MODIFY;
+              END;
+            END;
+          END ELSE BEGIN
+            //Cannot get Internet Customer so Bill-to Net Customer must be a B2B Login
+            IF InternetOrderHeadRec."Bill-to Net Customer No." = '' THEN BEGIN
+              CreateIPI(0,InternetOrderHeadRec."Order Guid",'','','',Text042,TRUE,FALSE,'');
+            END ELSE BEGIN
+              //Need to error if cannot find Internet Customer
+              //find B2B Customer...
+              Customer.RESET;
+              Customer.SETRANGE("User GUID",InternetOrderHeadRec."Bill-to Net Customer No.");
+              IF Customer.FINDFIRST THEN BEGIN
+                IF Customer.COUNT > 1 THEN BEGIN
+                  IssueText := STRSUBSTNO(Text032,Customer.COUNT,
+                               InternetOrderHeadRec."Bill-to Net Customer No.");
+                  CreateIPI(0,InternetOrderHeadRec."Order Guid",'','','',IssueText,TRUE,FALSE,
+                            Customer."No.");
+                END ELSE BEGIN
+                  IF Customer."Is a B2B Internet Customer" = FALSE THEN BEGIN
+                    IssueText := STRSUBSTNO(Text046,Customer."No.");
+                    CreateIPI(0,InternetOrderHeadRec."Order Guid",'','','',IssueText,TRUE,FALSE,
+                              Customer."No.");
+                  END ELSE BEGIN
+                    InternetOrderHeadRec1."Customer Is B2B" := Customer."Is a B2B Internet Customer";
+                    InternetOrderHeadRec1."Sell-to Customer No." := Customer."No.";
+                    InternetOrderHeadRec1.MODIFY;
+                  END;
+                END;
+              END ELSE
+                CreateIPI(0,InternetOrderHeadRec."Order Guid",'','','',Text004,TRUE,FALSE,'');
+            END;
+          END;
+        END;
+
+        IF InternetOrderHeadRec1."Sell-to Customer No." = '' THEN BEGIN
+          IssueText := STRSUBSTNO(Text005,InternetSetup."Convert To Document Type");
+          CreateIPI(0,InternetOrderHeadRec1."Order Guid",'','','',IssueText,TRUE,FALSE,'');
+          InternetOrderHeadRec1.Status := InternetOrderHeadRec1.Status::Invalid;
+          InternetOrderHeadRec1.MODIFY;
+        END ELSE BEGIN
+          IF InternetOrderHeadRec1."No. Of Internet Order Lines" = 0 THEN BEGIN
+            FinaliseInternetOrder;
+          END ELSE BEGIN
+            InternetOrderLine.RESET;
+            InternetOrderLine.SETCURRENTKEY("Order Guid");
+            InternetOrderLine.SETRANGE("Order Guid",InternetOrderHeadRec1."Order Guid");
+            IF InternetOrderHeadRec1."No. Of Internet Order Lines" = InternetOrderLine.COUNT THEN BEGIN
+              IF InternetOrderHeadRec1."No. Of Payment Entries" = 0 THEN BEGIN
+                FinaliseInternetOrder;
+              END ELSE BEGIN
+                FinaliseInternetOrder;
+              END;
+            END ELSE BEGIN
+              IssueText := STRSUBSTNO(Text024,InternetOrderHeadRec1."No. Of Internet Order Lines",InternetOrderLine.COUNT);
+              CreateIPI(0,InternetOrderHeadRec1."Order Guid",'','',InternetOrderHeadRec1."Bill-to Net Customer No.",
+                        IssueText,TRUE,FALSE,InternetOrderHeadRec1."Sell-to Customer No.");
+              //Note: not making invalid on purpose as it will probably process next time around.
+            END;
+          END;
+        END;
+      UNTIL InternetOrderHeadRec.NEXT = 0;
+    END;
+
+    PROCEDURE FinaliseInternetOrder@1000000000();
+    VAR
+      TxtAutomationError@1000000000 : TextConst 'ENU=Something has gone wrong in CU Internet Automation!;ENG=Something has gone wrong in CU Internet Automation!';
+    BEGIN
+      IF InternetOrderHeadRec1."No. of Web Attributes" <> 0 THEN BEGIN
+        LinkedAtValWeb.SETCURRENTKEY("Label Code","Table Name","Key Field String 1");
+        LinkedAtValWeb.SETRANGE("Label Code",InternetOrderHeadRec1."Label Code");
+        LinkedAtValWeb.SETRANGE("Table Name",'ShopSalesHeader');
+        LinkedAtValWeb.SETRANGE("Key Field String 1",InternetOrderHeadRec1."Order Guid");
+        i := LinkedAtValWeb.COUNT;
+        IF i = InternetOrderHeadRec1."No. of Web Attributes" THEN BEGIN
+        END ELSE BEGIN
+          IF i < InternetOrderHeadRec1."No. of Web Attributes" THEN BEGIN
+            //Note: not making invalid on purpose as it will probably process next time around.
+            IssueText := STRSUBSTNO(Text049,InternetOrderHeadRec1."No. of Web Attributes",i);
+            CreateIPI(0,InternetOrderHeadRec1."Order Guid",'','',InternetOrderHeadRec1."Bill-to Net Customer No.",
+                      IssueText,TRUE,FALSE,InternetOrderHeadRec1."Sell-to Customer No.");
+          END ELSE BEGIN
+            //More lines then there should be.  Obviously there is a problem
+            IssueText := STRSUBSTNO(Text050,InternetOrderHeadRec1."No. of Web Attributes",i);
+            CreateIPI(0,InternetOrderHeadRec1."Order Guid",'','',InternetOrderHeadRec1."Bill-to Net Customer No.",
+                      IssueText,TRUE,FALSE,InternetOrderHeadRec1."Sell-to Customer No.");
+            InternetOrderHeadRec1.Status := InternetOrderHeadRec1.Status::Invalid;
+            InternetOrderHeadRec1.MODIFY;
+          END;
+          EXIT;
+        END;
+      END;
+
+      COMMIT;
+
+      Customer.GET(InternetOrderHeadRec1."Sell-to Customer No.");
+      IF Customer.Blocked <> Customer.Blocked::" " THEN BEGIN
+        IssueText := STRSUBSTNO(Text034,Customer."No.");
+        CreateIPI(0,InternetOrderHeadRec1."Order Guid",'','','',IssueText,TRUE,FALSE,
+                  Customer."No.");
+        InternetOrderHeadRec1.Status := InternetOrderHeadRec1.Status::Invalid;
+        InternetOrderHeadRec1.MODIFY;
+        EXIT;
+      END ELSE BEGIN
+        IF (Customer."Bill-to Customer No." <> '') AND
+           (Customer."Bill-to Customer No." <> InternetOrderHeadRec1."Sell-to Customer No.") THEN BEGIN
+          Customer.GET(Customer."Bill-to Customer No.");
+          IF Customer.Blocked <> Customer.Blocked::" " THEN BEGIN
+            IssueText := STRSUBSTNO(Text034,Customer."No.");
+            CreateIPI(0,InternetOrderHeadRec1."Order Guid",'','','',IssueText,TRUE,FALSE,
+                      Customer."No.");
+            InternetOrderHeadRec1.Status := InternetOrderHeadRec1.Status::Invalid;
+            InternetOrderHeadRec1.MODIFY;
+            EXIT;
+          END;
+        END;
+      END;
+
+      IF InternetSetup."Create IPI if Order Comments" THEN BEGIN
+        FreeToProcess := TRUE;
+        WebCommentLine.RESET;
+        WebCommentLine.SETCURRENTKEY("Header Guid");
+        WebCommentLine.SETRANGE("Header Guid",InternetOrderHeadRec1."Order Guid");
+        IF WebCommentLine.FINDFIRST THEN BEGIN
+          FreeToProcess := FALSE;
+        END ELSE BEGIN
+          IF InternetOrderHeadRec1.Comment <> '' THEN
+            FreeToProcess := FALSE;
+        END;
+        IF FreeToProcess = FALSE THEN
+          CreateIPI(0,InternetOrderHeadRec1."Order Guid",'',TxtCommentIpi,
+                    InternetOrderHeadRec1."Bill-to Net Customer No.",Text048,FALSE,FALSE,
+                    InternetOrderHeadRec1."Sell-to Customer No.");
+      END;
+
+      IF InternetSetup."No Convert Order Special Items" THEN BEGIN
+        InternetOrderLine.RESET;
+        InternetOrderLine.SETCURRENTKEY("Order Guid","Line No.");
+        InternetOrderLine.SETRANGE("Order Guid",InternetOrderHeadRec1."Order Guid");
+        InternetOrderLine.SETRANGE(Type,InternetOrderLine.Type::Item);
+        IF InternetOrderLine.FIND('-') THEN
+        REPEAT
+          Item.GET(InternetOrderLine."No.");
+          IF Item."Do Not Auto Convert Int. Order" THEN BEGIN
+            CreateIPI(0,InternetOrderHeadRec1."Order Guid",'','','',Text047,TRUE,FALSE,
+                      InternetOrderHeadRec1."Sell-to Customer No.");
+            InternetOrderHeadRec1.Status := InternetOrderHeadRec1.Status::Invalid;
+            InternetOrderHeadRec1.MODIFY;
+            EXIT;
+          END;
+        UNTIL InternetOrderLine.NEXT = 0;
+      END;
+
+      //Always create an IPI and then delete if creation succeeded and set Internet Order Header to Invalid
+      InternetOrderHeadRec1."Processing In Progress" := TRUE;
+      InternetOrderHeadRec1.MODIFY;
+      IssueText := STRSUBSTNO(Text040,InternetSetup."Convert To Document Type");
+      CreateIPI(0,InternetOrderHeadRec1."Order Guid",'','',InternetOrderHeadRec1."Bill-to Net Customer No.",
+                IssueText,TRUE,TRUE,InternetOrderHeadRec1."Sell-to Customer No.");
+      COMMIT;
+      CLEAR(InternetOrdertoSalesDoc);
+      InternetOrdertoSalesDoc.RUN(InternetOrderHeadRec1);
+      IF InternetOrderHeadRec1.Status = InternetOrderHeadRec1.Status::Converted THEN BEGIN
+        IntProcessIssue.RESET;
+        IntProcessIssue.SETCURRENTKEY(Type,"Code 1","Code 2","Code 3");
+        IntProcessIssue.SETRANGE(Type,IntProcessIssue.Type::"Internet Order");
+        IntProcessIssue.SETRANGE("Code 1",InternetOrderHeadRec1."Order Guid");
+        IntProcessIssue.SETRANGE("Code 2",'');
+        IntProcessIssue.SETRANGE("Code 3",'');
+        IntProcessIssue.SETRANGE(Status,IntProcessIssue.Status::Open);
+        IntProcessIssue.SETRANGE(Hide,TRUE);
+        IntProcessIssue.FINDFIRST;
+        IntProcessIssue.DELETE;
+
+        // Send Confirmation Mail
+        //If this slows up system we will have to put the emails into another table
+        //and process separately.
+
+        IF InternetSetup."Notify on Conversion to Doc." THEN BEGIN
+          IF  InternetOrderHeadRec1."Bill-to E-Mail" <> '' THEN
+            InternetShopMgt.InternetOrderConverted(InternetOrderHeadRec1."Bill-to E-Mail",
+            InternetOrderHeadRec1."Internet Order Reference",InternetOrderHeadRec1."Label Code")
+          ELSE BEGIN
+            InternetCustRec.GET(InternetOrderHeadRec1."Bill-to Net Customer No.");
+            IF InternetCustRec."E-Mail" = '' THEN BEGIN
+              IssueText := STRSUBSTNO(Text007,InternetCustRec.Contact);
+              CreateIPI(0,InternetOrderHeadRec1."Order Guid",'','',InternetOrderHeadRec1."Bill-to Net Customer No.",
+                        IssueText,TRUE,FALSE,InternetOrderHeadRec1."Sell-to Customer No.");
+            END ELSE
+              InternetShopMgt.InternetOrderConverted(InternetCustRec."E-Mail",
+                              InternetOrderHeadRec1."Internet Order Reference",InternetOrderHeadRec1."Label Code");
+          END;
+        END;
+
+        SalesHeader.GET(InternetOrderHeadRec1."Converted-To Document Type",InternetOrderHeadRec1."Converted-To Document No.");
+        //DOC EC2013.4.67 IF InternetOrderHeadRec1."Label Code" = 'DERMAUB2B' THEN BEGIN
+        //DOC EC2013.4.67  CLEAR(CustomModsDAU);
+        //DOC EC2013.4.67  CustomModsDAU.SalesPostSumSalesLines(SalesHeader,TotalSalesLine)
+        CLEAR(V5AndOver);
+        V5AndOver.SalesPostSumSalesLines(SalesHeader,TotalSalesLine);
+
+        IF ROUND(InternetOrderHeadRec1."Amount Including Tax",0.01) <> ROUND(TotalSalesLine."Amount Including VAT",0.01) THEN BEGIN
+          IssueText := STRSUBSTNO(Text016,InternetOrderHeadRec1.TABLECAPTION, SalesHeader.TABLECAPTION);
+          CreateIPI(0,InternetOrderHeadRec1."Order Guid",'','',InternetOrderHeadRec1."Bill-to Net Customer No.",
+                    IssueText,FALSE,FALSE,InternetOrderHeadRec1."Sell-to Customer No.");
+        END;
+
+        OKToReleaseOrder := TRUE;
+        IF InternetSetup."Check Credit Auto Order Conv." THEN BEGIN
+          IF InternetOrderHeadRec1."Customer Is B2B" THEN BEGIN
+            IF OKToReleaseOrder = FALSE THEN BEGIN
+              IssueText := STRSUBSTNO(Text038,InternetOrderHeadRec1."Converted-To Document Type",
+                                      InternetOrderHeadRec1."Converted-To Document No.");
+              CreateIPI(5,FORMAT(InternetOrderHeadRec1."Converted-To Document Type"),
+                                InternetOrderHeadRec1."Converted-To Document No.",
+                                '',InternetOrderHeadRec1."Bill-to Net Customer No.",IssueText,TRUE,
+                                FALSE,InternetOrderHeadRec1."Sell-to Customer No.");
+            END;
+          END;
+        END;
+
+        //********* Any changes here need to be made to CU9021611 Internet Order to Doc(Yes/No)
+        IF OKToReleaseOrder THEN BEGIN
+          CLEAR(ReleaseSalesDocument);
+          COMMIT;
+          ReleaseSalesDocument.RUN(SalesHeader);
+          COMMIT;
+          SalesHeader.GET(InternetOrderHeadRec1."Converted-To Document Type",
+            InternetOrderHeadRec1."Converted-To Document No.");
+          IF SalesHeader.Status = SalesHeader.Status::Open THEN BEGIN
+            IssueText := STRSUBSTNO(Text031,FORMAT(InternetOrderHeadRec1."Converted-To Document Type"));
+            CreateIPI(5,FORMAT(InternetOrderHeadRec1."Converted-To Document Type"),
+                            InternetOrderHeadRec1."Converted-To Document No.",
+                            '',InternetOrderHeadRec1."Bill-to Net Customer No.",IssueText,TRUE,
+                            FALSE,SalesHeader."Sell-to Customer No.");
+          END;
+        END;
+
+      END ELSE BEGIN
+        IF InternetOrderHeadRec1."Converted-To Document No." <> '' THEN BEGIN
+          IF SalesHeader.GET(InternetOrderHeadRec1."Converted-To Document Type",
+                             InternetOrderHeadRec1."Converted-To Document No.") THEN BEGIN
+            SalesHeader.DELETE(TRUE);
+            IssueText := STRSUBSTNO(Text036,InternetSetup."Convert To Document Type",
+                                    InternetOrderHeadRec1."Converted-To Document No.");
+            CreateIPI(0,InternetOrderHeadRec1."Order Guid",'','',InternetOrderHeadRec1."Bill-to Net Customer No.",
+                      IssueText,TRUE,FALSE,SalesHeader."Sell-to Customer No.");
+          END ELSE BEGIN
+            IssueText := STRSUBSTNO(Text037,InternetSetup."Convert To Document Type",
+                                    InternetOrderHeadRec1."Converted-To Document No.");
+              CreateIPI(0,InternetOrderHeadRec1."Order Guid",'','',InternetOrderHeadRec1."Bill-to Net Customer No.",
+                        IssueText,TRUE,FALSE,SalesHeader."Sell-to Customer No.");
+          END;
+          InternetOrderHeadRec1."Last Errored Convert-To Doc No" := InternetOrderHeadRec1."Converted-To Document No.";
+          InternetOrderHeadRec1."Converted-To Document No." := '';
+          InternetOrderHeadRec1.Status := InternetOrderHeadRec1.Status::Invalid;
+          InternetOrderHeadRec1."Processing In Progress" := FALSE;
+          InternetOrderHeadRec1.MODIFY;
+        END ELSE BEGIN
+          IssueText := '';
+          IssueText := InternetOrdertoSalesDoc.CollectLastError;
+          IF IssueText = '' THEN
+            IssueText := STRSUBSTNO(Text006,InternetSetup."Convert To Document Type");
+          CreateIPI(0,InternetOrderHeadRec1."Order Guid",'','',InternetOrderHeadRec1."Bill-to Net Customer No.",
+                    IssueText,TRUE,FALSE,InternetOrderHeadRec1."Sell-to Customer No.");
+          IF InternetOrderHeadRec1.Status <> InternetOrderHeadRec1.Status::Invalid THEN
+            ERROR(TxtAutomationError);
+          InternetOrderHeadRec1.Status := InternetOrderHeadRec1.Status::Invalid;
+          InternetOrderHeadRec1."Processing In Progress" := FALSE;
+          InternetOrderHeadRec1.MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE ProcessCustomerSubscriptions@1040002();
+    BEGIN
+      //Processing Customer Subscriptions has four parts:
+      //1.  Customer Subscription must have a Segment No.
+      //2.  From Start Date, calculate End Date
+      //3.  Create Segment Line
+
+      CustSubRec.RESET;
+      CustSubRec.SETCURRENTKEY(Processed);
+      CustSubRec.SETRANGE(Processed,FALSE);
+      IF InternetSetup."Run in Interrogation Mode" THEN
+        NoOfRecords[3] := CustSubRec.COUNT;
+      IF CustSubRec.FIND('-') THEN
+      REPEAT
+        CustSubRec1 :=  CustSubRec;
+        //Checking to see that Subscription exists.
+        IF NOT SubscriptRec.GET(CustSubRec."Label Code",CustSubRec."Subscription Code") THEN BEGIN
+          CreateIPI(1,CustSubRec."User Subscription GUID",'','',CustSubRec."User GUID",Text001,
+                    TRUE,FALSE,'');
+        END ELSE BEGIN
+          //1.  Customer Subscription must have a Segment No
+          SubscriptRec.CALCFIELDS("Campaign No.");
+          IF SubscriptRec."Segment No." = '' THEN BEGIN
+            CreateIPI(3,CustSubRec."Label Code",CustSubRec."Subscription Code",'','',Text018,
+                      TRUE,FALSE,'');
+          END ELSE BEGIN
+
+            //2.  From Start Date, calculate End Date
+            //If already calculated, do not calculate again
+            IF NOT CustSubRec."End Date Processed" THEN BEGIN
+              IF SubscriptRec."No. of Periods of Subscription" <> 0 THEN
+                CustSubRec1.CalcEndDate(SubscriptRec);
+              CustSubRec1."End Date Processed" := TRUE;
+            END;
+
+            //3.  Create Segment Line
+            //Only create if not already created and Contact exists.
+            CustSubRec1.CALCFIELDS("Contact No.");
+            IF (CustSubRec."Segment Line Checked" = FALSE) AND
+               (CustSubRec1."Contact No." <> '') THEN BEGIN
+              IF CustSubRec.InsertSegmentEntry THEN BEGIN
+                CustSubRec1."Segment Line Checked" := TRUE;
+                CustSubRec1."Segment No." := SubscriptRec."Segment No.";
+                CustSubRec1."Campaign No." := SubscriptRec."Campaign No.";
+              END ELSE
+                CreateIPI(1,CustSubRec."User Subscription GUID",'','',CustSubRec."User GUID",Text019,
+                          TRUE,FALSE,'');
+            END;
+            IF (CustSubRec1."End Date Processed" = TRUE) AND
+               (CustSubRec1."Segment Line Checked" = TRUE) THEN
+              CustSubRec1.Processed := TRUE;
+            CustSubRec1.MODIFY;
+          END;
+        END;
+      UNTIL CustSubRec.NEXT = 0;
+    END;
+
+    PROCEDURE CreateIPI@1040005(Type@1040000 : 'Internet Order,Cust. Subscription,Customer,Subscription,Questionnaire Answer,Sales,Payment,Web Update,Promo Warning,Warning';Code1@1040001 : Text[50];Code2@1040002 : Text[50];Code3@1040003 : Text[50];IntCustNo@1040005 : Text[38];ErrorDescription@1040004 : Text[250];AutoClear@1190000005 : Boolean;MakeHidden@1190000006 : Boolean;CustNo@1000000000 : Code[20]);
+    BEGIN
+      IntProcessIssue.RESET;
+      IntProcessIssue.SETCURRENTKEY(Type,"Code 1","Code 2","Code 3");
+      IntProcessIssue.SETRANGE(Type,Type);
+      IntProcessIssue.SETRANGE("Code 1",Code1);
+      IntProcessIssue.SETRANGE("Code 2",Code2);
+      IntProcessIssue.SETRANGE("Code 3",Code3);
+      IntProcessIssue.SETRANGE(Status,IntProcessIssue.Status::Open);
+      IF IntProcessIssue.FINDFIRST THEN
+        IntProcessIssue.DELETEALL;
+
+      IntProcessIssue.INIT;
+      IntProcessIssue.Type := Type;
+      EVALUATE(IntProcessIssue."Code 1",Code1);
+      EVALUATE(IntProcessIssue."Code 2",Code2);
+      EVALUATE(IntProcessIssue."Code 3",Code3);
+      IntProcessIssue."Internet Customer No." := IntCustNo;
+      IntProcessIssue.Description := ErrorDescription;
+      IntProcessIssue."Date Time Created" := CURRENTDATETIME;
+      IntProcessIssue."Auto Clear" := AutoClear;
+      IntProcessIssue.Hide := MakeHidden;
+      IntProcessIssue."Customer No." := CustNo;
+      IntProcessIssue.INSERT(TRUE);
+    END;
+
+    PROCEDURE FindCustNoFromContact@1040004(ContactNo@1040000 : Code[20]) : Code[20];
+    BEGIN
+      ContBusRelRec.RESET;
+      ContBusRelRec.SETRANGE("Contact No.",ContactNo);
+      ContBusRelRec.SETRANGE("Link to Table",
+                             ContBusRelRec."Link to Table"::Customer);
+      IF ContBusRelRec.FINDFIRST THEN
+        EXIT(ContBusRelRec."No.")
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE CheckOpenIPIs@1040006();
+    VAR
+      SalesDocType@1000000000 : Integer;
+      TxtDocType@1000000001 : TextConst 'ENU=Invalid DocType - see Error 121210;ENG=Invalid DocType - see Error 121210';
+    BEGIN
+      //This goes through Open IPIs and checks to see that the Internet Order, Payment or Web Update is not processed
+      //If it is Processed, then the status of the IPI can be set to Sorted.
+      IntProcessIssue.RESET;
+      IntProcessIssue.SETCURRENTKEY(Status);
+      IntProcessIssue.SETRANGE(Status,IntProcessIssue.Status::Open);
+      IntProcessIssue.SETFILTER(Type,'%1|%2|%3|%4',IntProcessIssue.Type::"Internet Order",
+        IntProcessIssue.Type::Payment,IntProcessIssue.Type::"Web Update",IntProcessIssue.Type::Sales);
+      IntProcessIssue.SETRANGE("Auto Clear",TRUE);
+      IF InternetSetup."Run in Interrogation Mode" THEN
+        NoOfRecords[6] := IntProcessIssue.COUNT;
+      IF IntProcessIssue.FIND('-') THEN
+      REPEAT
+        CASE IntProcessIssue.Type OF
+          IntProcessIssue.Type::"Internet Order" :
+          BEGIN
+            IF InternetOrderHeadRec.GET(IntProcessIssue."Code 1") THEN BEGIN
+              IF (InternetOrderHeadRec.Status = InternetOrderHeadRec.Status::Converted)
+              THEN BEGIN
+                IntProcessIssue1.RESET;
+                IntProcessIssue1.SETCURRENTKEY(Type,"Code 1","Code 2","Code 3");
+                IntProcessIssue1.SETRANGE(Type,IntProcessIssue1.Type::Sales);
+                IntProcessIssue1.SETRANGE("Code 1",
+                                  FORMAT(InternetOrderHeadRec."Converted-To Document Type"));
+                IntProcessIssue1.SETRANGE("Code 2",
+                                  InternetOrderHeadRec."Converted-To Document No.");
+                IF IntProcessIssue1.FINDFIRST THEN BEGIN
+                  IntProcessIssue1 := IntProcessIssue;
+                  IntProcessIssue1.Status := IntProcessIssue1.Status::Sorted;
+                  IntProcessIssue1.MODIFY(TRUE);
+                END ELSE BEGIN
+                  IF SalesHead.GET(InternetOrderHeadRec."Converted-To Document Type",
+                                    InternetOrderHeadRec."Converted-To Document No.") THEN BEGIN
+                    IF SalesHead.Status = SalesHead.Status::Open THEN BEGIN
+                      IntProcessIssue1 := IntProcessIssue;
+                      IntProcessIssue1."Auto Clear" := FALSE;
+                      IntProcessIssue1.MODIFY(TRUE);
+                    END ELSE BEGIN
+                      IntProcessIssue1 := IntProcessIssue;
+                      IntProcessIssue1.Status := IntProcessIssue1.Status::Sorted;
+                      IntProcessIssue1.MODIFY(TRUE);
+                    END;
+                  END ELSE BEGIN
+                    IntProcessIssue1 := IntProcessIssue;
+                    IntProcessIssue1.Status := IntProcessIssue1.Status::Sorted;
+                    IntProcessIssue1.MODIFY(TRUE);
+                  END;
+                END;
+              END;
+            END ELSE BEGIN
+              IntProcessIssue1 := IntProcessIssue;
+              IntProcessIssue1.Status := IntProcessIssue1.Status::Sorted;
+              IntProcessIssue1.MODIFY(TRUE);
+            END;
+          END;
+          IntProcessIssue.Type::"Web Update" :
+          BEGIN
+            FieldUpdate.GET(IntProcessIssue."Code 1");
+            IF FieldUpdate."NAV Processing Status" = FieldUpdate."NAV Processing Status"::Processed THEN BEGIN
+              IntProcessIssue1 := IntProcessIssue;
+              IntProcessIssue1.Status := IntProcessIssue1.Status::Sorted;
+              IntProcessIssue1.MODIFY(TRUE);
+            END;
+          END;
+          IntProcessIssue.Type::Sales :
+          BEGIN
+            CASE IntProcessIssue."Code 1" OF
+              TxtQuote : SalesDocType := 0;
+              TxtOrder : SalesDocType := 1;
+              TxtInvoice : SalesDocType := 2;
+              ELSE
+                ERROR(TxtDocType);
+            END;
+            IF SalesHeader.GET(SalesDocType,IntProcessIssue."Code 2") THEN BEGIN
+              IF SalesHeader.Status = SalesHeader.Status::Released THEN BEGIN
+                IntProcessIssue1 := IntProcessIssue;
+                IntProcessIssue1.Status := IntProcessIssue1.Status::Sorted;
+                IntProcessIssue1.MODIFY(TRUE);
+              END;
+            END ELSE BEGIN
+              IntProcessIssue1 := IntProcessIssue;
+              IntProcessIssue1.Status := IntProcessIssue1.Status::Sorted;
+              IntProcessIssue1.MODIFY(TRUE);
+            END;
+          END;
+          //DOC EC2013.3.30 +
+        END;
+      UNTIL IntProcessIssue.NEXT = 0;
+    END;
+
+    PROCEDURE CheckForInvalidNotInIPI@1040007();
+    BEGIN
+      //This looks for Internet Orders which are invalid and checks that there is an open IPI.
+      //If not, reset the status to "New" and it will be reprocessed when this codeunit next runs.
+      //This guards against someone accidentally setting the IPI to Sorted when it has not.
+
+      IntProcessIssue.RESET;
+      IntProcessIssue.SETCURRENTKEY(Status);
+      IntProcessIssue.SETRANGE(Status,IntProcessIssue.Status::Open);
+      IntProcessIssue.SETRANGE(Type,IntProcessIssue.Type::"Internet Order");
+
+      InternetOrderHeadRec.RESET;
+      InternetOrderHeadRec.SETCURRENTKEY("Converted-To Document No.");
+      InternetOrderHeadRec.SETRANGE("Converted-To Document No.",'');
+      InternetOrderHeadRec.SETRANGE(Status,InternetOrderHeadRec.Status::Invalid);
+      IF InternetSetup."Run in Interrogation Mode" THEN
+        NoOfRecords[7] := InternetOrderHeadRec.COUNT;
+      IF InternetOrderHeadRec.FIND('-') THEN
+      REPEAT
+        IntProcessIssue.SETRANGE("Code 1",InternetOrderHeadRec."Order Guid");
+        IF NOT IntProcessIssue.FINDFIRST THEN BEGIN
+          InternetOrderHeadRec1 := InternetOrderHeadRec;
+          InternetOrderHeadRec1.Status := InternetOrderHeadRec1.Status::New;
+          InternetOrderHeadRec1."Processing In Progress" := FALSE;
+          InternetOrderHeadRec1.MODIFY;
+        END;
+      UNTIL InternetOrderHeadRec.NEXT = 0;
+
+      //If an order has been part converted (i.e. "Converted-To Doc. No. is not blank) and no
+      //IPI exists, create one.
+      InternetOrderHeadRec.RESET;
+      InternetOrderHeadRec.SETCURRENTKEY(Status);
+      InternetOrderHeadRec.SETFILTER("Converted-To Document No.",'<>%1','');
+      InternetOrderHeadRec.SETRANGE(Status,InternetOrderHeadRec.Status::Invalid);
+      IF InternetSetup."Run in Interrogation Mode" THEN
+        NoOfRecords[7] := NoOfRecords[7] + InternetOrderHeadRec.COUNT;
+      IF InternetOrderHeadRec.FIND('-') THEN
+      REPEAT
+        IntProcessIssue.SETRANGE("Code 1",InternetOrderHeadRec."Order Guid");
+        IF NOT IntProcessIssue.FINDFIRST THEN BEGIN
+          IssueText := STRSUBSTNO(Text043,InternetSetup."Convert To Document Type",InternetOrderHeadRec."Converted-To Document No.");
+          CreateIPI(0,InternetOrderHeadRec."Order Guid",'','',InternetOrderHeadRec."Bill-to Net Customer No.",
+                    IssueText,TRUE,FALSE,InternetOrderHeadRec."Sell-to Customer No.");
+        END;
+      UNTIL InternetOrderHeadRec.NEXT = 0;
+
+      //This looks for Payment Entries which have status Error and checks that there is an open IPI.
+      //If not, reset the NAV Status to "" and it will be reprocessed when this codeunit next runs.
+      //This guards against someone accidentally setting the IPI to Sorted when it has not.
+
+      IntProcessIssue.RESET;
+      IntProcessIssue.SETCURRENTKEY(Status);
+      IntProcessIssue.SETRANGE(Status,IntProcessIssue.Status::Open);
+      IntProcessIssue.SETRANGE(Type,IntProcessIssue.Type::Payment);
+    END;
+
+    PROCEDURE ProcessContactQuestionAnswers@1040008();
+    VAR
+      ContactProfileAnswer@1040001 : Record 5089;
+      InternetAnswer@1040000 : Record 9021660;
+      InternetAnswer1@1190000005 : Record 9021660;
+      InternetCustomer@1040002 : Record 9021642;
+      ProfileQLine@1000000000 : Record 5088;
+      LastContactQuestion@1040003 : Text[100];
+      NextQuestionLineNo@1040006 : Integer;
+      ThisContactQuestion@1040004 : Text[100];
+      ThisQuestionLineNo@1040005 : Integer;
+    BEGIN
+      //works through all records in the Internet Questionnaire Answer table (9021660)
+      //moves each answer to the core NAV CRM table: Contact Profile Answer (5089)
+      InternetAnswer.RESET;
+      InternetAnswer.SETCURRENTKEY("NAV Processing Status","Profile Questionnaire Code","Line No.");
+      InternetAnswer.SETRANGE("NAV Processing Status",InternetAnswer."NAV Processing Status"::" ");
+      IF InternetSetup."Run in Interrogation Mode" THEN
+        NoOfRecords[4] := InternetAnswer.COUNT;
+
+      IF InternetAnswer.FIND('-') THEN
+      REPEAT
+        InternetAnswer1 := InternetAnswer;
+        //get the contact number from the internet customer...
+        InternetCustomer.RESET;
+        IF NOT InternetCustomer.GET(InternetAnswer."User GUID") THEN BEGIN
+          InternetAnswer1."NAV Processing Status" :=
+                          InternetAnswer1."NAV Processing Status"::Error;
+          InternetAnswer1.MODIFY;
+          CreateIPI(4,InternetAnswer."Answer GUID",'','',InternetAnswer."User GUID",Text020,
+                    TRUE,FALSE,'');
+          EXIT;
+        END;
+        IF InternetCustomer."Contact No." = '' THEN BEGIN
+          InternetAnswer1."NAV Processing Status" :=
+                          InternetAnswer1."NAV Processing Status"::Error;
+          InternetAnswer1.MODIFY;
+          CreateIPI(4,InternetAnswer."Answer GUID",'','',InternetAnswer."User GUID",Text020,
+                    TRUE,FALSE,'');
+          EXIT;
+        END;
+
+        //find the Line No. for the question corresponding to the current answer...
+        //ThisQuestionLineNo:=ContactProfileAnswer.GetQuestionLineNo(InternetAnswer."Profile Questionnaire Code",
+        //                                                           InternetAnswer."Line No.");
+        ProfileQLine.RESET;
+        ProfileQLine.SETRANGE("Profile Questionnaire Code",InternetAnswer."Profile Questionnaire Code");
+        ProfileQLine.SETFILTER("Line No.",'<%1',InternetAnswer."Line No.");
+        ProfileQLine.SETRANGE(Type,ProfileQLine.Type::Question);
+        IF ProfileQLine.FIND('+') THEN
+          ThisQuestionLineNo := ProfileQLine."Line No."
+        ELSE
+          ThisQuestionLineNo := 0;
+
+        //track the current contact and question so we only delete existing answers ONCE as we loop...
+        ThisContactQuestion := STRSUBSTNO('%1-%2',InternetAnswer."User GUID",ThisQuestionLineNo);
+
+        //only delete answers if this is the first answer we've found for this question...
+        IF ThisContactQuestion <> LastContactQuestion THEN BEGIN
+
+          //get the next question so we have an ending line number to use in our delete filter...
+          //NextQuestionLineNo:=ContactProfileAnswer.GetNextQuestionLineNo(ContactProfileAnswer."Profile Questionnaire Code",
+          //                                                               ThisQuestionLineNo);
+          ProfileQLine.RESET;
+          ProfileQLine.SETRANGE("Profile Questionnaire Code",ContactProfileAnswer."Profile Questionnaire Code");
+          ProfileQLine.SETFILTER("Line No.",'>%1',ThisQuestionLineNo);
+          ProfileQLine.SETRANGE(Type,ProfileQLine.Type::Question);
+          IF ProfileQLine.FIND('-') THEN
+            NextQuestionLineNo := ProfileQLine."Line No."
+          ELSE
+            NextQuestionLineNo := 0;
+
+          //if there's no next question use a stupidly high Line No. to close our filter...
+          IF NextQuestionLineNo = 0 THEN
+            NextQuestionLineNo := 1000000000;
+
+          //delete any older answers...
+          ContactProfileAnswer.RESET;
+          ContactProfileAnswer.SETRANGE("Contact No.",InternetCustomer."Contact No.");
+          ContactProfileAnswer.SETRANGE("Profile Questionnaire Code",InternetAnswer."Profile Questionnaire Code");
+          ContactProfileAnswer.SETFILTER("Line No.",'>%1&<%2',ThisQuestionLineNo,NextQuestionLineNo);
+          ContactProfileAnswer.DELETEALL(TRUE);
+
+          //update our tracking to ensure we don't run the delete again for this contact and this question...
+          LastContactQuestion := ThisContactQuestion;
+        END;
+
+        //insert the new record...
+        CLEAR(ContactProfileAnswer);
+        ContactProfileAnswer.INIT;
+        ContactProfileAnswer."Contact No." := InternetCustomer."Contact No.";
+        ContactProfileAnswer."Profile Questionnaire Code" := InternetAnswer."Profile Questionnaire Code";
+        ContactProfileAnswer."Line No." := InternetAnswer."Line No.";
+        ContactProfileAnswer."Last Date Updated" := DT2DATE(InternetAnswer."DateTime Modified");
+        ContactProfileAnswer."User GuID" := InternetAnswer."User GUID";
+        ContactProfileAnswer."Text Answer" := InternetAnswer."Text Answer";
+        ContactProfileAnswer.INSERT(TRUE);
+
+        InternetAnswer1."NAV Processing Status" :=
+                        InternetAnswer1."NAV Processing Status"::Processed;
+        InternetAnswer1.MODIFY;
+      UNTIL InternetAnswer.NEXT=0;
+    END;
+
+    PROCEDURE IntCustProcessed@1000000001(IntCust@1000000000 : Record 9021642);
+    BEGIN
+      IF IntCust."Last DateTime Modified" = 0DT THEN
+        IntCust."Last DateTime Modified" := CURRENTDATETIME;
+      IntCust."Last Date Modified" := DT2DATE(IntCust."Last DateTime Modified");
+      IntCust."Last DateTime Processed" := IntCust."Last DateTime Modified";
+      IntCust.MODIFY;
+    END;
+
+    PROCEDURE UnHideHiddenIPIs@1190000006();
+    BEGIN
+      IntProcessIssue.RESET;
+      IntProcessIssue.SETCURRENTKEY(Status);
+      IntProcessIssue.SETFILTER(Type,'%1|%2',IntProcessIssue.Type::"Internet Order",
+                      IntProcessIssue.Type::"Web Update");
+      IntProcessIssue.SETRANGE(Status,IntProcessIssue.Status::Open);
+      IntProcessIssue.SETRANGE(Hide,TRUE);
+      IF InternetSetup."Run in Interrogation Mode" THEN
+        NoOfRecords[9] := IntProcessIssue.COUNT;
+      IF IntProcessIssue.FIND('-') THEN
+      REPEAT
+          IntProcessIssue1 := IntProcessIssue;
+          IntProcessIssue1.Hide := FALSE;
+          IntProcessIssue1.MODIFY;
+      UNTIL IntProcessIssue.NEXT = 0;
+    END;
+
+    PROCEDURE StartUpProcedures@1190000008();
+    BEGIN
+      UnHideHiddenIPIs;
+      MakeInvalidOrdersInProcessing;
+    END;
+
+    PROCEDURE MakeInvalidOrdersInProcessing@1190000009();
+    BEGIN
+      InternetOrderHeadRec.RESET;
+      InternetOrderHeadRec.SETCURRENTKEY("Converted-To Document No.");
+      InternetOrderHeadRec.SETRANGE("Converted-To Document No.",'');
+      //Actually only want New documents but since New Document will have a blank "Converted to Doc No.
+      //this seems a good way of getting to the right records quickly without adding a key.
+      InternetOrderHeadRec.SETRANGE(Status,InternetOrderHeadRec.Status::New);
+      InternetOrderHeadRec.SETRANGE("Processing In Progress",TRUE);
+      IF InternetSetup."Run in Interrogation Mode" THEN
+        NoOfRecords[9] := NoOfRecords[9] + InternetOrderHeadRec.COUNT;
+      IF InternetOrderHeadRec.FIND('-') THEN
+      REPEAT
+        InternetOrderHeadRec1 := InternetOrderHeadRec;
+        InternetOrderHeadRec1.Status := InternetOrderHeadRec1.Status::Invalid;
+        InternetOrderHeadRec1."Processing In Progress" := FALSE;
+        InternetOrderHeadRec1.MODIFY;
+        IssueText := STRSUBSTNO(Text041,InternetSetup."Convert To Document Type");
+        CreateIPI(0,InternetOrderHeadRec1."Order Guid",'','',InternetOrderHeadRec1."Bill-to Net Customer No.",
+                  IssueText,TRUE,FALSE,InternetOrderHeadRec1."Sell-to Customer No.");
+      UNTIL InternetOrderHeadRec.NEXT = 0;
+    END;
+
+    PROCEDURE ProcessWebFieldUpdates@1190000007();
+    BEGIN
+      FieldUpdate.RESET;
+      FieldUpdate.SETCURRENTKEY("NAV Processing Status",DateTimeInsertedModified);
+      FieldUpdate.SETRANGE("NAV Processing Status",FieldUpdate."NAV Processing Status"::" ");
+      IF FieldUpdate.FIND('-') THEN
+      REPEAT
+        FieldUpdate1 := FieldUpdate;
+        FieldUpdate1."NAV Processing Status" := FieldUpdate."NAV Processing Status"::Error;
+        FieldUpdate1."Error Message" := Text045;
+        FieldUpdate1.MODIFY;
+        CreateIPI(7,FieldUpdate1.NavFieldUpdateGuID,'','','',Text045,TRUE,TRUE,'');
+        COMMIT;
+        IF FieldUpdate1.Process THEN BEGIN
+          IntProcessIssue.RESET;
+          IntProcessIssue.SETCURRENTKEY(Type,"Code 1","Code 2","Code 3");
+          IntProcessIssue.SETRANGE(Type,IntProcessIssue.Type::"Web Update");
+          IntProcessIssue.SETRANGE("Code 1",FieldUpdate1.NavFieldUpdateGuID);
+          IntProcessIssue.SETRANGE("Code 2",'');
+          IntProcessIssue.SETRANGE("Code 3",'');
+          IntProcessIssue.SETRANGE(Status,IntProcessIssue.Status::Open);
+          IntProcessIssue.SETRANGE(Hide,TRUE);
+          IF IntProcessIssue.FINDFIRST THEN
+            IntProcessIssue.DELETE;
+        END ELSE BEGIN
+          CreateIPI(7,FieldUpdate.NavFieldUpdateGuID,'','','',Text044,TRUE,FALSE,'');
+        END;
+      UNTIL FieldUpdate.NEXT = 0;
+    END;
+
+    PROCEDURE CreditCheckOK@1040009(LabelCode@1040000 : Code[10]) : Boolean;
+    BEGIN
+      SalesSetup.GET;
+      IF SalesSetup."Credit Warnings" IN
+        [SalesSetup."Credit Warnings"::"Both Warnings",
+        SalesSetup."Credit Warnings"::"Credit Limit"] THEN BEGIN
+        Customer.SETFILTER("Date Filter",'..%1',TODAY);
+        Customer.CALCFIELDS("Balance (LCY)","Outstanding Orders (LCY)","Shipped Not Invoiced (LCY)");
+        SalesLine.RESET;
+        SalesLine.SETCURRENTKEY("Document Type","Bill-to Customer No.","Currency Code");
+        SalesLine.SETRANGE("Document Type",SalesLine."Document Type"::"Return Order");
+        SalesLine.SETRANGE("Bill-to Customer No.",Customer."No.");
+        SalesLine.CALCSUMS("Outstanding Amount (LCY)","Return Rcd. Not Invd. (LCY)");
+        IF ((Customer."Balance (LCY)" +
+          (Customer."Shipped Not Invoiced (LCY)" -  SalesLine."Return Rcd. Not Invd. (LCY)") +
+          Customer."Outstanding Orders (LCY)" - SalesLine."Outstanding Amount (LCY)")
+          > Customer."Credit Limit (LCY)") AND (Customer."Credit Limit (LCY)" <> 0) THEN
+          EXIT(FALSE);
+      END;
+
+      IF (SalesSetup."Credit Warnings" IN
+        [SalesSetup."Credit Warnings"::"Both Warnings",
+        SalesSetup."Credit Warnings"::"Overdue Balance"]) THEN BEGIN
+        Customer.CALCFIELDS("Balance Due (LCY)");
+        IF Customer."Balance Due (LCY)" > 0 THEN
+          EXIT(FALSE);
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE WaitUntilFree1@1000000003();
+    BEGIN
+      SELECTLATESTVERSION;
+      InternetSetup.GET;
+
+      //Setup, if run for first time
+      IF InternetSetup."Max Secs for Manual Post" = 0 THEN BEGIN
+        InternetSetup."Max Secs for Manual Post" := 10;
+        InternetSetup.MODIFY;
+      END;
+      IF InternetSetup."Max Secs for Int. Automation" = 0 THEN BEGIN
+        InternetSetup."Max Secs for Int. Automation" := 60;
+        InternetSetup.MODIFY;
+      END;
+      IF (InternetSetup."Time Last Processed" > TIME) OR
+        (InternetSetup."Time Last Processed" = 000000T) THEN BEGIN
+        InternetSetup."Time Last Processed" := 000010T;
+        InternetSetup."Processing Mode" := InternetSetup."Processing Mode"::" ";
+        InternetSetup.MODIFY;
+      END;
+
+      //Checking if OK to go ahead
+      IF InternetSetup."Processing Mode" IN
+         [InternetSetup."Processing Mode"::" ",
+         InternetSetup."Processing Mode"::"Internet Automation"] THEN BEGIN
+        InternetSetup."Processing Mode" := InternetSetup."Processing Mode"::"Internet Automation";
+        InternetSetup."Time Last Processed" := TIME;
+        InternetSetup.MODIFY;
+      END ELSE BEGIN
+        //Existing Processing Mode is Manual
+        FreeToProcess := FALSE;
+        WHILE FreeToProcess = FALSE DO
+          WaitUntilFree2;
+        SELECTLATESTVERSION;
+        InternetSetup.GET;
+        InternetSetup."Processing Mode" := InternetSetup."Processing Mode"::"Internet Automation";
+        InternetSetup."Time Last Processed" := TIME;
+        InternetSetup.MODIFY;
+      END;
+    END;
+
+    PROCEDURE WaitUntilFree2@1000000004();
+    VAR
+      EarliestStartTime@1000000000 : Time;
+      TimeToGo@1000000001 : Integer;
+    BEGIN
+      SELECTLATESTVERSION;
+      InternetSetup.GET;
+      IF InternetSetup."Processing Mode" IN
+         [InternetSetup."Processing Mode"::" ",
+         InternetSetup."Processing Mode"::"Internet Automation"] THEN BEGIN
+        FreeToProcess := TRUE;
+      END ELSE BEGIN
+        EarliestStartTime := InternetSetup."Time Last Processed" +
+          (InternetSetup."Max Secs for Manual Post" * 1000);
+        IF EarliestStartTime > TIME THEN BEGIN
+          FreeToProcess := FALSE;
+          TimeToGo := EarliestStartTime - TIME;
+          IF TimeToGo > 10000 THEN
+            SLEEP(10000)
+          ELSE
+            SLEEP(TimeToGo);
+        END ELSE
+          FreeToProcess := TRUE;
+      END;
+    END;
+
+    PROCEDURE ProcessWebFileDownload@1000000005();
+    VAR
+      WebFileDownload@1000000000 : Record 9021664;
+      WebFileDownload1@1000000001 : Record 9021664;
+      TextL000@1000000002 : TextConst 'ENU=Customer has downloaded a file.;ENG=Customer has downloaded a file.';
+    BEGIN
+      //DOC EC2015.5.02 New Function
+      WebFileDownload.RESET;
+      WebFileDownload.SETCURRENTKEY("NAV Processing Status");
+      WebFileDownload.SETRANGE("NAV Processing Status",WebFileDownload."NAV Processing Status"::" ");
+      IF WebFileDownload.FIND('-') THEN
+      REPEAT
+        WebFileDownload1 := WebFileDownload;
+        IF InternetCustRec.GET(WebFileDownload."User GuID") THEN BEGIN
+          CreateIPI(10,WebFileDownload."File GuID",'','',WebFileDownload."User GuID",TextL000,FALSE,FALSE,
+                    InternetCustRec."Customer No.");
+          WebFileDownload1."Customer No." := InternetCustRec."Customer No.";
+        END ELSE
+          CreateIPI(10,WebFileDownload."File GuID",'','',WebFileDownload."User GuID",TextL000,FALSE,FALSE,'');
+        WebFileDownload1."NAV Processing Status" := WebFileDownload1."NAV Processing Status"::"IPI Created";
+        WebFileDownload1.MODIFY;
+      UNTIL WebFileDownload.NEXT = 0;
+    END;
+
+    BEGIN
+    {
+      //DOC EC2013.3.00 MQ 11/07/2012 - GW120711 Solve problem of not updating Customer No on Internet Customer.
+      //DOC EC2013.3.00 MQ 30/07/2012 - GW120730 Do not run CreateInternetOrders for FINBRANDS.
+      //DOC EC2013.3.10 MQ 17/08/2012 - GW120817 Reduced CreditCheck
+      //DOC EC2013.3.10 MQ 31/08/2012 - GW120831 Change in PayCustomerAccounts
+      //DOC EC2013.3.20 MQ 16/10/2012 - GW121016 Make CalcDate Multilanguage; Restrictions on which Payment Entries to process.
+      //DOC EC2013.3.20 MQ 16/10/2012 - Add function: ProcessesPriorToManualOrder - called from CU Int. Order to Sales (Yes/No)
+      //DOC EC2013.3.30 MQ 15/11/2012 - GW121115 Add key in ProcessWebFieldUpdates
+      //DOC EC2013.3.30 MQ 12/12/2012 - GW121212 Work to Stop "Another User has Modified the Internet Order Header.
+      //DOC EC2013.3.40 MQ 20/02/2013 - GW130220 Add to Option of CreateIPI Type and handle B2B Registration; Handle Items marked as "Do Not Auto Convert Int. Order and IPI if Comments
+      //DOC EC2013.3.40 MQ 20/02/2013 - Check correct number of Linked Attribute Value Web Entries and create IPI if not.; Call SplitMultipleOrders; Enhance IPIs to include Customer No.
+      //DOC EC2013.3.40 MQ 20/02/2013 - Add modify permission to Internet Setup
+      //DOC EC2013.3.50 MQ 27/03/2013 - GW130327 Monitor ePages and Page Items
+      //DOC EC2013.3.60 MQ 16/04/2013 - GW130416 TOMDIXON
+      //DOC EC2013.3.60 MQ 14/05/2013 - GW130514 Allow run ConvertInternetOrders on order by order basis.
+      //DOC EC2013.3.61 MQ 19/07/2013 - GW130719 Changes to check for Email used by Internet Customers
+      //DOC EC2013.3.80 MQ 21/08/2013 - GW130821 Remove reference to InternetSetup."Use V1 Payment Entries"; Do not process Internet Customer marked as Not Active; PCI Charge in PayCustomerAccounts
+      //DOC EC2013.3.80 MQ 19/09/2013 - GW130919 Add DERMAUB2B
+      //DOC EC2013.4.00 MQ 19/12/2013 - GW131219 Removed call in StartupProceedures to codeunit CheckFunctions as no longer used.
+      //DOC EC2013.4.00 MQ 18/01/2014 - GW140118 DERMAUB2B
+      //DOC EC2013.4.60 MQ 19/03/2014 - GW140319 sort ProcessContactQuestionAnswers;
+      //DOC EC2013.4.64 MQ 17/06/2014 - GW140617 update PayCustomerAccounts for new PCI code.
+      //DOC EC2013.4.65 MQ 18/08/2014 - GW140818 Changed IssueTexts from T250 to T1024 and then put in a couple of COPYSTR removed PCI specific code in PayCustomerAccounts as now uses ProcessPayments
+      //DOC EC2013.4.67 MQ 17/11/2014 - GW141117 LM
+      //DOC EC2015.5.02 MQ 11/02/2015 - GW150211 ProcessWebFileDownload
+      //DOC EC2015.5.02 MQ 16/04/2015 - GW150416 Add support for DERMUK2015 x2
+      //DOC EC2015.5.03 MQ 05/05/2015 - GW150505 Removed update of DateTimeInsertedModifed from Customer and removed old comments
+      //DOC EC2015.5.04 MQ 17/07/2015 - GW150717 Add code for FBDE and now handle quotes.
+      //DOC EC2015.5.04 MQ 22/07/2015 - GW150722 Add use of No PayCustAcs On Man Order Con
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

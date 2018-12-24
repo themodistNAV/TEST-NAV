@@ -1,0 +1,281 @@
+OBJECT Codeunit 11102079 OM - MenuSuite Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE Refresh@1();
+    VAR
+      CALHistoryObject@1000 : Record 11102052;
+      CALHistoryLine@1001 : Record 11102053;
+      MenuSuiteNode@1002 : Record 11102092;
+      Object@1003 : Record 2000000001;
+      WindowsLanguageRec@1004 : Record 2000000045;
+      Progressbar@1005 : Codeunit 11102044;
+      SourceControl@1006 : Codeunit 11102050;
+      PropertyName@1007 : Text;
+      PropertyValue@1008 : Text;
+      ActiveLanguageCode@1009 : Code[20];
+      NoOfLines@1010 : Integer;
+      NoOfRecords@1011 : Integer;
+      Sorting@1012 : Integer;
+      ctUpdatingMenuNodes@1013 : TextConst 'DEU=Updating MenuNodes...;ENU=Updating MenuNodes...;ESP=Updating MenuNodes...;FRA=Updating MenuNodes...;NLD=MenuNodes bijwerken...;DEA=Updating MenuNodes...';
+    BEGIN
+      Object.SETRANGE(Type, Object.Type::MenuSuite);
+      Object.SETFILTER("BLOB Size", '>0');
+
+      SourceControl.UpdateCALHistory(Object, FALSE, TRUE);
+
+      WindowsLanguageRec.SETRANGE("Language ID", GLOBALLANGUAGE);
+      IF WindowsLanguageRec.FINDFIRST THEN
+        ActiveLanguageCode := WindowsLanguageRec."Abbreviated Name";
+
+      MenuSuiteNode.LOCKTABLE;
+      MenuSuiteNode.DELETEALL;
+
+      IF Object.FINDSET THEN
+        REPEAT
+          IF CALHistoryObject.TryGoToLastRecord(Object.Type, Object.ID) THEN BEGIN
+            CALHistoryLine.SETRANGE("Entry No.", CALHistoryObject."Entry No.");
+            CALHistoryLine.SETRANGE("Sub Line No.", 1);
+            NoOfLines += CALHistoryLine.COUNT;
+          END;
+        UNTIL Object.NEXT = 0;
+
+      Progressbar.Open(ctUpdatingMenuNodes, 0);
+      Progressbar.BarSize := NoOfLines * 2;
+
+      IF Object.FINDSET THEN
+        REPEAT
+          IF CALHistoryObject.TryGoToLastRecord(Object.Type, Object.ID) THEN BEGIN
+
+            MenuSuiteNode.INIT;
+
+            CALHistoryLine.SETRANGE("Entry No.", CALHistoryObject."Entry No.");
+            CALHistoryLine.SETRANGE("Sub Line No.", 1);
+            IF CALHistoryLine.FINDSET THEN
+              REPEAT
+                Progressbar.AddToBar(1);
+
+                IF STRPOS(CALHistoryLine.Code, '=') > 65 THEN BEGIN
+                  IF CALHistoryLine.Code[25] <> ' ' THEN BEGIN
+
+                    NoOfRecords += 1;
+
+                    IF MenuSuiteNode.Guid <> '' THEN
+                      SaveNode(MenuSuiteNode);
+
+                    MenuSuiteNode.INIT;
+                    MenuSuiteNode."Entry No." := 0;
+                    MenuSuiteNode."Menu No." := Object.ID;
+                    MenuSuiteNode."C/AL Line No." := CALHistoryLine."Line No.";
+                    IF Object.ID < 1000 THEN
+                      MenuSuiteNode."Menu Type" := MenuSuiteNode."Menu Type"::"Classic Client"
+                    ELSE
+                      MenuSuiteNode."Menu Type" := MenuSuiteNode."Menu Type"::"RoleTailored Client";
+                    MenuSuiteNode.Guid := ReplaceEmptyGuid(COPYSTR(CALHistoryLine.Code, 25, 36), Object.ID);
+                    IF EVALUATE(MenuSuiteNode.Type, COPYSTR(CALHistoryLine.Code, 7, 15)) THEN
+                      ;
+
+                  END;
+                  PropertyName := DELCHR(COPYSTR(CALHistoryLine.Code, 65, STRPOS(CALHistoryLine.Code, '=') - 65), '<', ' ');
+                  PropertyValue := COPYSTR(CALHistoryLine.Code, STRPOS(CALHistoryLine.Code, '=') + 1);
+                  PropertyValue := DELCHR(PropertyValue, '>', '}]; ');
+                  PropertyValue := DELCHR(PropertyValue, '<', '[{ ');
+
+                  IF PropertyName = 'CaptionML' THEN BEGIN
+                    PropertyName := COPYSTR(PropertyValue, 1, 3);
+                    PropertyValue := COPYSTR(PropertyValue, 5);
+                  END;
+
+                  CASE PropertyName OF
+                    'FirstChild' :
+                      MenuSuiteNode."First Child" := ReplaceEmptyGuid(PropertyValue, Object.ID);
+                    'Name' :
+                      MenuSuiteNode.Name := PropertyValue;
+                    'ParentNodeID' :
+                      MenuSuiteNode."Parent Node Id" := ReplaceEmptyGuid(PropertyValue, Object.ID);
+                    'NextNodeID' :
+                      MenuSuiteNode."Next Node Id" := ReplaceEmptyGuid(PropertyValue, Object.ID);
+                    'FirstChild' :
+                      MenuSuiteNode."First Child" := ReplaceEmptyGuid(PropertyValue, Object.ID);
+                    'RunObjectType' :
+                      IF EVALUATE(MenuSuiteNode."Object Type", PropertyValue) THEN
+                        ;
+                    'RunObjectID' :
+                      IF EVALUATE(MenuSuiteNode."Object No.", PropertyValue) THEN
+                        ;
+                    'Deleted' :
+                      IF EVALUATE(MenuSuiteNode.Deleted, PropertyValue) THEN
+                        ;
+                    'ENU' :
+                      BEGIN
+                        MenuSuiteNode."ENU Caption" := PropertyValue;
+                        IF MenuSuiteNode.Caption = '' THEN
+                          MenuSuiteNode.Caption := MenuSuiteNode."ENU Caption";
+                      END;
+                    ActiveLanguageCode :
+                      MenuSuiteNode.Caption := PropertyValue;
+
+                  END;
+
+                END;
+
+              UNTIL CALHistoryLine.NEXT = 0;
+
+            IF MenuSuiteNode.Guid <> '' THEN
+              SaveNode(MenuSuiteNode);
+
+          END;
+        UNTIL Object.NEXT = 0;
+
+      Progressbar.BarSize := NoOfRecords * 2;
+      Progressbar.BarPosition := NoOfRecords;
+
+      MenuSuiteNode.SETRANGE(Sorting, 0);
+      WHILE MenuSuiteNode.FINDFIRST DO
+        FillSorting(MenuSuiteNode, Sorting, 0, Progressbar);
+
+      MenuSuiteNode.RESET;
+      MenuSuiteNode.SETRANGE(Level, 1);
+      MenuSuiteNode.SETFILTER(Type, '<>%1', MenuSuiteNode.Type::" ");
+      MenuSuiteNode.MODIFYALL(Visible, TRUE);
+
+      Progressbar.Close;
+    END;
+
+    LOCAL PROCEDURE FillSorting@2(MenuSuiteNode@1000 : Record 11102092;VAR Sorting@1001 : Integer;Level@1002 : Integer;VAR Progressbar@1003 : Codeunit 11102044);
+    VAR
+      SubMenuSuiteNode@1004 : Record 11102092;
+    BEGIN
+      Progressbar.AddToBar(1);
+
+      IF MenuSuiteNode.Type = MenuSuiteNode.Type::Menu THEN
+        Level := 1;
+
+      Sorting += 1;
+      MenuSuiteNode.Sorting := Sorting;
+      MenuSuiteNode.Level := Level;
+      MenuSuiteNode.MODIFY;
+
+      IF NOT EmptyGuid(MenuSuiteNode."First Child") THEN BEGIN
+        SubMenuSuiteNode.RESET;
+        SubMenuSuiteNode.SETCURRENTKEY("Menu Type", Guid);
+        SubMenuSuiteNode.SETRANGE("Menu Type", MenuSuiteNode."Menu Type");
+        SubMenuSuiteNode.SETRANGE(Guid, MenuSuiteNode."First Child");
+        SubMenuSuiteNode.SETRANGE(Sorting, 0);
+        WHILE SubMenuSuiteNode.FINDFIRST DO
+          FillSorting(SubMenuSuiteNode, Sorting, Level + 1, Progressbar);
+      END;
+
+      IF NOT EmptyGuid(MenuSuiteNode."Next Node Id") THEN BEGIN
+        SubMenuSuiteNode.RESET;
+        SubMenuSuiteNode.SETCURRENTKEY("Menu Type", Guid);
+        SubMenuSuiteNode.SETRANGE("Menu Type", MenuSuiteNode."Menu Type");
+        SubMenuSuiteNode.SETRANGE(Guid, MenuSuiteNode."Next Node Id");
+        SubMenuSuiteNode.SETRANGE(Sorting, 0);
+        WHILE SubMenuSuiteNode.FINDFIRST DO
+          FillSorting(SubMenuSuiteNode, Sorting, Level, Progressbar);
+      END;
+
+      IF NOT EmptyGuid(MenuSuiteNode.Guid) THEN BEGIN
+        SubMenuSuiteNode.RESET;
+        SubMenuSuiteNode.SETCURRENTKEY("Menu Type", "Parent Node Id");
+        SubMenuSuiteNode.SETRANGE("Menu Type", MenuSuiteNode."Menu Type");
+        SubMenuSuiteNode.SETRANGE("Parent Node Id", MenuSuiteNode.Guid);
+        SubMenuSuiteNode.SETRANGE(Sorting, 0);
+        WHILE SubMenuSuiteNode.FINDFIRST DO
+          FillSorting(SubMenuSuiteNode, Sorting, Level + 1, Progressbar);
+      END;
+    END;
+
+    LOCAL PROCEDURE IsFilled@3(VAR MenuSuiteNode@1000 : Record 11102092) : Boolean;
+    BEGIN
+      WITH MenuSuiteNode DO
+        EXIT(("ENU Caption" <> '') OR (Caption <> '') OR ("Object Type" <> 0) OR ("Object No." <> 0) OR (Type <> Type::MenuItem));
+    END;
+
+    LOCAL PROCEDURE OverwriteProperties@5(VAR MenuSuiteNode@1000 : Record 11102092;VAR MenuSuiteNode2@1001 : Record 11102092);
+    BEGIN
+      WITH MenuSuiteNode2 DO BEGIN
+
+        FINDFIRST;
+
+        IF NOT EmptyGuid(MenuSuiteNode."Parent Node Id") THEN
+          "Parent Node Id" := MenuSuiteNode."Parent Node Id";
+
+        IF NOT EmptyGuid(MenuSuiteNode."Next Node Id") THEN
+          "Next Node Id" := MenuSuiteNode."Next Node Id";
+
+        IF NOT EmptyGuid(MenuSuiteNode."First Child") THEN
+          "First Child" := MenuSuiteNode."First Child";
+
+        IF MenuSuiteNode."Object Type" <> 0 THEN
+          "Object Type" := MenuSuiteNode."Object Type";
+
+        IF MenuSuiteNode."Object No." <> 0 THEN
+          "Object No." := MenuSuiteNode."Object No.";
+
+        IF MenuSuiteNode.Name <> '' THEN
+          Name := MenuSuiteNode.Name;
+
+        IF MenuSuiteNode."ENU Caption" <> '' THEN
+          "ENU Caption" := MenuSuiteNode."ENU Caption";
+
+        IF MenuSuiteNode.Caption <> '' THEN
+          Caption := MenuSuiteNode.Caption;
+
+        IF MenuSuiteNode.Deleted <> MenuSuiteNode.Deleted::" " THEN
+          Deleted := MenuSuiteNode.Deleted;
+
+        MODIFY;
+      END;
+    END;
+
+    LOCAL PROCEDURE EmptyGuid@6(GuidString@1000 : Text) : Boolean;
+    BEGIN
+      IF STRLEN(GuidString) < 10 THEN
+        EXIT(TRUE);
+
+      EXIT(GuidString = '00000000-0000-0000-0000-000000000000');
+    END;
+
+    LOCAL PROCEDURE ReplaceEmptyGuid@4(GuidString@1000 : Text;Id@1001 : Integer) : Text;
+    BEGIN
+      IF EmptyGuid(GuidString) THEN
+        EXIT(FORMAT(Id))
+      ELSE
+        EXIT(GuidString);
+    END;
+
+    LOCAL PROCEDURE SaveNode@7(VAR MenuSuiteNode@1000 : Record 11102092);
+    VAR
+      MenuSuiteNode2@1001 : Record 11102092;
+    BEGIN
+      MenuSuiteNode2.SETCURRENTKEY("Menu Type", Guid);
+      MenuSuiteNode2.SETRANGE("Menu Type", MenuSuiteNode."Menu Type");
+      MenuSuiteNode2.SETRANGE(Guid, MenuSuiteNode.Guid);
+      IF NOT MenuSuiteNode2.ISEMPTY THEN
+        OverwriteProperties(MenuSuiteNode, MenuSuiteNode2)
+      ELSE BEGIN
+        MenuSuiteNode.Empty := NOT IsFilled(MenuSuiteNode);
+        MenuSuiteNode.INSERT;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

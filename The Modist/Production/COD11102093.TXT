@@ -1,0 +1,190 @@
+OBJECT Codeunit 11102093 OM - Compare File
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            CommonDialog@1000 : Codeunit 11102059;
+            FileHandler@1001 : Codeunit 11102097;
+            FileName@1002 : Text;
+            ServerFileName@1003 : Text;
+            ctExtAll@1004 : TextConst 'DEU="Object Manager Files|*.txt;*.fld";ENU="Object Manager Files|*.txt;*.fld";ESP="Object Manager Files|*.txt;*.fld";FRA="Object Manager Files|*.txt;*.fld";NLD="Object Manager Files|*.txt;*.fld";DEA="Object Manager Files|*.txt;*.fld"';
+            ctNotValid@1005 : TextConst 'DEU=The extension ''%1'' is not valid.;ENU=The extension ''%1'' is not valid.;ESP=The extension ''%1'' is not valid.;FRA=The extension ''%1'' is not valid.;NLD=De extensie ''''%1'''' is niet geldig.;DEA=The extension ''%1'' is not valid.';
+          BEGIN
+            CommonDialog.AddExtension(ctExtAll, '');
+
+            CommonDialog.AddKnownExtension('txt-o');
+            CommonDialog.AddKnownExtension('fld');
+
+            IF NOT CommonDialog.OpenFile(FileName, ServerFileName) THEN
+              EXIT;
+
+            CASE CommonDialog.GetExtension OF
+              'txt-o' : CompareTxtFile(FileName, ServerFileName);
+              'txt' : CompareTxtFile(FileName, ServerFileName);
+              'fld' : CompareFieldFile(FileName, ServerFileName);
+              ELSE
+                MESSAGE(ctNotValid, FileHandler.GetExtension(FileName));
+            END;
+          END;
+
+  }
+  CODE
+  {
+
+    LOCAL PROCEDURE CompareTxtFile@1(ClientFileName@1000 : Text;ServerFileName@1001 : Text);
+    VAR
+      TmpCALHistoryObject@1002 : TEMPORARY Record 11102052;
+      Progressbar@1003 : Codeunit 11102044;
+      SourceControl@1004 : Codeunit 11102050;
+      FileHandler@1005 : Codeunit 11102097;
+      ClientCompareFileName@1006 : Text;
+      ServerCompareFileName@1007 : Text;
+      ctComparingFile@1008 : TextConst 'DEU=Comparing file...;ENU=Comparing file...;ESP=Comparing file...;FRA=Comparing file...;NLD=Bestand vergelijken...;DEA=Comparing file...';
+    BEGIN
+      Progressbar.Open(ctComparingFile, 1);
+
+      Progressbar.BarSize := LengthOfFile(ServerFileName) * 2;
+
+      ServerCompareFileName := AddTextToFileName(ServerFileName, '-db');
+      ClientCompareFileName := AddTextToFileName(ClientFileName, '-db');
+
+      FileHandler.QueryReplace(ServerCompareFileName);
+
+      ReadObjects(ServerFileName, TmpCALHistoryObject, Progressbar);
+      WriteCompareFile(ServerCompareFileName, TmpCALHistoryObject, Progressbar);
+
+      ClientCompareFileName := FileHandler.DownloadToClient(ServerCompareFileName, ClientCompareFileName, '');
+      SourceControl.StartCompareToolFile(ClientFileName, ClientCompareFileName);
+
+      Progressbar.Close;
+    END;
+
+    LOCAL PROCEDURE ReadObjects@2(VAR FileName@1000 : Text;VAR TmpCALHistoryObject@1001 : Record 11102052;VAR Progressbar@1002 : Codeunit 11102044);
+    VAR
+      TmpCALHistoryLine@1003 : TEMPORARY Record 11102053;
+      SourceControl@1004 : Codeunit 11102050;
+    BEGIN
+      SourceControl.ImportTextFile2(FileName, 1, Progressbar, 0, TmpCALHistoryObject, TmpCALHistoryLine, TRUE);
+    END;
+
+    LOCAL PROCEDURE WriteCompareFile@3(VAR FileName@1000 : Text;VAR TmpCALHistoryObject@1001 : Record 11102052;VAR Progressbar@1002 : Codeunit 11102044);
+    VAR
+      CALHistoryObject@1003 : Record 11102052;
+      CALHistoryLine@1004 : Record 11102053;
+      Object@1005 : Record 2000000001;
+      SourceControl@1006 : Codeunit 11102050;
+      oFile@1007 : File;
+    BEGIN
+      oFile.TEXTMODE(TRUE);
+      oFile.CREATE(FileName);
+
+      Progressbar.BarSize := TmpCALHistoryObject.COUNT * 2;
+      Progressbar.BarPosition := TmpCALHistoryObject.COUNT;
+
+      IF TmpCALHistoryObject.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+
+          IF Object.GET(TmpCALHistoryObject."Object Type", '', TmpCALHistoryObject."Object No.") THEN BEGIN
+
+            Progressbar.Text1Object := Object;
+
+            IF SourceControl.LatestHistoryIsOutdated(Object) THEN
+              SourceControl.AddObject(Object, 0, FALSE, TRUE, 0, FALSE);
+
+            CALHistoryObject.GoToLastRecord(TmpCALHistoryObject."Object Type", TmpCALHistoryObject."Object No.");
+            CALHistoryLine.SETRANGE("Entry No.", CALHistoryObject."Entry No.");
+            SourceControl.AppendHistoryLinesToFile(oFile, CALHistoryLine);
+          END;
+
+        UNTIL TmpCALHistoryObject.NEXT = 0;
+
+      oFile.CLOSE;
+    END;
+
+    LOCAL PROCEDURE LengthOfFile@6(FileName@1000 : Text) : Integer;
+    VAR
+      oFile@1001 : File;
+    BEGIN
+      oFile.OPEN(FileName);
+      EXIT(oFile.LEN);
+      oFile.CLOSE;
+    END;
+
+    LOCAL PROCEDURE AddTextToFileName@7(FileName@1000 : Text;TextToAdd@1001 : Text) ExitValue : Text;
+    VAR
+      i@1002 : Integer;
+    BEGIN
+      ExitValue := FileName + TextToAdd;
+      FOR i := 1 TO STRLEN(FileName) DO
+        IF FileName[i] = '.' THEN
+          ExitValue := INSSTR(FileName, TextToAdd, i);
+    END;
+
+    LOCAL PROCEDURE CompareFieldFile@8(ClientFileName@1000 : Text;ServerFileName@1001 : Text);
+    VAR
+      TmpFieldCompareLine@1002 : TEMPORARY Record 11102067;
+      TmpFieldCompareLine2@1003 : TEMPORARY Record 11102067;
+      Object@1004 : Record 2000000001;
+      TmpObject@1005 : TEMPORARY Record 2000000001;
+      Fld@1006 : Record 2000000041;
+      ImExportMgt@1007 : Codeunit 11102043;
+      Progressbar@1008 : Codeunit 11102044;
+      SourceControl@1009 : Codeunit 11102050;
+      FileHandler@1010 : Codeunit 11102097;
+      oFile@1011 : File;
+      OutStr@1012 : OutStream;
+      ClientCompareFileName@1013 : Text[1024];
+      ServerCompareFileName@1014 : Text[1024];
+      ctComparingFile@1015 : TextConst 'DEU=Comparing file...;ENU=Comparing file...;ESP=Comparing file...;FRA=Comparing file...;NLD=Bestand vergelijken...;DEA=Comparing file...';
+    BEGIN
+      Progressbar.Open(ctComparingFile, 1);
+
+      ServerCompareFileName := AddTextToFileName(ServerFileName, '-db');
+      FileHandler.QueryReplace(ServerCompareFileName);
+
+      ImExportMgt.ImportFldFromFile(ServerFileName, TmpFieldCompareLine, Progressbar, 0, 100);
+
+      IF TmpFieldCompareLine.FINDSET THEN
+        REPEAT
+          IF NOT TmpObject.GET(TmpObject.Type::Table, '', TmpFieldCompareLine."Table No.") THEN
+            IF Object.GET(TmpObject.Type::Table, '', TmpFieldCompareLine."Table No.") THEN BEGIN
+              TmpObject := Object;
+              TmpObject.INSERT;
+            END;
+        UNTIL TmpFieldCompareLine.NEXT = 0;
+
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          Fld.SETRANGE(TableNo, TmpObject.ID);
+          IF Fld.FINDSET THEN
+            REPEAT
+              TmpFieldCompareLine2.FillLeftFromField(Fld);
+              TmpFieldCompareLine2.INSERT;
+            UNTIL Fld.NEXT = 0;
+
+        UNTIL TmpObject.NEXT = 0;
+
+      oFile.WRITEMODE(TRUE);
+      oFile.CREATE(ServerCompareFileName);
+      oFile.CREATEOUTSTREAM(OutStr);
+      ImExportMgt.FillOutstreamFld(OutStr, TmpFieldCompareLine2);
+      oFile.CLOSE;
+
+      ClientCompareFileName := FileHandler.DownloadToClient(ServerCompareFileName, ClientCompareFileName, '');
+      SourceControl.StartCompareToolFile(ClientFileName, ClientCompareFileName);
+
+      Progressbar.Close;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,720 @@
+OBJECT Codeunit 9087006 Style Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/10/16;
+    Time=[ 5:06:43 PM];
+    Modified=Yes;
+    Version List=NS2016.16.1,IN37978;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 5802=r;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Colour@1000000001 : Record 9087003;
+      nSembleSetup@1000000004 : Record 9087000;
+      Size@1000000005 : Record 9087002;
+      Style@1000000002 : Record 9087012;
+      StyleColour@1000000000 : Record 9087013;
+      StyleColourSize@1000000003 : Record 9087014;
+      Item@1000000013 : Record 27;
+      EnhancedFieldBuffer@1000000010 : TEMPORARY Record 6529;
+      tHelp@1000000007 : TextConst 'ENU=You can use the following templates in description definition (specify them as percent sign and then the number):;ENG=You can use the following templates in description definition (specify them as percent sign and then the number):';
+      tField@1000000008 : TextConst 'ENU=%1 %2;ENG=%1 %2';
+      NsembleToolkit@1000000014 : Codeunit 9087000;
+      String@1000000011 : Codeunit 9062236;
+      TnpToolkit@1000000009 : Codeunit 9062230;
+      DialogManagement@1000000012 : Codeunit 9062249;
+      DialogIndex@1000000006 : ' ,Style,Colour,Size,Items,ItemVariants';
+
+    PROCEDURE "--- Style Colour Size Methods ---"@1000000006();
+    BEGIN
+    END;
+
+    PROCEDURE AddColoursToStyleColours@1000000008(pStyleNo@1000000001 : Code[20]) : Boolean;
+    VAR
+      lColours@1000000002 : Page 9087006;
+      lResult@1000000000 : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Adding colours to style colours
+      //  -> pStyleNo: Style number to add colours to
+      //  <- Result
+
+      lResult := FALSE;
+
+      Colour.RESET();
+      CLEAR(lColours);
+      lColours.SETTABLEVIEW(Colour);
+      lColours.LOOKUPMODE(TRUE);
+      IF (lColours.RUNMODAL() = ACTION::LookupOK) THEN
+      BEGIN
+        Colour.RESET();
+        lColours.SETSELECTIONFILTER(Colour);
+        IF (Colour.FINDSET()) THEN
+        REPEAT
+          IF ( NOT (StyleColour.GET(pStyleNo, Colour.Code))) THEN
+          BEGIN
+            CLEAR(StyleColour);
+            StyleColour.INIT();
+            StyleColour.VALIDATE("Style No.", pStyleNo);
+            StyleColour.VALIDATE("Colour Code", Colour.Code);
+            StyleColour.INSERT(TRUE);
+          END;
+        UNTIL (Colour.NEXT() = 0);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE UpdateStyleColourSizes@1000000005(pStyle@1000000001 : Record 9087012);
+    BEGIN
+      CLEAR(StyleColour);
+      UpdateStyleColourSizesForStyleColour(pStyle, StyleColour, StyleColour);
+    END;
+
+    PROCEDURE UpdateStyleColourSizesForStyleColour@1000000004(pStyle@1000000000 : Record 9087012;pOldStyleColour@1000000006 : Record 9087013;pNewStyleColour@1000000001 : Record 9087013);
+    VAR
+      lStyleColourTmp@1000000002 : TEMPORARY Record 9087013;
+      lStyleColourSizeTmp@1000000003 : TEMPORARY Record 9087014;
+      lDelete@1000000004 : Boolean;
+    BEGIN
+      Style := pStyle;
+      nSembleSetup.VerifyAndGet();
+
+      StyleColour.RESET();
+      StyleColour.SETRANGE("Style No.", Style."No.");
+      IF (StyleColour.FINDSET()) THEN
+      REPEAT
+        IF (StyleColour."Colour Code" <> pOldStyleColour."Colour Code") THEN
+        BEGIN
+          lStyleColourTmp := StyleColour;
+          lStyleColourTmp.INSERT();
+        END;
+      UNTIL (StyleColour.NEXT() = 0);
+      IF (pNewStyleColour."Colour Code" <> '') THEN
+        IF ( NOT (lStyleColourTmp.GET(pNewStyleColour."Style No.", pNewStyleColour."Colour Code"))) THEN
+        BEGIN
+          lStyleColourTmp := pNewStyleColour;
+          lStyleColourTmp.INSERT();
+        END;
+
+      StyleColourSize.RESET();
+      StyleColourSize.SETRANGE("Style No.", Style."No.");
+      IF (StyleColourSize.FINDSET()) THEN
+      REPEAT
+        lDelete := FALSE;
+        IF ( NOT (lDelete)) THEN
+          lDelete := (StyleColourSize."Colour Code" = pOldStyleColour."Colour Code");
+        IF ( NOT (lDelete)) THEN
+          lDelete := ( NOT (lStyleColourTmp.GET(StyleColourSize."Style No.", StyleColourSize."Colour Code")));
+        IF ( NOT (lDelete)) THEN
+          lDelete := (StyleColourSize."Size Group Code" <> Style."Size Group Code");
+        IF (lDelete) THEN
+          IF (StyleColourSize."Colour Code" = pNewStyleColour."Colour Code") THEN
+            lDelete := FALSE;
+        IF (lDelete) THEN
+        BEGIN
+          lStyleColourSizeTmp := StyleColourSize;
+          lStyleColourSizeTmp.INSERT();
+        END;
+      UNTIL (StyleColourSize.NEXT() = 0);
+
+      lStyleColourSizeTmp.RESET();
+      IF (lStyleColourSizeTmp.FINDSET()) THEN
+      REPEAT
+        //StyleColourSize.GET(lStyleColourSizeTmp."Style No.", lStyleColourSizeTmp."Colour Code", lStyleColourSizeTmp."Size Group Code");                               //DOC NS2016.16.1
+        StyleColourSize.GET(lStyleColourSizeTmp."Style No.", lStyleColourSizeTmp."Colour Code", lStyleColourSizeTmp."Size Group Code",lStyleColourSizeTmp."Size Code"); //DOC NS2016.16.1
+        StyleColourSize.DELETE(TRUE);
+      UNTIL (lStyleColourSizeTmp.NEXT() = 0);
+
+      IF (Style."Size Group Code" <> '') THEN
+      BEGIN
+        lStyleColourTmp.RESET();
+        IF (lStyleColourTmp.FINDSET()) THEN
+        REPEAT
+          Size.RESET();
+          Size.SETRANGE("Size Group Code", Style."Size Group Code");
+          IF (Size.FINDSET()) THEN
+          REPEAT
+            IF ( NOT (StyleColourSize.GET(Style."No.", lStyleColourTmp."Colour Code", Size."Size Group Code", Size.Code))) THEN
+            BEGIN
+              CLEAR(StyleColourSize);
+              StyleColourSize.VALIDATE("Style No.", Style."No.");
+              StyleColourSize."Colour Code" := lStyleColourTmp."Colour Code";
+              StyleColourSize."Size Group Code" := Size."Size Group Code";
+              StyleColourSize."Size Code" := Size.Code;
+              StyleColourSize.INSERT(TRUE);
+            END;
+          UNTIL (Size.NEXT() = 0);
+        UNTIL (lStyleColourTmp.NEXT() = 0);
+      END;
+    END;
+
+    PROCEDURE "--- Release / Reopen Methods ---"@1000000012();
+    BEGIN
+    END;
+
+    PROCEDURE Release@1000000013(VAR pStyle@1000000000 : Record 9087012);
+    BEGIN
+      //DOC NS2015.1 - Releasing a style
+      //  <> pStyle: Style to release
+
+      Style := pStyle;
+
+      IF (pStyle.Status = pStyle.Status::Released) THEN
+        EXIT;
+
+      Style.TESTFIELD("No.");
+      Style.TESTFIELD(Description);
+      Style.TESTFIELD("Base Unit of Measure");
+      Style.TESTFIELD("Inventory Posting Group");
+      Style.TESTFIELD("Gen. Prod. Posting Group");
+      Style.TESTFIELD("VAT Prod. Posting Group");
+      Style.TESTFIELD("Vendor No.");
+      Style.TESTFIELD(Blocked, FALSE);
+      Style.TESTFIELD("Brand Code");
+      Style.TESTFIELD("Season Code");
+
+      Style.VALIDATE(Status, pStyle.Status::Released);
+      Style.MODIFY(TRUE);
+
+      pStyle := Style;
+    END;
+
+    PROCEDURE Reopen@1000000014(VAR pStyle@1000000000 : Record 9087012);
+    BEGIN
+      //DOC NS2015.1 - Reopening a style
+      //  <> pStyle: Style to reopen
+
+      Style := pStyle;
+
+      IF (Style.Status = Style.Status::Open) THEN
+        EXIT;
+
+      Style.VALIDATE(Status, Style.Status::Open);
+      Style.MODIFY(TRUE);
+
+      pStyle := Style;
+    END;
+
+    PROCEDURE "--- Item Creation Methods ---"@1000000007();
+    BEGIN
+    END;
+
+    PROCEDURE UpdateStylesItems@1000000016(VAR pStyle@1000000000 : Record 9087012;pInteraction@1000000007 : Boolean) : Boolean;
+    VAR
+      eNoStyles@1000000002 : TextConst 'ENU=There are no styles to update items and variants for.;ENG=There are no styles to update items and variants for.';
+      eConfirmation@1000000010 : TextConst 'ENU=Do you want to update items and variants for %1 styles?;ENG=Do you want to update items and variants for %1 styles?';
+      eFinalMessage@1000000008 : TextConst 'ENU=%1 styles items and variants have been updated.;ENG=%1 styles items and variants have been updated.';
+      lCount@1000000001 : Integer;
+    BEGIN
+      //DOC NS2015.1 - Updating styles items
+      //  <> pStyle: Styles to update items for
+      //  -> pInteraction: Interaction flag
+      //  <- Result
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+
+      lCount := pStyle.COUNT();
+      IF (lCount = 0) THEN
+        ERROR(eNoStyles);
+
+      IF (pInteraction) THEN
+        IF ( NOT (CONFIRM(eConfirmation, TRUE, lCount))) THEN
+          EXIT(FALSE);
+
+      IF (pInteraction) THEN
+        OpenDialog();
+
+      IF (pStyle.FINDSET(TRUE)) THEN
+      REPEAT
+        UpdateStyleItemsInternal(pStyle, TRUE, FALSE, FALSE);
+      UNTIL (pStyle.NEXT() = 0);
+
+      IF (pInteraction) THEN
+        CloseDialog(STRSUBSTNO(eFinalMessage, lCount));
+    END;
+
+    PROCEDURE UpdateStyleItems@1000000011(VAR pStyle@1000000000 : Record 9087012;pInteraction@1000000007 : Boolean) : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Updating style items
+      //  <> pStyle: Style to update items for
+      //  -> pInteraction: Interaction flag
+      //  <- Result
+
+      EXIT(UpdateStyleItemsInternal(pStyle, pInteraction, TRUE, TRUE));
+    END;
+
+    LOCAL PROCEDURE UpdateStyleItemsInternal@1000000025(VAR pStyle@1000000000 : Record 9087012;pInteraction@1000000007 : Boolean;pConfirmation@1000000003 : Boolean;pOpenCloseDialog@1000000002 : Boolean) : Boolean;
+    VAR
+      eConfirmation@1000000010 : TextConst 'ENU=Do you want to update items and variants for style "%1" %2?;ENG=Do you want to update items and variants for style "%1" %2?';
+      eSize@1000000009 : TextConst 'ENU=%1 %2;ENG=%1 %2';
+      eDialogFinalMessage@1000000001 : TextConst 'ENU=Style "%1" items and variants have been updated.;ENG=Style "%1" items and variants have been updated.';
+    BEGIN
+      //DOC NS2015.1 - Updating style items (internal version)
+      //  <> pStyle: Style to update items for
+      //  -> pInteraction: Interaction flag
+      //  -> pConfirmation: Confirmation flag
+      //  -> pOpenCloseDialog: Flag to open / close dialog
+      //  <- Result
+
+      Style := pStyle;
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+      pConfirmation := ((pConfirmation) AND (pInteraction));
+      pOpenCloseDialog := ((pOpenCloseDialog) AND (pInteraction));
+
+      IF (pConfirmation) THEN
+        IF ( NOT (CONFIRM(eConfirmation, TRUE, Style."No.", Style.Description))) THEN
+          EXIT(FALSE);
+
+      nSembleSetup.VerifyAndGet();
+
+      DetectStyleItemEnhancedFields();
+
+      Release(Style);
+      Style.CALCFIELDS(Picture);
+
+      IF (pOpenCloseDialog) THEN
+        OpenDialog();
+      IF (pInteraction) THEN
+        DialogManagement.SetCounterTextValue(DialogIndex::Style, STRSUBSTNO('%1 (%2)', Style.Description, Style."No."));
+
+      StyleColour.RESET();
+      StyleColour.SETCURRENTKEY("Style No.", Sequence);
+      StyleColour.SETRANGE("Style No.", Style."No.");
+      IF (StyleColour.FINDSET(TRUE)) THEN
+      REPEAT
+        IF (pInteraction) THEN
+          DialogManagement.SetCounterTextValue(DialogIndex::Colour, StyleColour."Colour Code");
+
+        IF (StyleColour."Item No." = '') THEN
+          UpdateStyleItem(pInteraction, DialogIndex::Items)
+        ELSE
+          Item.GET(StyleColour."Item No.");
+
+        UpdateStyleItemEnhancedFields();
+        UpdateStyleItemSalesPrices();
+
+        StyleColourSize.RESET();
+        StyleColourSize.SETCURRENTKEY("Style No.", "Colour Code", Sequence);
+        StyleColourSize.SETRANGE("Style No.", Style."No.");
+        StyleColourSize.SETRANGE("Colour Code", StyleColour."Colour Code");
+        IF (StyleColourSize.FINDSET(TRUE)) THEN
+        REPEAT
+          IF (pInteraction) THEN
+            DialogManagement.SetCounterTextValue(DialogIndex::Size, STRSUBSTNO(eSize, StyleColourSize."Size Group Code", StyleColourSize."Size Code"));
+          IF (StyleColourSize.Enabled) THEN
+            IF (StyleColourSize."Variant Code" = '') THEN
+              UpdateStyleItemVariant(pInteraction, DialogIndex::ItemVariants);
+        UNTIL (StyleColourSize.NEXT() = 0);
+      UNTIL (StyleColour.NEXT() = 0);
+
+      IF (pOpenCloseDialog) THEN
+        CloseDialog(STRSUBSTNO(eDialogFinalMessage, Style."No."));
+    END;
+
+    LOCAL PROCEDURE UpdateStyleItem@1000000000(pInteraction@1000000004 : Boolean;pDialogIndex@1000000001 : Integer);
+    VAR
+      lDescriptionTemplate@1000000002 : Text[50];
+      lItemNo@1000000005 : Code[20];
+      lItemDescription@1000000003 : ARRAY [2] OF Text[50];
+    BEGIN
+      //DOC NS2015.1 - Updating style item
+      //  -> pInteraction: Interaction flag
+      //  -> pDialogIndex: Dialog index
+
+      lDescriptionTemplate := CreateDescriptionTemplate(nSembleSetup."Style Item Description", '%5 %2 %3');
+      DescriptionToDescriptionFields(STRSUBSTNO(lDescriptionTemplate, Style."No.", Style.Description, Style."Description 2", StyleColour."Colour Code",
+        StyleColour."Colour Name", Style."Size Group Code", Style."Size Group Name"), lItemDescription);
+
+      Colour.GET(StyleColour."Colour Code");
+
+      IF (nSembleSetup."Item Numbering" <> '') THEN
+        lItemNo := STRSUBSTNO(nSembleSetup."Item Numbering", Style."No.", Colour.Code, Colour."No.");
+
+      CLEAR(Item);
+      Item.INIT();
+      IF (lItemNo <> '') THEN
+        Item.VALIDATE("No.", lItemNo);
+      Item.INSERT(TRUE);
+      Item.VALIDATE(Description, lItemDescription[1]);
+      Item.VALIDATE("Description 2", lItemDescription[2]);
+      Item.VALIDATE("Base Unit of Measure", Style."Base Unit of Measure");
+      Item.VALIDATE("Sales Unit of Measure", Style."Base Unit of Measure");
+      Item.VALIDATE("Purch. Unit of Measure", Style."Base Unit of Measure");
+      Item.VALIDATE("Unit Price", Style."Unit Price");
+      Item.VALIDATE("Unit Cost", Style."Unit Cost");
+      Item.VALIDATE("Last Direct Cost", Style."Unit Cost");
+      Item.VALIDATE("Vendor No.", Style."Vendor No.");
+      IF (StyleColour."Vendor Item No." <> '') THEN
+        Item.VALIDATE("Vendor Item No.", StyleColour."Vendor Item No.")
+      ELSE
+        Item.VALIDATE("Vendor Item No.", Style."Vendor Style No.");
+      IF (StyleColour."Web Reference" <> '') THEN
+        Item.VALIDATE("Web Reference", StyleColour."Web Reference")
+      ELSE
+        Item.VALIDATE("Web Reference", Style."Web Reference");
+      Item.VALIDATE("Gross Weight", Style."Gross Weight");
+      Item.VALIDATE("Net Weight", Style."Net Weight");
+      Item.VALIDATE("Gen. Prod. Posting Group", Style."Gen. Prod. Posting Group");
+      Item.VALIDATE("VAT Prod. Posting Group", Style."VAT Prod. Posting Group");
+      Item.VALIDATE("Inventory Posting Group", Style."Inventory Posting Group");
+      Item.VALIDATE("Global Dimension 1 Code", Style."Global Dimension 1 Code");
+      Item.VALIDATE("Global Dimension 2 Code", Style."Global Dimension 2 Code");
+      Item.VALIDATE("Manufacturer Code", Style."Manufacturer Code");
+      Item.VALIDATE("Style No.", Style."No.");
+      Item.VALIDATE("Colour Code", StyleColour."Colour Code");
+      Item.VALIDATE("Vendor Colour Code", StyleColour."Vendor Colour Code");
+      Item.VALIDATE("Brand Code", Style."Brand Code");
+      Item.VALIDATE("Season Code", Style."Season Code");
+      Item.VALIDATE("Sub-Season Code", Style."Sub-Season Code");
+      Item.VALIDATE("Division Code", Style."Division Code");
+      Item.VALIDATE("Department Code", Style."Department Code");
+      Item.VALIDATE("Group Code", Style."Group Code");
+      Item.VALIDATE("Category Code", Style."Category Code");
+      Item.VALIDATE("Sub-Category Code", Style."Sub-Category Code");
+      Item.VALIDATE("Item Category Code", Style."Item Category Code");
+      Item.VALIDATE("Product Group Code", Style."Product Group Code");
+      Item."Size Group Code" := Style."Size Group Code";
+      StyleColour.CALCFIELDS(Picture);
+      IF (StyleColour.Picture.HASVALUE) THEN
+        Item.Picture := StyleColour.Picture
+      ELSE
+        Item.Picture := Style.Picture;
+      Item.VALIDATE("Quality Inspection %", Style."Quality Inspection %");
+      Item.MODIFY(TRUE);
+
+      CopyStyleDimensionsToItem();
+
+      StyleColour.VALIDATE("Item No.", Item."No.");
+      StyleColour.MODIFY(TRUE);
+
+      IF (pInteraction) THEN
+        DialogManagement.StepCounter(pDialogIndex);
+    END;
+
+    LOCAL PROCEDURE UpdateStyleItemEnhancedFields@1000000010();
+    VAR
+      lFromEnhancedFieldValue@1000000000 : Record 9062328;
+      lToEnhancedFieldValue@1000000001 : Record 9062328;
+      lItemPosition@1000000002 : Text;
+    BEGIN
+      //DOC NS2015.3 - Updating style item enhanced fields
+
+      lItemPosition := Item.GETPOSITION(TRUE);
+
+      lFromEnhancedFieldValue.RESET();
+      lFromEnhancedFieldValue.SETRANGE("Table No.", DATABASE::Style);
+      lFromEnhancedFieldValue.SETRANGE("Position Text", Style.GETPOSITION(TRUE));
+
+      lToEnhancedFieldValue.RESET();
+      lToEnhancedFieldValue.SETRANGE("Table No.", DATABASE::Item);
+      lToEnhancedFieldValue.SETRANGE("Position Text", lItemPosition);
+
+      EnhancedFieldBuffer.RESET();
+      IF (EnhancedFieldBuffer.FINDSET()) THEN
+      REPEAT
+        lFromEnhancedFieldValue.SETRANGE("Enhanced Field No.", EnhancedFieldBuffer."Primary Key Field 1 No.");
+        IF (lFromEnhancedFieldValue.FINDFIRST()) THEN
+        BEGIN
+          lToEnhancedFieldValue.SETRANGE("Enhanced Field No.", EnhancedFieldBuffer."Primary Key Field 2 No.");
+          IF (lToEnhancedFieldValue.FINDFIRST()) THEN
+          BEGIN
+            lToEnhancedFieldValue.VALIDATE(Value, lFromEnhancedFieldValue.Value);
+            lToEnhancedFieldValue.MODIFY(TRUE);
+          END
+          ELSE
+          BEGIN
+            lToEnhancedFieldValue := lFromEnhancedFieldValue;
+            lToEnhancedFieldValue."Table No." := DATABASE::Item;
+            lToEnhancedFieldValue."Enhanced Field No." := EnhancedFieldBuffer."Primary Key Field 2 No.";
+            lToEnhancedFieldValue."Position Text" := lItemPosition;
+            lToEnhancedFieldValue."Primary Key Value 1" := Item."No.";
+            lToEnhancedFieldValue.INSERT(TRUE);
+          END;
+        END;
+      UNTIL (EnhancedFieldBuffer.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE UpdateStyleItemSalesPrices@1000000018();
+    VAR
+      lStyleSalesPrice@1000000000 : Record 9087045;
+      lSalesPrice@1000000001 : Record 7002;
+      lSalesPriceVariant@1000000003 : Variant;
+      lSalesPriceModified@1000000002 : Boolean;
+    BEGIN
+      //DOC NS2015.3 - Updating style item sales prices
+
+      lStyleSalesPrice.RESET();
+      lStyleSalesPrice.SETRANGE("Style No.", Style."No.");
+      lStyleSalesPrice.SETFILTER("Colour Code",'%1|%2',Item."Colour Code",'');  //DOC NS2016.16.1 PCM
+      IF (lStyleSalesPrice.FINDSET()) THEN
+      REPEAT
+        lSalesPrice.RESET();
+        lSalesPrice.SETRANGE("Item No.", Item."No.");
+        lSalesPrice.SETRANGE("Sales Type", lStyleSalesPrice."Sales Type");
+        lSalesPrice.SETRANGE("Sales Code", lStyleSalesPrice."Sales Code");
+        lSalesPrice.SETRANGE("Starting Date", lStyleSalesPrice."Starting Date");
+        lSalesPrice.SETRANGE("Currency Code", lStyleSalesPrice."Currency Code");
+        lSalesPrice.SETRANGE("Variant Code", '');
+        lSalesPrice.SETRANGE("Unit of Measure Code", lStyleSalesPrice."Unit of Measure Code");
+        lSalesPrice.SETRANGE("Minimum Quantity", lStyleSalesPrice."Minimum Quantity");
+        IF ( NOT (lSalesPrice.FINDFIRST())) THEN
+        BEGIN
+          CLEAR(lSalesPrice);
+          lSalesPrice.INIT();
+          lSalesPrice.VALIDATE("Item No.", Item."No.");
+          lSalesPrice.VALIDATE("Sales Type", lStyleSalesPrice."Sales Type");
+          lSalesPrice.VALIDATE("Sales Code", lStyleSalesPrice."Sales Code");
+          lSalesPrice.VALIDATE("Starting Date", lStyleSalesPrice."Starting Date");
+          lSalesPrice.VALIDATE("Currency Code", lStyleSalesPrice."Currency Code");
+          lSalesPrice.VALIDATE("Unit of Measure Code", lStyleSalesPrice."Unit of Measure Code");
+          lSalesPrice.VALIDATE("Minimum Quantity", lStyleSalesPrice."Minimum Quantity");
+          lSalesPrice.INSERT(TRUE);
+        END;
+        CLEAR(NsembleToolkit);
+        NsembleToolkit.SetRecord(lSalesPrice);
+        NsembleToolkit.ValidateRecordField(lSalesPrice.FIELDNO("Unit Price"), lStyleSalesPrice."Unit Price");
+        NsembleToolkit.ValidateRecordField(lSalesPrice.FIELDNO("Price Includes VAT"), lStyleSalesPrice."Price Includes VAT");
+        NsembleToolkit.ValidateRecordField(lSalesPrice.FIELDNO("Allow Invoice Disc."), lStyleSalesPrice."Allow Invoice Disc.");
+        NsembleToolkit.ValidateRecordField(lSalesPrice.FIELDNO("Allow Line Disc."), lStyleSalesPrice."Allow Line Disc.");
+        NsembleToolkit.ValidateRecordField(lSalesPrice.FIELDNO("VAT Bus. Posting Gr. (Price)"), lStyleSalesPrice."VAT Bus. Posting Gr. (Price)");
+        NsembleToolkit.ValidateRecordField(lSalesPrice.FIELDNO("Ending Date"), lStyleSalesPrice."Ending Date");
+        lSalesPriceModified := NsembleToolkit.GetRecord(lSalesPriceVariant);
+        IF (lSalesPriceModified) THEN
+        BEGIN
+          lSalesPrice := lSalesPriceVariant;
+          lSalesPrice.MODIFY(TRUE);
+        END;
+      UNTIL (lStyleSalesPrice.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE UpdateStyleItemVariant@1000000023(pInteraction@1000000004 : Boolean;pDialogIndex@1000000003 : Integer);
+    VAR
+      lItemVariant@1000000000 : Record 5401;
+      lDescriptionTemplate@1000000002 : Text[50];
+      lItemVariantDescription@1000000001 : ARRAY [2] OF Text[50];
+      lSize@1000000005 : Record 9087002;
+    BEGIN
+      //DOC NS2015.1 - Updating style item variant
+      //  -> pInteraction: Interaction flag
+      //  -> pDialogIndex: Dialog index
+
+      lDescriptionTemplate := CreateDescriptionTemplate(nSembleSetup."Style Item Variant Description", '%5 %2 %3 %9');
+      DescriptionToDescriptionFields(STRSUBSTNO(lDescriptionTemplate, Style."No.", Style.Description, Style."Description 2", StyleColour."Colour Code",
+        StyleColour."Colour Name", Style."Size Group Code", Style."Size Group Name", StyleColourSize."Size Code", StyleColourSize."Size Name"),
+        lItemVariantDescription);
+
+      lItemVariant.INIT();
+      lItemVariant.VALIDATE("Item No.", StyleColourSize."Item No.");
+      lItemVariant.VALIDATE(Code, StyleColourSize."Size Code");
+      lItemVariant.VALIDATE(Description, lItemVariantDescription[1]);
+      lItemVariant.VALIDATE("Description 2", lItemVariantDescription[2]);
+      lItemVariant.VALIDATE("Style No.", Style."No.");
+      lItemVariant.VALIDATE("Colour Code", StyleColour."Colour Code");
+      lItemVariant.VALIDATE("Brand Code", Style."Brand Code");
+      lItemVariant.VALIDATE("Season Code", Style."Season Code");
+      lItemVariant.VALIDATE("Sub-Season Code", Style."Sub-Season Code");
+      lItemVariant.VALIDATE("Division Code", Style."Division Code");
+      lItemVariant.VALIDATE("Department Code", Style."Department Code");
+      lItemVariant.VALIDATE("Group Code", Style."Group Code");
+      lItemVariant.VALIDATE("Category Code", Style."Category Code");
+      lItemVariant.VALIDATE("Sub-Category Code", Style."Sub-Category Code");
+      lItemVariant.VALIDATE("Size Group Code", Style."Size Group Code");
+      lItemVariant.VALIDATE("Size Code", StyleColourSize."Size Code");
+
+      //IN37978 JR 22/05/2017 +
+      IF lSize.GET(Style."Size Group Code", StyleColourSize."Size Code") THEN
+                lItemVariant.VALIDATE(Sequence, lSize.Sequence); //IN37978 JR 22/05/2017
+      //IN37978 JR 22/05/2017 -
+
+      IF lItemVariant.INSERT(TRUE) THEN;
+
+      StyleColourSize.VALIDATE("Variant Code", lItemVariant.Code);
+      StyleColourSize.MODIFY(TRUE);
+
+      IF (pInteraction) THEN
+        DialogManagement.StepCounter(pDialogIndex);
+    END;
+
+    LOCAL PROCEDURE CopyStyleDimensionsToItem@1000000002();
+    VAR
+      lFromDefaultDimension@1000000000 : Record 352;
+      lToDefaultDimension@1000000001 : Record 352;
+    BEGIN
+      //DOC NS2015.1 - Copying style dimensions to item
+
+      lFromDefaultDimension.RESET();
+      lFromDefaultDimension.SETRANGE("Table ID", DATABASE::Style);
+      lFromDefaultDimension.SETRANGE("No.", Item."Style No.");
+      IF (lFromDefaultDimension.FINDSET()) THEN
+      REPEAT
+        IF ( NOT (lToDefaultDimension.GET(DATABASE::Item, Item."No.", lFromDefaultDimension."Dimension Code"))) THEN
+        BEGIN
+          lToDefaultDimension.INIT();
+          lToDefaultDimension.VALIDATE("Table ID", DATABASE::Item);
+          lToDefaultDimension.VALIDATE("No.", Item."No.");
+          lToDefaultDimension.VALIDATE("Dimension Code", lFromDefaultDimension."Dimension Code");
+        END;
+        lToDefaultDimension.VALIDATE("Dimension Value Code", lFromDefaultDimension."Dimension Value Code");
+        lToDefaultDimension.MODIFY(TRUE);
+      UNTIL (lFromDefaultDimension.NEXT() = 0);
+    END;
+
+    PROCEDURE "--- Tools ---"@1000000001();
+    BEGIN
+    END;
+
+    PROCEDURE CreateDescriptionTemplate@1000000021(pTemplate@1000000000 : Text[50];pDefaultTemplate@1000000001 : Text[50]) : Text[50];
+    BEGIN
+      //DOC NS2015.1 - Creating description template
+      //  -> pTemplate: Template
+      //  -> pDefaultTemplate: Default template (used if template is empty)
+      //  <- Template created
+
+      pTemplate := TnpToolkit.DefaultString(pTemplate, pDefaultTemplate);
+
+      Style.CALCFIELDS("Size Group Name");
+      StyleColour.CALCFIELDS("Colour Name");
+
+      EXIT(pTemplate);
+    END;
+
+    PROCEDURE DescriptionToDescriptionFields@1000000019(pDescription@1000000000 : Text[1024];VAR pDescriptionFields@1000000001 : ARRAY [2] OF Text[50]);
+    VAR
+      lDescriptionBuffer@1000000002 : TEMPORARY Record 9062730;
+    BEGIN
+      //DOC NS2015.1 - Converting description to description fields
+      //  -> pDescription: Description
+      //  <> pDescriptionFields: Target description fields
+
+      String.SplitPreservingWords(pDescription, MAXSTRLEN(pDescriptionFields[1]), lDescriptionBuffer);
+      CLEAR(pDescriptionFields);
+      IF (lDescriptionBuffer.FINDSET()) THEN
+        pDescriptionFields[1] := lDescriptionBuffer.Value;
+      IF (lDescriptionBuffer.NEXT() <> 0) THEN
+        pDescriptionFields[2] := lDescriptionBuffer.Value;
+    END;
+
+    PROCEDURE StyleItemDescriptionHelp@1000000003();
+    BEGIN
+      //DOC NS2015.1 - Showing help for style item description
+
+      MESSAGE(tHelp + '\' +
+        '  %1: ' + STRSUBSTNO(tField, Style.TABLECAPTION, Style.FIELDCAPTION("No.")) + '\' +
+        '  %2: ' + STRSUBSTNO(tField, Style.TABLECAPTION, Style.FIELDCAPTION(Description)) + '\' +
+        '  %3: ' + STRSUBSTNO(tField, Style.TABLECAPTION, Style.FIELDCAPTION("Description 2")) + '\' +
+        '  %4: ' + StyleColour.FIELDCAPTION("Colour Code") + '\' +
+        '  %5: ' + StyleColour.FIELDCAPTION("Colour Name") + '\' +
+        '  %6: ' + Style.FIELDCAPTION("Size Group Code") + '\' +
+        '  %7: ' + Style.FIELDCAPTION("Size Group Name")
+      );
+    END;
+
+    PROCEDURE StyleItemVariantDescriptionHelp@1000000009();
+    BEGIN
+      //DOC NS2015.1 - Showing help for style item variant description
+
+      MESSAGE(tHelp + '\' +
+        '  %1: ' + STRSUBSTNO(tField, Style.TABLECAPTION, Style.FIELDCAPTION("No.")) + '\' +
+        '  %2: ' + STRSUBSTNO(tField, Style.TABLECAPTION, Style.FIELDCAPTION(Description)) + '\' +
+        '  %3: ' + STRSUBSTNO(tField, Style.TABLECAPTION, Style.FIELDCAPTION("Description 2")) + '\' +
+        '  %4: ' + StyleColour.FIELDCAPTION("Colour Code") + '\' +
+        '  %5: ' + StyleColour.FIELDCAPTION("Colour Name") + '\' +
+        '  %6: ' + Style.FIELDCAPTION("Size Group Code") + '\' +
+        '  %7: ' + Style.FIELDCAPTION("Size Group Name") + '\' +
+        '  %8: ' + StyleColourSize.FIELDCAPTION("Size Code") + '\' +
+        '  %9: ' + StyleColourSize.FIELDCAPTION("Size Name")
+      );
+    END;
+
+    PROCEDURE ItemNumberingHelp@1000000020();
+    VAR
+      eHelp@1000000000 : TextConst 'ENU=eHelp;ENG=eHelp';
+    BEGIN
+      //DOC NS2016.16 - Showing help for item numbering
+
+      MESSAGE(tHelp + '\' +
+        '  %1: ' + STRSUBSTNO(tField, Style.TABLECAPTION, Style.FIELDCAPTION("No.")) + '\' +
+        '  %2: ' + STRSUBSTNO(tField, Colour.TABLECAPTION, Colour.FIELDCAPTION(Code)) + '\' +
+        '  %3: ' + STRSUBSTNO(tField, Colour.TABLECAPTION, Colour.FIELDCAPTION("No."))
+      );
+    END;
+
+    LOCAL PROCEDURE DetectStyleItemEnhancedFields@1000000015();
+    VAR
+      lFromEnhancedFieldDefinition@1000000003 : Record 9062327;
+      lToEnhancedFieldDefinition@1000000001 : Record 9062327;
+      lEntryNo@1000000000 : Integer;
+    BEGIN
+      //DOC NS2015.3 - Detecting style / item enhanced fields
+
+      EnhancedFieldBuffer.RESET();
+      EnhancedFieldBuffer.DELETEALL();
+
+      lToEnhancedFieldDefinition.RESET();
+      lToEnhancedFieldDefinition.SETRANGE("Table No.", DATABASE::Item);
+
+      lFromEnhancedFieldDefinition.RESET();
+      lFromEnhancedFieldDefinition.SETRANGE("Table No.", DATABASE::Style);
+      IF (lFromEnhancedFieldDefinition.FINDSET()) THEN
+      REPEAT
+        lToEnhancedFieldDefinition.SETRANGE(Name, lFromEnhancedFieldDefinition.Name);
+        IF (lToEnhancedFieldDefinition.FINDFIRST()) THEN
+        BEGIN
+          lEntryNo += 1;
+          EnhancedFieldBuffer."Entry No." := lEntryNo;
+          EnhancedFieldBuffer."Primary Key Field 1 No." := lFromEnhancedFieldDefinition."Enhanced Field No.";
+          EnhancedFieldBuffer."Primary Key Field 2 No." := lToEnhancedFieldDefinition."Enhanced Field No.";
+          EnhancedFieldBuffer.INSERT();
+        END;
+      UNTIL (lFromEnhancedFieldDefinition.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE OpenDialog@1000000017();
+    VAR
+      eTitle@1000000005 : TextConst 'ENU=Updating style items and variants...;ENG=Updating style items and variants...';
+      eItemsCreated@1000000002 : TextConst 'ENU=Items created;ENG=Items created';
+      eItemVariantsCreated@1000000001 : TextConst 'ENU=Item variants created;ENG=Item variants created';
+    BEGIN
+      //DOC NS2016.16 - Opening dialog
+
+      CLEAR(DialogManagement);
+      DialogManagement.Add(Style.TABLECAPTION(), 25, DialogIndex::Style, 20, FALSE, FALSE);
+      DialogManagement.Add(Colour.TABLECAPTION(), 25, DialogIndex::Colour, 20, FALSE, FALSE);
+      DialogManagement.Add(Size.TABLECAPTION(), 25, DialogIndex::Size, 10, FALSE, FALSE);
+      DialogManagement.Add(eItemsCreated, 25, DialogIndex::Items, 10, TRUE, FALSE);
+      DialogManagement.Add(eItemVariantsCreated, 25, DialogIndex::ItemVariants, 10, TRUE, FALSE);
+      DialogManagement.Open(eTitle);
+    END;
+
+    LOCAL PROCEDURE CloseDialog@1000000026(pMessage@1000000000 : Text);
+    BEGIN
+      //DOC NS2016.16 - Closing dialog
+      //  -> pMessage: Dialog message
+
+      DialogManagement.Close();
+      DialogManagement.FinalMessage(pMessage);
+    END;
+
+    BEGIN
+    {
+      //DOC NS2015.1    JH 04/11/2013 - Created
+      //DOC NS2015.3    JH 30/07/2014 - "Vendor Item No.", "Web Reference" for colours, enhanced fields
+      //DOC NS2016.16   JH 07/09/2016 - nSemble 2016
+      //DOC NS2016.16.1 JH 07/10/2016 - Copying prices style -> item
+      //DOC NS2016.16.1 PCM 29/11/2016 - Amended UpdateStyleItemSalesPrices to handle Colour specific prices.
+      //DOC NS2016.16.1 PCM 09/02/2017 - Corrected GET statement.
+      //IN37978 JR 22/05/2017 - Variants field sequence its not being populated
+    }
+    END.
+  }
+}
+

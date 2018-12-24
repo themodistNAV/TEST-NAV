@@ -1,0 +1,625 @@
+OBJECT Codeunit 9021672 MarketingTablesTriggerCode
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:21 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      InternetSetup@1000000000 : Record 9021609;
+      LabelRec@1000000001 : Record 9021618;
+      TextG000@1000000002 : TextConst 'ENU=You cannot change %1 as Shipping Agent Services exists.;ENG=You cannot change %1 as Shipping Agent Services exists.';
+      ShipPriceCont@1000000003 : Codeunit 9021623;
+      InternetShopMgt@1190000005 : Codeunit 9021610;
+      TextG001@1190000007 : TextConst 'ENU=You must fill in the Label Code first.;ENG=You must fill in the Label Code first.';
+      TextG002@1190000008 : TextConst 'ENU=You must fill in the Product Group Code first.;ENG=You must fill in the Product Group Code first.';
+      MultiLabelItemCatProdGrp@1190000010 : Record 9021601;
+      MultiLabelItemCatProdGrp1@1190000009 : Record 9021601;
+      GlobalFunctions@1190000011 : Codeunit 9021624;
+      TextG003@1000000004 : TextConst 'ENU=The Label is not in Multi-Language Mode;ENG=The Label is not in Multi-Language Mode';
+
+    PROCEDURE T5077ContactNoOnVal@1190000013(VAR SegLinePar@1190000005 : Record 5077;ContactCompanyNo@1190000006 : Code[20];ContLabelCode@1190000008 : Code[10]);
+    VAR
+      Cont1@1190000007 : Record 5050;
+    BEGIN
+      IF ContactCompanyNo <> '' THEN BEGIN
+        Cont1.GET(ContactCompanyNo);
+        SegLinePar."Company User GuID" := Cont1."User GuID";
+      END;
+
+      SegLinePar."Label Code" := ContLabelCode;
+    END;
+
+    PROCEDURE T5715UpdateRelatedItems@1190000026(ItemSubPar@1190000005 : Record 5715);
+    VAR
+      RelItem@1190000006 : Record 9021640;
+    BEGIN
+      //Note: Is NOT Variant Specific.
+      IF (ItemSubPar.Type = ItemSubPar.Type::Item) AND
+         (ItemSubPar."Substitute Type" = ItemSubPar."Substitute Type"::Item) AND
+         (ItemSubPar."No." <> '') AND
+         (ItemSubPar."Substitute No." <> '') THEN BEGIN
+        RelItem.RESET;
+        RelItem.SETRANGE("Relation Type",RelItem."Relation Type"::"Similar products");
+        RelItem.SETRANGE("Item No.",ItemSubPar."No.");
+        RelItem.SETRANGE("Related to Item No.",ItemSubPar."Substitute No.");
+        IF RelItem.FINDFIRST THEN BEGIN
+          IF (ItemSubPar.Interchangeable = TRUE) AND
+            (RelItem.Interchangeable = FALSE) THEN BEGIN
+            RelItem.MODIFYALL(Interchangeable,TRUE);
+          END;
+        END ELSE BEGIN
+          RelItem.INIT;
+          RelItem."Item No." := ItemSubPar."No.";
+          RelItem."Relation Type" := RelItem."Relation Type"::"Similar products";
+          RelItem."Related to Item No." := ItemSubPar."Substitute No.";
+          RelItem."Line No." := 10000;
+          RelItem.Interchangeable := ItemSubPar.Interchangeable;
+          RelItem.INSERT(TRUE);
+        END;
+      END;
+    END;
+
+    PROCEDURE T5715DeleteRelatedItems@1190000027(ItemSubPar@1190000005 : Record 5715);
+    VAR
+      RelItem@1190000006 : Record 9021640;
+      ItemSub@1190000007 : Record 5715;
+    BEGIN
+      //Note: Only deletes if no Item Sub Variants exist.
+      ItemSub.RESET;
+      IF (ItemSubPar.Type = ItemSubPar.Type::Item) AND
+         (ItemSubPar."Substitute Type" = ItemSubPar."Substitute Type"::Item) AND
+         (ItemSubPar."No." <> '') AND
+         (ItemSubPar."Substitute No." <> '') THEN BEGIN
+        ItemSub.RESET;
+        ItemSub.SETRANGE(Type,ItemSubPar.Type::Item);
+        ItemSub.SETRANGE("Substitute Type",ItemSub."Substitute Type"::Item);
+        ItemSub.SETRANGE("No.",ItemSubPar."No.");
+        ItemSub.SETRANGE("Substitute No.",ItemSubPar."Substitute No.");
+        IF ItemSub.COUNT = 1 THEN BEGIN
+          RelItem.RESET;
+          RelItem.SETRANGE("Relation Type",RelItem."Relation Type"::"Similar products");
+          RelItem.SETRANGE("Item No.",ItemSubPar."No.");
+          RelItem.SETRANGE("Related to Item No.",ItemSubPar."Substitute No.");
+          IF RelItem.FIND('-') THEN
+          REPEAT
+            RelItem.DELETE(TRUE);
+          UNTIL RelItem.NEXT = 0;
+        END;
+      END;
+    END;
+
+    PROCEDURE T5715OnRename@1190000028(ItemSubPar@1190000005 : Record 5715);
+    VAR
+      TextL000@1190000006 : TextConst 'ENU=Links to Related Items means you cannot rename Item Substitutions.;ENG=Links to Related Items means you cannot rename Item Substitutions.';
+    BEGIN
+      ERROR(TextL000);
+    END;
+
+    PROCEDURE T5722OnDelete@1190000022(VAR ItemCatPar@1190000006 : Record 5722);
+    BEGIN
+      IF MultiLabelItemCatProdGrp.GET(ItemCatPar.Code,'',ItemCatPar."Label Code") THEN
+        MultiLabelItemCatProdGrp.DELETE;
+    END;
+
+    PROCEDURE T5722OnRename@1190000023(VAR ItemCatPar@1190000008 : Record 5722;xRecItemCatPar@1190000009 : Record 5722);
+    VAR
+      MultiLabelItemCatProdGrp1@1190000007 : Record 9021601;
+    BEGIN
+      MultiLabelItemCatProdGrp.RESET;
+      MultiLabelItemCatProdGrp.SETRANGE("Item Category Code",xRecItemCatPar.Code);
+      MultiLabelItemCatProdGrp.SETRANGE("Product Group Code",'');
+      IF MultiLabelItemCatProdGrp.FIND('-') THEN
+      REPEAT
+        MultiLabelItemCatProdGrp1 := MultiLabelItemCatProdGrp;
+        MultiLabelItemCatProdGrp1."Item Category Code" := ItemCatPar.Code;
+        IF MultiLabelItemCatProdGrp1.INSERT THEN;
+        MultiLabelItemCatProdGrp.DELETE;
+      UNTIL MultiLabelItemCatProdGrp.NEXT = 0;
+    END;
+
+    PROCEDURE T5722LabelCodeOnVal@1190000008(VAR ItemCatPar@1190000005 : Record 5722;xRecLabelCode@1190000006 : Code[10]);
+    VAR
+      Text000@1190000007 : TextConst 'ENU=The Label Code %1 can only be used in company %2.;ENG=The Label Code %1 can only be used in company %2.';
+    BEGIN
+      IF ItemCatPar."Label Code" <> '' THEN BEGIN
+        LabelRec.GET(ItemCatPar."Label Code");
+        IF LabelRec."Used-in Company" <> COMPANYNAME THEN
+          ERROR(Text000,ItemCatPar."Label Code",LabelRec."Used-in Company");
+      END;
+
+      IF ItemCatPar."Label Code" <> xRecLabelCode THEN BEGIN
+        ItemCatPar."Web Attribute Code" := '';
+        IF MultiLabelItemCatProdGrp.GET(ItemCatPar.Code,'',xRecLabelCode) THEN BEGIN
+          IF ItemCatPar."Label Code" <> '' THEN BEGIN
+            MultiLabelItemCatProdGrp1 := MultiLabelItemCatProdGrp;
+            MultiLabelItemCatProdGrp1."Label Code" := ItemCatPar."Label Code";
+            MultiLabelItemCatProdGrp1.INSERT;
+          END;
+          MultiLabelItemCatProdGrp.DELETE;
+        END;
+      END;
+    END;
+
+    PROCEDURE T5722WebAttCodeOnVal@1190000009(VAR ItemCatPar@1190000005 : Record 5722);
+    VAR
+      WebAtt@1190000006 : Record 9021701;
+      Text000@1190000009 : TextConst 'ENU=You must fill in a label code first.;ENG=You must fill in a label code first.';
+      Text001@1190000008 : TextConst 'ENU=Modifying Multi Label Item Category Product Group table.;ENG=Modifying Multi Label Item Category Product Group table.';
+    BEGIN
+      IF ItemCatPar."Label Code" = '' THEN
+        ERROR(Text000);
+
+      IF ItemCatPar."Web Attribute Code" <> '' THEN
+        WebAtt.GET(ItemCatPar."Label Code",27,ItemCatPar."Web Attribute Code");
+
+      IF MultiLabelItemCatProdGrp.GET(ItemCatPar.Code,'',ItemCatPar."Label Code") THEN BEGIN
+        IF MultiLabelItemCatProdGrp."Web Attribute Code" <> ItemCatPar."Web Attribute Code" THEN BEGIN
+          MultiLabelItemCatProdGrp."Web Attribute Code" := ItemCatPar."Web Attribute Code";
+          MultiLabelItemCatProdGrp.MODIFY;
+          MESSAGE(Text001);
+        END;
+      END ELSE BEGIN
+        MultiLabelItemCatProdGrp.INIT;
+        MultiLabelItemCatProdGrp."Item Category Code" := ItemCatPar.Code;
+        MultiLabelItemCatProdGrp."Product Group Code" := '';
+        MultiLabelItemCatProdGrp."Label Code" := ItemCatPar."Label Code";
+        MultiLabelItemCatProdGrp."Web Attribute Code" := ItemCatPar."Web Attribute Code";
+        MultiLabelItemCatProdGrp.INSERT;
+      END;
+    END;
+
+    PROCEDURE T5722AutoUpdateCatOnVal@1190000025(VAR ItemCatPar@1190000005 : Record 5722);
+    VAR
+      WebAtt@1190000006 : Record 9021701;
+      Text000@1190000008 : TextConst 'ENU=You must fill in the ePage GuID before ticking this.;ENG=You must fill in the ePage GuID before ticking this.';
+      Text001@1190000007 : TextConst 'ENU=Modifying Multi Label Item Category Product Group table.;ENG=Modifying Multi Label Item Category Product Group table.';
+    BEGIN
+      IF ItemCatPar."Label Code" = '' THEN
+        ERROR(TextG001);
+      IF ItemCatPar.Code = '' THEN
+        ERROR(TextG002);
+
+      IF (ItemCatPar."ePage GuID" = 0) AND
+         (ItemCatPar."Auto Update Catalogue" = TRUE) THEN
+        ERROR(Text000);
+
+      IF MultiLabelItemCatProdGrp.GET(ItemCatPar.Code,
+                     '',ItemCatPar."Label Code") THEN BEGIN
+        IF MultiLabelItemCatProdGrp."Auto Update Catalogue" <> ItemCatPar."Auto Update Catalogue" THEN BEGIN
+          MultiLabelItemCatProdGrp."Auto Update Catalogue" := ItemCatPar."Auto Update Catalogue";
+          MultiLabelItemCatProdGrp.MODIFY;
+          MESSAGE(Text001);
+        END;
+      END ELSE BEGIN
+        MultiLabelItemCatProdGrp.INIT;
+        MultiLabelItemCatProdGrp."Item Category Code" := ItemCatPar.Code;
+        MultiLabelItemCatProdGrp."Product Group Code" := '';
+        MultiLabelItemCatProdGrp."Label Code" := ItemCatPar."Label Code";
+        MultiLabelItemCatProdGrp."Auto Update Catalogue" := ItemCatPar."Auto Update Catalogue";
+        MultiLabelItemCatProdGrp.INSERT;
+      END;
+    END;
+
+    PROCEDURE T5722ePageGuIDOnVal@1190000024(VAR ItemCatPar@1190000005 : Record 5722);
+    VAR
+      Text001@1190000007 : TextConst 'ENU=Warning... ePage %1 is linked to a Page Item Sort which does not build Page Items by Item Category / Product Group codes.  This may cause problems.;ENG=Warning... ePage %1 is linked to a Page Item Sort which does not build Page Items by Item Category / Product Group codes.  This may cause problems.';
+      Text002@1190000006 : TextConst 'ENU=Since there is only one Page Item Sort that builds by Item Category/Product Group, would you like to assign this Page Item Sort Code to the ePage %1?;ENG=Since there is only one Page Item Sort that builds by Item Category/Product Group, would you like to assign this Page Item Sort Code to the ePage %1?';
+      ePage@1190000009 : Record 9021628;
+      PageItemSort@1190000010 : Record 9021600;
+      Text003@1190000012 : TextConst 'ENU=Modifying Multi Label Item Category Product Group table.;ENG=Modifying Multi Label Item Category Product Group table.';
+    BEGIN
+      IF ItemCatPar."Label Code" = '' THEN
+        ERROR(TextG001);
+      IF ItemCatPar.Code = '' THEN
+        ERROR(TextG002);
+      IF ItemCatPar."ePage GuID" = 0 THEN BEGIN
+        ItemCatPar."Auto Update Catalogue" := FALSE;
+      END ELSE BEGIN
+        ePage.GET(ItemCatPar."Label Code",ItemCatPar."ePage GuID");
+        IF ePage."Page Item Sort Code" = '' THEN BEGIN
+          PageItemSort.RESET;
+          PageItemSort.SETRANGE("Label Code",ItemCatPar."Label Code");
+          PageItemSort.SETRANGE("Build By",PageItemSort."Build By"::"Item Cat/Prod Group");
+          IF PageItemSort.COUNT = 1 THEN BEGIN
+            IF CONFIRM(Text002,FALSE,ItemCatPar."ePage GuID") THEN BEGIN
+              PageItemSort.FINDFIRST;
+              ePage."Page Item Sort Code" := PageItemSort.Code;
+              ePage.MODIFY;
+            END;
+          END;
+        END ELSE BEGIN
+          PageItemSort.GET(ItemCatPar."Label Code",ePage."Page Item Sort Code");
+          IF PageItemSort."Build By" <> PageItemSort."Build By"::"Item Cat/Prod Group" THEN
+            MESSAGE(Text001);
+        END;
+      END;
+
+      IF MultiLabelItemCatProdGrp.GET(ItemCatPar.Code,
+                     '',ItemCatPar."Label Code") THEN BEGIN
+        IF MultiLabelItemCatProdGrp."ePage GuID" <> ItemCatPar."ePage GuID" THEN BEGIN
+          MultiLabelItemCatProdGrp."ePage GuID" := ItemCatPar."ePage GuID";
+          MultiLabelItemCatProdGrp."Auto Update Catalogue" := ItemCatPar."Auto Update Catalogue";
+          MultiLabelItemCatProdGrp.MODIFY;
+          MESSAGE(Text003);
+        END;
+      END ELSE BEGIN
+        MultiLabelItemCatProdGrp.INIT;
+        MultiLabelItemCatProdGrp."Item Category Code" := ItemCatPar.Code;
+        MultiLabelItemCatProdGrp."Product Group Code" := '';
+        MultiLabelItemCatProdGrp."Label Code" := ItemCatPar."Label Code";
+        MultiLabelItemCatProdGrp."ePage GuID" := ItemCatPar."ePage GuID";
+        MultiLabelItemCatProdGrp."Auto Update Catalogue" := ItemCatPar."Auto Update Catalogue";
+        MultiLabelItemCatProdGrp.INSERT;
+      END;
+    END;
+
+    PROCEDURE T5723OnDelete@1190000021(VAR ProdGroupPar@1190000005 : Record 5723);
+    BEGIN
+      IF MultiLabelItemCatProdGrp.GET(ProdGroupPar."Item Category Code",
+                     ProdGroupPar.Code,ProdGroupPar."Label Code") THEN
+        MultiLabelItemCatProdGrp.DELETE;
+    END;
+
+    PROCEDURE T5723OnRename@1190000020(VAR ProdGroupPar@1190000006 : Record 5723;xRecProdGroupPar@1190000005 : Record 5723);
+    VAR
+      MultiLabelItemCatProdGrp1@1190000007 : Record 9021601;
+    BEGIN
+      MultiLabelItemCatProdGrp.RESET;
+      MultiLabelItemCatProdGrp.SETRANGE("Item Category Code",xRecProdGroupPar."Item Category Code");
+      MultiLabelItemCatProdGrp.SETRANGE("Product Group Code",xRecProdGroupPar.Code);
+      IF MultiLabelItemCatProdGrp.FIND('-') THEN
+      REPEAT
+        MultiLabelItemCatProdGrp1 := MultiLabelItemCatProdGrp;
+        MultiLabelItemCatProdGrp1."Item Category Code" := ProdGroupPar."Item Category Code";
+        MultiLabelItemCatProdGrp1."Product Group Code" := ProdGroupPar.Code;
+        IF MultiLabelItemCatProdGrp1.INSERT THEN;
+        MultiLabelItemCatProdGrp.DELETE;
+      UNTIL MultiLabelItemCatProdGrp.NEXT = 0;
+    END;
+
+    PROCEDURE T5723LabelCodeOnVal@1190000005(VAR ProdGroupPar@1190000005 : Record 5723;xRecLabelCode@1190000006 : Code[10]);
+    VAR
+      Text000@1190000007 : TextConst 'ENU=The Label Code %1 can only be used in company %2.;ENG=The Label Code %1 can only be used in company %2.';
+    BEGIN
+      IF ProdGroupPar.Code = '' THEN
+        ERROR(TextG002);
+
+      IF ProdGroupPar."Label Code" <> '' THEN BEGIN
+        LabelRec.GET(ProdGroupPar."Label Code");
+        IF LabelRec."Used-in Company" <> COMPANYNAME THEN
+          ERROR(Text000,ProdGroupPar."Label Code",LabelRec."Used-in Company");
+      END;
+
+      IF ProdGroupPar."Label Code" <> xRecLabelCode THEN BEGIN
+        ProdGroupPar."ePage GuID" := 0;
+        ProdGroupPar."Web Attribute Code" := '';
+        ProdGroupPar."Auto Update Catalogue" := FALSE;
+        IF MultiLabelItemCatProdGrp.GET(ProdGroupPar."Item Category Code",ProdGroupPar.Code,xRecLabelCode) THEN
+          MultiLabelItemCatProdGrp.DELETE;
+      END;
+    END;
+
+    PROCEDURE T5723WebAttCodeOnVal@1190000006(VAR ProdGroupPar@1190000005 : Record 5723);
+    VAR
+      WebAtt@1190000006 : Record 9021701;
+      Text001@1190000007 : TextConst 'ENU=Modifying Multi Label Item Category Product Group table.;ENG=Modifying Multi Label Item Category Product Group table.';
+    BEGIN
+      IF ProdGroupPar."Label Code" = '' THEN
+        ERROR(TextG001);
+      IF ProdGroupPar.Code = '' THEN
+        ERROR(TextG002);
+
+      IF ProdGroupPar."Web Attribute Code" <> '' THEN
+        WebAtt.GET(ProdGroupPar."Label Code",27,ProdGroupPar."Web Attribute Code");
+
+      IF MultiLabelItemCatProdGrp.GET(ProdGroupPar."Item Category Code",
+                     ProdGroupPar.Code,ProdGroupPar."Label Code") THEN BEGIN
+        IF MultiLabelItemCatProdGrp."Web Attribute Code" <> ProdGroupPar."Web Attribute Code" THEN BEGIN
+          MultiLabelItemCatProdGrp."Web Attribute Code" := ProdGroupPar."Web Attribute Code";
+          MultiLabelItemCatProdGrp.MODIFY;
+          MESSAGE(Text001);
+        END;
+      END ELSE BEGIN
+        MultiLabelItemCatProdGrp.INIT;
+        MultiLabelItemCatProdGrp."Item Category Code" := ProdGroupPar."Item Category Code";
+        MultiLabelItemCatProdGrp."Product Group Code" := ProdGroupPar.Code;
+        MultiLabelItemCatProdGrp."Label Code" := ProdGroupPar."Label Code";
+        MultiLabelItemCatProdGrp."Web Attribute Code" := ProdGroupPar."Web Attribute Code";
+        MultiLabelItemCatProdGrp.INSERT;
+      END;
+    END;
+
+    PROCEDURE T5723AutoUpdateCatOnVal@1190000019(VAR ProdGroupPar@1190000005 : Record 5723);
+    VAR
+      WebAtt@1190000006 : Record 9021701;
+      Text000@1190000008 : TextConst 'ENU=You must fill in the ePage GuID before ticking this.;ENG=You must fill in the ePage GuID before ticking this.';
+      Text001@1190000007 : TextConst 'ENU=Modifying Multi Label Item Category Product Group table.;ENG=Modifying Multi Label Item Category Product Group table.';
+    BEGIN
+      IF ProdGroupPar."Label Code" = '' THEN
+        ERROR(TextG001);
+      IF ProdGroupPar.Code = '' THEN
+        ERROR(TextG002);
+
+      IF (ProdGroupPar."ePage GuID" = 0) AND
+         (ProdGroupPar."Auto Update Catalogue" = TRUE) THEN
+        ERROR(Text000);
+
+      IF MultiLabelItemCatProdGrp.GET(ProdGroupPar."Item Category Code",
+                     ProdGroupPar.Code,ProdGroupPar."Label Code") THEN BEGIN
+        IF MultiLabelItemCatProdGrp."Auto Update Catalogue" <> ProdGroupPar."Auto Update Catalogue" THEN BEGIN
+          MultiLabelItemCatProdGrp."Auto Update Catalogue" := ProdGroupPar."Auto Update Catalogue";
+          MultiLabelItemCatProdGrp."ePage GuID" := ProdGroupPar."ePage GuID";  //DOC EC2013.4.00
+          MultiLabelItemCatProdGrp.MODIFY;
+          MESSAGE(Text001);
+        END;
+      END ELSE BEGIN
+        MultiLabelItemCatProdGrp.INIT;
+        MultiLabelItemCatProdGrp."Item Category Code" := ProdGroupPar."Item Category Code";
+        MultiLabelItemCatProdGrp."Product Group Code" := ProdGroupPar.Code;
+        MultiLabelItemCatProdGrp."Label Code" := ProdGroupPar."Label Code";
+        MultiLabelItemCatProdGrp."Auto Update Catalogue" := ProdGroupPar."Auto Update Catalogue";
+        MultiLabelItemCatProdGrp."ePage GuID" := ProdGroupPar."ePage GuID";  //DOC EC2013.4.00
+        MultiLabelItemCatProdGrp.INSERT;
+      END;
+    END;
+
+    PROCEDURE T5723ePageGuIDOnVal@1190000007(VAR ProdGroupPar@1190000005 : Record 5723);
+    VAR
+      Text001@1190000007 : TextConst 'ENU=Warning... ePage %1 is linked to a Page Item Sort which does not build Page Items by Item Category / Product Group codes.  This may cause problems.;ENG=Warning... ePage %1 is linked to a Page Item Sort which does not build Page Items by Item Category / Product Group codes.  This may cause problems.';
+      Text002@1190000006 : TextConst 'ENU=Since there is only one Page Item Sort that builds by Item Category/Product Group, would you like to assign this Page Item Sort Code to the ePage %1?;ENG=Since there is only one Page Item Sort that builds by Item Category/Product Group, would you like to assign this Page Item Sort Code to the ePage %1?';
+      ePage@1190000009 : Record 9021628;
+      PageItemSort@1190000010 : Record 9021600;
+      Text003@1190000012 : TextConst 'ENU=Modifying Multi Label Item Category Product Group table.;ENG=Modifying Multi Label Item Category Product Group table.';
+    BEGIN
+      IF ProdGroupPar."Label Code" = '' THEN
+        ERROR(TextG001);
+      IF ProdGroupPar.Code = '' THEN
+        ERROR(TextG002);
+      IF ProdGroupPar."ePage GuID" = 0 THEN BEGIN
+        ProdGroupPar."Auto Update Catalogue" := FALSE;
+      END ELSE BEGIN
+        ePage.GET(ProdGroupPar."Label Code",ProdGroupPar."ePage GuID");
+        IF ePage."Page Item Sort Code" = '' THEN BEGIN
+          PageItemSort.RESET;
+          PageItemSort.SETRANGE("Label Code",ProdGroupPar."Label Code");
+          PageItemSort.SETRANGE("Build By",PageItemSort."Build By"::"Item Cat/Prod Group");
+          IF PageItemSort.COUNT = 1 THEN BEGIN
+            IF CONFIRM(Text002,FALSE,ProdGroupPar."ePage GuID") THEN BEGIN
+              PageItemSort.FINDFIRST;
+              ePage."Page Item Sort Code" := PageItemSort.Code;
+              ePage.MODIFY;
+            END;
+          END;
+        END ELSE BEGIN
+          PageItemSort.GET(ProdGroupPar."Label Code",ePage."Page Item Sort Code");
+          IF PageItemSort."Build By" <> PageItemSort."Build By"::"Item Cat/Prod Group" THEN
+            MESSAGE(Text001);
+        END;
+      END;
+
+      IF MultiLabelItemCatProdGrp.GET(ProdGroupPar."Item Category Code",
+                     ProdGroupPar.Code,ProdGroupPar."Label Code") THEN BEGIN
+        IF MultiLabelItemCatProdGrp."ePage GuID" <> ProdGroupPar."ePage GuID" THEN BEGIN
+          MultiLabelItemCatProdGrp."ePage GuID" := ProdGroupPar."ePage GuID";
+          MultiLabelItemCatProdGrp."Auto Update Catalogue" := ProdGroupPar."Auto Update Catalogue";
+          MultiLabelItemCatProdGrp.MODIFY;
+          MESSAGE(Text003);
+        END;
+      END ELSE BEGIN
+        MultiLabelItemCatProdGrp.INIT;
+        MultiLabelItemCatProdGrp."Item Category Code" := ProdGroupPar."Item Category Code";
+        MultiLabelItemCatProdGrp."Product Group Code" := ProdGroupPar.Code;
+        MultiLabelItemCatProdGrp."Label Code" := ProdGroupPar."Label Code";
+        MultiLabelItemCatProdGrp."ePage GuID" := ProdGroupPar."ePage GuID";
+        MultiLabelItemCatProdGrp."Auto Update Catalogue" := ProdGroupPar."Auto Update Catalogue";
+        MultiLabelItemCatProdGrp.INSERT;
+      END;
+    END;
+
+    PROCEDURE T5790OnInsert@1000000007(VAR ShipAgentSerPar@1000000000 : Record 5790);
+    BEGIN
+      IF ShipAgentSerPar."Label Code" = '' THEN
+        ShipAgentSerPar."Label Code" := GlobalFunctions.GetLabelCode;
+      ShipAgentSerPar.DateTimeInsertedModified := CURRENTDATETIME;
+    END;
+
+    PROCEDURE T5790OnModify@1000000008(VAR ShipAgentSerPar@1000000000 : Record 5790);
+    BEGIN
+      ShipAgentSerPar.DateTimeInsertedModified := CURRENTDATETIME;
+    END;
+
+    PROCEDURE T5790OnDelete@1000000009(ShipAgentSerPar@1000000000 : Record 5790);
+    VAR
+      Text000@1000000001 : TextConst 'ENU=You cannot delete this a Shipping Agent Service Price %1 has Item Ship Prices.  The Item Ship Prices must be deleted first.;ENG=You cannot delete this a Shipping Agent Service Price %1 has Item Ship Prices.  The Item Ship Prices must be deleted first.';
+      ShipAgentServPrice@1000000002 : Record 9021711;
+    BEGIN
+      ShipAgentServPrice.RESET;
+      ShipAgentServPrice.SETRANGE("Label Code",ShipAgentSerPar."Label Code");
+      ShipAgentServPrice.SETRANGE("Shipping Agent Code",ShipAgentSerPar."Shipping Agent Code");
+      ShipAgentServPrice.SETRANGE("Shipping Service Code",ShipAgentSerPar.Code);
+      ShipAgentServPrice.SETRANGE(Measure,ShipAgentSerPar."Default Measure");
+      IF ShipAgentServPrice.FIND('-') THEN
+      REPEAT
+        IF ShipAgentServPrice.ItemShipPriceExists(TRUE) THEN
+          ERROR(Text000,ShipAgentServPrice."Upper Limit");
+        ShipAgentServPrice.DELETE;
+      UNTIL ShipAgentServPrice.NEXT = 0;
+    END;
+
+    PROCEDURE T5790OnRename@1000000010();
+    VAR
+      Text000@1000000000 : TextConst 'ENU=You cannot rename a Shipping Agent Service.  Please delete and insert a new record.;ENG=You cannot rename a Shipping Agent Service.  Please delete and insert a new record.';
+    BEGIN
+      ERROR(Text000);
+    END;
+
+    PROCEDURE T5790CodeOnVal@1000000011(VAR ShipAgentSerPar@1000000000 : Record 5790);
+    VAR
+      ShipServ@1000000001 : Record 9021710;
+    BEGIN
+      IF ShipServ.GET(ShipAgentSerPar.Code) THEN BEGIN
+        IF (ShipServ.Description <> '') AND
+           (ShipAgentSerPar.Description = '') THEN
+          ShipAgentSerPar.Description := ShipServ.Description
+      END ELSE BEGIN
+        ShipServ.INIT;
+        ShipServ.Code := ShipAgentSerPar.Code;
+        ShipServ.INSERT;
+      END;
+    END;
+
+    PROCEDURE T5790MultiLangOnVal@1000000000(VAR ShipAgentSerPar@1000000000 : Record 5790);
+    VAR
+      MultiLangFunc@1000000001 : Codeunit 9021603;
+    BEGIN
+      IF ShipAgentSerPar."Label Code" = '' THEN
+        ERROR(TextG001);
+      LabelRec.GET(ShipAgentSerPar."Label Code");
+      IF LabelRec."Multi-Language Mode" = FALSE THEN
+        ERROR(TextG003);
+      IF ShipAgentSerPar."Multi Language Description Key" = '?' THEN
+        ShipAgentSerPar."Multi Language Description Key" :=
+          MultiLangFunc.CreateKey(5790,ShipAgentSerPar."Label Code",
+          (ShipAgentSerPar."Shipping Agent Code" + '_' +
+          ShipAgentSerPar.Code),0);
+      IF ShipAgentSerPar."Multi Language Description Key" <> '' THEN
+        MultiLangFunc.UpdateMultiLang(ShipAgentSerPar."Multi Language Description Key",
+                      ShipAgentSerPar."Label Code");
+    END;
+
+    PROCEDURE T5790LabelCodeOnVal@1000000012(VAR ShipAgentSerPar@1000000000 : Record 5790;xRecLabelCode@1000000001 : Code[10];xRecCode@1000000002 : Code[20]);
+    VAR
+      Text000@1190000005 : TextConst 'ENU=You can not use this label code in this company.;ENG=You can not use this label code in this company.';
+      Text001@1000000003 : TextConst 'ENU=You cannot change the Label Code if the Multi Language Description Key is not blank.;ENG=You cannot change the Label Code if the Multi Language Description Key is not blank.';
+      TxtError@1000000004 : TextConst 'ENU=Error in CU9021494... codes are different Code %1, xreccode %2;ENG=Error in CU9021494... codes are different Code %1, xreccode %2';
+    BEGIN
+      IF xRecCode = ShipAgentSerPar.Code THEN BEGIN
+        IF xRecLabelCode = ShipAgentSerPar."Label Code" THEN
+          EXIT;
+      END ELSE
+        ERROR(TxtError,ShipAgentSerPar.Code,xRecCode);
+
+      IF ShipAgentSerPar."Multi Language Description Key" <> '' THEN
+        ERROR(Text001);
+
+      IF ShipAgentSerPar."Label Code" = '' THEN
+        ShipAgentSerPar."Label Code" := GlobalFunctions.GetLabelCode
+      ELSE BEGIN
+        IF GlobalFunctions.CheckLabelUsedInCompany(ShipAgentSerPar."Label Code")
+           = FALSE THEN
+          ERROR(Text000);
+      END;
+
+      LabelRec.GET(ShipAgentSerPar."Label Code");
+      LabelRec.TESTFIELD("Default User Country Code");
+      ShipAgentSerPar."Default Country" := LabelRec."Default User Country Code";
+    END;
+
+    PROCEDURE T5790DefaultMeasureOnVal@1000000013(VAR ShipAgentSerPar@1000000000 : Record 5790;xRecDefaultMeasure@1000000001 : ' ,Weight,Longest Dimension,Unit Volume,Order Value');
+    VAR
+      Text000@1000000002 : TextConst 'ENU=The Default Measure can only be Order Value unless you are using the Advanced Shipping Module.;ENG=The Default Measure can only be Order Value unless you are using the Advanced Shipping Module.';
+      ShipAgentServ@1000000003 : Record 5790;
+      Text001@1000000004 : TextConst 'ENU=The system currently does not support %1 Default Measure.;ENG=The system currently does not support %1 Default Measure.';
+      Text002@1000000005 : TextConst 'ENU=The system does not support multiple measures.;ENG=The system does not support multiple measures.';
+      TxtDefaultMeasure@1000000006 : TextConst 'ENU=Default Measure;ENG=Default Measure';
+    BEGIN
+      InternetSetup.GET;
+      IF (InternetSetup."Advanced Shipping Mode" = FALSE) AND
+         (ShipAgentSerPar."Default Measure" <>
+                    ShipAgentSerPar."Default Measure"::"Order Value") THEN
+        ERROR(Text000);
+
+      IF (ShipAgentSerPar."Default Measure" <> xRecDefaultMeasure) AND
+         (ShipPriceCont.ShippingAgentServiceExists(ShipAgentSerPar) = TRUE) THEN
+        ERROR(TextG000,TxtDefaultMeasure);
+
+      IF ShipAgentSerPar."Default Measure" =
+               ShipAgentSerPar."Default Measure"::"Order Value" THEN
+        ShipAgentSerPar."Combine Items" := TRUE;
+
+      //DOC EC2013.4.65 -
+      IF ShipAgentSerPar."Default Measure" IN
+        [ShipAgentSerPar."Default Measure"::"Longest Dimension",
+        ShipAgentSerPar."Default Measure"::"Unit Volume"] THEN
+          ERROR(Text001,ShipAgentSerPar."Default Measure");
+      ShipAgentServ.RESET;
+      IF ShipAgentServ.FIND('-') THEN
+      REPEAT
+        IF (ShipAgentServ."Shipping Agent Code" <> ShipAgentSerPar."Shipping Agent Code") AND
+          (ShipAgentServ.Code <> ShipAgentSerPar.Code) THEN
+          IF ShipAgentServ."Default Measure" <> ShipAgentSerPar."Default Measure" THEN
+          ERROR(Text002);
+      UNTIL ShipAgentServ.NEXT = 0;
+      //DOC EC2013.4.65 +
+    END;
+
+    PROCEDURE T5790CombineItemsOnVal@1000000014(VAR ShipAgentSerPar@1000000001 : Record 5790;xRecCombineItems@1000000002 : Boolean);
+    VAR
+      Text000@1000000000 : TextConst 'ENU=Combine Items must be Yes if Default Measure is Order Value.;ENG=Combine Items must be Yes if Default Measure is Order Value.';
+      TxtCombineItems@1000000003 : TextConst 'ENU=Combine Items;ENG=Combine Items';
+    BEGIN
+      IF (ShipAgentSerPar."Combine Items" <> xRecCombineItems) AND
+         (ShipPriceCont.ShippingAgentServiceExists(ShipAgentSerPar) = TRUE) THEN
+        ERROR(TextG000,TxtCombineItems);
+
+      IF (ShipAgentSerPar."Default Measure" =
+            ShipAgentSerPar."Default Measure"::"Order Value") AND
+         (ShipAgentSerPar."Combine Items" = FALSE) THEN
+        ERROR(Text000);
+    END;
+
+    PROCEDURE T5790PriceLowerLimitsOnVal@1000000015(VAR ShipAgentSerPar@1000000000 : Record 5790);
+    BEGIN
+      IF ShipAgentSerPar."Price Lower Limits Set" = FALSE THEN
+        ShipAgentSerPar."Item Ship Prices OK" := FALSE;
+    END;
+
+    PROCEDURE T5790UpdateItemShipPricesFunc@1000000016(VAR ShipAgentSerPar@1000000000 : Record 5790);
+    BEGIN
+      ShipPriceCont.UpdateItemShipPrices(ShipAgentSerPar."Label Code",
+          ShipAgentSerPar."Shipping Agent Code",ShipAgentSerPar.Code,0,'','','',TRUE,'');
+      ShipAgentSerPar."Item Ship Prices OK" := TRUE;
+      ShipAgentSerPar.DateTimeInsertedModified := CURRENTDATETIME;
+      ShipAgentSerPar.MODIFY;
+    END;
+
+    PROCEDURE T5790SetPriceLowerLimitsFunc@1000000017(VAR ShipAgentSerPar@1000000000 : Record 5790);
+    BEGIN
+      ShipPriceCont.SetPriceLowerLimits(ShipAgentSerPar."Label Code",
+          ShipAgentSerPar."Shipping Agent Code",ShipAgentSerPar.Code,0,'','',TRUE,'');
+      ShipAgentSerPar."Price Lower Limits Set" := TRUE;
+      ShipAgentSerPar.DateTimeInsertedModified := CURRENTDATETIME;
+      ShipAgentSerPar.MODIFY;
+    END;
+
+    BEGIN
+    {
+      //DOC EC2009.2.66 MQ 01/01/2011 - Add functions T5722OnDelete, T5722OnRename, T5723OnDelete, T5723OnRename and T5723AutoUpdateCatOnVal
+      //DOC EC2009.2.68 MQ 08/02/2011 - GW110208 add functions T5722AutoUpdateCatOnVal and T5722ePageGuIDOnVal
+      //DOC EC2009.2.68 MQ 03/08/2011 - GW110803 correct code in T5722LabelCodeOnVal was just deleting Multi values and not creating a new one.
+      //DOC EC2009.2.68 MQ 03/08/2011 - New Function T5715UpdateRelatedItems, T5715DeleteRelatedItems and T5715OnRename
+      //DOC EC2009.2.69 MQ 21/08/2011 - GW110821 create Shipping Service if it does not exist.
+      //DOC EC2009.2.69 MQ 08/09/2011 - GW110908 add If to T5077ContactNoOnVal as sometime contacts (if a person) does not have a Company No.
+      //DOC EC2009.2.69 MQ 14/09/2011 - GW110914 Add Label Code to Shipping Agent Service if blank.
+      //DOC EC2013.3.40 MQ 12/02/2013 - GW130212 New code for Advanced Shipping and deal with changed parameters in Ship Price functions; Code removed from Sales Price as COSTA do not have fields
+      //DOC EC2013.3.80 MQ 19/08/2013 - GW130819 Remove reference to and use of Sync Mgt
+      //DOC EC2013.4.00 MQ 16/01/2014 - GW140116 Enhanced T5723AutoUpdateCatOnVal
+      //DOC EC2013.4.65 MQ 06/08/2014 - GW140806 Enhanced T5790DefaultMeasureOnVal
+      //DOC EC2015.5.02 MQ 10/02/2015 - GW150210 Removed T7002xxx
+      //DOC EC2015.5.03 MQ 05/05/2015 - GW150505 Removed T5077OnInsert, Modify, Delete and Rename
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

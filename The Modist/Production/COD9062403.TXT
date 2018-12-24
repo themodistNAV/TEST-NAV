@@ -1,0 +1,1644 @@
+OBJECT Codeunit 9062403 Ask nOra - Action Processing
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    TableNo=9062522;
+    OnRun=BEGIN
+            IF NOT ANAction.GET("Curr. Action") THEN ERROR(eUnknownAction,"Curr. Action");
+
+            //If this is a custom Action, run the specified codeunit
+            IF ANAction."Codeunit to Run" <> 0 THEN BEGIN
+              "Last Action Success" := FALSE;
+              CODEUNIT.RUN(ANAction."Codeunit to Run",Rec);
+              Success := "Last Action Success";
+              EXIT;
+            END;
+
+            CASE ANAction.Code OF
+              'GET FIELD VALUE' : Action_GETFIELDVALUE(Rec);
+              'SHOW RECORD' : Action_SHOWRECORD(Rec);
+              'ORDER ME' : Action_ORDERMESOME(Rec);
+              'GET DIRECTIONS' : Action_GETDIRECTIONS(Rec);
+              'DEBUG' : Action_DEBUG(Rec);
+              'WIKI' : Action_WIKI(Rec);
+              'WOLFRAM' : Action_WOLFRAM(Rec);
+              'GET PANEL' : Action_GETPANEL(Rec);
+              ELSE ERROR(eActionNotWritten,ANAction.Code);
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      eUnknownAction@1000000001 : TextConst 'ENU=Sorry, I don''t know the Action "%1";ENG=Sorry, I don''t know the Action "%1"';
+      eActionNotWritten@1000000000 : TextConst 'ENU=Sorry, it looks like I haven''t been told how to do the Action "%1";ENG=Sorry, it looks like I haven''t been told how to do the Action "%1"';
+      ANAction@1000000002 : Record 9062520;
+      ConvMgt@1000000003 : Codeunit 9062400;
+      Success@1000000004 : Boolean;
+      TNPUtils@1000000005 : Codeunit 9062229;
+      tBackToBeginning@1000000006 : TextConst 'ENU=I''m going back to the beginning;ENG=I''m going back to the beginning';
+
+    PROCEDURE Action_GETFIELDVALUE@1000000005(VAR Rec@1000000000 : Record 9062522);
+    VAR
+      SearchMgt@1000000005 : Codeunit 9062405;
+      NumFieldsFound@1000000004 : Integer;
+      SearchResults_Fields@1000000003 : Record 9062523;
+      NumRecordsFound@1000000002 : Integer;
+      SearchResults_Records@1000000001 : Record 9062523;
+      QuestionChoice@1000000006 : Record 9062513;
+      Field@1000000007 : Record 2000000041;
+      EnhField@1000000008 : Record 9062327;
+      QuestionID@1000000009 : Integer;
+      ANQuestionChoice@1000000010 : Record 9062513;
+      FieldValue@1000000011 : Text;
+      RecRef@1000000012 : RecordRef;
+      theFieldName@1000000013 : Text;
+      eTrying@1000000014 : TextConst 'ENU=I''m going to try to show you a value of a field in NAV;ENG=I''m going to try to show you a value of a field in NAV';
+      eIfRecordFieldKnown@1000000015 : TextConst 'ENU=First, I''m looking to see if I already know what record and field to show you;ENG=First, I''m looking to see if I already know what record and field to show you';
+      eRecordFieldKnown@1000000016 : TextConst 'ENU=I do - so I''m going to show you the value of %1 %2 for %3 in table %4...;ENG=I do - so I''m going to show you the value of %1 %2 for %3 in table %4...';
+      eFieldIs@1000000017 : TextConst 'ENU=%1 is the %2 for %3;ENG=%1 is the %2 for %3';
+      eIDontKnowRecord@1000000018 : TextConst 'ENU=I don''t yet know the record to show, do I know the field?;ENG=I don''t yet know the record to show, do I know the field?';
+      eIKnowTheField@1000000019 : TextConst 'ENU=I do know the field (table %1, field %2: %3), so now I just need to work out which record use;ENG=I do know the field (table %1, field %2: %3), so now I just need to work out which record use';
+      eMaybeYouTold@1000000020 : TextConst 'ENU=Maybe you just told me which record to use;ENG=Maybe you just told me which record to use';
+      eOneRecordFound@1000000021 : TextConst 'ENU=I found exactly 1 record in what you just said (%1), so I''ll use that;ENG=I found exactly 1 record in what you just said (%1), so I''ll use that';
+      eMaybeQuestionAnswered@1000000023 : TextConst 'ENU=You have just answered a question for me, maybe that''s the record;ENG=You have just answered a question for me, maybe that''s the record';
+      eQuestionAnswered@1000000024 : TextConst 'ENU=It is, so I''m going to use show you the value of the field for that record;ENG=It is, so I''m going to use show you the value of the field for that record';
+      eQuestionUnrelated@1000000022 : TextConst 'ENU=No, that question you answered wasn''t related to a record in this table;ENG=No, that question you answered wasn''t related to a record in this table';
+      eNoRecords@1000000025 : TextConst 'ENU=I didn''t find any records in that table in what you said;ENG=I didn''t find any records in that table in what you said';
+      ePreviousRecord@1000000026 : TextConst 'ENU=The previous record we were talking about was in this table, so I''ll use that;ENG=The previous record we were talking about was in this table, so I''ll use that';
+      eNoRecordsInMessage@1000000027 : TextConst 'ENU=I didn''t find any records in that table in your message, so I''m out of options;ENG=I didn''t find any records in that table in your message, so I''m out of options';
+      eMultipleRecords@1000000028 : TextConst 'ENU=I found multiple records from what you said, so you''ll need to choose;ENG=I found multiple records from what you said, so you''ll need to choose';
+      eIDontKnowTheField@1000000029 : TextConst 'ENU=I don''t yet know the field to show, do I know the record?;ENG=I don''t yet know the field to show, do I know the record?';
+      eIKnowTheRecord@1000000030 : TextConst 'ENU=I do know the record (table %1, %2), so now I just need to work out which field to use;ENG=I do know the record (table %1, %2), so now I just need to work out which field to use';
+      eTryingToWorkOutField@1000000031 : TextConst 'ENU=I''m going to look in what you said and try to work out if you mention any fields in this table;ENG=I''m going to look in what you said and try to work out if you mention any fields in this table';
+      eFieldFound@1000000032 : TextConst 'ENU=I found the exactly 1 field in your sentence, so I''ll use that;ENG=I found the exactly 1 field in your sentence, so I''ll use that';
+      eHaveYouAnsweredAQuestion@1000000033 : TextConst 'ENU=Have you just answered a question?;ENG=Have you just answered a question?';
+      eYouHaveAnsweredAQuestion@1000000034 : TextConst 'ENU=You have just answered a question for me, maybe that''s the field;ENG=You have just answered a question for me, maybe that''s the field';
+      eFieldInAQuestion@1000000035 : TextConst 'ENU=It is, so I''m going to use show you the value of that field;ENG=It is, so I''m going to use show you the value of that field';
+      eMultipleFields@1000000036 : TextConst 'ENU=I found multiple fields from what you said, so you''ll need to choose;ENG=I found multiple fields from what you said, so you''ll need to choose';
+      eNoFields@1000000037 : TextConst 'ENU="I didn''t find any relevant fields in what you said; maybe the previous field we were talking about is in this table?";ENG="I didn''t find any relevant fields in what you said; maybe the previous field we were talking about is in this table?"';
+      eUsingPreviousField@1000000038 : TextConst 'ENU=It is, so I''m going to use that field;ENG=It is, so I''m going to use that field';
+      eIDidntFindAnyFields@1000000039 : TextConst 'ENU=I didn''t find and Fields in that table in your message, so I''m out of options;ENG=I didn''t find and Fields in that table in your message, so I''m out of options';
+      eNoRecordNoField@1000000040 : TextConst 'ENU=I don''t currently know either the record or the field to show you;ENG=I don''t currently know either the record or the field to show you';
+      eWorkingOutFields@1000000041 : TextConst 'ENU=I''m going to look in what you said and try to work out if you mention any fields;ENG=I''m going to look in what you said and try to work out if you mention any fields';
+      eMentionedOneField@1000000042 : TextConst 'ENU=You mentioned 1 field (%1), so I''m going to try that;ENG=You mentioned 1 field (%1), so I''m going to try that';
+      eRecordMentioned@1000000043 : TextConst 'ENU=I''m going to see if you mentioned a record in the same table as that field (%1);ENG=I''m going to see if you mentioned a record in the same table as that field (%1)';
+      eOneRecordFoundInMessage@1000000044 : TextConst 'ENU=I found exactly 1 record in that table in your message, so I''ll use that;ENG=I found exactly 1 record in that table in your message, so I''ll use that';
+      ePreviousRecordTheSameTable@1000000045 : TextConst 'ENU=The previous record we were talking about is in this same table, so lets use that;ENG=The previous record we were talking about is in this same table, so lets use that';
+      eTheRightField@1000000046 : TextConst 'ENU=I do know that this is the right field though, so I''ll remember the field we were talking about;ENG=I do know that this is the right field though, so I''ll remember the field we were talking about';
+      eAnsweringAQuestion@1000000047 : TextConst 'ENU=You are answering a question?;ENG=You are answering a question?';
+      eFieldInQuestionAnswer@1000000048 : TextConst 'ENU=Is the question you answered the choice of field?;ENG=Is the question you answered the choice of field?';
+      eFieldFoundInAnswer@1000000049 : TextConst 'ENU=It was the choice of field, lets use that then;ENG=It was the choice of field, lets use that then';
+      eNoFieldsLookingForARecord@1000000050 : TextConst 'ENU=I couldn''t see any fields in what you said, so I''m going to see if you talked about any records;ENG=I couldn''t see any fields in what you said, so I''m going to see if you talked about any records';
+      eAnswerToChooseARecord@1000000051 : TextConst 'ENU=You have just answered a question, was it to choose a record in this table?;ENG=You have just answered a question, was it to choose a record in this table?';
+      eUsingARecord@1000000052 : TextConst 'ENU=It is, so I''m going to use that record - %1 - %2;ENG=It is, so I''m going to use that record - %1 - %2';
+      eNoRecordsFields@1000000053 : TextConst 'ENU=I didn''t find any records or fields in your message, so I''m out of options;ENG=I didn''t find any records or fields in your message, so I''m out of options';
+      eMultipleFieldsPrevMessage@1000000054 : TextConst 'ENU=I found multiple fields in your message, so I''''m going to see if there are any in the previous table;ENG=I found multiple fields in your message, so I''''m going to see if there are any in the previous table';
+      eFieldInPrevMessage@1000000055 : TextConst 'ENU=There is a field in the previous table, so I''m going to try that one;ENG=There is a field in the previous table, so I''m going to try that one';
+      eAddingField@1000000056 : TextConst 'ENU=Adding %1 %2 to the list of possible fields;ENG=Adding %1 %2 to the list of possible fields';
+      eOneFieldFound@1000000057 : TextConst 'ENU=I only found one field with a matching record in your sentence, so lets use that;ENG=I only found one field with a matching record in your sentence, so lets use that';
+      eSomethingWentWrong@1000000058 : TextConst 'ENU=I''m not quiet sure how we ended up here... something went wrong;ENG=I''m not quiet sure how we ended up here... something went wrong';
+    BEGIN
+      //Get the Value of a Field in NAV
+      WITH Rec DO BEGIN
+        ConvMgt.nOraResponse_Debug(eTrying);
+
+        //Do we know:
+        // - Current Table No.
+        // - Current Field No.
+        // - Current Record
+        //1
+        ConvMgt.nOraResponse_Debug(eIfRecordFieldKnown);
+        IF ("Curr. Table" <> 0) AND ("Curr. Rec. Position" <> '') AND ("Curr. Field" <> 0) THEN BEGIN
+          //1.1
+          ConvMgt.nOraResponse_Debug(STRSUBSTNO(eRecordFieldKnown,"Curr. Field Type","Curr. Field","Curr. Rec. Position","Curr. Table"));
+
+          RecRef.OPEN("Curr. Table");
+          RecRef.SETPOSITION("Curr. Rec. Position");
+          IF "Curr. Field Type" = "Curr. Field Type"::Field THEN BEGIN
+            Field.GET("Curr. Table","Curr. Field");
+            theFieldName := Field."Field Caption";
+          END ELSE BEGIN
+            EnhField.GET("Curr. Table","Curr. Field");
+            theFieldName := EnhField.Name;
+          END;
+
+          CASE UPPERCASE(theFieldName) OF
+            'ADDRESS' :
+              BEGIN
+                TNPUtils.GetRecordAddress(RecRef.NUMBER,RecRef.GETPOSITION,FieldValue);
+              END;
+            ELSE FieldValue := TNPUtils.GetFieldValue(RecRef,theFieldName);
+          END;
+
+          ConvMgt.nOraResponse_NAVRecord(STRSUBSTNO(eFieldIs,FieldValue,theFieldName,TNPUtils.GetRecordDescription("Curr. Table","Curr. Rec. Position"))
+                    ,"Curr. Table","Curr. Rec. Position");
+          Success := TRUE;
+          EXIT;
+        END;
+
+        //Do we know:
+        // - Current Table No.
+        // - Current Field No.
+        //2
+        ConvMgt.nOraResponse_Debug(eIDontKnowRecord);
+        IF ("Curr. Table" <> 0) AND ("Curr. Field" <> 0)  THEN BEGIN
+          ConvMgt.nOraResponse_Debug(STRSUBSTNO(eIKnowTheField,"Curr. Table","Curr. Field Type","Curr. Field"));
+
+          ConvMgt.nOraResponse_Debug(eMaybeYouTold);
+          //2.1
+          NumRecordsFound :=
+            SearchMgt.QuickSearch("Curr. Sentence ID",FORMAT("Curr. Table"),'',FALSE,FALSE,FALSE,FALSE,FALSE,FALSE,'RECORD',1,SearchResults_Records);
+
+          //2.1.1
+          IF NumRecordsFound = 1 THEN BEGIN
+            //2.1.1.1
+            ConvMgt.nOraResponse_Debug(STRSUBSTNO(eOneRecordFound,"Curr. Sentence ID"));
+            SearchMgt.UseSearchResult(SearchResults_Records);
+            VALIDATE("Curr. Rec. Position",SearchResults_Records."Position Text");
+            MODIFY(TRUE);
+            ConvMgt.nOraResponse_Debug(tBackToBeginning);
+            Action_GETFIELDVALUE(Rec); //Do this function again
+            EXIT;
+          END ELSE BEGIN
+            //Look for Question answer which is the record
+            //2.1.1.2
+            IF ("Question Answered" <> 0) AND ("Question Choice Answer" <> 0) THEN BEGIN
+              ConvMgt.nOraResponse_Debug(eMaybeQuestionAnswered);
+              QuestionChoice.GET("Question Answered","Question Choice Answer");
+              //2.1.1.2.1
+              IF QuestionChoice."Related Table No." = Rec."Curr. Table" THEN BEGIN
+                //2.1.1.2.1.1
+                ConvMgt.nOraResponse_Debug(eQuestionAnswered);
+                VALIDATE("Curr. Table",QuestionChoice."Related Table No.");
+                VALIDATE("Curr. Rec. Position",QuestionChoice."Related Position Text");
+
+                //Clear the chosen option >> //WRITE NICE FUNCTION WRAPPER FOR THIS - "USE QUESTION ANSWER"
+                VALIDATE("Question Answered",0);
+                VALIDATE("Question Choice Answer",0);
+                //Clear the chosen option <<
+
+                MODIFY(TRUE);
+
+                ConvMgt.nOraResponse_Debug(tBackToBeginning);
+                Action_GETFIELDVALUE(Rec); //Do this function again
+                EXIT;
+              END ELSE BEGIN
+                ConvMgt.nOraResponse_Debug(eQuestionUnrelated);
+              END;
+            END ELSE BEGIN
+              //2.1.1.2.2
+              IF NumRecordsFound = 0 THEN BEGIN
+                ConvMgt.nOraResponse_Debug(eNoRecords);
+                //2.1.1.2.2.1
+                //Is the previous record in this table?
+                IF ("Prev. Table" = "Curr. Table") AND ("Prev. Rec. Position" <> '') THEN BEGIN //DEMO
+                  //2.1.1.2.2.1.1
+                  ConvMgt.nOraResponse_Debug(ePreviousRecord);
+                  VALIDATE("Curr. Table","Prev. Table");
+                  VALIDATE("Curr. Rec. Position","Prev. Rec. Position"); //DEMO
+
+                  MODIFY(TRUE);
+
+                  ConvMgt.nOraResponse_Debug(tBackToBeginning);
+                  Action_GETFIELDVALUE(Rec); //Do this function again
+                  EXIT;
+                END ELSE BEGIN
+                  //2.1.1.2.2.1.2
+                  ConvMgt.nOraResponse_Debug(eNoRecordsInMessage);
+                  Success := FALSE;
+                  EXIT;
+                END;
+              END ELSE BEGIN
+                //2.1.1.2.2.2
+                //Found multiple records to choose from
+                ConvMgt.nOraResponse_Debug(eMultipleRecords);
+
+                ConvMgt.CreateQuestion_FromSearchResSum(Rec,SearchResults_Records,'',TRUE);
+                SearchMgt.UseSearchResult(SearchResults_Records);
+
+                Success := TRUE; //We consider this a success
+                EXIT;
+
+              END;
+            END;
+
+          END;
+        END ELSE BEGIN
+
+          //Do we know
+          // - Current Table No.
+          // - Current Position Text
+          //3
+          ConvMgt.nOraResponse_Debug(eIDontKnowTheField);
+          IF ("Curr. Table" <> 0) AND ("Curr. Rec. Position" <> '') THEN BEGIN
+            ConvMgt.nOraResponse_Debug(STRSUBSTNO(eIKnowTheRecord,"Curr. Table","Curr. Rec. Position"));
+
+            //3.1
+            ConvMgt.nOraResponse_Debug(eTryingToWorkOutField);
+            NumFieldsFound := SearchMgt.QuickSearch_ForField("Curr. Sentence ID",FALSE,FALSE,'FIELD',SearchResults_Fields);
+            IF NumFieldsFound > 0 THEN BEGIN
+              SearchResults_Fields.SETRANGE("Search ID",SearchResults_Fields."Search ID");
+              SearchResults_Fields.SETRANGE("Field Search - Table No.","Curr. Table"); //Only fields in Curr. Table
+              NumFieldsFound := SearchResults_Fields.COUNT;
+            END;
+
+            //3.1.1
+            IF NumFieldsFound = 1 THEN BEGIN
+              //Found 1 field exactly
+              //3.1.1.1
+              ConvMgt.nOraResponse_Debug(eFieldFound);
+              SearchMgt.UseSearchResult(SearchResults_Fields);
+              VALIDATE("Curr. Field Type",SearchResults_Fields."Field Search - Field Type");
+              VALIDATE("Curr. Field",SearchResults_Fields."Field Search - Field No.");
+
+              MODIFY(TRUE);
+              ConvMgt.nOraResponse_Debug(tBackToBeginning);
+              Action_GETFIELDVALUE(Rec); //Do this function again
+              EXIT;
+
+            END ELSE BEGIN
+              ConvMgt.nOraResponse_Debug(eHaveYouAnsweredAQuestion);
+              //3.1.1.2
+              IF ("Question Answered" <> 0) AND ("Question Choice Answer" <> 0) THEN BEGIN
+                ConvMgt.nOraResponse_Debug(eYouHaveAnsweredAQuestion);
+                QuestionChoice.GET("Question Answered","Question Choice Answer");
+                IF (QuestionChoice."Related Table No." = DATABASE::Field) OR (QuestionChoice."Related Table No." = DATABASE::"Enhanced Field Definition") THEN BEGIN
+                  //The Question result is a field
+                  IF QuestionChoice."Related Table No." = DATABASE::Field THEN BEGIN
+                    //3.1.1.2.1
+                    Field.SETPOSITION(QuestionChoice."Related Position Text");
+                    Field.SETRECFILTER;
+                    Field.FINDFIRST;
+
+                    IF Field.TableNo = "Curr. Table" THEN BEGIN
+                      //3.1.1.2.1.1
+                      ConvMgt.nOraResponse_Debug(eFieldInAQuestion);
+                      VALIDATE("Curr. Field Type","Curr. Field Type"::Field);
+                      VALIDATE("Curr. Field",Field."No.");
+
+                      //Clear the chosen option >> //WRITE NICE FUNCTION WRAPPER FOR THIS - "USE QUESTION ANSWER"
+                      VALIDATE("Question Answered",0);
+                      VALIDATE("Question Choice Answer",0);
+                      //Clear the chosen option <<
+
+                      MODIFY(TRUE);
+
+                      ConvMgt.nOraResponse_Debug(tBackToBeginning);
+                      Action_GETFIELDVALUE(Rec); //Do this function again
+                      EXIT;
+                    END;
+                  END ELSE BEGIN
+                    //3.1.1.2.1
+                    EnhField.SETPOSITION(QuestionChoice."Related Position Text");
+                    EnhField.SETRECFILTER;
+                    EnhField.FINDFIRST;
+
+                    IF EnhField."Table No." = "Curr. Table" THEN BEGIN
+                      //3.1.1.2.1.1
+                      ConvMgt.nOraResponse_Debug(eFieldInAQuestion);
+                      VALIDATE("Curr. Field Type","Curr. Field Type"::"Enhanced Field");
+                      VALIDATE("Curr. Field",EnhField."Enhanced Field No.");
+
+                      //Clear the chosen option >> //WRITE NICE FUNCTION WRAPPER FOR THIS - "USE QUESTION ANSWER"
+                      VALIDATE("Question Answered",0);
+                      VALIDATE("Question Choice Answer",0);
+                      //Clear the chosen option <<
+
+                      MODIFY(TRUE);
+
+                      ConvMgt.nOraResponse_Debug(tBackToBeginning);
+                      Action_GETFIELDVALUE(Rec); //Do this function again
+                      EXIT;
+                    END;
+                  END;
+                END;
+              END ELSE BEGIN
+                //3.1.1.2.2
+                IF NumFieldsFound <> 0 THEN BEGIN
+                  //3.1.1.2.2.1
+                  ConvMgt.nOraResponse_Debug(eMultipleFields);
+
+                  ConvMgt.CreateQuestion_FromSearchResSum(Rec,SearchResults_Fields,'',TRUE);
+                  SearchMgt.UseSearchResult(SearchResults_Records);
+
+                  Success := TRUE; //We consider this a success
+                  EXIT;
+                END ELSE BEGIN
+                  //3.1.1.2.2.2
+                  ConvMgt.nOraResponse_Debug(eNoFields);
+                  IF ("Prev. Table" = "Curr. Table") AND ("Prev. Field" <> 0) THEN BEGIN
+                    //3.1.1.2.2.2.1
+                    ConvMgt.nOraResponse_Debug(eUsingPreviousField);
+                    VALIDATE("Curr. Field Type","Prev. Field Type");
+                    VALIDATE("Curr. Field","Prev. Field");
+                    MODIFY(TRUE);
+
+                    ConvMgt.nOraResponse_Debug(tBackToBeginning);
+                    Action_GETFIELDVALUE(Rec); //Do this function again
+                    EXIT;
+
+                  END ELSE BEGIN
+                    //3.1.1.2.2.2.2
+                    ConvMgt.nOraResponse_Debug(eIDidntFindAnyFields);
+                    Success := FALSE;
+                    EXIT;
+                  END;
+                END;
+              END;
+            END;
+          END;
+
+
+          //We don't know anything...
+          ConvMgt.nOraResponse_Debug(eNoRecordNoField);
+
+          //Look for Fields in the Sentence
+          //3.2
+          ConvMgt.nOraResponse_Debug(eWorkingOutFields);
+          NumFieldsFound := SearchMgt.QuickSearch_ForField("Curr. Sentence ID",FALSE,FALSE,'FIELD',SearchResults_Fields);
+
+          //3.2.1
+          IF NumFieldsFound = 1 THEN BEGIN
+            SearchResults_Fields.FINDFIRST;
+            ConvMgt.nOraResponse_Debug(STRSUBSTNO(eMentionedOneField,SearchResults_Fields."Record Description"));
+            SearchMgt.UseSearchResult(SearchResults_Fields);
+
+            //Look for records in the related table
+            //3.2.1.1
+            ConvMgt.nOraResponse_Debug(STRSUBSTNO(eRecordMentioned,SearchResults_Fields."Field Search - Table No."));
+            NumRecordsFound :=
+              SearchMgt.QuickSearch("Curr. Sentence ID",FORMAT(SearchResults_Fields."Field Search - Table No."),'',FALSE,FALSE,FALSE,FALSE,FALSE,FALSE,'RECORD',1,SearchResults_Records);
+
+            //Exactly 1 record found
+            //3.2.1.1.1
+            IF NumRecordsFound = 1 THEN BEGIN
+              //3.2.1.1.1.1
+              ConvMgt.nOraResponse_Debug(eOneRecordFoundInMessage);
+              SearchResults_Records.FINDFIRST;
+              SearchMgt.UseSearchResult(SearchResults_Records);
+              VALIDATE("Curr. Table",SearchResults_Fields."Field Search - Table No.");
+              VALIDATE("Curr. Field Type",SearchResults_Fields."Field Search - Field Type");
+              VALIDATE("Curr. Field",SearchResults_Fields."Field Search - Field No.");
+              VALIDATE("Curr. Rec. Position",SearchResults_Records."Position Text");
+
+              MODIFY(TRUE);
+              ConvMgt.nOraResponse_Debug(tBackToBeginning);
+              Action_GETFIELDVALUE(Rec); //Do this function again
+              EXIT;
+            END ELSE BEGIN
+              //No records found
+              //3.2.1.1.1.2
+              IF NumRecordsFound = 0 THEN BEGIN
+                //3.2.1.1.1.2.1
+                IF ("Prev. Table" = SearchResults_Fields."Field Search - Table No.") AND ("Prev. Rec. Position" <> '') THEN BEGIN
+                  //3.2.1.1.1.2.1.2
+                  ConvMgt.nOraResponse_Debug(ePreviousRecordTheSameTable);
+                  VALIDATE("Curr. Table",SearchResults_Fields."Field Search - Table No.");
+                  VALIDATE("Curr. Field Type",SearchResults_Fields."Field Search - Field Type");
+                  VALIDATE("Curr. Field",SearchResults_Fields."Field Search - Field No.");
+                  VALIDATE("Curr. Rec. Position","Prev. Rec. Position");
+
+                  MODIFY(TRUE);
+                  ConvMgt.nOraResponse_Debug(tBackToBeginning);
+                  Action_GETFIELDVALUE(Rec); //Do this function again
+                  EXIT;
+
+                END ELSE BEGIN
+                  //3.2.1.1.1.2.1.2
+                  ConvMgt.nOraResponse_Debug(eNoRecords);
+                  SearchMgt.UnUseSearchResult(SearchResults_Fields);
+                  Success := FALSE;
+                  EXIT;
+                END;
+              END ELSE BEGIN
+                //Multiple possible records found
+                //3.2.1.1.1.2.2
+                IF NumRecordsFound > 1 THEN BEGIN
+                  ConvMgt.nOraResponse_Debug(eMultipleRecords);
+
+                  ConvMgt.nOraResponse_Debug(eTheRightField);
+                  VALIDATE("Curr. Table",SearchResults_Fields."Field Search - Table No.");
+                  VALIDATE("Curr. Field Type",SearchResults_Fields."Field Search - Field Type");
+                  VALIDATE("Curr. Field",SearchResults_Fields."Field Search - Field No.");
+                  MODIFY(TRUE);
+
+                  ConvMgt.CreateQuestion_FromSearchResSum(Rec,SearchResults_Records,'',TRUE);
+                  SearchMgt.UseSearchResult(SearchResults_Records);
+
+                  Success := TRUE; //We consider this a success
+                  EXIT;
+                END;
+              END;
+            END;
+          END ELSE BEGIN
+            //3.2.1a
+            ConvMgt.nOraResponse_Debug(eAnsweringAQuestion);
+            IF ("Question Answered" <> 0) AND ("Question Choice Answer" <> 0) THEN BEGIN
+              QuestionChoice.GET("Question Answered","Question Choice Answer");
+              ConvMgt.nOraResponse_Debug(eFieldInQuestionAnswer);
+              //3.2.1a.1
+              IF (QuestionChoice."Related Table No." = DATABASE::Field) OR (QuestionChoice."Related Table No." = DATABASE::"Enhanced Field Definition") THEN BEGIN
+                ConvMgt.nOraResponse_Debug(eFieldFoundInAnswer);
+                //3.2.1a.2
+                IF QuestionChoice."Related Table No." = DATABASE::Field THEN BEGIN
+                  Field.SETPOSITION(QuestionChoice."Related Position Text");
+                  Field.SETRECFILTER;
+                  Field.FINDFIRST;
+
+                  VALIDATE("Curr. Table",Field.TableNo);
+                  VALIDATE("Curr. Field Type","Curr. Field Type"::Field);
+                  VALIDATE("Curr. Field",Field."No.");
+
+                END ELSE BEGIN
+                  EnhField.SETPOSITION(QuestionChoice."Related Position Text");
+                  EnhField.SETRECFILTER;
+                  EnhField.FINDFIRST;
+
+                  VALIDATE("Curr. Table",EnhField."Table No.");
+                  VALIDATE("Curr. Field Type","Curr. Field Type"::"Enhanced Field");
+                  VALIDATE("Curr. Field",EnhField."Enhanced Field No.");
+                END;
+
+                //Clear the chosen option >> //WRITE NICE FUNCTION WRAPPER FOR THIS - "USE QUESTION ANSWER"
+                VALIDATE("Question Answered",0);
+                VALIDATE("Question Choice Answer",0);
+                //Clear the chosen option <<
+
+                MODIFY(TRUE);
+                ConvMgt.nOraResponse_Debug(tBackToBeginning);
+                Action_GETFIELDVALUE(Rec); //Do this function again
+                EXIT;
+              END;
+            END;
+            //3.2.1.2
+            IF NumFieldsFound = 0 THEN BEGIN
+              //3.2.1.2.1
+              ConvMgt.nOraResponse_Debug(eNoFieldsLookingForARecord);
+              NumRecordsFound :=
+                SearchMgt.QuickSearch("Curr. Sentence ID",'','',FALSE,FALSE,FALSE,FALSE,FALSE,FALSE,'RECORD',1,SearchResults_Records);
+
+              //3.2.1.2.1.1
+              IF NumRecordsFound = 1 THEN BEGIN
+                //3.2.1.2.1.1.1
+                ConvMgt.nOraResponse_Debug(eOneRecordFound);
+                SearchMgt.UseSearchResult(SearchResults_Records);
+                VALIDATE("Curr. Table",SearchResults_Records."Table No.");
+                VALIDATE("Curr. Rec. Position",SearchResults_Records."Position Text");
+                MODIFY(TRUE);
+
+                MODIFY(TRUE);
+                ConvMgt.nOraResponse_Debug(tBackToBeginning);
+                Action_GETFIELDVALUE(Rec); //Do this function again
+                EXIT;
+
+              END ELSE BEGIN
+                //3.2.1.2.1.1.2
+                ConvMgt.nOraResponse_Debug(eAnsweringAQuestion);
+                IF ("Question Answered" <> 0) AND ("Question Choice Answer" <> 0) THEN BEGIN
+                  //3.2.1.2.1.1.2.1
+                  ConvMgt.nOraResponse_Debug(eAnswerToChooseARecord);
+                  QuestionChoice.GET("Question Answered","Question Choice Answer");
+                  IF (QuestionChoice."Related Table No." <> DATABASE::"Field Lookup") AND (QuestionChoice."Related Table No." <> DATABASE::"Enhanced Field Definition") THEN BEGIN
+                    //3.2.1.2.1.1.2.1.1
+                    ConvMgt.nOraResponse_Debug(STRSUBSTNO(eUsingARecord, QuestionChoice."Related Table No.", QuestionChoice."Related Position Text"));
+                    VALIDATE("Curr. Table",QuestionChoice."Related Table No.");
+                    VALIDATE("Curr. Rec. Position",QuestionChoice."Related Position Text");
+
+                    //Clear the chosen option >> //WRITE NICE FUNCTION WRAPPER FOR THIS - "USE QUESTION ANSWER"
+                    VALIDATE("Question Answered",0);
+                    VALIDATE("Question Choice Answer",0);
+                    //Clear the chosen option <<
+
+                    MODIFY(TRUE);
+
+                    ConvMgt.nOraResponse_Debug(tBackToBeginning);
+                    Action_GETFIELDVALUE(Rec); //Do this function again
+                    EXIT;
+                  END;
+                END;
+
+                //3.2.1.2.1.1.2.2
+                IF NumRecordsFound = 0 THEN BEGIN
+                  //3.2.1.2.1.1.2.2.2
+                  ConvMgt.nOraResponse_Debug(eNoRecordsFields);
+                  //SearchMgt.UnUseSearchResult(SearchResults_Fields);
+                  Success := FALSE;
+                  EXIT;
+                END ELSE BEGIN
+                  //3.2.1.2.1.1.2.2.1
+                  ConvMgt.nOraResponse_Debug(eMultipleRecords);
+
+                  ConvMgt.CreateQuestion_FromSearchResSum(Rec,SearchResults_Records,'',TRUE);
+                  SearchMgt.UseSearchResult(SearchResults_Records);
+
+                  Success := TRUE; //We consider this a success
+                  EXIT;
+
+                END;
+
+              END;
+            END ELSE BEGIN
+              //3.2.1.2.2
+              //ConvMgt.nOraResponse_Debug('I found multiple fields in your message, so now I''m going to check if your message contains matching records for any of those fields');
+              //DOC PC DEMO >>
+              ConvMgt.nOraResponse_Debug(eMultipleFieldsPrevMessage);
+              SearchResults_Fields.SETFILTER("Field Search - Table No.",'%1',Rec."Prev. Table");
+              IF SearchResults_Fields.COUNT = 1 THEN BEGIN
+                SearchResults_Fields.FINDFIRST;
+                ConvMgt.nOraResponse_Debug(eFieldInPrevMessage);
+                Rec.VALIDATE("Curr. Table",SearchResults_Fields."Field Search - Table No.");
+                Rec.VALIDATE("Curr. Field",SearchResults_Fields."Field Search - Field No.");
+                Rec.VALIDATE("Curr. Field Type",SearchResults_Fields."Field Search - Field Type");
+
+                MODIFY(TRUE);
+                ConvMgt.nOraResponse_Debug(tBackToBeginning);
+                Action_GETFIELDVALUE(Rec); //Do this function again
+                EXIT;
+
+
+              END ELSE BEGIN
+                SearchResults_Fields.SETFILTER("Field Search - Table No.",'');
+              END;
+
+              //DOC PC DEMO <<
+              //3.2.1.2.2.1
+              SearchResults_Fields.FINDSET;
+              QuestionID := ConvMgt.CreateQuestion(ID,'');
+              REPEAT
+                SearchMgt.UseSearchResult(SearchResults_Fields); //DOC PC 08/05/2014
+                NumRecordsFound :=
+                  SearchMgt.QuickSearch("Curr. Sentence ID",FORMAT(SearchResults_Fields."Field Search - Table No."),'',FALSE,FALSE,FALSE,FALSE,FALSE,FALSE,'RECORD',1,SearchResults_Records);
+
+                //3.2.1.2.2.2
+                IF NumRecordsFound > 0 THEN BEGIN
+                  IF SearchResults_Fields."Field Search - Field Type" = SearchResults_Fields."Field Search - Field Type"::Field THEN BEGIN
+                    Field.GET(SearchResults_Fields."Field Search - Table No.",SearchResults_Fields."Field Search - Field No.");
+                    //3.2.1.2.2.3
+                    ConvMgt.AddQuestionChoice(QuestionID,Field.TableName + ' ' + Field."Field Caption",DATABASE::Field,Field.GETPOSITION);
+                    ConvMgt.nOraResponse_Debug(STRSUBSTNO(eAddingField,Field.TableName,Field."Field Caption"));
+                  END ELSE BEGIN
+                    EnhField.GET(SearchResults_Fields."Field Search - Table No.",SearchResults_Fields."Field Search - Field No.");
+                    EnhField.CALCFIELDS("Table Name");
+                    //3.2.1.2.2.3
+                    ConvMgt.AddQuestionChoice(QuestionID,EnhField."Table Name" + ' ' + EnhField.Name,DATABASE::"Enhanced Field Definition",EnhField.GETPOSITION);
+                    ConvMgt.nOraResponse_Debug(STRSUBSTNO(eAddingField,EnhField."Table Name",EnhField.Name));
+                  END;
+                END;
+                //SearchMgt.UnUseSearchResult(SearchResults_Fields); //DOC PC 08/05/2014
+              UNTIL SearchResults_Fields.NEXT = 0;
+
+              ANQuestionChoice.SETRANGE("Question ID",QuestionID);
+              //3.2.1.2.3
+              IF ANQuestionChoice.COUNT = 1 THEN BEGIN
+                //3.2.1.2.3.1
+                ANQuestionChoice.FINDFIRST;
+                ConvMgt.nOraResponse_Debug(eOneFieldFound);
+                IF ANQuestionChoice."Related Table No." = DATABASE::Field THEN BEGIN
+                  Field.SETPOSITION(ANQuestionChoice."Related Position Text");
+                  Field.SETRECFILTER;
+                  Field.FINDFIRST;
+
+
+                  VALIDATE("Curr. Table",Field.TableNo);
+                  VALIDATE("Curr. Field Type","Curr. Field Type"::Field);
+                  VALIDATE("Curr. Field",Field."No.");
+
+                END ELSE BEGIN
+                  EnhField.SETPOSITION(ANQuestionChoice."Related Position Text");
+                  EnhField.SETRECFILTER;
+                  EnhField.FINDFIRST;
+
+                  VALIDATE("Curr. Table",EnhField."Table No.");
+                  VALIDATE("Curr. Field Type","Curr. Field Type"::"Enhanced Field");
+                  VALIDATE("Curr. Field",EnhField."Enhanced Field No.");
+                END;
+
+                MODIFY(TRUE);
+                ConvMgt.nOraResponse_Debug(tBackToBeginning);
+                Action_GETFIELDVALUE(Rec); //Do this function again
+                EXIT;
+
+              END ELSE BEGIN
+                //3.2.1.2.3.2
+                IF ANQuestionChoice.COUNT = 0 THEN BEGIN
+                  //3.2.1.2.3.2.1
+                  ConvMgt.nOraResponse_Debug(eNoRecordsFields);
+                  SearchMgt.UnUseSearchResult(SearchResults_Fields);
+                  Success := FALSE;
+                  EXIT;
+                END ELSE BEGIN
+                  //3.2.1.2.3.2.2
+                  ConvMgt.nOraResponse_Debug(eMultipleFields);
+                  ConvMgt.nOraResponse_AskQuestion(Rec,QuestionID);
+                  Success := TRUE; //We consider this a success
+                  EXIT;
+                END;
+              END;
+            END;
+          END;
+
+        END;
+        ConvMgt.nOraResponse_Error(eSomethingWentWrong);
+        Success := FALSE;
+        EXIT;
+      END;
+    END;
+
+    PROCEDURE Action_GETFIELDVALUE_Old@1000000000(VAR Rec@1000000000 : Record 9062522);
+    VAR
+      SearchMgt@1000000002 : Codeunit 9062405;
+      NumFieldsFound@1000000001 : Integer;
+      SearchResults_Fields@1000000003 : Record 9062523;
+      NumRecordsFound@1000000004 : Integer;
+      SearchResults_Records@1000000005 : Record 9062523;
+      QuestionChoice@1000000006 : Record 9062513;
+      Field@1000000007 : Record 2000000041;
+      QuestionID@1000000008 : Integer;
+      eValue@1000000009 : TextConst 'ENU=Here goes the value of the table %1, field %2 for position %3;ENG=Here goes the value of the table %1, field %2 for position %3';
+      eWhichField@1000000010 : TextConst 'ENU=Which field did you mean?;ENG=Which field did you mean?';
+    BEGIN
+      //Get the Value of a Field in NAV
+      WITH Rec DO BEGIN
+        //The aim is the get the following fields populated
+        //"Curr. Table"
+        //"Curr. Field"
+        //"Curr. Rec. Position"
+
+        //If we know what to display, do it
+        IF ("Curr. Table" <> 0) AND ("Curr. Field" <> 0) AND ("Curr. Rec. Position" <> '') THEN BEGIN
+          ConvMgt.nOraResponse(STRSUBSTNO(eValue,Rec."Curr. Table",Rec."Curr. Field",Rec."Curr. Rec. Position"));
+          Success := TRUE;
+          EXIT;
+        END;
+
+        //We know a Table and Field, so does the current sentence mention a Record in that table?
+        IF ("Curr. Table" <> 0) AND ("Curr. Field" <> 0) THEN BEGIN
+          NumRecordsFound :=
+            SearchMgt.QuickSearch("Curr. Sentence ID",FORMAT("Curr. Table"),'',FALSE,FALSE,FALSE,FALSE,FALSE,FALSE,'RECORD',1,SearchResults_Records);
+
+          //It mentions 1 record exactly... lets use that
+          IF NumRecordsFound = 1 THEN BEGIN
+            VALIDATE("Curr. Rec. Position",SearchResults_Records."Position Text");
+            MODIFY(TRUE);
+            ConvMgt.nOraResponse_Debug(tBackToBeginning);
+            Action_GETFIELDVALUE(Rec); //Do this function again
+            EXIT;
+          END;
+
+          //Didnt find an exact match, but I do have an unused Option Choice and the Action before the Question was this one
+          IF ("Question Answered" <> 0) AND ("Question Choice Answer" <> 0) AND ("Before Question Action" = "Curr. Action") THEN BEGIN
+            QuestionChoice.GET("Question Answered","Question Choice Answer");
+
+            VALIDATE("Curr. Rec. Position",QuestionChoice."Related Position Text");
+
+            //Clear the chosen option >> //WRITE NICE FUNCTION WRAPPER FOR THIS - "USE QUESTION ANSWER"
+            VALIDATE("Question Answered",0);
+            VALIDATE("Question Choice Answer",0);
+            //Clear the chosen option <<
+
+            MODIFY(TRUE);
+            ConvMgt.nOraResponse_Debug(tBackToBeginning);
+            Action_GETFIELDVALUE(Rec); //Do this function again
+            EXIT;
+          END;
+
+          //The current sentence mentions multiple possible records, so get the user to choose
+          IF NumRecordsFound > 1 THEN BEGIN
+            ConvMgt.CreateQuestion_FromSearchResSum(Rec,SearchResults_Records,'',TRUE);
+            MODIFY(TRUE);
+            Success := TRUE; //We consider this a success
+            EXIT;
+          END;
+
+          //The sentence doesn't mention any records
+          //Try the previous record mentioned
+          IF "Prev. Rec. Position" <> '' THEN BEGIN
+            VALIDATE("Curr. Rec. Position","Prev. Rec. Position");
+            MODIFY(TRUE);
+
+            ConvMgt.nOraResponse_Debug(tBackToBeginning);
+            Action_GETFIELDVALUE(Rec); //Do this function again
+            EXIT;
+          END;
+
+          //The sentence doesn't mention any records
+          //There's no oustanding search result that might tell us
+          //They haven't referenced a record before
+          MODIFY(TRUE);
+          Success := FALSE;
+          EXIT;
+        END;
+
+        //We know a Table and Record Position, so does the current sentence mention a Field in that Table?
+        IF ("Curr. Table" <> 0) AND ("Curr. Rec. Position" <> '') THEN BEGIN
+          NumFieldsFound :=
+            SearchMgt.QuickSearch("Curr. Sentence ID",FORMAT(DATABASE::Field),'',TRUE,FALSE,FALSE,TRUE,TRUE,FALSE,'FIELD',1,SearchResults_Fields);
+
+          //It mentions 1 field exactly... lets use that
+          IF NumFieldsFound = 1 THEN BEGIN
+            VALIDATE("Curr. Field Type",SearchResults_Fields."Field Search - Field Type");
+            VALIDATE("Curr. Field",SearchResults_Fields."Field Search - Field No.");
+            MODIFY(TRUE);
+
+            ConvMgt.nOraResponse_Debug(tBackToBeginning);
+            Action_GETFIELDVALUE(Rec); //Do this function again
+            EXIT;
+          END;
+        END;
+
+        //We really don't know what to show at the moment
+        //Does the current sentence tell us everything we need to know?
+
+        //Does the current sentence mention a field name?
+        NumFieldsFound := SearchMgt.QuickSearch_ForField("Curr. Sentence ID",FALSE,FALSE,'FIELD',SearchResults_Fields);
+
+        //It mentions 1 field exactly... lets see if that works
+        IF NumFieldsFound = 1 THEN BEGIN
+          VALIDATE("Curr. Rec. Position",''); //We don't know the record, so reset that
+          VALIDATE("Curr. Table",SearchResults_Fields."Field Search - Table No.");
+          VALIDATE("Curr. Field Type",SearchResults_Fields."Field Search - Field Type");
+          VALIDATE("Curr. Field",SearchResults_Fields."Field Search - Field No.");
+          MODIFY(TRUE);
+
+          ConvMgt.nOraResponse_Debug(tBackToBeginning);
+          Action_GETFIELDVALUE(Rec);
+          EXIT;
+        END;
+
+        //It mentions multiple fields... lets see if we can find any records for them
+        IF NumFieldsFound > 1 THEN BEGIN
+          SearchResults_Fields.FINDSET;
+          REPEAT
+            NumRecordsFound :=
+              SearchMgt.QuickSearch("Curr. Sentence ID",FORMAT(SearchResults_Fields."Field Search - Table No."),'',FALSE,FALSE,FALSE,FALSE,FALSE,FALSE,'RECORD',1,SearchResults_Records);
+
+            //It might be this Field
+            IF NumRecordsFound > 0 THEN BEGIN
+              IF QuestionID = 0 THEN
+                QuestionID := ConvMgt.CreateQuestion(ID,eWhichField);
+              IF NOT ConvMgt.QuestionChoiceExists(QuestionID,SearchResults_Fields."Table No.",SearchResults_Fields."Position Text") THEN
+                ConvMgt.AddQuestionChoice(QuestionID,SearchResults_Fields."Record Description",SearchResults_Fields."Table No.",SearchResults_Fields."Position Text");
+
+            END;
+          UNTIL SearchResults_Fields.NEXT = 0;
+
+          //We found at least one Field with a matching record
+          IF QuestionID <> 0 THEN BEGIN
+            QuestionChoice.SETRANGE("Question ID",QuestionID);
+            IF QuestionChoice.COUNT = 1 THEN BEGIN
+              //We found only one Field with a matching Record
+              QuestionChoice.FINDFIRST;
+              Field.SETPOSITION(QuestionChoice."Related Position Text");
+              Field.SETRECFILTER;
+              Field.FINDFIRST;
+
+
+            END ELSE BEGIN
+            END;
+          END;
+
+          //No - no records found matching those fields
+          //Lets try to Prev. Record
+          IF ("Need Answer to Question" = 0) AND ("Prev. Rec. Position" <> '') THEN BEGIN
+            SearchResults_Fields.SETRANGE("Field Search - Table No.","Prev. Table");
+            IF SearchResults_Fields.FINDSET THEN BEGIN
+              VALIDATE("Curr. Rec. Position","Prev. Rec. Position");
+              VALIDATE("Curr. Table","Prev. Table");
+              VALIDATE("Curr. Field Type",SearchResults_Fields."Field Search - Field Type");
+              VALIDATE("Curr. Field",SearchResults_Fields."Field Search - Field No.");
+
+              MODIFY(TRUE);
+
+              ConvMgt.nOraResponse_Debug(tBackToBeginning);
+              Action_GETFIELDVALUE(Rec); //Do this function again
+              EXIT;
+
+            END;
+          END;
+        END;
+
+        //It doesn't mention any fields, but I do have an unused Option Choice and the Action before the Question was this one
+        IF ("Question Answered" <> 0) AND ("Question Choice Answer" <> 0) AND ("Before Question Action" = "Curr. Action") THEN BEGIN
+          QuestionChoice.GET("Question Answered","Question Choice Answer");
+          IF QuestionChoice."Related Table No." = DATABASE::Field THEN BEGIN
+            Field.SETPOSITION(QuestionChoice."Related Position Text");
+            Field.SETRECFILTER;
+            Field.FINDFIRST;
+            VALIDATE("Curr. Table",Field.TableNo);
+            VALIDATE("Curr. Field Type",Rec."Curr. Field Type"::Field);
+            VALIDATE("Curr. Field",Field."No.");
+
+            //Clear the chosen option >> //WRITE NICE FUNCTION WRAPPER FOR THIS - "USE QUESTION ANSWER"
+            VALIDATE("Question Answered",0);
+            VALIDATE("Question Choice Answer",0);
+            //Clear the chosen option <<
+
+            MODIFY(TRUE);
+
+            ConvMgt.nOraResponse_Debug(tBackToBeginning);
+            Action_GETFIELDVALUE(Rec); //Do this function again
+            EXIT;
+          END;
+
+          //They haven't mentioned a Field anywhere, but I have a "Prev. Field"
+          IF "Prev. Field" <> 0 THEN BEGIN
+            VALIDATE("Curr. Field Type","Prev. Field Type");
+            VALIDATE("Curr. Field","Prev. Field");
+            MODIFY(TRUE);
+
+            ConvMgt.nOraResponse_Debug(tBackToBeginning);
+            Action_GETFIELDVALUE(Rec); //Do this function again
+            EXIT;
+          END;
+        END;
+
+
+        //So we don't know what field to show, or what record
+        //Does the sentence match any records for the Prev. Table?
+        NumRecordsFound :=
+          SearchMgt.QuickSearch("Curr. Sentence ID",FORMAT("Prev. Table"),'',FALSE,FALSE,FALSE,FALSE,FALSE,FALSE,'RECORD',1,SearchResults_Records);
+
+        //It mentions 1 record exactly... lets use that against the Previous Table/Field
+        IF NumRecordsFound = 1 THEN BEGIN
+          VALIDATE("Curr. Rec. Position",SearchResults_Records."Position Text");
+          VALIDATE("Curr. Table","Prev. Table");
+          VALIDATE("Curr. Field Type","Prev. Field Type");
+          VALIDATE("Curr. Field","Prev. Field");
+
+          MODIFY(TRUE);
+
+          ConvMgt.nOraResponse_Debug(tBackToBeginning);
+          Action_GETFIELDVALUE(Rec); //Do this function again
+          EXIT;
+        END;
+
+        //Didnt find an exact match, but I do have an unused Option Choice and the Action before the Question was this one
+        IF ("Question Answered" <> 0) AND ("Question Choice Answer" <> 0) AND ("Before Question Action" = "Curr. Action") THEN BEGIN
+          QuestionChoice.GET("Question Answered","Question Choice Answer");
+
+          VALIDATE("Curr. Table",QuestionChoice."Related Table No.");
+          VALIDATE("Curr. Rec. Position",QuestionChoice."Related Position Text");
+
+          //Clear the chosen option >> //WRITE NICE FUNCTION WRAPPER FOR THIS - "USE QUESTION ANSWER"
+          VALIDATE("Question Answered",0);
+          VALIDATE("Question Choice Answer",0);
+          //Clear the chosen option <<
+
+          MODIFY(TRUE);
+
+          ConvMgt.nOraResponse_Debug(tBackToBeginning);
+          Action_GETFIELDVALUE(Rec); //Do this function again
+          EXIT;
+        END;
+
+        //The current sentence mentions multiple possible records, so get the user to choose
+        IF NumRecordsFound > 1 THEN BEGIN
+          ConvMgt.CreateQuestion_FromSearchResSum(Rec,SearchResults_Records,'',TRUE);
+          MODIFY(TRUE);
+          Success := TRUE; //We consider this a success
+          EXIT;
+        END;
+
+        //The sentence doesn't mention any records
+        //We look to be out of options
+        MODIFY(TRUE);
+        Success := FALSE;
+        EXIT;
+
+      END;
+    END;
+
+    PROCEDURE Action_SHOWRECORD@1000000001(VAR Rec@1000000000 : Record 9062522);
+    VAR
+      AsknOraDevAPI@1000000002 : Codeunit 9062514;
+      Result@1000000001 : 'Success,Failure,QuestionAsked';
+      eHereIs@1000000003 : TextConst 'ENU=Here is %1;ENG=Here is %1';
+    BEGIN
+      //DOC PC ASKNORA 05/04/2015 - Replaced original code with API use
+      WITH Rec DO BEGIN
+        Success := AsknOraDevAPI.FindRecord(Rec,Result,'');
+        IF Result <> Result::Success THEN EXIT;
+
+        ConvMgt.nOraResponse_NAVRecord(STRSUBSTNO(eHereIs, TNPUtils.GetRecordDescription("Curr. Table","Curr. Rec. Position")),"Curr. Table","Curr. Rec. Position");
+        EXIT;
+      END;
+    END;
+
+    PROCEDURE Action_DEBUG@1000000002(VAR Rec@1000000000 : Record 9062522);
+    VAR
+      eShowMyWorkings@1000000001 : TextConst 'ENU=Ok... I''''ll show you my workings;ENG=Ok... I''''ll show you my workings';
+      eKeepingToMyself@1000000002 : TextConst 'ENU=I''ll keep my workings to myself;ENG=I''ll keep my workings to myself';
+    BEGIN
+      WITH Rec DO BEGIN
+        IF NOT "Debug Mode" THEN BEGIN
+          //Turn on Debug Mode
+          VALIDATE("Debug Mode",TRUE);
+          ConvMgt.nOraResponse(eShowMyWorkings);
+          Rec."Curr. Action" := ''; //Clear the Current Action so nOra won't accidentally repeat it
+          MODIFY(TRUE);
+          Success := TRUE;
+          EXIT;
+        END ELSE BEGIN
+          //Turn off Debug Mode
+          VALIDATE("Debug Mode",FALSE);
+          ConvMgt.nOraResponse(eKeepingToMyself);
+          Rec."Curr. Action" := ''; //Clear the Current Action so nOra won't accidentally repeat it
+          MODIFY(TRUE);
+          Success := TRUE;
+          EXIT;
+        END;
+      END;
+    END;
+
+    PROCEDURE Action_ORDERMESOME@1000000018(VAR Rec@1000000000 : Record 9062522);
+    VAR
+      AsknOraDevAPI@1000000018 : Codeunit 9062514;
+      Result@1000000017 : 'Success,Failure,QuestionAsked';
+      SentenceWord@1000000001 : Record 9062518;
+      PurchaseHeader@1000000003 : Record 38;
+      Item@1000000004 : Record 27;
+      PurchaseLine@1000000005 : Record 39;
+      NumResults@1000000010 : Integer;
+      Vendor@1000000007 : Record 23;
+      NewOrder@1000000014 : Boolean;
+      NewLine@1000000015 : Boolean;
+      LineNo@1000000016 : Integer;
+      QtyToOrder@1000000002 : Integer;
+      eWorkingOutHowMany@1000000006 : TextConst 'ENU=Ok, we''re looking to order some of %1, now I need to work out how many;ENG=Ok, we''re looking to order some of %1, now I need to work out how many';
+      eYouSaidTheNumber@1000000008 : TextConst 'ENU=You did, you said the number %1;ENG=You did, you said the number %1';
+      eItemReorderQuantity@1000000009 : TextConst 'ENU=I couldn''t find a quantity from what you said, so I''ll use the item''s reorder quantity of %1;ENG=I couldn''t find a quantity from what you said, so I''ll use the item''s reorder quantity of %1';
+      eNoReorderQuantity@1000000011 : TextConst 'ENU=I couldn''t find a quantity from what you said, and the Item doesn''t have a reorder quantity set;ENG=I couldn''t find a quantity from what you said, and the Item doesn''t have a reorder quantity set';
+      eItemVendor@1000000012 : TextConst 'ENU=I couldn''t find a vendor from what you said, so I''ll use the item''s vendor no. of %1'';ENG=I couldn''t find a vendor from what you said, so I''ll use the item''s vendor no. of %1''';
+      eNoItemVendor@1000000013 : TextConst 'ENU=I couldn''t find a vendor from what you said, and the Item doesn''t have a vendor no. set;ENG=I couldn''t find a vendor from what you said, and the Item doesn''t have a vendor no. set';
+      eCantCreateOrderNoVendor@1000000019 : TextConst 'ENU=Sorry, I can''t create a purchase order as I don''t know which vendor to use;ENG=Sorry, I can''t create a purchase order as I don''t know which vendor to use';
+      eCreatingOrder@1000000020 : TextConst 'ENU=Great, I''m going to create the purchase order now...;ENG=Great, I''m going to create the purchase order now...';
+      eLookingForOpenPurchaseOrders@1000000021 : TextConst 'ENU=I''m just going to check if there''s an open purchase order for vendor %1 that I can use;ENG=I''m just going to check if there''s an open purchase order for vendor %1 that I can use';
+      eNoOpenPurchaseOrder@1000000022 : TextConst 'ENU=I didn''t find an open purchase order to use, so I''m creating a new one;ENG=I didn''t find an open purchase order to use, so I''m creating a new one';
+      eOpenPurchaseOrderFound@1000000023 : TextConst 'ENU=I worked out that the order should be for the vendor %1;ENG=I worked out that the order should be for the vendor %1';
+      ePurchaseOrderNoFound@1000000024 : TextConst 'ENU=I found purchase order %1 that I can use;ENG=I found purchase order %1 that I can use';
+      eQuantityShouldBe@1000000025 : TextConst 'ENU=I worked out that the quantity should be %1;ENG=I worked out that the quantity should be %1';
+      ePurchaseOrderCreated@1000000026 : TextConst 'ENU=Ok. I''ve created purchase order %1, here it is;ENG=Ok. I''ve created purchase order %1, here it is';
+      eLineAdded@1000000027 : TextConst 'ENU=Ok. I''ve added a line to purchase order %1, here it is;ENG=Ok. I''ve added a line to purchase order %1, here it is';
+      eQuantityIncreased@1000000028 : TextConst 'ENU=Ok. I''ve increased the quantity on the line in purchase order %1 to %2, here it is;ENG=Ok. I''ve increased the quantity on the line in purchase order %1 to %2, here it is';
+    BEGIN
+      //DOC PC ASKNORA 05/04/2015 - Replaced original code with API use
+      WITH Rec DO BEGIN
+
+        IF ConvMgt.GetVariable(ID,'ORDERSOME_ITEM') = '' THEN BEGIN
+          //Decide which Item
+          Success := AsknOraDevAPI.FindRecord_Advanced(Rec,Result,FORMAT(DATABASE::Item),'<>INTEGER&<>DECIMAL');
+          IF Result <> Result::Success THEN EXIT;
+          Item.SETPOSITION("Curr. Rec. Position");
+          Item.SETRECFILTER;
+          Item.FINDFIRST;
+          ConvMgt.SetVariable(ID,'ORDERSOME_ITEM',Item."No."); //Store Item in Conversation Variable
+        END;
+
+        Item.GET(ConvMgt.GetVariable(ID,'ORDERSOME_ITEM')); //Set Item
+
+        //Item found - decide quantity
+        IF ConvMgt.GetVariable(ID,'ORDERSOME_QUANTITY') = '' THEN BEGIN
+          ConvMgt.nOraResponse_Debug(STRSUBSTNO(eWorkingOutHowMany,TNPUtils.GetRecordDescription(DATABASE::Item,Item.GETPOSITION)));
+          IF AsknOraDevAPI.GetNextWord_Advanced(Rec,SentenceWord,FALSE,FALSE,'INTEGER|DECIMAL','') THEN BEGIN
+            ConvMgt.nOraResponse_Debug(STRSUBSTNO(eYouSaidTheNumber,SentenceWord.Text));
+            ConvMgt.SetVariable(ID,'ORDERSOME_QUANTITY',SentenceWord.Text); //Set Quantity
+          END ELSE BEGIN
+            IF Item."Reorder Quantity" <> 0 THEN BEGIN
+              ConvMgt.nOraResponse(STRSUBSTNO(eItemReorderQuantity,Item."Reorder Quantity"));
+              ConvMgt.SetVariable(ID,'ORDERSOME_QUANTITY',FORMAT(Item."Reorder Quantity")); //Set Quantity
+            END ELSE BEGIN
+              ConvMgt.nOraResponse_Error(STRSUBSTNO(eNoReorderQuantity));
+              Success := FALSE;
+
+              ConvMgt.DeleteVariable(ID,'ORDERSOME_ITEM');
+              ConvMgt.DeleteVariable(ID,'ORDERSOME_QUANTITY');
+              ConvMgt.DeleteVariable(ID,'ORDERSOME_VENDOR');
+              EXIT;
+            END;
+          END;
+        END;
+
+        //Item and Quantity found - Identify vendor
+        IF ConvMgt.GetVariable(ID,'ORDERSOME_VENDOR') = '' THEN BEGIN
+          Success := AsknOraDevAPI.FindRecord(Rec,Result,FORMAT(DATABASE::Vendor));
+          CASE Result OF
+            Result::QuestionAsked : EXIT;
+            Result::Success :
+              BEGIN
+                Vendor.SETPOSITION("Curr. Rec. Position");
+                Vendor.SETRECFILTER;
+                Vendor.FINDFIRST;
+                ConvMgt.SetVariable(ID,'ORDERSOME_VENDOR',Vendor."No."); //Set Vendor
+              END;
+            Result::Failure :
+              BEGIN
+                IF Item."Vendor No." <> '' THEN BEGIN
+                  ConvMgt.nOraResponse_Debug(STRSUBSTNO(eItemVendor,Item."Vendor No."));
+                  ConvMgt.SetVariable(ID,'ORDERSOME_VENDOR',Item."Vendor No."); //Set Vendor
+                END ELSE BEGIN
+                  ConvMgt.nOraResponse_Debug(STRSUBSTNO(eNoItemVendor));
+                  ConvMgt.nOraResponse_Error(eCantCreateOrderNoVendor);
+                  Success := FALSE;
+
+                  ConvMgt.DeleteVariable(ID,'ORDERSOME_ITEM');
+                  ConvMgt.DeleteVariable(ID,'ORDERSOME_QUANTITY');
+                  ConvMgt.DeleteVariable(ID,'ORDERSOME_VENDOR');
+                  EXIT;
+                END;
+              END;
+          END;
+        END;
+
+        //We know all the info, so raise/update the PO
+        ConvMgt.nOraResponse_Debug(eCreatingOrder);
+
+        //DOC PC 13/05/2014 <<
+        ConvMgt.nOraResponse_Debug(STRSUBSTNO(eLookingForOpenPurchaseOrders,ConvMgt.GetVariable(ID,'ORDERSOME_VENDOR')));
+        PurchaseHeader.SETRANGE("Document Type",PurchaseHeader."Document Type"::Order);
+        PurchaseHeader.SETRANGE("Buy-from Vendor No.",ConvMgt.GetVariable(ID,'ORDERSOME_VENDOR'));
+        PurchaseHeader.SETRANGE(Status,PurchaseHeader.Status::Open);
+        IF NOT PurchaseHeader.FINDFIRST THEN BEGIN
+          ConvMgt.nOraResponse_Debug(eNoOpenPurchaseOrder);
+          PurchaseHeader.INIT;
+          PurchaseHeader.VALIDATE("Document Type",PurchaseHeader."Document Type"::Order);
+          IF ConvMgt.GetVariable(ID,'ORDERSOME_VENDOR') <> '' THEN BEGIN
+            ConvMgt.nOraResponse_Debug(STRSUBSTNO(eOpenPurchaseOrderFound,ConvMgt.GetVariable(ID,'ORDERSOME_VENDOR')));
+            PurchaseHeader.VALIDATE("Buy-from Vendor No.",ConvMgt.GetVariable(ID,'ORDERSOME_VENDOR'));
+          END;
+          PurchaseHeader.INSERT(TRUE);
+          NewOrder := TRUE;
+        END ELSE BEGIN
+          ConvMgt.nOraResponse_Debug(STRSUBSTNO(ePurchaseOrderNoFound,PurchaseHeader."No."));
+        END;
+
+
+        ConvMgt.nOraResponse_Debug(STRSUBSTNO(eQuantityShouldBe,ConvMgt.GetVariable(ID,'ORDERSOME_quantity')));
+        EVALUATE(QtyToOrder,ConvMgt.GetVariable(ID,'ORDERSOME_QUANTITY'));
+
+        PurchaseLine.SETRANGE("Document Type",PurchaseLine."Document Type"::Order);
+        PurchaseLine.SETRANGE("Document No.",PurchaseHeader."No.");
+        IF NOT PurchaseLine.FINDSET THEN BEGIN
+          PurchaseLine.INIT;
+          PurchaseLine.VALIDATE("Document Type",PurchaseLine."Document Type"::Order);
+          PurchaseLine.VALIDATE("Document No.",PurchaseHeader."No.");
+          PurchaseLine.VALIDATE("Line No.",10000);
+          PurchaseLine.VALIDATE(Type,PurchaseLine.Type::Item);
+          PurchaseLine.VALIDATE("No.",Item."No.");
+          PurchaseLine.VALIDATE(Quantity,QtyToOrder);
+          PurchaseLine.INSERT(TRUE);
+          NewLine := TRUE;
+        END ELSE BEGIN
+          PurchaseLine.SETRANGE(Type,PurchaseLine.Type::Item);
+          PurchaseLine.SETRANGE("No.",Item."No.");
+          IF PurchaseLine.FINDFIRST THEN BEGIN
+            PurchaseLine.VALIDATE(Quantity,PurchaseLine.Quantity + QtyToOrder);
+            PurchaseLine.MODIFY(TRUE);
+          END ELSE BEGIN
+            PurchaseLine.RESET;
+            PurchaseLine.SETRANGE("Document Type",PurchaseLine."Document Type"::Order);
+            PurchaseLine.SETRANGE("Document No.",PurchaseHeader."No.");
+            PurchaseLine.FINDLAST;
+            LineNo := PurchaseLine."Line No." + 10000;
+            PurchaseLine.INIT;
+            PurchaseLine.VALIDATE("Document Type",PurchaseLine."Document Type"::Order);
+            PurchaseLine.VALIDATE("Document No.",PurchaseHeader."No.");
+            PurchaseLine.VALIDATE("Line No.",LineNo);
+            PurchaseLine.VALIDATE(Type,PurchaseLine.Type::Item);
+            PurchaseLine.VALIDATE("No.",Item."No.");
+            PurchaseLine.VALIDATE(Quantity,QtyToOrder);
+            PurchaseLine.INSERT(TRUE);
+            NewLine := TRUE;
+          END;
+        END;
+
+        IF NewOrder THEN BEGIN
+          ConvMgt.nOraResponse_NAVRecord(STRSUBSTNO(ePurchaseOrderCreated,PurchaseHeader."No."),DATABASE::"Purchase Header",PurchaseHeader.GETPOSITION);
+        END ELSE BEGIN
+          IF NewLine THEN
+            ConvMgt.nOraResponse_NAVRecord(STRSUBSTNO(eLineAdded,PurchaseHeader."No."),DATABASE::"Purchase Header",PurchaseHeader.GETPOSITION)
+          ELSE
+            ConvMgt.nOraResponse_NAVRecord(STRSUBSTNO(eQuantityIncreased,PurchaseHeader."No.",PurchaseLine.Quantity),DATABASE::"Purchase Header",PurchaseHeader.GETPOSITION)
+        END;
+
+        ConvMgt.DeleteVariable(ID,'ORDERSOME_ITEM');
+        ConvMgt.DeleteVariable(ID,'ORDERSOME_QUANTITY');
+        ConvMgt.DeleteVariable(ID,'ORDERSOME_VENDOR');
+
+        MODIFY(TRUE);
+
+        Success := TRUE;
+        EXIT;
+      END;
+    END;
+
+    PROCEDURE Action_GETDIRECTIONS@1000000006(VAR Rec@1000000000 : Record 9062522);
+    VAR
+      ToContact@1000000001 : Record 5050;
+      FromContact@1000000009 : Record 5050;
+      ContBusRel@1000000002 : Record 5054;
+      Vendor@1000000003 : Record 23;
+      Customer@1000000004 : Record 18;
+      QuestionChoice@1000000005 : Record 9062513;
+      NumResults@1000000006 : Integer;
+      SearchMgt@1000000007 : Codeunit 9062405;
+      SearchResultsSummary@1000000008 : Record 9062523;
+      nAblementUser@1000000010 : Record 9062729;
+      SentenceMgt@1000000011 : Codeunit 9062401;
+      eGoogleDirections@1000000012 : TextConst 'ENU="https://maps.google.com/maps?saddr=%1&daddr=%2&hl=en&";ENG="https://maps.google.com/maps?saddr=%1&daddr=%2&hl=en&"';
+      eIfYouveAsked@1000000019 : TextConst 'ENU=I''m going to see if you''ve asked me to give you directions;ENG=I''m going to see if you''ve asked me to give you directions';
+      eIfIKnowTheRecord@1000000020 : TextConst 'ENU=First, I''m looking to see if I already know what record to use;ENG=First, I''m looking to see if I already know what record to use';
+      FromAddress@1000000013 : Text;
+      FromAddressText@1000000014 : Text;
+      ToAddress@1000000015 : Text;
+      ToAddressText@1000000016 : Text;
+      ANSentenceWord@1000000017 : Record 9062518;
+      WordID_From@1000000018 : Integer;
+      eIKnowTheRecord@1000000021 : TextConst 'ENU=I do know the record you''re talking about - it''s table %1, position %2;ENG=I do know the record you''re talking about - it''s table %1, position %2';
+      eNoContactCustomerVendor@1000000022 : TextConst 'ENU=Looks like you''re not talking about a Contact, Vendor or Customer, so I''m not sure what to do here;ENG=Looks like you''re not talking about a Contact, Vendor or Customer, so I''m not sure what to do here';
+      eLookinfForDirectionsTo@1000000023 : TextConst 'ENU=I think you''re looking for directions to %1 %2;ENG=I think you''re looking for directions to %1 %2';
+      eImGoingToGiveDirectionsFrom@1000000024 : TextConst 'ENU=I''m going to give you directions from %1;ENG=I''m going to give you directions from %1';
+      eHereAreDirections@1000000025 : TextConst 'ENU=Here are the directions from %1 to %2;ENG=Here are the directions from %1 to %2';
+      eNoDirectionsFromContCustVend@1000000026 : TextConst 'ENU=Looks like you''re not talking about directions from a Contact, Vendor or Customer, so I''m not sure what to do here;ENG=Looks like you''re not talking about directions from a Contact, Vendor or Customer, so I''m not sure what to do here';
+      eDirectionsFromContact@1000000027 : TextConst 'ENU=I''m going to give you directions from contact %1;ENG=I''m going to give you directions from contact %1';
+      eDontKnowWhatFromDirections@1000000028 : TextConst 'ENU=I don''t yet know where you want directions from, so I''m going to try to work it out;ENG=I don''t yet know where you want directions from, so I''m going to try to work it out';
+      eYouAnsweredAQuestion@1000000029 : TextConst 'ENU=You have just answered a question for me, maybe that''s the record;ENG=You have just answered a question for me, maybe that''s the record';
+      eRecordFromAQuestion@1000000030 : TextConst 'ENU=It is, so I''m going to show you the record that you picked when I asked you that question;ENG=It is, so I''m going to show you the record that you picked when I asked you that question';
+      eWordFrom@1000000031 : TextConst 'ENU=Did you say the word from? If so I''ll use whatever the next word you said was;ENG=Did you say the word from? If so I''ll use whatever the next word you said was';
+      eFoundWord@1000000032 : TextConst 'ENU=I found the word "%1" after "from", so I''ll use that;ENG=I found the word "%1" after "from", so I''ll use that';
+      eNoFromAddress@1000000033 : TextConst 'ENU=I couldn''t find anything in what you said that could be the from address, so I''m using your place;ENG=I couldn''t find anything in what you said that could be the from address, so I''m using your place';
+      eNoFromOutOfOptions@1000000034 : TextConst 'ENU=I couldn''t find anything in what you said that tells me where you want to get directions from and I''m out of other options :(;ENG=I couldn''t find anything in what you said that tells me where you want to get directions from and I''m out of other options :(';
+      eIDontKnowTheRecord@1000000035 : TextConst 'ENU=I don''t already know which record you''re looking for directions to, so I''m going to try to work it out;ENG=I don''t already know which record you''re looking for directions to, so I''m going to try to work it out';
+      eYouveToldTheRecord@1000000036 : TextConst 'ENU=I wonder if you just told me what record to get directions to;ENG=I wonder if you just told me what record to get directions to';
+      eOneRecordFound@1000000037 : TextConst 'ENU=I managed to find 1 NAV Record from what you just said, so I''ll use that;ENG=I managed to find 1 NAV Record from what you just said, so I''ll use that';
+      eMultipleRecordsFound@1000000038 : TextConst 'ENU=I found multiple records from what you said, so you''ll need to choose;ENG=I found multiple records from what you said, so you''ll need to choose';
+      eUsingPreviousRecord@1000000039 : TextConst 'ENU=I couldn''t find anything in what you said that relates to a NAV Record, but you have previously talking about another record, so I''ll use that;ENG=I couldn''t find anything in what you said that relates to a NAV Record, but you have previously talking about another record, so I''ll use that';
+      eNothingRelatedToContCustVend@1000000040 : TextConst 'ENU=I couldn''t find anything in what you said that relates to a Contact, Customer or Vendor Record and I''m out of other options :(;ENG=I couldn''t find anything in what you said that relates to a Contact, Customer or Vendor Record and I''m out of other options :(';
+    BEGIN
+      WITH Rec DO BEGIN
+        ConvMgt.nOraResponse_Debug(eIfYouveAsked);
+
+        //Do we already have a record set?
+        ConvMgt.nOraResponse_Debug(eIfIKnowTheRecord);
+        IF ("Curr. Table" <> 0) AND ("Curr. Rec. Position" <> '') THEN BEGIN
+          ConvMgt.nOraResponse_Debug(STRSUBSTNO(eIKnowTheRecord,"Curr. Table","Curr. Rec. Position"));
+          CASE "Curr. Table" OF
+            DATABASE::Contact, DATABASE::Customer, DATABASE::Vendor :
+              BEGIN
+                CASE "Curr. Table" OF
+                  DATABASE::Contact :
+                    BEGIN
+                      ToContact.SETPOSITION("Curr. Rec. Position");
+                      ToContact.SETRECFILTER;
+                      ToContact.FINDFIRST;
+                    END;
+                  DATABASE::Customer :
+                    BEGIN
+                      Customer.SETPOSITION("Curr. Rec. Position");
+                      Customer.SETRECFILTER;
+                      Customer.FINDFIRST;
+                      ContBusRel.SETRANGE("Business Relation Code",'CUST');
+                      ContBusRel.SETRANGE("No.",Customer."No.");
+                      ContBusRel.FINDFIRST;
+                      ToContact.GET(ContBusRel."Contact No.");
+                    END;
+                  DATABASE::Vendor :
+                    BEGIN
+                      Vendor.SETPOSITION("Curr. Rec. Position");
+                      Vendor.SETRECFILTER;
+                      Vendor.FINDFIRST;
+                      ContBusRel.SETRANGE("Business Relation Code",'VEND');
+                      ContBusRel.SETRANGE("No.",Vendor."No.");
+                      ContBusRel.FINDFIRST;
+                      ToContact.GET(ContBusRel."Contact No.");
+                    END;
+                END;
+              END;
+            ELSE
+              BEGIN
+                ConvMgt.nOraResponse_Debug(eNoContactCustomerVendor);
+                Success := FALSE;
+                EXIT;
+              END;
+          END;
+
+          ConvMgt.nOraResponse_Debug(STRSUBSTNO(eLookinfForDirectionsTo,ToContact."No.",ToContact.Name));
+
+          //We know where we're looking for directions to, how about directions From
+          IF ConvMgt.GetVariable(ID,'DIR_FROM_TABLE') <> '' THEN BEGIN
+            CASE ConvMgt.GetVariable(ID,'DIR_FROM_TABLE') OF
+              FORMAT(DATABASE::Contact), FORMAT(DATABASE::Customer), FORMAT(DATABASE::Vendor) :
+                BEGIN
+                  CASE ConvMgt.GetVariable(ID,'DIR_FROM_TABLE') OF
+                    FORMAT(DATABASE::Contact) :
+                      BEGIN
+                        FromContact.SETPOSITION(ConvMgt.GetVariable(ID,'DIR_FROM_POS'));
+                        FromContact.SETRECFILTER;
+                        FromContact.FINDFIRST;
+                      END;
+                    FORMAT(DATABASE::Customer) :
+                      BEGIN
+                        Customer.SETPOSITION(ConvMgt.GetVariable(ID,'DIR_FROM_POS'));
+                        Customer.SETRECFILTER;
+                        Customer.FINDFIRST;
+                        ContBusRel.SETRANGE("Business Relation Code",'CUST');
+                        ContBusRel.SETRANGE("No.",Customer."No.");
+                        ContBusRel.FINDFIRST;
+                        FromContact.GET(ContBusRel."Contact No.");
+                      END;
+                    FORMAT(DATABASE::Vendor) :
+                      BEGIN
+                        Vendor.SETPOSITION(ConvMgt.GetVariable(ID,'DIR_FROM_POS'));
+                        Vendor.SETRECFILTER;
+                        Vendor.FINDFIRST;
+                        ContBusRel.SETRANGE("Business Relation Code",'VEND');
+                        ContBusRel.SETRANGE("No.",Vendor."No.");
+                        ContBusRel.FINDFIRST;
+                        FromContact.GET(ContBusRel."Contact No.");
+                      END;
+                  END;
+                END;
+              'MANUAL' :
+                BEGIN
+                  ConvMgt.nOraResponse_Debug(STRSUBSTNO(eImGoingToGiveDirectionsFrom,ConvMgt.GetVariable(ID,'DIR_FROM_POS')));
+
+                  FromAddress := ConvMgt.GetVariable(ID,'DIR_FROM_POS');
+                  ToAddress := TNPUtils.GetRecordAddress(DATABASE::Contact,ToContact.GETPOSITION,FromAddressText);
+                  ConvMgt.DeleteVariable(ID,'DIR_FROM_TABLE');
+                  ConvMgt.DeleteVariable(ID,'DIR_FROM_POS');
+                  ConvMgt.nOraResponse_Url(STRSUBSTNO(eHereAreDirections,
+                                            FromAddress,
+                                            TNPUtils.GetRecordDescription(DATABASE::Contact,ToContact.GETPOSITION)),
+                                            STRSUBSTNO(eGoogleDirections,FromAddress,ToAddress));
+                  Success := TRUE;
+                  EXIT;
+
+                END;
+              ELSE
+                BEGIN
+                  ConvMgt.nOraResponse_Debug(eNoDirectionsFromContCustVend);
+                  Success := FALSE;
+                  EXIT;
+                END;
+            END;
+
+
+            ConvMgt.nOraResponse_Debug(STRSUBSTNO(eDirectionsFromContact,FromContact."No."));
+
+            FromAddress := TNPUtils.GetRecordAddress(DATABASE::Contact,FromContact.GETPOSITION,FromAddressText);
+            ToAddress := TNPUtils.GetRecordAddress(DATABASE::Contact,ToContact.GETPOSITION,FromAddressText);
+            ConvMgt.DeleteVariable(ID,'DIR_FROM_TABLE');
+            ConvMgt.DeleteVariable(ID,'DIR_FROM_POS');
+            ConvMgt.nOraResponse_Url(STRSUBSTNO(eHereAreDirections,
+                                      TNPUtils.GetRecordDescription(DATABASE::Contact,FromContact.GETPOSITION),
+                                      TNPUtils.GetRecordDescription(DATABASE::Contact,ToContact.GETPOSITION)),
+                                      STRSUBSTNO(eGoogleDirections,FromAddress,ToAddress));
+            Success := TRUE;
+            EXIT;
+          END ELSE BEGIN
+            ConvMgt.nOraResponse_Debug(eDontKnowWhatFromDirections);
+
+            //but I do have an unused Option Choice and the Action before the Question was this one
+            IF ("Question Answered" <> 0) AND ("Question Choice Answer" <> 0)AND ("Before Question Action" = Rec."Curr. Action") THEN BEGIN
+              ConvMgt.nOraResponse_Debug(eYouAnsweredAQuestion);
+              QuestionChoice.GET("Question Answered","Question Choice Answer");
+
+              IF (
+                  (QuestionChoice."Related Table No." = DATABASE::Contact) OR
+                  (QuestionChoice."Related Table No." = DATABASE::Customer) OR
+                  (QuestionChoice."Related Table No." = DATABASE::Vendor)
+                 ) THEN BEGIN
+                ConvMgt.nOraResponse_Debug(eRecordFromAQuestion);
+                ConvMgt.SetVariable(ID,'DIR_FROM_TABLE',FORMAT(QuestionChoice."Related Table No."));
+                ConvMgt.SetVariable(ID,'DIR_FROM_POS',QuestionChoice."Related Position Text");
+
+                //Clear the chosen option >> //WRITE NICE FUNCTION WRAPPER FOR THIS - "USE QUESTION ANSWER"
+                VALIDATE("Question Answered",0);
+                VALIDATE("Question Choice Answer",0);
+                //Clear the chosen option <<
+
+                MODIFY(TRUE);
+
+                ConvMgt.nOraResponse_Debug(tBackToBeginning);
+                Action_GETDIRECTIONS(Rec); //Do this function again
+                EXIT;
+              END;
+            END;
+
+            //We don't have any matches, look for the word after the word "From"
+            ConvMgt.nOraResponse_Debug(eWordFrom);
+            ANSentenceWord.SETRANGE("Sentence ID","Curr. Sentence ID");
+            ANSentenceWord.SETFILTER(Text,'@from');
+            IF ANSentenceWord.FINDFIRST THEN BEGIN
+              WordID_From := ANSentenceWord."Word ID";
+
+              ANSentenceWord.RESET;
+              IF ANSentenceWord.GET("Curr. Sentence ID",WordID_From+1) THEN BEGIN
+                ConvMgt.nOraResponse_Debug(STRSUBSTNO(eFoundWord, ANSentenceWord.Text));
+                ConvMgt.SetVariable(ID,'DIR_FROM_TABLE','MANUAL');
+                ConvMgt.SetVariable(ID,'DIR_FROM_POS',ANSentenceWord.Text);
+                ConvMgt.nOraResponse_Debug(tBackToBeginning);
+                Action_GETDIRECTIONS(Rec); //Do this function again
+                EXIT;
+              END;
+            END;
+
+            //We don't have matches in the current sentence, so I'm going to assume you mean from your place
+            IF nAblementUser.GET("User ID") AND FromContact.GET(nAblementUser."Contact No.") THEN BEGIN
+              ConvMgt.nOraResponse(eNoFromAddress);
+              ConvMgt.SetVariable(ID,'DIR_FROM_TABLE',FORMAT(DATABASE::Contact));
+              ConvMgt.SetVariable(ID,'DIR_FROM_POS',FromContact.GETPOSITION);
+              ConvMgt.nOraResponse_Debug(tBackToBeginning);
+              Action_GETDIRECTIONS(Rec); //Do this function again
+              EXIT;
+            END;
+
+            //We're out of options
+            ConvMgt.nOraResponse_Debug(eNoFromOutOfOptions);
+            Success := FALSE;
+          END;
+        END;
+        //We don't have a record set yet
+        ConvMgt.nOraResponse_Debug(eIDontKnowTheRecord);
+
+        //but I do have an unused Option Choice and the Action before the Question was this one
+        IF ("Question Answered" <> 0) AND ("Question Choice Answer" <> 0)AND ("Before Question Action" = Rec."Curr. Action") THEN BEGIN
+          ConvMgt.nOraResponse_Debug(eYouAnsweredAQuestion);
+          QuestionChoice.GET("Question Answered","Question Choice Answer");
+
+          IF (
+              (QuestionChoice."Related Table No." = DATABASE::Contact) OR
+              (QuestionChoice."Related Table No." = DATABASE::Customer) OR
+              (QuestionChoice."Related Table No." = DATABASE::Vendor)
+             ) THEN BEGIN
+            ConvMgt.nOraResponse_Debug(eRecordFromAQuestion);
+            VALIDATE("Curr. Table",QuestionChoice."Related Table No.");
+            VALIDATE("Curr. Rec. Position",QuestionChoice."Related Position Text");
+
+            //Clear the chosen option >> //WRITE NICE FUNCTION WRAPPER FOR THIS - "USE QUESTION ANSWER"
+            VALIDATE("Question Answered",0);
+            VALIDATE("Question Choice Answer",0);
+            //Clear the chosen option <<
+
+            MODIFY(TRUE);
+
+            ConvMgt.nOraResponse_Debug(tBackToBeginning);
+            Action_GETDIRECTIONS(Rec); //Do this function again
+            EXIT;
+          END;
+        END;
+
+        //Does the current sentence mention one?
+        ConvMgt.nOraResponse_Debug(eYouveToldTheRecord);
+        NumResults :=
+          SearchMgt.QuickSearch_StartAfterWord("Curr. Sentence ID",SentenceMgt.FindWordInSentence("Curr. Sentence ID",'to',0),
+            FORMAT(DATABASE::Contact) + '|' + FORMAT(DATABASE::Customer) + '|' + FORMAT(DATABASE::Vendor)
+            ,'',FALSE,FALSE,FALSE,FALSE,FALSE,FALSE,'TO_RECORD',1,SearchResultsSummary);
+
+        //The current sentence mentions exactly 1 record - so we should use that
+        IF NumResults = 1 THEN BEGIN
+          ConvMgt.nOraResponse_Debug(eOneRecordFound);
+          //MESSAGE('Found 1 result');
+          VALIDATE("Curr. Table",SearchResultsSummary."Table No.");
+          VALIDATE("Curr. Rec. Position",SearchResultsSummary."Position Text");
+          MODIFY(TRUE);
+          SearchMgt.UseSearchResult(SearchResultsSummary);
+
+          ConvMgt.nOraResponse_Debug(tBackToBeginning);
+          Action_GETDIRECTIONS(Rec); //Do this function again
+          EXIT;
+        END;
+
+        //The current sentence mentions multiple possible records, so get the user to choose
+        IF NumResults > 1 THEN BEGIN
+          ConvMgt.nOraResponse_Debug(eMultipleRecordsFound);
+          ConvMgt.CreateQuestion_FromSearchResSum(Rec,SearchResultsSummary,'',TRUE);
+          SearchMgt.UseSearchResult(SearchResultsSummary);
+          Success := TRUE; //We consider this a success
+          EXIT;
+        END;
+
+        //We don't have matches in the current sentence, but we do have a previous record, so use that
+        IF ("Prev. Table" <> 0) AND ("Prev. Rec. Position" <> '') AND (
+            ("Prev. Table" = DATABASE::Contact) OR
+            ("Prev. Table" = DATABASE::Customer) OR
+            ("Prev. Table" = DATABASE::Vendor)
+          ) THEN BEGIN
+          ConvMgt.nOraResponse_Debug(eUsingPreviousRecord);
+          //MESSAGE('No records found - using prev');
+          VALIDATE("Curr. Table","Prev. Table");
+          VALIDATE("Curr. Rec. Position","Prev. Rec. Position");
+          MODIFY(TRUE);
+
+          ConvMgt.nOraResponse_Debug(tBackToBeginning);
+          Action_GETDIRECTIONS(Rec); //Do this function again
+          EXIT;
+        END;
+
+        //We're out of options
+        ConvMgt.nOraResponse_Debug(eNothingRelatedToContCustVend);
+        Success := FALSE;
+
+      END;
+    END;
+
+    PROCEDURE Action_WIKI@1000000008(VAR Rec@1000000000 : Record 9062522);
+    VAR
+      ANSentence@1000000001 : Record 9062518;
+      SearchText@1000000002 : Text;
+      eWikiSearch@1000000003 : TextConst 'ENU=http://en.wikipedia.org/wiki/Special:Search/%1;ENG=http://en.wikipedia.org/wiki/Special:Search/%1';
+      MoreRecords@1000000004 : Boolean;
+      eWikiAnswer@1000000005 : TextConst 'ENU=Here''s the Wikipedia search for "%1";ENG=Here''s the Wikipedia search for "%1"';
+    BEGIN
+      WITH Rec DO BEGIN
+      //http://en.wikipedia.org/wiki/Special:Search/%s
+        ANSentence.SETRANGE("Sentence ID","Curr. Sentence ID");
+        ANSentence.SETRANGE(Used,FALSE);
+        IF ANSentence.FINDSET THEN BEGIN;
+          REPEAT
+            IF SearchText <> '' THEN SearchText += ' ';
+            SearchText += ANSentence.Text;
+          UNTIL ANSentence.NEXT = 0;
+
+          ConvMgt.nOraResponse_Url(STRSUBSTNO(eWikiAnswer,SearchText),STRSUBSTNO(eWikiSearch,SearchText));
+          Success := TRUE;
+          EXIT;
+        END;
+      END;
+    END;
+
+    PROCEDURE Action_WOLFRAM@1000000007(VAR Rec@1000000000 : Record 9062522);
+    VAR
+      ANSentenceWord@1000000001 : Record 9062518;
+      SearchText@1000000002 : Text;
+      eWolframSearch@1000000003 : TextConst 'ENU="https://www.wolframalpha.com/input/?i=%1";ENG="https://www.wolframalpha.com/input/?i=%1"';
+      eWolframSearchApi@1000000004 : TextConst 'ENU="http://api.wolframalpha.com/v2/query?input=%1&appid=KR42J9-GU7QT772AH";ENG="http://api.wolframalpha.com/v2/query?input=%1&appid=KR42J9-GU7QT772AH"';
+      HttpWebRequest@1000000005 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      WebRequest@1000000006 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.WebRequest";
+      WebResponse@1000000007 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.WebResponse";
+      XmlDocument@1000000008 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XmlNode@1000000009 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XmlNodeList@1000000010 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      PodNodeList@1000000013 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      WebEncoding@1000000015 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      AsciiEncoding@1000000016 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      LineText@1000000017 : Text;
+      i@1000000011 : Integer;
+      FirstSentence@1000000012 : Boolean;
+      eCouldntFind@1000000014 : TextConst 'ENU=I couldn''t find an answer to your question;ENG=I couldn''t find an answer to your question';
+    BEGIN
+      WITH Rec DO BEGIN
+
+        ANSentenceWord.SETRANGE("Sentence ID","Curr. Sentence ID");
+        ANSentenceWord.SETRANGE(Used,FALSE);
+        IF ANSentenceWord.FINDSET THEN BEGIN;
+          REPEAT
+            IF UPPERCASE(ANSentenceWord.Text) <> 'WOLFRAM' THEN BEGIN
+              IF SearchText <> '' THEN SearchText += ' ';
+              SearchText += ANSentenceWord.Text;
+            END;
+          UNTIL ANSentenceWord.NEXT = 0;
+        END;
+
+        IF SearchText <> '' THEN BEGIN
+          //use API
+          HttpWebRequest := WebRequest.Create(STRSUBSTNO(eWolframSearchApi, SearchText));
+          HttpWebRequest.Method := 'GET';
+          HttpWebRequest.Headers.Set('Accept-Language', 'en-gb,en;q=0.5');
+          HttpWebRequest.Timeout := 10000;
+
+          WebResponse := HttpWebRequest.GetResponse();
+          XmlDocument := XmlDocument.XmlDocument();
+          XmlDocument.Load(WebResponse.GetResponseStream());
+
+          FirstSentence := TRUE;
+
+          WebEncoding := WebEncoding.Default;
+          AsciiEncoding := AsciiEncoding.ASCII;
+
+          XmlNode := XmlDocument.SelectSingleNode('/queryresult/pod[@primary=''true'']');
+          IF (ISNULL(XmlNode)) THEN
+            XmlNode := XmlDocument.SelectSingleNode('/queryresult/pod[@id=''Result'']');
+          IF (ISNULL(XmlNode)) THEN
+            XmlNode := XmlDocument.SelectSingleNode('/queryresult/pod[@id!=''Input'']');
+          IF (ISNULL(XmlNode)) THEN
+            XmlNode := XmlDocument.SelectSingleNode('/queryresult/pod');
+          IF (NOT(ISNULL(XmlNode))) THEN BEGIN
+            XmlNodeList := XmlNode.SelectNodes('subpod/plaintext');
+            IF (NOT(ISNULL(XmlNodeList))) THEN BEGIN
+              FOR i:=0 TO XmlNodeList.Count - 1 DO BEGIN
+                LineText := AsciiEncoding.GetString(AsciiEncoding.Convert(WebEncoding, AsciiEncoding,
+                  WebEncoding.GetBytes(XmlNodeList.Item(i).InnerText)));
+                LineText := CONVERTSTR(LineText, '?', ' ');
+
+                IF (FirstSentence) THEN BEGIN
+                  ConvMgt.nOraResponse_FirstSentence(LineText);
+                  FirstSentence := FALSE;
+                END ELSE
+                  ConvMgt.nOraResponse_AddSentence(LineText);
+              END;
+            END;
+          END ELSE
+            ConvMgt.nOraResponse(eCouldntFind);
+          Success := TRUE;
+          EXIT;
+        END;
+      END;
+    END;
+
+    PROCEDURE Action_GETPANEL@1000000010(VAR Rec@1000000000 : Record 9062522);
+    VAR
+      SearchMgt@1000000001 : Codeunit 9062405;
+      NumResults@1000000002 : Integer;
+      SearchResultsSummary@1000000003 : Record 9062523;
+      QuestionChoice@1000000004 : Record 9062513;
+      SentenceMgt@1000000005 : Integer;
+      Panel@1000000006 : Record 9062363;
+      PanelRequest@1000000007 : Codeunit 9062321;
+      PanelTile@1000000008 : Record 9062367;
+      PanelTile2@1000000009 : Record 9062367;
+      AreWord@1000000010 : Text;
+      PanelNo@1000000011 : Decimal;
+      UseTile@1000000012 : Boolean;
+      eTrying@1000000013 : TextConst 'ENU=I''m going to try to get the values from a panel;ENG=I''m going to try to get the values from a panel';
+      ePanelName@1000000014 : TextConst 'ENU=First, I''m going to see if you mentioned a panel name;ENG=First, I''m going to see if you mentioned a panel name';
+      eOnePanel@1000000015 : TextConst 'ENU=You mentioned exactly one panel, so I''ll use that;ENG=You mentioned exactly one panel, so I''ll use that';
+      eThingsOnThePanel@1000000016 : TextConst 'ENU=Here are the things on the %1 panel;ENG=Here are the things on the %1 panel';
+      eIs@1000000017 : TextConst 'ENU=is;ENG=is';
+      eAre@1000000018 : TextConst 'ENU=are;ENG=are';
+      eCouldntFindPanel@1000000019 : TextConst 'ENU=I couldn''t find the name of a panel in what you said;ENG=I couldn''t find the name of a panel in what you said';
+    BEGIN
+      Success := FALSE;
+
+      WITH Rec DO BEGIN
+
+        //look for Panel records
+        ConvMgt.nOraResponse_Debug(eTrying);
+        ConvMgt.nOraResponse_Debug(ePanelName);
+
+        NumResults :=
+          SearchMgt.QuickSearch("Curr. Sentence ID",FORMAT(DATABASE::Panel),'',TRUE,FALSE,TRUE,TRUE,FALSE,TRUE,'PANEL',1,SearchResultsSummary);
+
+        //Found the panel
+        IF NumResults = 1 THEN BEGIN
+          ConvMgt.nOraResponse_Debug(eOnePanel);
+          SearchMgt.UseSearchResult(SearchResultsSummary);
+          Panel.SETPOSITION(SearchResultsSummary."Position Text");
+          Panel.SETRECFILTER;
+          Panel.FINDFIRST;
+
+          ConvMgt.nOraResponse(STRSUBSTNO(eThingsOnThePanel,Panel.Description));
+
+          PanelTile.SETRANGE("Panel Code",Panel.Code);
+          IF PanelTile.FINDSET THEN BEGIN
+            REPEAT
+              IF PanelRequest.GetPanelTileProperties(Panel.Code,PanelTile.Text,PanelTile2) THEN BEGIN
+                IF PanelTile2.Info <> '' THEN BEGIN
+                  IF EVALUATE(PanelNo,PanelTile2.Info) THEN BEGIN
+                    IF PanelNo = 1 THEN
+                      AreWord := eIs
+                    ELSE
+                      AreWord := eAre;
+                  END ELSE AreWord := eIs;
+
+                  AreWord := ':';
+                  ConvMgt.nOraResponse_Bullet(STRSUBSTNO('%1 %2 %3',PanelTile2.Text,AreWord,PanelTile2.Info));
+                END;
+              END;
+            UNTIL PanelTile.NEXT = 0;
+          END;
+
+          Success := TRUE;
+          EXIT;
+        END;
+
+        ConvMgt.nOraResponse_Debug(eCouldntFindPanel);
+        Success := FALSE;
+        EXIT;
+      END;
+    END;
+
+    PROCEDURE WasSuccess@1000000004() : Boolean;
+    BEGIN
+      EXIT(Success);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.6  PC 05/04/2015 - Rewrote Action_SHOWRECORD to use "Ask nOra - Dev. API" codeunit
+      //DOC NA2016.6  PC 05/04/2015 - Rewrote Action_ORDERMESOME to use "Ask nOra - Dev. API" codeunit
+      //DOC NA2016.10 JH 01/09/2015 - Upgraded to 2016
+      //DOC NA2016.10 PC 23/09/2015 - Moved "Action_REMINDME" to CU "Ask nOra - nHanced NAV Act."
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

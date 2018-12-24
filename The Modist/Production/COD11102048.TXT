@@ -1,0 +1,1258 @@
+OBJECT Codeunit 11102048 OM - Renumber Object Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    TableNo=11102063;
+    OnRun=VAR
+            OriginalObjectToRenumber@1000 : Record 11102063;
+          BEGIN
+            OriginalObjectToRenumber := Rec;
+            SETCURRENTKEY("Object Type", "Object No.");
+            RenumberObjects(Rec);
+            Rec := OriginalObjectToRenumber;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ExportFileName@1000 : Text;
+      gReplaceAction@1001 : ARRAY [100] OF Text[250];
+      gReplaceActionSplitChar@1002 : ARRAY [100] OF Text[250];
+      SourceFileName@1003 : Text;
+      NoOfObjects@1004 : Integer;
+      NoOfReplaceActions@1005 : Integer;
+      gReplaceObjectType@1006 : ARRAY [100] OF ',Table,,Report,,Codeunit,XMLport,MenuSuite,Page,Query';
+      RunType@1007 : 'Update in DB,Export,Update File,Wizard';
+      SetModifyFlag@1008 : Boolean;
+      UpdateReferencingObjects@1009 : Boolean;
+
+    LOCAL PROCEDURE RenumberObjects@1(VAR ObjectToRenumber@1000 : Record 11102063);
+    VAR
+      Setup@1001 : Record 11102035;
+      CALHistoryObject@1002 : Record 11102052;
+      TmpCALHistoryObject@1003 : TEMPORARY Record 11102052;
+      TmpSourceObject@1004 : TEMPORARY Record 11102052;
+      TmpCALHistoryLine@1005 : TEMPORARY Record 11102053;
+      TmpSourceLine@1006 : TEMPORARY Record 11102053;
+      TmpSourceLine2@1007 : TEMPORARY Record 11102053;
+      TmpObjectToRenumber@1008 : TEMPORARY Record 11102063;
+      Object@1009 : Record 2000000001;
+      TmpObject@1010 : TEMPORARY Record 2000000001;
+      TmpOriginalObject@1011 : TEMPORARY Record 2000000001;
+      Progressbar@1012 : Codeunit 11102044;
+      WhereUsedMgt@1013 : Codeunit 11102045;
+      SourceControl@1014 : Codeunit 11102050;
+      FileHandler@1015 : Codeunit 11102097;
+      RenumberObjectsWizard@1016 : Page 11175821;
+      oFile@1017 : File;
+      oSourceFile@1018 : File;
+      StartDate@1019 : Date;
+      StartTime@1020 : Time;
+      Directory@1021 : Text;
+      WizardStatus@1022 : 'Started,Finished';
+      ctCheckingDuplicateKeys@1023 : TextConst 'DEU=Checking duplicate keys...;ENU=Checking duplicate keys...;ESP=Checking duplicate keys...;FRA=Checking duplicate keys...;NLD=Dubbele sleutels controleren...;DEA=Checking duplicate keys...';
+      ctExportingObjects@1024 : TextConst 'DEU=Exporting objects...;ENU=Exporting objects...;ESP=Exporting objects...;FRA=Exporting objects...;NLD=Objecten exporteren...;DEA=Exporting objects...';
+      ctNoFileNameSpecified@1025 : TextConst 'DEU=No file name specified.;ENU=No file name specified.;ESP=No file name specified.;FRA=No file name specified.;NLD=Geen bestandsnaam opgegeven.;DEA=No file name specified.';
+      ctRenamingObjects@1026 : TextConst 'DEU=Renaming objects...;ENU=Renaming objects...;ESP=Renaming objects...;FRA=Renaming objects...;NLD=Objecten hernoemen...;DEA=Renaming objects...';
+      ctRenumberingObjects@1027 : TextConst 'DEU=Renumbering objects...;ENU=Renumbering objects...;ESP=Renumbering objects...;FRA=Renumbering objects...;NLD=Objecten exporteren...;DEA=Renumbering objects...';
+      ctUpdatingCALHistory@1028 : TextConst 'DEU=Updating C/AL history...;ENU=Updating C/AL history...;ESP=Updating C/AL history...;FRA=Updating C/AL history...;NLD=C/AL Historie bijwerken...;DEA=Updating C/AL history...';
+      ctUpdatingObjects@1029 : TextConst 'DEU=Updating objects...;ENU=Updating objects...;ESP=Updating objects...;FRA=Updating objects...;NLD=Objecten bijwerken...;DEA=Updating objects...';
+      ctUpdatingWhereUsedIn@1030 : TextConst 'DEU=Updating Where Used in...;ENU=Updating Where Used in...;ESP=Updating Where Used in...;FRA=Updating Where Used in...;NLD=Waar-gebruikt in bijwerken...;DEA=Updating Where Used in...';
+      ctUpdatingWhereUsedObjects@1031 : TextConst 'DEU=Updating Where Used objects...;ENU=Updating Where Used objects...;ESP=Updating Where Used objects...;FRA=Updating Where Used objects...;NLD=Waar-gebruikt objecten bijwerken...;DEA=Updating Where Used objects...';
+    BEGIN
+      Setup.CustomGet;
+
+      StartDate := TODAY;
+      StartTime := TIME;
+
+      Directory := FileHandler.TempDirectory;
+
+      IF NOT GetRecordSets(TmpObject, TmpOriginalObject, TmpObjectToRenumber) THEN
+        EXIT;
+
+      NoOfObjects := TmpObject.COUNT;
+
+      BuildReplaceActionArray;
+
+      CASE RunType OF
+
+        RunType::Wizard :
+          BEGIN
+            WizardStatus := WizardStatus::Started;
+            RenumberObjectsWizard.SetUpdateReferencingObjects(UpdateReferencingObjects);
+            RenumberObjectsWizard.SetSetModifyFlag(SetModifyFlag);
+            COMMIT;
+            RenumberObjectsWizard.RUNMODAL;
+            IF RenumberObjectsWizard.Finished THEN
+              WizardStatus := WizardStatus::Finished;
+          END;
+
+        RunType::"Update in DB" :
+          BEGIN
+
+            Progressbar.Open(ctUpdatingObjects, 2);
+            Progressbar.BarSize := (ObjectToRenumber.COUNT * 2) + (TmpObject.COUNT * 10);
+
+            Progressbar.Text1 := ctCheckingDuplicateKeys;
+            CheckDuplicateKeys(ObjectToRenumber, Progressbar);
+
+            CheckObjects(Progressbar, TmpOriginalObject, TmpCALHistoryObject);
+
+            Progressbar.Text1 := ctRenamingObjects;
+            IF ObjectToRenumber.FINDSET THEN
+              REPEAT
+                Progressbar.AddToBar(1);
+                Progressbar.Text2Object := TmpObject;
+
+                IF ObjectToRenumber."Object No." <> ObjectToRenumber."New Number" THEN BEGIN
+                  Object.GET(ObjectToRenumber."Object Type", '', ObjectToRenumber."Object No.");
+                  Object.RENAME(Object, '', ObjectToRenumber."New Number");
+                END;
+
+              UNTIL ObjectToRenumber.NEXT = 0;
+
+            UpdateObjects(Progressbar, TmpCALHistoryObject, TmpObject, TmpObjectToRenumber);
+            CompileObjects(Progressbar, TmpObject);
+
+            IF SetModifyFlag THEN
+              SetDatetimeStamp(Progressbar, TmpObject, StartDate, StartTime)
+            ELSE
+              Progressbar.AddToBar(TmpObject.COUNT);
+
+            Progressbar.Text1 := ctUpdatingCALHistory;
+            IF TmpObject.FINDSET THEN
+              REPEAT
+                Progressbar.AddToBar(1);
+                Progressbar.Text2Object := TmpObject;
+                Object.GET(TmpObject.Type, '', TmpObject.ID);
+                SourceControl.AddObject(Object, 0, FALSE, FALSE, 1, FALSE);
+              UNTIL TmpObject.NEXT = 0;
+
+            Progressbar.Text1 := ctUpdatingWhereUsedObjects;
+            IF TmpObject.FINDSET THEN
+              REPEAT
+                Progressbar.AddToBar(1);
+                Progressbar.Text2Object := TmpObject;
+                WhereUsedMgt.FillEntryNos;
+                Object.GET(TmpObject.Type, '', TmpObject.ID);
+                WhereUsedMgt.UpdateObjectLines(Object);
+              UNTIL TmpObject.NEXT = 0;
+
+            Progressbar.Text1 := ctUpdatingWhereUsedIn;
+            IF TmpObject.FINDSET THEN
+              REPEAT
+                Progressbar.AddToBar(1);
+                Progressbar.Text2Object := TmpObject;
+                Object.GET(TmpObject.Type, '', TmpObject.ID);
+                WhereUsedMgt.UpdateWhereInOfObject(Object);
+              UNTIL TmpObject.NEXT = 0;
+
+            Progressbar.Close;
+
+          END;
+
+        RunType::Export :
+          BEGIN
+            IF ExportFileName = '' THEN
+              ERROR(ctNoFileNameSpecified);
+
+            oFile.TEXTMODE(TRUE);
+            oFile.CREATE(ExportFileName);
+
+            Progressbar.Open(ctExportingObjects, 2);
+            Progressbar.Text1 := ctRenumberingObjects;
+            Progressbar.BarSize := TmpObject.COUNT + ObjectToRenumber.COUNT;
+
+            IF ObjectToRenumber.FINDSET THEN
+              REPEAT
+                Object.GET(ObjectToRenumber."Object Type", '', ObjectToRenumber."Object No.");
+                IF NOT SourceControl.ConfirmObjectLock(Object) THEN
+                  EXIT;
+                COMMIT;
+
+                IF SourceControl.LatestHistoryIsOutdated(Object) THEN
+                  SourceControl.AddObject(Object, 0, FALSE, FALSE, 1, FALSE);
+
+                Progressbar.AddToBar(1);
+
+              UNTIL ObjectToRenumber.NEXT = 0;
+
+            IF TmpObject.FINDSET THEN
+              REPEAT
+
+                Progressbar.Text2Object := TmpObject;
+                Progressbar.AddToBar(1);
+
+                TmpObjectToRenumber.RESET;
+                TmpObjectToRenumber.SETCURRENTKEY("Object Type", "New Number");
+                TmpObjectToRenumber.SETRANGE("Object Type", TmpObject.Type);
+                TmpObjectToRenumber.SETRANGE("New Number", TmpObject.ID);
+                IF TmpObjectToRenumber.FINDFIRST THEN
+                  CALHistoryObject.GoToLastRecord(TmpObject.Type, TmpObjectToRenumber."Object No.")
+                ELSE
+                  CALHistoryObject.GoToLastRecord(TmpObject.Type, TmpObject.ID);
+                SourceControl.FillCALLineBufferWithEntryNo(TmpCALHistoryLine, CALHistoryObject."Entry No.");
+
+                IF TmpObject.Type = TmpObject.Type::MenuSuite THEN
+                  RenumberMenuSuite(TmpCALHistoryLine, TmpObjectToRenumber)
+                ELSE
+                  RenumberObject(TmpCALHistoryLine, TmpObjectToRenumber);
+
+                IF SetModifyFlag THEN
+                  SourceControl.SetModifyFlagInHistoryLines(TmpCALHistoryLine, StartDate, StartTime);
+                SourceControl.AppendHistoryLinesToFile(oFile, TmpCALHistoryLine);
+
+              UNTIL TmpObject.NEXT = 0;
+            Progressbar.Close;
+            oFile.CLOSE;
+
+          END;
+
+        RunType::"Update File" :
+          BEGIN
+
+            IF SourceFileName = '' THEN
+              ERROR(ctNoFileNameSpecified);
+
+            IF ExportFileName = '' THEN
+              ERROR(ctNoFileNameSpecified);
+
+            oFile.TEXTMODE(TRUE);
+            oFile.CREATE(ExportFileName);
+
+            Progressbar.Open(ctRenumberingObjects, 1);
+
+            oSourceFile.OPEN(SourceFileName);
+            Progressbar.BarSize := oSourceFile.LEN * 2;
+            oSourceFile.CLOSE;
+
+            SourceControl.ImportTextFile2(SourceFileName, 1, Progressbar, 0, TmpSourceObject, TmpSourceLine, TRUE);
+
+            Progressbar.BarSize := TmpSourceObject.COUNT * 2;
+            Progressbar.BarPosition := TmpSourceObject.COUNT;
+
+            IF TmpSourceObject.FINDSET THEN
+              REPEAT
+
+                TmpSourceObject.FillObjectFields(TmpObject);
+                Progressbar.Text1Object := TmpObject;
+                Progressbar.AddToBar(1);
+
+                TmpSourceLine2.RESET;
+                TmpSourceLine2.DELETEALL;
+                TmpSourceLine.SETRANGE("Entry No.", TmpSourceObject."Entry No.");
+                IF TmpSourceLine.FINDSET THEN
+                  REPEAT
+                    TmpSourceLine2 := TmpSourceLine;
+                    TmpSourceLine2.INSERT;
+                  UNTIL TmpSourceLine.NEXT = 0;
+
+                IF TmpObject.Type = TmpObject.Type::MenuSuite THEN
+                  RenumberMenuSuite(TmpSourceLine2, TmpObjectToRenumber)
+                ELSE
+                  RenumberObject(TmpSourceLine2, TmpObjectToRenumber);
+
+                IF SetModifyFlag THEN
+                  SourceControl.SetModifyFlagInHistoryLines(TmpSourceLine2, StartDate, StartTime);
+
+                SourceControl.AppendHistoryLinesToFile(oFile, TmpSourceLine2);
+
+              UNTIL TmpSourceObject.NEXT = 0;
+            Progressbar.Close;
+
+            oFile.CLOSE;
+
+          END;
+
+      END;
+    END;
+
+    PROCEDURE GetRecordSets@30(VAR TmpObject@1000 : TEMPORARY Record 2000000001;VAR TmpOriginalObject@1001 : TEMPORARY Record 2000000001;VAR TmpObjectToRenumber@1002 : TEMPORARY Record 11102063) : Boolean;
+    VAR
+      ObjectToRenumber@1003 : Record 11102063;
+      WhereUsedMgt@1004 : Codeunit 11102045;
+      CheckCALHistory@1005 : Codeunit 11102063;
+      ctAlreadyExist@1006 : TextConst 'DEU=already exist;ENU=already exist;ESP=already exist;FRA=already exist;NLD=bestaat reeds;DEA=already exist';
+      ctCALNotUpToDate@1007 : TextConst 'DEU=The where used objects are not up to date.\Update now?;ENU=The where used objects are not up to date.\Update now?;ESP=The where used objects are not up to date.\Update now?;FRA=The where used objects are not up to date.\Update now?;NLD=De waar-gebruikt objecten zijn niet bijgewerkt.\Nu bijwerken?;DEA=The where used objects are not up to date.\Update now?';
+      ctIsDouble@1008 : TextConst 'DEU=is double;ENU=is double;ESP=is double;FRA=is double;NLD=is dubbel;DEA=is double';
+    BEGIN
+      IF RunType IN [RunType::"Update in DB", RunType::Export] THEN BEGIN
+
+        GetInvolvedObjects(TmpObject, RunType <> RunType::"Update in DB", UpdateReferencingObjects);
+
+        IF NOT CheckCALHistory.RunWithObjectRange(TmpObject) THEN BEGIN
+          IF NOT CONFIRM(ctCALNotUpToDate, TRUE) THEN
+            EXIT;
+          COMMIT;
+          WhereUsedMgt.UpdateObjects;
+        END;
+
+        IF TmpObject.FINDSET THEN
+          REPEAT
+            TmpOriginalObject := TmpObject;
+            TmpOriginalObject.INSERT;
+          UNTIL TmpObject.NEXT = 0;
+
+        CheckNoOMObjects(ObjectToRenumber);
+
+      END;
+
+      IF ObjectToRenumber.FINDSET THEN
+        REPEAT
+
+          ObjectToRenumber.TESTFIELD("New Number");
+
+          IF ObjectToRenumber.NewNumberExist AND (RunType = RunType::"Update in DB") THEN
+            ObjectToRenumber.FIELDERROR("New Number", ctAlreadyExist);
+
+          IF ObjectToRenumber.NewNumberDouble THEN
+            ObjectToRenumber.FIELDERROR("New Number", ctIsDouble);
+
+          IF TmpObject.GET(ObjectToRenumber."Object Type", '', ObjectToRenumber."Object No.") THEN BEGIN
+
+            TmpObject.DELETE;
+            TmpObject.ID := ObjectToRenumber."New Number";
+            TmpObject.INSERT;
+          END;
+
+          TmpObjectToRenumber := ObjectToRenumber;
+          TmpObjectToRenumber.INSERT;
+
+        UNTIL ObjectToRenumber.NEXT = 0;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE RenumberObject@2(VAR CALHistoryLine@1000 : Record 11102053;VAR ObjectToRenumber@1001 : Record 11102063);
+    VAR
+      CALLine@1002 : Text;
+      CurrentLineNo@1003 : Integer;
+      SubLineNo@1004 : Integer;
+    BEGIN
+      ObjectToRenumber.RESET;
+
+      IF CALHistoryLine.FINDFIRST THEN
+        REPEAT
+          CurrentLineNo := CALHistoryLine."Line No.";
+          CALHistoryLine.SETRANGE("Line No.", CurrentLineNo);
+
+          CALLine := '';
+          REPEAT
+            CALLine := CALLine + CALHistoryLine.Code;
+          UNTIL CALHistoryLine.NEXT = 0;
+
+          IF RenumberCALLine(CALLine, ObjectToRenumber) THEN BEGIN
+            CALHistoryLine.DELETEALL;
+            SubLineNo := 0;
+            WHILE (CALLine <> '') OR (SubLineNo = 0) DO BEGIN
+              SubLineNo += 1;
+              CALHistoryLine."Sub Line No." := SubLineNo;
+              CALHistoryLine.Code := DELSTR(CALLine, 251);
+              CALHistoryLine.INSERT;
+              IF STRLEN(CALLine) > 250 THEN
+                CALLine := COPYSTR(CALLine, 251)
+              ELSE
+                CALLine := '';
+            END;
+          END;
+
+          CALHistoryLine.SETFILTER("Line No.", '>%1', CurrentLineNo);
+        UNTIL CALHistoryLine.NEXT = 0;
+
+      CALHistoryLine.SETRANGE("Line No.");
+    END;
+
+    LOCAL PROCEDURE RenumberCALLine@3(VAR CALLine@1000 : Text;VAR ObjectToRenumber@1001 : Record 11102063) ExitValue : Boolean;
+    VAR
+      FoundObjectNo@1002 : Integer;
+      FoundObjectNoStartPos@1003 : Integer;
+      FoundStrPos@1004 : Integer;
+      i@1005 : Integer;
+    BEGIN
+      FOR i := 1 TO NoOfReplaceActions DO BEGIN
+
+        FoundStrPos := StrPos2(CALLine, gReplaceAction[i], 1);
+        WHILE FoundStrPos > 0 DO BEGIN
+
+          IF FindObjectNumber(CALLine, FoundStrPos, i, FoundObjectNo, FoundObjectNoStartPos) THEN BEGIN
+
+            ObjectToRenumber.SETRANGE("Object Type", gReplaceObjectType[i]);
+            ObjectToRenumber.SETRANGE("Object No.", FoundObjectNo);
+            IF ObjectToRenumber.FINDFIRST THEN BEGIN
+              CALLine :=
+                DELSTR(CALLine, FoundObjectNoStartPos) +
+                FORMAT(ObjectToRenumber."New Number") +
+                COPYSTR(CALLine, FoundObjectNoStartPos + STRLEN(FORMAT(FoundObjectNo)));
+              ExitValue := TRUE;
+            END;
+          END;
+
+          FoundStrPos := StrPos2(CALLine, gReplaceAction[i], FoundStrPos + 1);
+        END;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE StrPos2@4(String1@1000 : Text;String2@1001 : Text;StartPos@1002 : Integer) ExitValue : Integer;
+    VAR
+      LocalString@1003 : Text;
+    BEGIN
+      LocalString := COPYSTR(String1, StartPos);
+      LocalString := LOWERCASE(LocalString);
+
+      ExitValue := STRPOS(LocalString, String2);
+
+      IF ExitValue > 0 THEN
+        ExitValue += StartPos - 1;
+    END;
+
+    LOCAL PROCEDURE FindObjectNumber@5(CALLine@1000 : Text;StartPos@1001 : Integer;ReplaceActionNo@1002 : Integer;VAR ObjectNo@1003 : Integer;VAR ObjectNoStartPos@1004 : Integer) : Boolean;
+    VAR
+      ObjectNoString@1005 : Text;
+      i@1006 : Integer;
+      SplitPosFound@1007 : Boolean;
+    BEGIN
+      i := StartPos + STRLEN(gReplaceAction[ReplaceActionNo]);
+
+      SplitPosFound := gReplaceActionSplitChar[ReplaceActionNo] = '';
+
+      WHILE i <= STRLEN(CALLine) DO
+        IF SplitPosFound THEN
+
+          CASE TRUE OF
+            (CALLine[i] >= '0') AND (CALLine[i] <= '9') :
+              BEGIN
+                ObjectNoStartPos := i;
+                REPEAT
+                  ObjectNoString += FORMAT(CALLine[i]);
+                  i += 1;
+                UNTIL (CALLine[i] < '0') OR (CALLine[i] > '9');
+                EVALUATE(ObjectNo, ObjectNoString);
+                EXIT(TRUE);
+              END;
+
+            CALLine[i] = ' ' :
+              i += 1;
+
+            ELSE
+              EXIT(FALSE);
+          END
+
+        ELSE
+          CASE FORMAT(CALLine[i]) OF
+
+            gReplaceActionSplitChar[ReplaceActionNo] :
+              BEGIN
+                SplitPosFound := TRUE;
+                i += 1;
+              END;
+
+            ' ' :
+              i += 1;
+
+            ELSE
+              EXIT(FALSE);
+          END;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE RenumberMenuSuite@6(VAR CALHistoryLine@1000 : Record 11102053;VAR ObjectToRenumber@1001 : Record 11102063);
+    VAR
+      Object@1002 : Record 2000000001;
+      ObjectNo@1003 : Text;
+      ObjectType2@1004 : Text;
+    BEGIN
+      ObjectToRenumber.RESET;
+      CALHistoryLine.SETRANGE("Sub Line No.", 1);
+      IF CALHistoryLine.FINDSET THEN
+        REPEAT
+          IF COPYSTR(CALHistoryLine.Code, 65, 14) = 'RunObjectType=' THEN BEGIN
+            ObjectType2 := COPYSTR(CALHistoryLine.Code, 79);
+            ObjectType2 := DELSTR(ObjectType2, STRLEN(ObjectType2));
+            Object.SETFILTER(Type, ObjectType2);
+            ObjectToRenumber.SETRANGE("Object Type", Object.GETRANGEMIN(Type));
+          END;
+          IF COPYSTR(CALHistoryLine.Code, 65, 12) = 'RunObjectID=' THEN
+            IF CALHistoryLine.Code[STRLEN(CALHistoryLine.Code)] = ';' THEN BEGIN
+              ObjectNo := COPYSTR(CALHistoryLine.Code, 77);
+              ObjectNo := DELSTR(ObjectNo, STRLEN(ObjectNo));
+              ObjectToRenumber.SETFILTER("Object No.", ObjectNo);
+              IF ObjectToRenumber.FINDFIRST THEN BEGIN
+                CALHistoryLine.Code := DELSTR(CALHistoryLine.Code, 77) + FORMAT(ObjectToRenumber."New Number") + ';';
+                CALHistoryLine.MODIFY;
+              END;
+            END;
+        UNTIL CALHistoryLine.NEXT = 0;
+
+      CALHistoryLine.SETRANGE("Sub Line No.");
+      ObjectToRenumber.RESET;
+    END;
+
+    PROCEDURE SetRunType@7(NewValue@1000 : Integer);
+    BEGIN
+      RunType := NewValue;
+    END;
+
+    PROCEDURE SetSourceFileName@8(NewValue@1000 : Text);
+    BEGIN
+      SourceFileName := NewValue;
+    END;
+
+    PROCEDURE SetExportFileName@9(NewValue@1000 : Text);
+    BEGIN
+      ExportFileName := NewValue;
+    END;
+
+    PROCEDURE SetUpdateReferencingObjects@26(NewValue@1000 : Boolean);
+    BEGIN
+      UpdateReferencingObjects := NewValue;
+    END;
+
+    PROCEDURE SetSetModifyFlag@27(NewValue@1000 : Boolean);
+    BEGIN
+      SetModifyFlag := NewValue;
+    END;
+
+    LOCAL PROCEDURE BuildReplaceActionArray@10();
+    BEGIN
+      NoOfReplaceActions := 0;
+
+      AddReplaceAction('table', '', gReplaceObjectType::Table);
+      AddReplaceAction('report', '', gReplaceObjectType::Report);
+      AddReplaceAction('codeunit', '', gReplaceObjectType::Codeunit);
+      AddReplaceAction('xmlport', '', gReplaceObjectType::XMLport);
+      AddReplaceAction('menusuite', '', gReplaceObjectType::MenuSuite);
+      AddReplaceAction('page', '', gReplaceObjectType::Page);
+      AddReplaceAction('query', '', gReplaceObjectType::Query);
+
+      AddReplaceAction('tabledata', '', gReplaceObjectType::Table);
+      AddReplaceAction('record', '', gReplaceObjectType::Table);
+      AddReplaceAction('tableno', '=', gReplaceObjectType::Table);
+
+      AddReplaceAction('report.run', '(', gReplaceObjectType::Report);
+      AddReplaceAction('report.runmodal', '(', gReplaceObjectType::Report);
+      AddReplaceAction('report.saveashtml', '(', gReplaceObjectType::Report);
+      AddReplaceAction('report.saveasxml', '(', gReplaceObjectType::Report);
+      AddReplaceAction('report.saveaspdf', '(', gReplaceObjectType::Report);
+      AddReplaceAction('report.saveasexcel', '(', gReplaceObjectType::Report);
+      AddReplaceAction('report.saveasword', '(', gReplaceObjectType::Report);
+      AddReplaceAction('report.wordxmlpart', '(', gReplaceObjectType::Report);
+      AddReplaceAction('report.wordlayout', '(', gReplaceObjectType::Report);
+      AddReplaceAction('report.rdlclayout', '(', gReplaceObjectType::Report);
+      AddReplaceAction('report.defaultlayout', '(', gReplaceObjectType::Report);
+      AddReplaceAction('report.runrequestpage', '(', gReplaceObjectType::Report);
+      AddReplaceAction('report.execute', '(', gReplaceObjectType::Report);
+      AddReplaceAction('report.print', '(', gReplaceObjectType::Report);
+      AddReplaceAction('report.saveas', '(', gReplaceObjectType::Report);
+
+      AddReplaceAction('codeunit.run', '(', gReplaceObjectType::Codeunit);
+
+      AddReplaceAction('xmlport.run', '(', gReplaceObjectType::XMLport);
+      AddReplaceAction('xmlport.import', '(', gReplaceObjectType::XMLport);
+      AddReplaceAction('xmlport.export', '(', gReplaceObjectType::XMLport);
+
+      AddReplaceAction('page.run', '(', gReplaceObjectType::Page);
+      AddReplaceAction('page.runmodal', '(', gReplaceObjectType::Page);
+
+      AddReplaceAction('query.saveascsv', '(', gReplaceObjectType::Query);
+      AddReplaceAction('query.saveasxml', '(', gReplaceObjectType::Query);
+    END;
+
+    LOCAL PROCEDURE AddReplaceAction@11(ReplaceAction@1000 : Text;ReplaceActionSplitChar@1001 : Text;ReplaceObjectType@1002 : ',Table,,Report,,Codeunit,XMLport,MenuSuite,Page,Query');
+    BEGIN
+      NoOfReplaceActions += 1;
+      gReplaceAction[NoOfReplaceActions] := ReplaceAction;
+      gReplaceActionSplitChar[NoOfReplaceActions] := ReplaceActionSplitChar;
+      gReplaceObjectType[NoOfReplaceActions] := ReplaceObjectType;
+    END;
+
+    PROCEDURE NoOfInvolvedObjects@12(UpdateReferencingObjects2@1000 : Boolean) : Integer;
+    VAR
+      TmpObject@1001 : TEMPORARY Record 2000000001;
+    BEGIN
+      GetInvolvedObjects(TmpObject, TRUE, UpdateReferencingObjects2);
+      EXIT(TmpObject.COUNT);
+    END;
+
+    PROCEDURE DrillDownNoOfInvolvedObjects@13(UpdateReferencingObjects2@1000 : Boolean);
+    VAR
+      TmpObject@1001 : TEMPORARY Record 2000000001;
+    BEGIN
+      GetInvolvedObjects(TmpObject, TRUE, UpdateReferencingObjects2);
+
+      IF TmpObject.FINDFIRST THEN
+        ;
+      PAGE.RUNMODAL(PAGE::"OM - Object List", TmpObject);
+    END;
+
+    PROCEDURE GetInvolvedObjects@14(VAR Object@1000 : Record 2000000001;UpdateAllObjects@1001 : Boolean;UpdateReferencingObjects2@1002 : Boolean);
+    VAR
+      WhereUsedObject@1003 : Record 11102057;
+      WhereUsedCrossTable@1004 : Record 11102061;
+      ObjectToRenumber@1005 : Record 11102063;
+      OriginalObjectToRenumber@1006 : Record 11102063;
+      Object2@1007 : Record 2000000001;
+    BEGIN
+      OriginalObjectToRenumber := ObjectToRenumber;
+
+      IF ObjectToRenumber.FINDSET THEN
+        REPEAT
+
+          IF UpdateReferencingObjects2 THEN
+            IF ObjectToRenumber."Object No." <> ObjectToRenumber."New Number" THEN
+              IF WhereUsedObject.GET(ObjectToRenumber."Object Type", ObjectToRenumber."Object No.") THEN BEGIN
+                WhereUsedCrossTable.SETCURRENTKEY("Object Entry No.");
+                WhereUsedCrossTable.SETRANGE("Object Entry No.", WhereUsedObject."Object Line Entry No.");
+                IF WhereUsedCrossTable.FINDSET THEN
+                  REPEAT
+                    WhereUsedCrossTable.CALCFIELDS("Object Type", "Object No.", Type);
+                    IF WhereUsedCrossTable.Type <> WhereUsedCrossTable.Type::Data THEN
+                      IF NOT Object.GET(WhereUsedCrossTable."Object Type", '', WhereUsedCrossTable."Object No.") THEN
+                        IF Object2.GET(WhereUsedCrossTable."Object Type", '', WhereUsedCrossTable."Object No.") THEN BEGIN
+                          Object := Object2;
+                          Object.INSERT;
+                        END;
+
+                  UNTIL WhereUsedCrossTable.NEXT = 0;
+              END;
+
+          IF UpdateAllObjects OR (ObjectToRenumber."Object No." <> ObjectToRenumber."New Number") THEN
+            IF NOT Object.GET(ObjectToRenumber."Object Type", '', ObjectToRenumber."Object No.") THEN
+              IF Object2.GET(ObjectToRenumber."Object Type", '', ObjectToRenumber."Object No.") THEN BEGIN
+                Object := Object2;
+                Object.INSERT;
+              END;
+
+        UNTIL ObjectToRenumber.NEXT = 0;
+
+      ObjectToRenumber := OriginalObjectToRenumber;
+    END;
+
+    LOCAL PROCEDURE CheckNoOMObjects@15(VAR ObjectToRenumber@1000 : Record 11102063);
+    VAR
+      Mgt@1001 : Codeunit 11102035;
+      ctOMObjectsError@1002 : TextConst 'DEU=The Object Manager cannot be renumbered.;ENU=The Object Manager cannot be renumbered.;ESP=The Object Manager cannot be renumbered.;FRA=The Object Manager cannot be renumbered.;NLD=De Object Manager kan niet worden omgenummerd.;DEA=The Object Manager cannot be renumbered.';
+    BEGIN
+      IF Mgt.ShortUserId <> 'REIJER' THEN BEGIN
+        ObjectToRenumber.SETFILTER("Object Name", 'OM - *');
+        IF NOT ObjectToRenumber.ISEMPTY THEN
+          ERROR(ctOMObjectsError);
+
+        ObjectToRenumber.SETRANGE("Object Name");
+      END;
+    END;
+
+    PROCEDURE ExportDefinition@16(FileName@1000 : Text);
+    VAR
+      ObjectToRenumber@1001 : Record 11102063;
+      oFile@1002 : File;
+      Tab@1003 : Char;
+    BEGIN
+      oFile.TEXTMODE(TRUE);
+      oFile.CREATE(FileName);
+
+      Tab := 9;
+
+      WITH ObjectToRenumber DO
+        IF FINDSET THEN
+          REPEAT
+            oFile.WRITE(FORMAT("Object Type" + 0) + FORMAT(Tab) + FORMAT("Object No.") + FORMAT(Tab) + FORMAT("New Number"));
+          UNTIL NEXT = 0;
+
+      oFile.CLOSE;
+    END;
+
+    PROCEDURE ImportDefinition@17(FileName@1000 : Text);
+    VAR
+      ObjectToRenumber@1001 : Record 11102063;
+      Mgt@1002 : Codeunit 11102035;
+      oFile@1003 : File;
+      SplitTextLine@1004 : ARRAY [100] OF Text[1024];
+      Tab@1005 : Text;
+      TextLine@1006 : Text;
+      ReadChar@1007 : Char;
+      NewObjectNo@1008 : Integer;
+      ObjectNo@1009 : Integer;
+      ObjectType2@1010 : Integer;
+    BEGIN
+      oFile.TEXTMODE(FALSE);
+      oFile.OPEN(FileName);
+
+      Tab[1] := 9;
+
+      WHILE oFile.READ(ReadChar) > 0 DO
+        CASE ReadChar OF
+          13, 10 :
+
+            IF TextLine <> '' THEN BEGIN
+
+              Mgt.Split(TextLine, Tab, SplitTextLine);
+
+              EVALUATE(ObjectType2, SplitTextLine[1]);
+              EVALUATE(ObjectNo, SplitTextLine[2]);
+              EVALUATE(NewObjectNo, SplitTextLine[3]);
+
+              IF ObjectToRenumber.GET(ObjectType2, ObjectNo) THEN BEGIN
+                ObjectToRenumber."New Number" := NewObjectNo;
+                ObjectToRenumber.MODIFY;
+              END ELSE BEGIN
+                ObjectToRenumber."Object Type" := ObjectType2;
+                ObjectToRenumber."Object No." := ObjectNo;
+                ObjectToRenumber."New Number" := NewObjectNo;
+                ObjectToRenumber.INSERT;
+              END;
+
+              TextLine := '';
+            END;
+
+          ELSE
+            TextLine += FORMAT(ReadChar);
+        END;
+
+      oFile.CLOSE;
+    END;
+
+    PROCEDURE ShowSucceedMessage@18();
+    VAR
+      ObjectText@1000 : Text;
+      ctObject@1001 : TextConst 'DEU=object;ENU=object;ESP=object;FRA=object;NLD=object;DEA=object';
+      ctObjects@1002 : TextConst 'DEU=objects;ENU=objects;ESP=objects;FRA=objects;NLD=objecten;DEA=objects';
+      ctObjectsExported@1003 : TextConst 'DEU=%1 %2 exported.;ENU=%1 %2 exported.;ESP=%1 %2 exported.;FRA=%1 %2 exported.;NLD=%1 %2 ge‰xporteerd.;DEA=%1 %2 exported.';
+      ctObjectsUpdated@1004 : TextConst 'DEU=%1 %2 updated.;ENU=%1 %2 updated.;ESP=%1 %2 updated.;FRA=%1 %2 updated.;NLD=%1 %2 bijgewerkt.;DEA=%1 %2 updated.';
+      ctTextFileRenumbered@1005 : TextConst 'DEU=Text file is renumbered.;ENU=Text file is renumbered.;ESP=Text file is renumbered.;FRA=Text file is renumbered.;NLD=Tekstbestand is omgenummerd.;DEA=Text file is renumbered.';
+    BEGIN
+      IF NoOfObjects = 1 THEN
+        ObjectText := ctObject
+      ELSE
+        ObjectText := ctObjects;
+
+      CASE RunType OF
+
+        RunType::"Update in DB" :
+          MESSAGE(ctObjectsUpdated, NoOfObjects, ObjectText);
+
+        RunType::Export :
+          MESSAGE(ctObjectsExported, NoOfObjects, ObjectText);
+
+        RunType::"Update File" :
+          MESSAGE(ctTextFileRenumbered);
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckDuplicateKeys@19(VAR ObjectToRenumber@1000 : Record 11102063;VAR Progressbar@1001 : Codeunit 11102044);
+    BEGIN
+      IF ObjectToRenumber.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+
+          IF ObjectToRenumber."Object No." <> ObjectToRenumber."New Number" THEN BEGIN
+            CheckDuplicateKeysValues(ObjectToRenumber, DATABASE::"OM - Project Object", 2, 3);
+            CheckDuplicateKeysValues(ObjectToRenumber, DATABASE::"OM - Object Lock", 1, 2);
+            CheckDuplicateKeysValues(ObjectToRenumber, DATABASE::"OM - Where Used Object", 1, 2);
+            CheckDuplicateKeysValues(ObjectToRenumber, DATABASE::"OM - Where Used Status", 1, 2);
+            CheckDuplicateKeysValues(ObjectToRenumber, DATABASE::"OM - Object to Update Vars", 1, 2);
+            CheckDuplicateKeysValues(ObjectToRenumber, DATABASE::"OM - Known Object Export Error", 1, 2);
+            CheckDuplicateKeysValues(ObjectToRenumber, DATABASE::"OM - Field to Renumber", 0, 1);
+            CheckDuplicateKeysValues(ObjectToRenumber, DATABASE::"OM - Object Import Line", 3, 4);
+            CheckDuplicateKeysValues(ObjectToRenumber, DATABASE::"OM - Check Guidelines Object", 1, 2);
+            CheckDuplicateKeysValues(ObjectToRenumber, DATABASE::"OM - Check Guidelines Comment", 2, 3);
+          END;
+        UNTIL ObjectToRenumber.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CheckDuplicateKeysValues@20(VAR ObjectToRenumber@1000 : Record 11102063;TableNo@1001 : Integer;FieldTypeNo@1002 : Integer;FieldNoNo@1003 : Integer);
+    VAR
+      RecRef@1004 : RecordRef;
+      RecRef2@1005 : RecordRef;
+      FldRef@1006 : FieldRef;
+      QuestionAsked@1007 : Boolean;
+      ctContinue@1008 : TextConst 'DEU=Conflicting data present in table ''%1'' will be deleted.\Are you sure?;ENU=Conflicting data present in table ''%1'' will be deleted.\Are you sure?;ESP=Conflicting data present in table ''%1'' will be deleted.\Are you sure?;FRA=Conflicting data present in table ''%1'' will be deleted.\Are you sure?;NLD=Conflicterende data aanwezig in tabel ''%1'' zal worden verwijderd.\Wilt u doorgaan?;DEA=Conflicting data present in table ''%1'' will be deleted.\Are you sure?';
+    BEGIN
+      RecRef.OPEN(TableNo);
+
+      IF FieldTypeNo = 0 THEN
+        IF ObjectToRenumber."Object Type" <> ObjectToRenumber."Object Type"::Table THEN
+          EXIT;
+
+      IF FieldTypeNo <> 0 THEN BEGIN
+        FldRef := RecRef.FIELD(FieldTypeNo);
+        FldRef.SETRANGE(ObjectToRenumber."Object Type");
+      END;
+
+      FldRef := RecRef.FIELD(FieldNoNo);
+      FldRef.SETRANGE(ObjectToRenumber."New Number");
+
+      IF RecRef.FINDSET THEN
+        REPEAT
+
+          RecRef2 := RecRef.DUPLICATE;
+          RecRef2.SETRECFILTER;
+
+          FldRef := RecRef2.FIELD(FieldNoNo);
+          FldRef.SETRANGE(ObjectToRenumber."Object No.");
+
+          IF NOT RecRef2.ISEMPTY THEN BEGIN
+            IF NOT QuestionAsked THEN
+              IF NOT CONFIRM(ctContinue, TRUE, RecRef.CAPTION) THEN
+                ERROR('');
+            QuestionAsked := TRUE;
+            RecRef.DELETE;
+          END;
+
+        UNTIL RecRef.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE StripTable@21(VAR CALHistoryLine@1000 : Record 11102053;VAR TmpNewCALHistoryLine@1001 : TEMPORARY Record 11102053;NewTableNo@1002 : Integer);
+    VAR
+      Mgt@1003 : Codeunit 11102035;
+      SourceControl@1004 : Codeunit 11102050;
+      Dummy@1005 : Text;
+      FieldType@1006 : Text;
+      Position@1007 : Integer;
+      Position2@1008 : Integer;
+    BEGIN
+      AddCAlHistoryLine(TmpNewCALHistoryLine, STRSUBSTNO('OBJECT Table %1 Table%1', NewTableNo));
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '{');
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '  OBJECT-PROPERTIES');
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '  {');
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '    Date=;');
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '    Time=;');
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '  }');
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '  FIELDS');
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '  {');
+
+      SourceControl.SetRangeOnSection(CALHistoryLine, 'FIELDS');
+      CALHistoryLine.SETFILTER(Code, '%1', '    {*');
+      IF CALHistoryLine.FINDSET THEN
+        REPEAT
+
+          Position := 7;
+          Mgt.NextValue(CALHistoryLine.Code, Position, ';', '[', ']', Dummy);
+          Mgt.NextValue(CALHistoryLine.Code, Position, ';', '[', ']', Dummy);
+          Mgt.NextValue(CALHistoryLine.Code, Position, ';', '[', ']', Dummy);
+          Position2 := Position;
+          Mgt.NextValue(CALHistoryLine.Code, Position, ';', '[', ']', FieldType);
+
+          IF FieldType = 'Option' THEN
+            FieldType := 'Integer';
+
+          AddCAlHistoryLine(TmpNewCALHistoryLine, STRSUBSTNO('%1;%2 }', DELSTR(CALHistoryLine.Code, Position2 - 1), FieldType));
+        UNTIL CALHistoryLine.NEXT = 0;
+
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '  }');
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '  KEYS');
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '  {');
+
+      SourceControl.SetRangeOnSection(CALHistoryLine, 'KEYS');
+      CALHistoryLine.SETFILTER(Code, '%1', '    {*');
+      CALHistoryLine.FINDFIRST;
+
+      Position := 7;
+      Mgt.NextValue(CALHistoryLine.Code, Position, ';', '[', ']', Dummy);
+      Mgt.NextValue(CALHistoryLine.Code, Position, ';', '[', ']', Dummy);
+
+      AddCAlHistoryLine(TmpNewCALHistoryLine, DELSTR(CALHistoryLine.Code, Position - 1) + ' }');
+
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '  }');
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '  CODE');
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '  {');
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '');
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '     BEGIN');
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '     END.');
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '  }');
+      AddCAlHistoryLine(TmpNewCALHistoryLine, '}');
+
+      SourceControl.SetModifyFlagInHistoryLines(TmpNewCALHistoryLine, TODAY, TIME);
+    END;
+
+    LOCAL PROCEDURE AddCAlHistoryLine@22(VAR TmpNewCAlHistoryLine@1000 : TEMPORARY Record 11102053;Code@1001 : Text);
+    BEGIN
+      IF TmpNewCAlHistoryLine.FINDLAST THEN
+        ;
+      TmpNewCAlHistoryLine."Line No." += 1;
+      TmpNewCAlHistoryLine."Sub Line No." := 1;
+      TmpNewCAlHistoryLine.Code := Code;
+      TmpNewCAlHistoryLine.INSERT;
+    END;
+
+    PROCEDURE CheckObjects@23(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpOriginalObject@1001 : TEMPORARY Record 2000000001;VAR TmpCALHistoryObject@1002 : TEMPORARY Record 11102052);
+    VAR
+      Setup@1003 : Record 11102035;
+      CALHistoryObject@1004 : Record 11102052;
+      ObjectLock@1005 : Record 11102054;
+      ObjectToRenumber@1006 : Record 11102063;
+      Object@1007 : Record 2000000001;
+      SourceControl@1008 : Codeunit 11102050;
+      Directory@1009 : Text;
+      FileName@1010 : Text;
+      ctCheckingObjects@1011 : TextConst 'DEU=Checking objects...;ENU=Checking objects...;ESP=Checking objects...;FRA=Checking objects...;NLD=Objecten controleren...;DEA=Checking objects...';
+      ctUpdateFileName@1012 : TextConst 'DEU=RenumberFields.txt;ENU=RenumberFields.txt;ESP=RenumberFields.txt;FRA=RenumberFields.txt;NLD=RenumberFields.txt;DEA=RenumberFields.txt';
+    BEGIN
+      FileName := Directory + ctUpdateFileName;
+      Progressbar.Text1 := ctCheckingObjects;
+      IF TmpOriginalObject.FINDSET THEN
+        REPEAT
+
+          Object.GET(TmpOriginalObject.Type, '', TmpOriginalObject.ID);
+          IF NOT SourceControl.CheckObjectBeforeChanging(Object, Progressbar) THEN
+            EXIT;
+
+          IF Setup."Lock Object at Design" THEN
+            ObjectLock.InsertLock(Object);
+
+          CALHistoryObject.GoToLastRecord(Object.Type, Object.ID);
+          TmpCALHistoryObject := CALHistoryObject;
+          IF ObjectToRenumber.GET(Object.Type, Object.ID) THEN
+            TmpCALHistoryObject."Object No." := ObjectToRenumber."New Number";
+          TmpCALHistoryObject.INSERT;
+
+        UNTIL TmpOriginalObject.NEXT = 0;
+    END;
+
+    PROCEDURE AddNewTables@24(VAR Progressbar@1000 : Codeunit 11102044);
+    VAR
+      CALHistoryObject@1001 : Record 11102052;
+      CALHistoryLine@1002 : Record 11102053;
+      TmpCALHistoryLine@1003 : TEMPORARY Record 11102053;
+      ObjectToRenumber@1004 : Record 11102063;
+      Object@1005 : Record 2000000001;
+      ObjectMgt@1006 : Codeunit 11102046;
+      SourceControl@1007 : Codeunit 11102050;
+      FileHandler@1008 : Codeunit 11102097;
+      FileName@1009 : Text;
+      ctCheckingObjects@1010 : TextConst 'DEU=Adding new tables...;ENU=Adding new tables...;ESP=Adding new tables...;FRA=Adding new tables...;NLD=Nieuwe tabellen toevoegen...;DEA=Adding new tables...';
+    BEGIN
+      Progressbar.Text1 := ctCheckingObjects;
+
+      ObjectToRenumber.SETRANGE("Object Type", Object.Type::Table);
+      IF ObjectToRenumber.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+
+          CALHistoryObject.GoToLastRecord(Object.Type::Table, ObjectToRenumber."Object No.");
+          CALHistoryLine.SETRANGE("Entry No.", CALHistoryObject."Entry No.");
+          CALHistoryLine.FINDFIRST;
+
+          TmpCALHistoryLine.RESET;
+          TmpCALHistoryLine.DELETEALL;
+
+          StripTable(CALHistoryLine, TmpCALHistoryLine, ObjectToRenumber."New Number");
+
+          FileName := FileHandler.CreateServerTempFileName('txt');
+          SourceControl.ExportTextFile(FileName, TmpCALHistoryLine);
+
+          ObjectMgt.ImportObject(FileName);
+
+          Object.Type := Object.Type::Table;
+          Object.ID := ObjectToRenumber."New Number";
+          ObjectMgt.CompileObject(Object);
+
+        UNTIL ObjectToRenumber.NEXT = 0;
+    END;
+
+    PROCEDURE TransferData@25(VAR Progressbar@1000 : Codeunit 11102044);
+    VAR
+      TmpAction@1001 : TEMPORARY Record 11102048;
+      TmpActionField@1002 : TEMPORARY Record 11102049;
+      ObjectToRenumber@1003 : Record 11102063;
+      Object@1004 : Record 2000000001;
+      ActionMgt@1005 : Codeunit 11102038;
+      ctTransferringData@1006 : TextConst 'DEU=Transferring data...;ENU=Transferring data...;ESP=Transferring data...;FRA=Transferring data...;NLD=Data overzetten...;DEA=Transferring data...';
+    BEGIN
+      Progressbar.Text1 := ctTransferringData;
+
+      ObjectToRenumber.SETRANGE("Object Type", Object.Type::Table);
+      IF ObjectToRenumber.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+
+          TmpAction.Type := TmpAction.Type::"Temporary";
+
+          TmpAction."Line No." := 10000;
+          TmpAction."Action Type" := TmpAction."Action Type"::"Copy Data";
+          TmpAction."Object No." := ObjectToRenumber."Object No.";
+          TmpAction."Into Table No." := ObjectToRenumber."New Number";
+          TmpAction.INSERT;
+
+        UNTIL ObjectToRenumber.NEXT = 0;
+
+      ActionMgt.SetSkipConfirm(TRUE);
+      ActionMgt.Start(TmpAction, TmpActionField);
+    END;
+
+    PROCEDURE RenameOldObjects@28(VAR Progressbar@1000 : Codeunit 11102044);
+    VAR
+      ObjectToRenumber@1001 : Record 11102063;
+      Object@1002 : Record 2000000001;
+      ObjectMgt@1003 : Codeunit 11102046;
+      ctRenamingOldObjects@1004 : TextConst 'DEU=Renaming old objects...;ENU=Renaming old objects...;ESP=Renaming old objects...;FRA=Renaming old objects...;NLD=Oude objecten hernoemen...;DEA=Renaming old objects...';
+    BEGIN
+      Progressbar.Text1 := ctRenamingOldObjects;
+
+      IF ObjectToRenumber.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+
+          IF Object.GET(ObjectToRenumber."Object Type", '', ObjectToRenumber."Object No.") THEN
+            ObjectMgt.RenameObject(Object, STRSUBSTNO('%1%2', Object.Type, Object.ID));
+
+        UNTIL ObjectToRenumber.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateObjects@29(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpCALHistoryObject@1001 : TEMPORARY Record 11102052;VAR TmpObject@1002 : TEMPORARY Record 2000000001;VAR TmpObjectToRenumber@1003 : TEMPORARY Record 11102063);
+    VAR
+      TmpCALHistoryLine@1004 : TEMPORARY Record 11102053;
+      ObjectMgt@1005 : Codeunit 11102046;
+      SourceControl@1006 : Codeunit 11102050;
+      FileHandler@1007 : Codeunit 11102097;
+      FileName@1008 : Text;
+      ctRenumberingObjects@1009 : TextConst 'DEU=Renumbering objects...;ENU=Renumbering objects...;ESP=Renumbering objects...;FRA=Renumbering objects...;NLD=Objecten exporteren...;DEA=Renumbering objects...';
+    BEGIN
+      BuildReplaceActionArray;
+
+      FileName := FileHandler.CreateServerTempFileName('txt');
+
+      Progressbar.Text1 := ctRenumberingObjects;
+      IF TmpObject.FINDSET THEN
+        REPEAT
+
+          Progressbar.AddToBar(1);
+          Progressbar.Text2Object := TmpObject;
+
+          TmpCALHistoryObject.SETCURRENTKEY("Object Type", "Object No.");
+          TmpCALHistoryObject.SETRANGE("Object Type", TmpObject.Type);
+          TmpCALHistoryObject.SETRANGE("Object No.", TmpObject.ID);
+          TmpCALHistoryObject.SETRANGE("C/AL Code Present", TRUE);
+          TmpCALHistoryObject.FINDFIRST;
+
+          SourceControl.FillCALLineBufferWithEntryNo(TmpCALHistoryLine, TmpCALHistoryObject."Entry No.");
+
+          IF TmpObject.Type = TmpObject.Type::MenuSuite THEN
+            RenumberMenuSuite(TmpCALHistoryLine, TmpObjectToRenumber)
+          ELSE
+            RenumberObject(TmpCALHistoryLine, TmpObjectToRenumber);
+
+          SourceControl.ExportTextFile(FileName, TmpCALHistoryLine);
+
+          ObjectMgt.ImportObject(FileName);
+
+        UNTIL TmpObject.NEXT = 0;
+    END;
+
+    PROCEDURE CompileObjects@31(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpObject@1001 : TEMPORARY Record 2000000001);
+    VAR
+      ObjectMgt@1002 : Codeunit 11102046;
+      ctCompilingObjects@1003 : TextConst 'DEU=Compiling objects...;ENU=Compiling objects...;ESP=Compiling objects...;FRA=Compiling objects...;NLD=Objecten compileren...;DEA=Compiling objects...';
+    BEGIN
+      Progressbar.Text1 := ctCompilingObjects;
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+          Progressbar.Text2Object := TmpObject;
+          ObjectMgt.CompileObject(TmpObject);
+        UNTIL TmpObject.NEXT = 0;
+    END;
+
+    PROCEDURE DeleteData@32(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpOriginalObject@1001 : TEMPORARY Record 2000000001);
+    VAR
+      TmpAction@1002 : TEMPORARY Record 11102048;
+      TmpActionField@1003 : TEMPORARY Record 11102049;
+      Object@1004 : Record 2000000001;
+      ActionMgt@1005 : Codeunit 11102038;
+      ctDeleteData@1006 : TextConst 'DEU=Deleting data...;ENU=Deleting data...;ESP=Deleting data...;FRA=Deleting data...;NLD=Data verwijderen...;DEA=Deleting data...';
+    BEGIN
+      Progressbar.Text1 := ctDeleteData;
+
+      TmpOriginalObject.SETRANGE(Type, Object.Type::Table);
+      IF TmpOriginalObject.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+
+          TmpAction.Type := TmpAction.Type::"Temporary";
+
+          TmpAction."Line No." := 10000;
+          TmpAction."Action Type" := TmpAction."Action Type"::"Delete Data";
+          TmpAction."Object No." := TmpOriginalObject.ID;
+          TmpAction.INSERT;
+
+        UNTIL TmpOriginalObject.NEXT = 0;
+
+      ActionMgt.SetSkipConfirm(TRUE);
+      ActionMgt.Start(TmpAction, TmpActionField);
+    END;
+
+    PROCEDURE DeleteOldObjects@33(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpOriginalObject@1001 : TEMPORARY Record 2000000001;VAR TmpObject@1002 : TEMPORARY Record 2000000001);
+    VAR
+      ObjectMgt@1003 : Codeunit 11102046;
+      ctDeleteObjects@1004 : TextConst 'DEU=Deleting old objects...;ENU=Deleting old objects...;ESP=Deleting old objects...;FRA=Deleting old objects...;NLD=Oude objecten verwijderen...;DEA=Deleting old objects...';
+    BEGIN
+      Progressbar.Text1 := ctDeleteObjects;
+
+      TmpOriginalObject.RESET;
+      IF TmpOriginalObject.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+
+          TmpObject := TmpOriginalObject;
+          IF NOT TmpObject.FIND('=') THEN
+            ObjectMgt.DeleteObject(TmpOriginalObject);
+
+        UNTIL TmpOriginalObject.NEXT = 0;
+    END;
+
+    PROCEDURE SetDatetimeStamp@34(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpObject@1001 : TEMPORARY Record 2000000001;StartDate@1002 : Date;StartTime@1003 : Time);
+    VAR
+      SourceControl@1004 : Codeunit 11102050;
+      ctSettingTimestamps@1005 : TextConst 'DEU=Setting timestamps...;ENU=Setting timestamps...;ESP=Setting timestamps...;FRA=Setting timestamps...;NLD=Tijdstempels zetten...;DEA=Setting timestamps...';
+    BEGIN
+      Progressbar.Text1 := ctSettingTimestamps;
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+          Progressbar.Text2Object := TmpObject;
+          SourceControl.SetModifyFlagInObject(TmpObject, StartDate, StartTime);
+
+        UNTIL TmpObject.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateOMData@38(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpObjectToRenumber@1001 : TEMPORARY Record 11102063);
+    VAR
+      ctUpdatingOMData@1002 : TextConst 'DEU=Updating OM data...;ENU=Updating OM data...;ESP=Updating OM data...;FRA=Updating OM data...;NLD=OM data bijwerken...;DEA=Updating OM data...';
+    BEGIN
+      Progressbar.Text1 := ctUpdatingOMData;
+
+      IF TmpObjectToRenumber.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Modification", 2, 3);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Expected Modification", 1, 2);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Action", 23, 24);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Action Field", 0, 6);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - C/AL History Object", 4, 5);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Object Lock", 1, 2);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Where Used Object", 1, 2);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Where Used Object", 0, 14);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Where Used Object Line", 2, 3);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Where Used Status", 1, 2);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Where Used In", 2, 3);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Variable Buffer", 8, 9);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Object to Renumber", 1, 2);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Object to Update Vars", 1, 2);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Translation Tool Line", 8, 9);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Known Object Export Error", 1, 2);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Field to Renumber", 0, 1);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Element to Renumber", 2, 3);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Relation", 0, 3);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Relation", 0, 5);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Object Import Line", 3, 4);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Check Guidelines Object", 1, 2);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Check Guidelines Comment", 2, 3);
+          UpdateOMTable(Progressbar, TmpObjectToRenumber, DATABASE::"OM - Modification Buffer", 2, 3);
+
+        UNTIL TmpObjectToRenumber.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE UpdateOMTable@39(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpObjectToRenumber@1001 : TEMPORARY Record 11102063;TableNo@1002 : Integer;FieldTypeNo@1003 : Integer;FieldNoNo@1004 : Integer);
+    VAR
+      TableMgt@1005 : Codeunit 11102053;
+      RecRef@1006 : RecordRef;
+      FldRef@1007 : FieldRef;
+      IsPrimaryKey@1008 : Boolean;
+    BEGIN
+      IF FieldTypeNo = 0 THEN
+        IF TmpObjectToRenumber."Object Type" <> TmpObjectToRenumber."Object Type"::Table THEN
+          EXIT;
+
+      IF TmpObjectToRenumber."Object No." = TmpObjectToRenumber."New Number" THEN
+        EXIT;
+
+      IsPrimaryKey := TableMgt.IsPrimaryKeyField(TableNo, FieldTypeNo) OR TableMgt.IsPrimaryKeyField(TableNo, FieldNoNo);
+      RecRef.OPEN(TableNo);
+
+      IF FieldTypeNo <> 0 THEN BEGIN
+        FldRef := RecRef.FIELD(FieldTypeNo);
+        FldRef.SETRANGE(TmpObjectToRenumber."Object Type");
+      END;
+
+      FldRef := RecRef.FIELD(FieldNoNo);
+      FldRef.SETRANGE(TmpObjectToRenumber."Object No.");
+
+      WHILE NOT RecRef.ISEMPTY DO BEGIN
+        RecRef.FINDFIRST;
+        FldRef.VALUE := TmpObjectToRenumber."New Number";
+
+        IF NOT IsPrimaryKey THEN
+          RecRef.MODIFY
+        ELSE
+          IF NOT RecRef.INSERT THEN BEGIN
+            FldRef.VALUE := TmpObjectToRenumber."Object No.";
+            RecRef.DELETE;
+          END;
+
+      END;
+    END;
+
+    PROCEDURE UpdateCALHistory@37(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpObject@1001 : TEMPORARY Record 2000000001);
+    VAR
+      Object@1002 : Record 2000000001;
+      SourceControl@1003 : Codeunit 11102050;
+      ctUpdatingCALHistory@1004 : TextConst 'DEU=Updating C/AL history...;ENU=Updating C/AL history...;ESP=Updating C/AL history...;FRA=Updating C/AL history...;NLD=C/AL Historie bijwerken...;DEA=Updating C/AL history...';
+    BEGIN
+      Progressbar.Text1 := ctUpdatingCALHistory;
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+          Progressbar.Text2Object := TmpObject;
+          Object.GET(TmpObject.Type, '', TmpObject.ID);
+          SourceControl.AddObject(Object, 0, FALSE, FALSE, 1, FALSE);
+        UNTIL TmpObject.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateWhereUsedObjects@36(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpObject@1001 : TEMPORARY Record 2000000001);
+    VAR
+      Object@1002 : Record 2000000001;
+      WhereUsedMgt@1003 : Codeunit 11102045;
+      ctUpdatingWhereUsedObjects@1004 : TextConst 'DEU=Updating Where Used objects...;ENU=Updating Where Used objects...;ESP=Updating Where Used objects...;FRA=Updating Where Used objects...;NLD=Waar-gebruikt objecten bijwerken...;DEA=Updating Where Used objects...';
+    BEGIN
+      Progressbar.Text1 := ctUpdatingWhereUsedObjects;
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+          Progressbar.Text2Object := TmpObject;
+          WhereUsedMgt.FillEntryNos;
+          Object.GET(TmpObject.Type, '', TmpObject.ID);
+          WhereUsedMgt.UpdateObjectLines(Object);
+        UNTIL TmpObject.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateWhereUsedIn@35(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpObject@1001 : TEMPORARY Record 2000000001);
+    VAR
+      Object@1002 : Record 2000000001;
+      WhereUsedMgt@1003 : Codeunit 11102045;
+      ctUpdatingWhereUsedIn@1004 : TextConst 'DEU=Updating Where Used in...;ENU=Updating Where Used in...;ESP=Updating Where Used in...;FRA=Updating Where Used in...;NLD=Waar-gebruikt in bijwerken...;DEA=Updating Where Used in...';
+    BEGIN
+      Progressbar.Text1 := ctUpdatingWhereUsedIn;
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+          Progressbar.Text2Object := TmpObject;
+          Object.GET(TmpObject.Type, '', TmpObject.ID);
+          WhereUsedMgt.FillEntryNos;
+          WhereUsedMgt.UpdateWhereInOfObject(Object);
+        UNTIL TmpObject.NEXT = 0;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

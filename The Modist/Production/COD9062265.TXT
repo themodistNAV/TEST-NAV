@@ -1,0 +1,682 @@
+OBJECT Codeunit 9062265 File Attachment Queue Func.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=26/09/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.16.2;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TNPUtils@9062237 : Codeunit 9062229;
+      Logger@9062236 : Record 9062280;
+      SysB@9062235 : Record 9062230;
+      FAttachMgmt@9062234 : Codeunit 9062267;
+      WFlowIn@9062233 : Codeunit 9062262;
+      mFileSystem@9062232 : Codeunit 9062264;
+      ExcelIntegration@9062231 : Codeunit 9062283;
+      FAttach_Identification@9062230 : Codeunit 9062268;
+      UniV@9062229 : Codeunit 9062232;
+      errNoDocTypeFound@9062238 : TextConst 'ENU=Could not identify Document Type for this file;ENG=Could not identify Document Type for this file';
+      errArchivePath@9062239 : TextConst 'ENU=Couldn''t archive File as there was a problem finding the directory from FilePath: %1;ENG=Couldn''t archive File as there was a problem finding the directory from FilePath: %1';
+      txtFileArchived@9062240 : TextConst 'ENU=File Archived to: %1;ENG=File Archived to: %1';
+      ArchiveFileSilently@1000000000 : Boolean;
+      TnpToolkit@1000000001 : Codeunit 9062230;
+
+    PROCEDURE AddToContact@1000000001(VAR FAQEntry@1000000005 : Record 9062271);
+    VAR
+      Cont@1000000001 : Record 5050;
+      FAttach@1000000002 : Record 9062272;
+      DoIt@1000000003 : Boolean;
+      ContListPage@1000000004 : Page 5052;
+      TxtAdding@1000000000 : TextConst 'ENU=Adding file attachment queue %1 to contact "%2";ENG=Adding file attachment queue %1 to contact "%2"';
+      FileAttachmentProcessing@9062229 : Codeunit 9062600;
+    BEGIN
+      ContListPage.LOOKUPMODE := TRUE;
+      IF ContListPage.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        ContListPage.GETRECORD(Cont);
+        DoIt := TRUE;
+      END;
+
+      IF DoIt THEN BEGIN
+        FAttach.FILTERGROUP(4);
+        FAttach.SETRANGE("Table ID", DATABASE::Contact);
+        FAttach.SETRANGE("Primary Key Value 1", Cont."No.");
+        FAttach.SETRANGE("Primary Key FieldID 1", 1);
+        FAttach.SETRANGE("Related Record Position", Cont.GETPOSITION(FALSE));
+        FAttach.SETRANGE("Card Page ID", PAGE::"Contact Card");
+        FAttach.FILTERGROUP(0);
+
+        FileAttachmentProcessing.GetFromQueueEntry(FAttach, FAQEntry, TRUE, TRUE);
+
+        Logger.Log('FAQ', Logger.Type::Information, STRSUBSTNO(TxtAdding, FAQEntry."Entry No.", Cont."No."), USERID);
+      END;
+    END;
+
+    PROCEDURE AddToEmployee@1000000010(VAR FAQEntry@1000000005 : Record 9062271);
+    VAR
+      Emp@1000000001 : Record 5200;
+      FAttach@1000000002 : Record 9062272;
+      DoIt@1000000003 : Boolean;
+      EmpListPage@1000000004 : Page 5201;
+      TxtAdding@1000000000 : TextConst 'ENU=Adding file attachment queue %1 to employee "%2";ENG=Adding file attachment queue %1 to employee "%2"';
+      FileAttachmentProcessing@9062229 : Codeunit 9062600;
+    BEGIN
+      EmpListPage.LOOKUPMODE := TRUE;
+      IF EmpListPage.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        EmpListPage.GETRECORD(Emp);
+        DoIt := TRUE;
+      END;
+
+      IF DoIt THEN BEGIN
+        FAttach.FILTERGROUP(4);
+        FAttach.SETRANGE("Table ID", DATABASE::Employee);
+        FAttach.SETRANGE("Primary Key Value 1", Emp."No.");
+        FAttach.SETRANGE("Primary Key FieldID 1", 1);
+        FAttach.SETRANGE("Card Page ID", PAGE::"Employee Card");
+        FAttach.SETRANGE("Related Record Position", Emp.GETPOSITION(FALSE));
+        FAttach.FILTERGROUP(0);
+
+        FileAttachmentProcessing.GetFromQueueEntry(FAttach, FAQEntry, TRUE, TRUE);
+
+        Logger.Log('FAQ', Logger.Type::Information, STRSUBSTNO(TxtAdding, FAQEntry."Entry No.", Emp."No."), USERID);
+      END;
+    END;
+
+    PROCEDURE MoveToProcessed@1000000002(VAR FAQEntry@9062229 : Record 9062271;TableID@1000000004 : Integer;PositionText@1000000005 : Text[250];PageID@1000000009 : Integer) : Boolean;
+    VAR
+      WFGroupHeader@1000000008 : Record 9062265;
+      i@1000000000 : Integer;
+      ProcessedFolderPath@1000000002 : Text[250];
+      FAQ@1000000001 : Record 9062270;
+      NAVForm@1000000006 : Record 9062268;
+      RecRef@1000000007 : RecordRef;
+      Interaction@1000000011 : Record 5065;
+      IntEntNo@1000000012 : Integer;
+      Att@1000000013 : Record 5062;
+      Cont@1000000014 : Record 5050;
+      GotNAVForm@1000000015 : Boolean;
+      TxtMovingToProcessed@1000000003 : TextConst 'ENU=Moving to processed file attachment queue: %1 - %2;ENG=Moving to processed file attachment queue: %1 - %2';
+      TxtCouldNotMoveEntry@1000000010 : TextConst 'ENU=Could not move entry %1 to processed as queue code "%2" does not exist;ENG=Could not move entry %1 to processed as queue code "%2" does not exist';
+      TxtCreatingInteraction@1000000016 : TextConst 'ENU=Creating interaction for contact "%1" for "%2";ENG=Creating interaction for contact "%1" for "%2"';
+      TxtCreatingWorkflow@1000000017 : TextConst 'ENU=Creating workflow "%1" for file "%2" for user "%3";ENG=Creating workflow "%1" for file "%2" for user "%3"';
+    BEGIN
+      Logger.Log('FAQ', Logger.Type::Information, STRSUBSTNO(TxtMovingToProcessed, FAQEntry."Entry No.", FAQEntry.FilePath), USERID);
+      IF NOT FAQ.GET(FAQEntry."Queue Code") THEN BEGIN
+        Logger.Log('FAQ', Logger.Type::Error, STRSUBSTNO(TxtCouldNotMoveEntry, FAQEntry."Entry No.", FAQEntry."Queue Code"), USERID);
+        EXIT(FALSE);
+      END;
+
+      IF FAQEntry."Document Type" = 'NFORM' THEN BEGIN
+        IF NAVForm.GET(FAQEntry."Form Code") THEN GotNAVForm := TRUE;
+      END ELSE BEGIN
+        IF NAVForm.GET(FAQEntry."Document Type") THEN GotNAVForm := TRUE;
+      END;
+
+      IF GotNAVForm THEN BEGIN
+
+        //Create Interaction
+        IF NAVForm."Create Interaction" THEN BEGIN
+          Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtCreatingInteraction, FAQEntry."Contact No.", FAQEntry.Filename), USERID);
+          IF Cont.GET(FAQEntry."Contact No.") THEN BEGIN
+            Interaction.FINDLAST;
+            IntEntNo := Interaction."Entry No." + 1;
+            WITH Interaction DO BEGIN
+              INIT;
+              VALIDATE("Entry No.",IntEntNo);
+              VALIDATE("Contact Company No.",Cont."Company No.");
+              VALIDATE("Contact No.",Cont."No.");
+              VALIDATE(Date,TODAY);
+              VALIDATE("Interaction Template Code",NAVForm."Interaction Template Code");
+              VALIDATE(Description,COPYSTR(FAQEntry.Description,1,50));
+              Att.INIT;
+              Att.ImportAttachmentFromClientFile(FAQEntry.FilePath,FALSE,FALSE);
+              Att.INSERT(TRUE);
+
+              VALIDATE("Attachment No.",Att."No.");
+              INSERT(TRUE);
+            END;
+          END;
+
+        END;
+        //Trigger Workflow
+        IF (NAVForm."Trigger WFlow On" = NAVForm."Trigger WFlow On"::"Auto Process") AND
+           (NAVForm."Workflow Code" <> '') AND
+           (TableID <> 0) AND
+           (PositionText <> '') THEN BEGIN
+          RecRef.OPEN(TableID);
+          RecRef.SETPOSITION(PositionText);
+          IF RecRef.GET(RecRef.RECORDID) THEN BEGIN
+            WFlowIn.Simple(NAVForm."Workflow Code",RecRef.GETPOSITION);
+            Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtCreatingWorkflow, NAVForm."Workflow Code", FAQEntry.FilePath, FAQEntry."User ID"), USERID);
+          END;
+        END;
+
+      END;
+
+      IF NOT SysB.GetBoolean('KEEP_PROCESSED_F_ATT') THEN BEGIN
+        mFileSystem.DeleteFileIfExists(FALSE,FAQEntry.FilePath);
+        FAQEntry.DELETE;
+        EXIT(TRUE);
+      END;
+
+      ProcessedFolderPath := FAQ."Folder Path";
+
+      ProcessedFolderPath := ProcessedFolderPath + '\Processed\';
+      mFileSystem.CreateFolderStructure(FALSE, ProcessedFolderPath);
+      REPEAT
+        i += 1;
+      UNTIL NOT mFileSystem.FileExists(FALSE, ProcessedFolderPath + FORMAT(i) + '_' + FAQEntry.Filename);
+      mFileSystem.MoveFile(FALSE, FAQEntry.FilePath, ProcessedFolderPath + FORMAT(i) + '_' + FAQEntry.Filename);
+
+      FAQEntry.DELETE;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetDOCSEntry@1000000006(VAR FAQEntry@9062229 : Record 9062271) Found : Boolean;
+    VAR
+      DOCS@1000000002 : Record 9062253;
+      TxtFoundDocs@1000000000 : TextConst 'ENU=Found DOCS "%1" for "%2";ENG=Found DOCS "%1" for "%2"';
+      TxtDidNotFindDocs@1000000001 : TextConst 'ENU=Did not find DOCS for "%1";ENG=Did not find DOCS for "%1"';
+    BEGIN
+      CLEAR(DOCS);
+      DOCS.SETFILTER("Document Code",'<>%1','');
+      IF NOT DOCS.FINDFIRST THEN EXIT(FALSE);
+      REPEAT
+        IF STRPOS(FAQEntry.Filename,DOCS."Document Code") <> 0 THEN BEGIN
+          Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtFoundDocs, DOCS."Document Code", FAQEntry.Filename), USERID);
+          EXIT(TRUE);
+        END;
+      UNTIL DOCS.NEXT = 0;
+      Logger.Log('FAQ', Logger.Type::Information, STRSUBSTNO(TxtDidNotFindDocs, FAQEntry.Filename), USERID);
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE AddEmailEntry@1000000012(EntryID@1000000000 : Text[1024];StoreID@1000000001 : Text[1024];Subject@1000000002 : Text[250]) : Integer;
+    VAR
+      FAQ@1000000004 : Record 9062271;
+      TxtAddingEMailEntry@1000000003 : TextConst 'ENU=Adding e-mail entry;ENG=Adding e-mail entry';
+      EntryNo@9062229 : Integer;
+    BEGIN
+      Logger.Log('FAQ', Logger.Type::Debug, TxtAddingEMailEntry, USERID);
+
+
+      FAQ.RESET();
+      IF FAQ.FINDLAST THEN
+        EntryNo := FAQ."Entry No.";
+      EntryNo += 1;
+      FAQ.INIT;
+      FAQ."Entry No." := EntryNo;
+      FAQ."Document Type" := 'EMAIL';
+      FAQ.FilePath := '';
+      FAQ.Filename := '';
+      FAQ.Description := Subject;
+      FAQ."User ID" := USERID;
+
+      FAQ.INSERT(TRUE);
+      EXIT(FAQ."Entry No.");
+    END;
+
+    PROCEDURE AutoProcessEntry@1000000000(VAR FAQEntry@9062229 : Record 9062271;PopupRecord@1000000006 : Boolean) Processed : Boolean;
+    VAR
+      FAttach@1000000000 : Record 9062272;
+      DocType@1000000001 : Record 9062268;
+      RecRef@1000000003 : RecordRef;
+      FieldRef@1000000007 : FieldRef;
+      SmartDoc@1000000008 : Codeunit 9062273;
+      P1Value@1000000005 : Text[100];
+      P2Value@1000000002 : Text[100];
+      P3Value@1000000004 : Text[100];
+      MatchFrom@1000000009 : Text[250];
+      Found@1000000010 : Boolean;
+      FAQueue@1000000011 : Record 9062270;
+      FSO@1000000013 : Automation "{420B2830-E718-11CF-893D-00A0C9054228} 1.0:{0D43FE01-F093-11CF-8940-00A0C9054228}:'Microsoft Scripting Runtime'.FileSystemObject";
+      FAttachErrMsg@1000000014 : Text[250];
+      PrimKeyID1@1000000012 : Integer;
+      PrimKeyID2@1000000015 : Integer;
+      PrimKeyID3@1000000016 : Integer;
+      PrimKeyValue1@1000000017 : Text[250];
+      PrimKeyValue2@1000000018 : Text[250];
+      PrimKeyValue3@1000000019 : Text[250];
+      FAttachIdentify@1000000020 : Codeunit 9062268;
+      TxtTryingToAutoProcess@1000000021 : TextConst 'ENU=Trying to auto-process entry "%1";ENG=Trying to auto-process entry "%1"';
+      TxtEntryMarkedAsErrored@1000000022 : TextConst 'ENU=Not auto-processing "%1" as file attachment queue entry is marked as errored;ENG=Not auto-processing "%1" as file attachment queue entry is marked as errored';
+      TxtNotAutoNav@1000000023 : TextConst 'ENU=AUTONAV not auto-processing "%1" as set to not-autonav;ENG=AUTONAV not auto-processing "%1" as set to not-autonav';
+      TxtDocumentTypeNotFound@1000000024 : TextConst 'ENU=Not auto-processing "%1" as the document type was not found;ENG=Not auto-processing "%1" as the document type was not found';
+      TxtErrorProcessing@1000000025 : TextConst 'ENU=Error processing "%1". Codeunit %2 returned an error: "%3";ENG=Error processing "%1". Codeunit %2 returned an error: "%3"';
+      TxtTypeNotAutoProcess@1000000026 : TextConst 'ENU=Not auto-proccesing "%1" as type "%2" is not set to auto-process;ENG=Not auto-proccesing "%1" as type "%2" is not set to auto-process';
+      TxtFileIdentified@1000000027 : TextConst 'ENU="""%1"" identified as file extension ""%2"" and document type ""%3""";ENG="""%1"" identified as file extension ""%2"" and document type ""%3"""';
+      TxtRunningCU@1000000028 : TextConst 'ENU=Running CU %1 on FAQEntry %2'';ENG=Running CU %1 on FAQEntry %2''';
+    BEGIN
+      Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtTryingToAutoProcess, FAQEntry.FilePath), USERID);
+      IF FAQEntry."AutoProcess Errored" THEN BEGIN
+        Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtEntryMarkedAsErrored, FAQEntry.FilePath), USERID);
+        EXIT;
+      END;
+
+      FAQueue.GET(FAQEntry."Queue Code");
+      IF UPPERCASE(USERID) = UPPERCASE(SysB.GetText('AUTONAV_USER')) THEN BEGIN
+        IF FAQEntry."Not for AutoNAV" THEN BEGIN
+          Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtNotAutoNav, FAQEntry.FilePath), USERID);
+          EXIT;
+        END;
+      END;
+
+      IF NOT DocType.GET(FAQEntry."Document Type") THEN BEGIN
+        FAttachIdentify.IdentifyDocumentType(FAQEntry);
+        IF NOT DocType.GET(FAQEntry."Document Type") THEN BEGIN
+          Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtDocumentTypeNotFound, FAQEntry.FilePath), USERID);
+          FAQEntry.VALIDATE("AutoProcess Error Message", errNoDocTypeFound);
+          FAQEntry.VALIDATE("AutoProcess Errored",TRUE);
+          FAQEntry.MODIFY(TRUE);
+          EXIT;
+        END;
+      END;
+
+      //Run Codeunit
+      IF (DocType."Run Codeunit On" = DocType."Run Codeunit On"::"Instead of Attaching") AND (DocType."Run Codeunit No." <> 0 ) THEN BEGIN
+          Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtRunningCU,DocType."Run Codeunit No.",FAQEntry."Entry No."), USERID);
+          COMMIT;
+          IF NOT CODEUNIT.RUN(DocType."Run Codeunit No.",FAQEntry) THEN
+            Logger.Log('FAQ', Logger.Type::Error, STRSUBSTNO(TxtErrorProcessing, FAQEntry.Filename, DocType."Run Codeunit No.", GETLASTERRORTEXT), USERID);
+          RecRef.OPEN(DATABASE::"File Attachment Queue Entry");
+          RecRef.SETPOSITION(FAQEntry.GETPOSITION);
+          MoveToProcessed(FAQEntry, RecRef.NUMBER,RecRef.GETPOSITION,DocType.PageID);
+          EXIT;
+        END;
+
+      IF NOT DocType."Auto Process" THEN BEGIN
+        Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtTypeNotAutoProcess, FAQEntry.Filename, DocType.Code), USERID);
+        EXIT;
+      END;
+
+      EXIT(ProcessEntry(FAQEntry,PopupRecord));
+    END;
+
+    PROCEDURE MatchRecordFromText@1000000007(VAR RecRef@1000000000 : RecordRef;FieldNo@1000000001 : Integer;FieldValue@1000000002 : Text[250];MatchExact@1000000003 : Boolean) Matched : Boolean;
+    VAR
+      FieldRef@1000000004 : FieldRef;
+      TxtCannotSetFilter@1000000005 : TextConst 'ENU=Cannot set filter on field 0;ENG=Cannot set filter on field 0';
+      TxtSetFilterFoundValues@1000000006 : TextConst 'ENU=Set filter on field %1 in table "%2" to "%3" - and found values;ENG=Set filter on field %1 in table "%2" to "%3" - and found values';
+      TxtSetFilterDidNotFindValues@1000000007 : TextConst 'ENU=Set filter on field %1 in table "%2" to "%3" - but did not find values;ENG=Set filter on field %1 in table "%2" to "%3" - but did not find values';
+      InExactMatchFound@1000000008 : Boolean;
+    BEGIN
+      IF FieldNo = 0 THEN ERROR(TxtCannotSetFilter);
+
+      FieldRef := RecRef.FIELD(FieldNo);
+
+      IF MatchExact THEN BEGIN
+        FieldRef.SETRANGE(FieldValue);
+      END ELSE BEGIN
+        IF TNPUtils.FindRecordFromText(RecRef,FieldNo,FieldValue) THEN BEGIN
+          InExactMatchFound := TRUE;
+          FieldRef.SETFILTER('%1',FORMAT(FieldRef.VALUE));
+        END;
+      END;
+
+      IF MatchExact OR InExactMatchFound THEN
+        Matched := RecRef.FINDFIRST;
+      IF Matched THEN
+        Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtSetFilterFoundValues, FieldNo, RecRef.NAME, FieldRef.GETFILTER), USERID)
+      ELSE
+        Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtSetFilterDidNotFindValues, FieldNo, RecRef.NAME, FieldRef.GETFILTER), USERID);
+
+      EXIT(Matched);
+    END;
+
+    PROCEDURE IdentifyDocumentInfo@1000000003(VAR FAQEntry@9062229 : Record 9062271);
+    VAR
+      ext@1000000001 : Code[10];
+      SmartDoc@1000000003 : Codeunit 9062273;
+      NAVForm@1000000000 : Record 9062268;
+      NAVFormType@1000000004 : Code[20];
+      RecRef@1000000005 : RecordRef;
+    BEGIN
+      FAttach_Identification.IdentifyDocumentType(FAQEntry);
+      FAttach_Identification.GetIdentifiedValues(FAQEntry);
+    END;
+
+    PROCEDURE SetTypeFromNAVDOCS@1000000009(VAR FAQEntry@9062229 : Record 9062271;TextToSearch@1000000001 : Text[200]);
+    VAR
+      DOCS@1000000000 : Record 9062268;
+      i@1000000002 : Integer;
+      char@1000000003 : Char;
+      currKW@1000000004 : Text[100];
+      TxtFoundDocs@1000000005 : TextConst 'ENU=Found DOCS "%1" for "%2";ENG=Found DOCS "%1" for "%2"';
+      TxtDidNotFindDocs@1000000006 : TextConst 'ENU=Did not find DOCS for "%1";ENG=Did not find DOCS for "%1"';
+    BEGIN
+      CLEAR(DOCS);
+      IF DOCS.FINDFIRST THEN BEGIN
+        REPEAT
+          IF STRPOS(UPPERCASE(TextToSearch),DOCS.Code) <> 0 THEN BEGIN
+            Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtFoundDocs, DOCS.Code, FAQEntry.Filename), USERID);
+            FAQEntry."Document Type" := DOCS.Code;
+            EXIT;
+          END;
+          //Search in Keywords
+          IF STRLEN(DOCS.Keywords) > 0 THEN BEGIN
+            i := 1;
+            currKW := '';
+            REPEAT
+              char := DOCS.Keywords[i];
+              IF (char = ',') OR (i = STRLEN(DOCS.Keywords)) THEN BEGIN
+                IF STRPOS(UPPERCASE(TextToSearch),UPPERCASE(currKW)) <> 0 THEN BEGIN
+                  FAQEntry."Document Type" := DOCS.Code;
+                  IF DOCS."Extract Email Attachments" THEN BEGIN
+                    IF ProcessEmailAttachments(FAQEntry) THEN BEGIN
+
+                    END;
+                  END;
+                  EXIT;
+                END ELSE
+                  currKW := '';
+              END ELSE
+                currKW := currKW + FORMAT(char);
+              i += 1;
+            UNTIL i > STRLEN(DOCS.Keywords);
+          END;
+          //Search in Keywords
+        UNTIL DOCS.NEXT = 0;
+
+        Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtDidNotFindDocs, FAQEntry.Filename), USERID);
+      END;
+    END;
+
+    PROCEDURE ProcessEmailAttachments@1000000004(VAR FAQEntry@9062229 : Record 9062271) OK : Boolean;
+    VAR
+      Email@1000000011 : Record 9062281;
+      EmailLine@1000000010 : Record 9062282;
+      EmailAtt@1000000008 : Record 9062283;
+      NoAttachments@1000000013 : Integer;
+      i@1000000005 : Integer;
+      FAQ@1000000006 : Record 9062270;
+      TempPath@1000000009 : Text[250];
+      TxtProcessingAttachments@1000000014 : TextConst 'ENU=Processing attachments for "%1";ENG=Processing attachments for "%1"';
+      TxtError@1000000015 : TextConst 'ENU=Error tried to process e-mail attachments for non email file "%1";ENG=Error tried to process e-mail attachments for non email file "%1"';
+      FilePath2@1000000012 : Text[1000];
+      FileName2@1000000016 : Text[250];
+      DocumentType@1000000000 : Record 9062268;
+      DestFAQ@1000000001 : Record 9062270;
+      TxtAddedEmailToQueue@1000000002 : TextConst 'ENU=Added email attachment to queue;ENG=Added email attachment to queue';
+      Description@1000000003 : Text;
+      NewFileAttachmentQueueEntryNo@1000000007 : Integer;
+      NewFileAttachmentQueueEntry@1000000004 : Record 9062271;
+    BEGIN
+      Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtProcessingAttachments, FAQEntry.FilePath), USERID);
+      IF (UPPERCASE(mFileSystem.GetExtension(mFileSystem.Client(), FAQEntry.FilePath)) <> '.MSG') AND
+         (UPPERCASE(mFileSystem.GetExtension(mFileSystem.Client(), FAQEntry.FilePath)) <> '.EML') THEN BEGIN
+        Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtError, FAQEntry.FilePath), USERID);
+        EXIT(FALSE);
+      END;
+
+      IF ( NOT (DocumentType.GET(FAQEntry."Document Type"))) THEN
+        CLEAR(DocumentType);
+
+      FAQ.GET(FAQEntry."Queue Code");
+      IF NOT Email.GET(FAQEntry."E-Mail Entry ID") THEN EXIT(FALSE);
+      EmailAtt.SETRANGE("E-Mail Entry No.",Email."Entry No.");
+      IF (DocumentType."E-Mail Attachments Filter" <> '') THEN
+        EmailAtt.SETFILTER("File Name", DocumentType."E-Mail Attachments Filter")
+      ELSE
+        IF SysB.GetBoolean('SKIP_IMAGE0x.PNG_ATT') THEN
+          EmailAtt.SETFILTER("File Name", '<>%1', '@*image0*.png');
+      IF EmailAtt.FINDSET THEN BEGIN
+        NoAttachments := EmailAtt.COUNT;
+        REPEAT
+          IF DocumentType."E-Mail Attachments Queue" <> '' THEN
+            DestFAQ.GET(DocumentType."E-Mail Attachments Queue")
+          ELSE
+            DestFAQ.GET(FAQ.Code);
+
+          FileName2 := FORMAT(CURRENTDATETIME(), 0, '<Year4,4><Month,2><Day,2>_<Hours24><Minutes,2><Seconds,2><Second dec><Comma,_>') + '_' + EmailAtt."File Name";
+          FilePath2 := DestFAQ."Folder Path" + '\' + FileName2;
+          EmailAtt.CALCFIELDS("Content BLOB");
+          EmailAtt."Content BLOB".EXPORT(FilePath2);
+          DestFAQ.SetContactAndEmail(FAQEntry."Contact No.",FAQEntry."Sender Email Address");
+
+          Logger.Log('FAQ', Logger.Type::Debug, TxtAddedEmailToQueue + DestFAQ.Code, USERID);
+
+          Description := TnpToolkit.IIFText(DocumentType."E-Mail Attach. Inherit Descr.", FAQEntry.Description, EmailAtt."File Name");
+          NewFileAttachmentQueueEntryNo := FAQ.AddEntry(FilePath2, FileName2, Description, FAQEntry."User ID", DestFAQ.Code, FALSE, FALSE);
+          IF (NewFileAttachmentQueueEntry.GET(NewFileAttachmentQueueEntryNo)) THEN
+          BEGIN
+            NewFileAttachmentQueueEntry."E-Mail Entry ID" := FAQEntry."E-Mail Entry ID";
+            NewFileAttachmentQueueEntry."Sender Contact No." := FAQEntry."Sender Contact No.";
+            NewFileAttachmentQueueEntry."Sender Email Address" := FAQEntry."Sender Email Address";
+            NewFileAttachmentQueueEntry.MODIFY(TRUE);
+          END;
+        UNTIL EmailAtt.NEXT = 0;
+      END ELSE EXIT(FALSE);
+
+      EXIT(NoAttachments > 0);
+    END;
+
+    PROCEDURE AddToNewPurchaseInvoice@1000000013(VAR FAQEntry@9062229 : Record 9062271);
+    VAR
+      TxtConfirmation@1000000000 : TextConst 'ENU=Would you like to attach this file to a new Purchase Invoice;ENG=Would you like to attach this file to a new Purchase Invoice';
+    BEGIN
+      IF CONFIRM(TxtConfirmation) THEN BEGIN
+        FAQEntry."Document Type" := 'PURCHINV';
+        FAQEntry."Not for AutoNAV" := FALSE;
+        FAQEntry.MODIFY;
+        AutoProcessEntry(FAQEntry, TRUE);
+      END;
+    END;
+
+    PROCEDURE ArchiveFiles@1000000005(VAR pFileAttachmentQueueEntry@1000000000 : Record 9062271) : Boolean;
+    VAR
+      lResult@1000000001 : Boolean;
+      eConfirmation@1000000002 : TextConst 'ENU=Are you sure you want to archive %1 files?;ENG=Are you sure you want to archive %1 files?';
+    BEGIN
+      //DOC NA2016.10 - Archiving files
+      //  <> pFileAttachmentQueueEntry: The entries to archive files from
+
+      lResult := FALSE;
+
+      IF (CONFIRM(eConfirmation, TRUE, pFileAttachmentQueueEntry.COUNT())) THEN
+      BEGIN
+        IF (pFileAttachmentQueueEntry.FINDSET(TRUE, TRUE)) THEN
+        REPEAT
+          ArchiveFileSilently := TRUE;
+          ArchiveFile(pFileAttachmentQueueEntry);
+          ArchiveFileSilently := FALSE;
+        UNTIL (pFileAttachmentQueueEntry.NEXT() = 0);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE ArchiveFileWithConfirmation@1000000014(VAR pFileAttachmentQueueEntry@1000000001 : Record 9062271) : Boolean;
+    VAR
+      eConfirmation@1000000000 : TextConst 'ENU=Are you sure you want to archive the "%1" file?;ENG=Are you sure you want to archive the "%1" file?';
+      lResult@1000000002 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Archiving a file with confirmation
+      //  <> pFileAttachmentQueueEntry: The entry with file to archive
+      //  <- TRUE = Archived, FALSE = Cancelled
+
+      lResult := FALSE;
+
+      IF (CONFIRM(eConfirmation, TRUE, pFileAttachmentQueueEntry.Filename)) THEN
+      BEGIN
+        ArchiveFile(pFileAttachmentQueueEntry);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE ArchiveFile@1000000008(VAR FAQEntry@9062229 : Record 9062271);
+    VAR
+      FileSystem@1000000000 : Codeunit 9062264;
+      ParentDir@1000000001 : Text;
+      ArchiveDir@1000000002 : Text;
+      eFileDoesntExist@1000000003 : TextConst 'ENU="File ""%1"" doesn''t exist; do you want to delete the entry?";ENG="File ""%1"" doesn''t exist; do you want to delete the entry?"';
+    BEGIN
+      ParentDir := FileSystem.GetParentFolder(FileSystem.Client,FAQEntry.FilePath);
+      IF ParentDir = '' THEN
+        ERROR(errArchivePath, FAQEntry.FilePath);
+      ArchiveDir := ParentDir + '\' + 'Archive';
+      IF NOT FileSystem.FolderExists(FileSystem.Client,ArchiveDir) THEN FileSystem.CreateFolderStructure(FileSystem.Client,ArchiveDir);
+
+      FileSystem.DeleteFileIfExists(FileSystem.Client,ArchiveDir + '\' + FAQEntry.Filename);
+      IF (FileSystem.FileExists(FileSystem.Client, FAQEntry.FilePath)) THEN
+      BEGIN
+        FileSystem.MoveFile(FileSystem.Client,FAQEntry.FilePath,ArchiveDir + '\' + FAQEntry.Filename);
+        IF ( NOT (ArchiveFileSilently)) THEN
+          MESSAGE(txtFileArchived, ArchiveDir + '\' + FAQEntry.Filename);
+        FAQEntry.DELETE(TRUE);
+      END
+      ELSE
+      BEGIN
+        IF ( NOT (ArchiveFileSilently)) THEN
+          IF ( NOT (CONFIRM(eFileDoesntExist, TRUE, FAQEntry.Filename))) THEN
+            EXIT;
+        FAQEntry.DELETE(TRUE);
+      END;
+    END;
+
+    PROCEDURE ProcessEntry@1000000011(VAR FAQEntry@1000000000 : Record 9062271;PopupRecord@1000000029 : Boolean) Processed : Boolean;
+    VAR
+      TxtTryingToAutoProcess@1000000007 : TextConst 'ENU=Trying to auto-process entry "%1";ENG=Trying to auto-process entry "%1"';
+      TxtEntryMarkedAsErrored@1000000006 : TextConst 'ENU=Not auto-processing "%1" as file attachment queue entry is marked as errored;ENG=Not auto-processing "%1" as file attachment queue entry is marked as errored';
+      TxtNotAutoNav@1000000005 : TextConst 'ENU=AUTONAV not auto-processing "%1" as set to not-autonav;ENG=AUTONAV not auto-processing "%1" as set to not-autonav';
+      TxtDocumentTypeNotFound@1000000004 : TextConst 'ENU=Not auto-processing "%1" as the document type was not found;ENG=Not auto-processing "%1" as the document type was not found';
+      TxtErrorProcessing@1000000003 : TextConst 'ENU=Error processing "%1". Codeunit %2 returned an error: "%3";ENG=Error processing "%1". Codeunit %2 returned an error: "%3"';
+      TxtTypeNotAutoProcess@1000000002 : TextConst 'ENU=Not auto-proccesing "%1" as type "%2" is not set to auto-process;ENG=Not auto-proccesing "%1" as type "%2" is not set to auto-process';
+      TxtFileIdentified@1000000001 : TextConst 'ENU="""%1"" identified as file extension ""%2"" and document type ""%3""";ENG="""%1"" identified as file extension ""%2"" and document type ""%3"""';
+      FAttach@1000000027 : Record 9062272;
+      DocType@1000000026 : Record 9062268;
+      RecRef@1000000025 : RecordRef;
+      FieldRef@1000000024 : FieldRef;
+      SmartDoc@1000000023 : Codeunit 9062273;
+      P1Value@1000000022 : Text[100];
+      P2Value@1000000021 : Text[100];
+      P3Value@1000000020 : Text[100];
+      MatchFrom@1000000019 : Text[250];
+      Found@1000000018 : Boolean;
+      FAQueue@1000000017 : Record 9062270;
+      FSO@1000000016 : Automation "{420B2830-E718-11CF-893D-00A0C9054228} 1.0:{0D43FE01-F093-11CF-8940-00A0C9054228}:'Microsoft Scripting Runtime'.FileSystemObject";
+      FAttachErrMsg@1000000015 : Text[250];
+      PrimKeyID1@1000000014 : Integer;
+      PrimKeyID2@1000000013 : Integer;
+      PrimKeyID3@1000000012 : Integer;
+      PrimKeyValue1@1000000011 : Text[250];
+      PrimKeyValue2@1000000010 : Text[250];
+      PrimKeyValue3@1000000009 : Text[250];
+      FAttachIdentify@1000000008 : Codeunit 9062268;
+      FileAttachmentProcessing@9062229 : Codeunit 9062600;
+    BEGIN
+      IF NOT DocType.GET(FAQEntry."Document Type") THEN BEGIN
+        FAttachIdentify.IdentifyDocumentType(FAQEntry);
+        IF NOT DocType.GET(FAQEntry."Document Type") THEN BEGIN
+          Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtDocumentTypeNotFound, FAQEntry.FilePath), USERID);
+        END;
+      END;
+
+      IF FAQEntry."File Extension" = '' THEN
+        FAQEntry.VALIDATE("File Extension",UPPERCASE(mFileSystem.GetExtension(mFileSystem.Client(), FAQEntry.FilePath)));
+
+      Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtFileIdentified, FAQEntry.Filename, FAQEntry."File Extension", DocType.Code), USERID);
+
+      IF (FAQEntry."File Extension" = '.MSG') OR (FAQEntry."File Extension" = '.EML') THEN BEGIN
+        IF DocType."Extract Email Attachments" THEN BEGIN
+          ProcessEmailAttachments(FAQEntry);
+          MoveToProcessed(FAQEntry, 0, '', 0);
+          EXIT;
+        END;
+      END;
+
+      IF (DocType."Run Codeunit On" = DocType."Run Codeunit On"::"Instead of Attaching") AND (DocType."Run Codeunit No." <> 0) THEN BEGIN
+        Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO('Running CU %1 on FAQEntry %2',DocType."Run Codeunit No.",FAQEntry."Entry No."), USERID);
+
+        CODEUNIT.RUN(DocType."Run Codeunit No.",FAQEntry);
+        MoveToProcessed(FAQEntry, 0, '', 0);
+        EXIT(TRUE);
+      END;
+
+      IF (FAQEntry."Destination Table ID" = 0) OR (FAQEntry."Destination Position Text" = '') THEN BEGIN
+        IF NOT FAttach_Identification.IdentifyDestinationRecord(FAQEntry) THEN BEGIN
+          IF DocType."Alternative Document Type" <> '' THEN BEGIN
+            FAQEntry.VALIDATE("Document Type",DocType."Alternative Document Type");
+            AutoProcessEntry(FAQEntry, PopupRecord);
+          END ELSE
+            EXIT(FALSE);
+        END;
+      END;
+      RecRef.OPEN(FAQEntry."Destination Table ID");
+      RecRef.SETPOSITION(FAQEntry."Destination Position Text");
+
+      //File Attachment
+      FAttach.INIT;
+      FAttach.FILTERGROUP(4);
+      FAttach.SETFILTER("Table ID",FORMAT(RecRef.NUMBER));
+      PrimKeyID1 := TNPUtils.GetPrimaryKeyFieldID(RecRef.NUMBER,RecRef.GETPOSITION,1);
+      IF PrimKeyID1 <> 0 THEN BEGIN
+        PrimKeyValue1 := TNPUtils.GetPrimaryKey(RecRef.NUMBER,RecRef.GETPOSITION,1);
+        FAttach.SETFILTER(FAttach."Primary Key FieldID 1",FORMAT(PrimKeyID1));
+        FAttach.SETFILTER(FAttach."Primary Key Value 1",PrimKeyValue1);
+      END;
+
+      PrimKeyID2 := TNPUtils.GetPrimaryKeyFieldID(RecRef.NUMBER,RecRef.GETPOSITION,2);
+      IF PrimKeyID2 <> 0 THEN BEGIN
+        PrimKeyValue2 := TNPUtils.GetPrimaryKey(RecRef.NUMBER,RecRef.GETPOSITION,2);
+        FAttach.SETFILTER(FAttach."Primary Key FieldID 2",FORMAT(PrimKeyID2));
+        FAttach.SETFILTER(FAttach."Primary Key Value 2",PrimKeyValue2);
+      END;
+
+      PrimKeyID3 := TNPUtils.GetPrimaryKeyFieldID(RecRef.NUMBER,RecRef.GETPOSITION,3);
+      IF PrimKeyID3 <> 0 THEN BEGIN
+        PrimKeyValue3 := TNPUtils.GetPrimaryKey(RecRef.NUMBER,RecRef.GETPOSITION,3);
+        FAttach.SETFILTER(FAttach."Primary Key FieldID 3",FORMAT(PrimKeyID3));
+        FAttach.SETFILTER(FAttach."Primary Key Value 3",PrimKeyValue3);
+      END;
+
+      FAttachErrMsg := FileAttachmentProcessing.ImportFileAdvanced(FAttach, FAQEntry.FilePath,
+        FAQEntry.Filename,FAQEntry.Description, FAQEntry."File Type",FALSE,FALSE,TRUE,
+        FAQEntry."User ID",FAQEntry."Contact No.",FAQEntry."Sender Email Address",FAQEntry."Excel ID");
+
+      IF STRLEN(FAttachErrMsg) > 0 THEN BEGIN
+        FAQEntry."AutoProcess Errored" := TRUE;
+        FAQEntry."AutoProcess Error Message" := FAttachErrMsg;
+        FAQEntry.MODIFY;
+      END ELSE BEGIN
+        DocType."Last Attached to Table ID" := RecRef.NUMBER;
+        DocType."Last Attached to Position Text" := RecRef.GETPOSITION;
+        DocType.MODIFY;
+
+        IF (DocType."Run Codeunit On" = DocType."Run Codeunit On"::"After Attaching") THEN
+          IF DocType."Run Codeunit No." <> 0 THEN CODEUNIT.RUN(DocType."Run Codeunit No.",FAQEntry);
+        MoveToProcessed(FAQEntry,RecRef.NUMBER,RecRef.GETPOSITION,DocType.PageID);
+
+        UniV.SetIntegerVar('NFORM_DEST_TABLE', RecRef.NUMBER);
+        UniV.SetTextVar('NFORM_DEST_POS', RecRef.GETPOSITION);
+        EXIT(TRUE);
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1    JH 02/09/2012 - Migrated to 2013
+      //DOC NA2016.10   JH 26/08/2015 - Upgraded to 2016
+      //DOC NA2016.10   AZ 15/09/2015 - Code moved from File Attachment Queue Entry
+      //DOC NA2016.14   PC 01/03/2016 - Delete FAQEntry after MoveToProcessed when file is deleted, not archived
+      //DOC NA2016.14   PC 01/03/2016 - Fixes to run CU instead of attaching file
+      //DOC NA2016.14   PC 01/03/2016 - Change to allow extracting Email Attachments to different queue
+      //DOC NA2016.15   JH 18/04/2016 - CfMD amendments
+      //DOC NA2016.15   JH 21/04/2016 - New logic for filering e-mail attachments and updating their descriptions
+      //DOC NA2016.15   JH 09/05/2016 - CfMD modifications
+      //DOC NA2016.16.2 JH 04/08/2016 - Inheriting e-mail details from parent attachment in "ProcessEmailAttachments"
+    }
+    END.
+  }
+}
+

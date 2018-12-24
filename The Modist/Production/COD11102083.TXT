@@ -1,0 +1,621 @@
+OBJECT Codeunit 11102083 OM - Database Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE GetObjectProperties@1(VAR NAVDatabase@1000 : Record 11102099;VAR Object@1001 : Record 2000000001;VAR Progressbar@1002 : Codeunit 11102044;ProgressbarFrom@1003 : Integer;ProgressbarTo@1004 : Integer);
+    VAR
+      ObjectImportLine@1005 : Record 11102079;
+      NoOfRecords@1006 : Integer;
+      OMAPresent2@1007 : Boolean;
+      DataReader@1008 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      SqlCommand@1009 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlConnection@1010 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+    BEGIN
+      SqlConnection := SqlConnection.SqlConnection(NAVDatabase.ConnectionString);
+      SqlConnection.Open;
+
+      SqlCommand := SqlConnection.CreateCommand;
+
+      SqlCommand.CommandText('SELECT COUNT(ID) AS NoOfObjects FROM Object WHERE Type <> 0');
+      DataReader := SqlCommand.ExecuteReader;
+      DataReader.Read;
+      NoOfRecords := DataReader.Item('NoOfObjects');
+      DataReader.Close;
+
+      OMAPresent2 := OMAPresent(SqlConnection);
+
+      Progressbar.BarSize := NoOfRecords;
+      Progressbar.UseRange(ProgressbarFrom, ProgressbarTo);
+
+      IF OMAPresent2 THEN
+        SqlCommand.CommandText(
+          'SELECT o.[Type], o.[ID], o.[Name], o.[Modified], o.[Compiled], o.[BLOB Size], ' +
+          '  DATEPART(YYYY, o.[Date]) AS [Year], DATEPART(MM, o.[Date]) AS [Month], DATEPART(DD, o.[Date]) AS [Day], ' +
+          '  DATEPART(HH, o.[Time]) AS [Hours], DATEPART(MI, o.[Time]) AS [Minutes], DATEPART(SS, o.[Time]) AS [Seconds], ' +
+          '  DATEPART(YYYY, o.[Date]) AS [TimeYear], ' +
+          '  o.[Version List], ' +
+          '  CASE ISNULL(h.[Object No_], 0) WHEN 0 THEN 1 ELSE 0 END Updated ' +
+          'FROM [Object] o ' +
+          'LEFT OUTER JOIN ' +
+          '( ' +
+          '  SELECT [Object Type], [Object No_], [Object Name], [Modified], [Compiled], [Version List], [Object Date], [Object Time] ' +
+          '  FROM [OM - C_AL History Object] ' +
+          '  WHERE [Entry No_] IN ' +
+          '  ( ' +
+          '    SELECT MAX([Entry No_]) ' +
+          '    FROM [OM - C_AL History Object] ' +
+          '    GROUP BY [Object Type], [Object No_] ' +
+          '   ) ' +
+          ') h ' +
+          'ON o.[Type] = h.[Object Type] ' +
+          'AND o.[ID] = h.[Object No_] ' +
+          'AND o.[Name] = h.[Object Name] ' +
+          'AND o.[Modified] = h.[Modified] ' +
+          'AND o.[Compiled] = h.[Compiled] ' +
+          'AND REPLACE(REPLACE(REPLACE(o.[Version List], '','', ''''), ''#'', ''''), ''LOCKED'', '''') = ' +
+          '    REPLACE(REPLACE(REPLACE(h.[Version List], '','', ''''), ''#'', ''''), ''LOCKED'', '''') ' +
+          'AND o.[Date] = h.[Object Date] ' +
+          'AND ABS(DATEDIFF(SECOND, o.[Time], h.[Object Time])) < 2 ' +
+          'WHERE o.[Type] <> 0;')
+      ELSE
+        SqlCommand.CommandText(
+          'SELECT o.[Type], o.[ID], o.[Name], o.[Modified], o.[Compiled], o.[BLOB Size], ' +
+          '  DATEPART(YYYY, o.[Date]) AS [Year], DATEPART(MM, o.[Date]) AS [Month], DATEPART(DD, o.[Date]) AS [Day], ' +
+          '  DATEPART(HH, o.[Time]) AS [Hours], DATEPART(MI, o.[Time]) AS [Minutes], DATEPART(SS, o.[Time]) AS [Seconds], ' +
+          '  DATEPART(YYYY, o.[Date]) AS [TimeYear], ' +
+          '  o.[Version List], ' +
+          '  1 Updated ' +
+          'FROM [Object] o ' +
+          'WHERE o.[Type] <> 0;');
+
+      DataReader := SqlCommand.ExecuteReader;
+
+      WHILE DataReader.Read DO BEGIN
+
+        Progressbar.AddToBar(1);
+
+        FillObjectWithDataReader(Object, DataReader);
+
+        Object.INSERT;
+
+      END;
+      DataReader.Close;
+
+      IF OMAPresent2 THEN BEGIN
+
+        SqlCommand.CommandText('SELECT [Object Type], [Object No_] FROM [OM - Known Object Export Error]');
+        DataReader := SqlCommand.ExecuteReader;
+
+        WHILE DataReader.Read DO
+          IF Object.GET(DataReader.Item('Object Type'), '', DataReader.Item('Object No_')) THEN BEGIN
+            Object."DBM Table No." := ObjectImportLine.Updated::Error;
+            Object.MODIFY;
+          END;
+        DataReader.Close;
+      END;
+    END;
+
+    PROCEDURE GetObjectPropertiesSelection@2(VAR NAVDatabase@1000 : Record 11102099;VAR Object@1001 : Record 2000000001;VAR Progressbar@1002 : Codeunit 11102044;ProgressbarFrom@1003 : Integer;ProgressbarTo@1004 : Integer);
+    VAR
+      ctOMATableNotFound@1005 : TextConst 'DEU=The Object Manager tables are not present in this database.;ENU=The Object Manager tables are not present in this database.;ESP=The Object Manager tables are not present in this database.;FRA=The Object Manager tables are not present in this database.;NLD=De Object Manager tabellen zijn niet aanwezig in deze database.;DEA=The Object Manager tables are not present in this database.';
+      DataReader@1006 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      SqlCommand@1007 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlConnection@1008 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+    BEGIN
+      SqlConnection := SqlConnection.SqlConnection(NAVDatabase.ConnectionString);
+      SqlConnection.Open;
+
+      IF NOT OMAPresent(SqlConnection) THEN
+        ERROR(ctOMATableNotFound);
+
+      Progressbar.BarSize := Object.COUNT;
+      Progressbar.UseRange(ProgressbarFrom, ProgressbarTo);
+
+      SqlCommand := SqlConnection.CreateCommand;
+
+      IF Object.FINDSET THEN
+        REPEAT
+
+          SqlCommand.CommandText(
+            'SELECT o.[Type], o.[ID], o.[Name], o.[Modified], o.[Compiled], o.[BLOB Size], ' +
+            '  DATEPART(YYYY, o.[Date]) AS [Year], DATEPART(MM, o.[Date]) AS [Month], DATEPART(DD, o.[Date]) AS [Day], ' +
+            '  DATEPART(HH, o.[Time]) AS [Hours], DATEPART(MI, o.[Time]) AS [Minutes], DATEPART(SS, o.[Time]) AS [Seconds], ' +
+            '  DATEPART(YYYY, o.[Date]) AS [TimeYear], ' +
+            '  o.[Version List], ' +
+            '  CASE ISNULL(h.[Object No_], 0) WHEN 0 THEN 1 ELSE 0 END Updated ' +
+            'FROM [Object] o ' +
+            'LEFT OUTER JOIN ' +
+            '( ' +
+            '  SELECT [Object Type], [Object No_], [Object Name], [Modified], [Compiled], [Version List], [Object Date], [Object Time] ' +
+            '  FROM [OM - C_AL History Object] ' +
+            '  WHERE [Entry No_] IN ' +
+            '  ( ' +
+            '    SELECT MAX([Entry No_]) ' +
+            '    FROM [OM - C_AL History Object] ' +
+            '    GROUP BY [Object Type], [Object No_] ' +
+            '   ) ' +
+            ') h ' +
+            'ON o.[Type] = h.[Object Type] ' +
+            'AND o.[ID] = h.[Object No_] ' +
+            'AND o.[Name] = h.[Object Name] ' +
+            'AND o.[Modified] = h.[Modified] ' +
+            'AND o.[Compiled] = h.[Compiled] ' +
+            'AND REPLACE(REPLACE(REPLACE(o.[Version List], '','', ''''), ''#'', ''''), ''LOCKED'', '''') = ' +
+            '    REPLACE(REPLACE(REPLACE(h.[Version List], '','', ''''), ''#'', ''''), ''LOCKED'', '''') ' +
+            'AND o.[Date] = h.[Object Date] ' +
+            'AND ABS(DATEDIFF(SECOND, o.[Time], h.[Object Time])) < 2 ' +
+            'WHERE [Type] = ' + FORMAT(Object.Type + 0) + ' ' +
+            'AND   ID = ' + FORMAT(Object.ID));
+
+          DataReader := SqlCommand.ExecuteReader;
+          IF DataReader.Read THEN
+            FillObjectWithDataReader(Object, DataReader)
+          ELSE
+            Object.INIT;
+
+          Object.MODIFY;
+
+          DataReader.Close;
+
+        UNTIL Object.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE FillObjectWithDataReader@13(VAR Object@1000 : Record 2000000001;VAR DataReader@1001 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader");
+    VAR
+      Day@1002 : Integer;
+      Hours@1003 : Integer;
+      Minutes@1004 : Integer;
+      Month@1005 : Integer;
+      Seconds@1006 : Integer;
+      TimeYear@1007 : Integer;
+      Year@1008 : Integer;
+    BEGIN
+      Object.Type := DataReader.Item('Type');
+      Object.ID := DataReader.Item('ID');
+      Object.Name := DataReader.Item('Name');
+      Object.Modified := FORMAT(DataReader.Item('Modified'))[1] = 1;
+      Object.Compiled := FORMAT(DataReader.Item('Compiled'))[1] = 1;
+      Object."BLOB Size" := DataReader.Item('BLOB Size');
+
+      Year := DataReader.Item('Year');
+      Month := DataReader.Item('Month');
+      Day := DataReader.Item('Day');
+
+      IF Year = 1753 THEN
+        Object.Date := 0D
+      ELSE
+        Object.Date := DMY2DATE(Day, Month, Year);
+
+      Hours := DataReader.Item('Hours');
+      Minutes := DataReader.Item('Minutes');
+      Seconds := DataReader.Item('Seconds');
+      TimeYear := DataReader.Item('TimeYear');
+
+      IF TimeYear = 1753 THEN
+        Object.Time := 0T
+      ELSE
+        IF EVALUATE(Object.Time, FORMAT(Hours) + ':' + FORMAT(Minutes) + ':' + FORMAT(Seconds)) THEN
+          ;
+
+      Object."Version List" := DataReader.Item('Version List');
+      Object."DBM Table No." := DataReader.Item('Updated');
+    END;
+
+    PROCEDURE GetObjectContent@3(VAR NAVDatabase@1000 : Record 11102099;VAR Object@1001 : Record 2000000001;VAR CALHistoryLine@1002 : Record 11102053);
+    VAR
+      DataReader@1003 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      SqlCommand@1004 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlConnection@1005 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+    BEGIN
+      SqlConnection := SqlConnection.SqlConnection(NAVDatabase.ConnectionString);
+      SqlConnection.Open;
+
+      SqlCommand := SqlConnection.CreateCommand;
+
+      SqlCommand.CommandText(
+        'SELECT [Line No_], [Sub Line No_], [Code] FROM [OM - C_AL History Line] ' +
+        'WHERE [Entry No_] = ( ' +
+        'SELECT MAX([Entry No_]) FROM [OM - C_AL History Object] ' +
+        'WHERE [Object Type] = ' + FORMAT(Object.Type + 0) + ' ' +
+        'AND [Object No_] = ' + FORMAT(Object.ID) + ') ');
+
+      CALHistoryLine.RESET;
+      CALHistoryLine.DELETEALL;
+
+      DataReader := SqlCommand.ExecuteReader;
+
+      WHILE DataReader.Read DO BEGIN
+
+        CALHistoryLine."Entry No." := 1;
+        CALHistoryLine."Line No." := DataReader.Item('Line No_');
+        CALHistoryLine."Sub Line No." := DataReader.Item('Sub Line No_');
+        CALHistoryLine.Code := DataReader.Item('Code');
+        CALHistoryLine.INSERT;
+
+      END;
+      DataReader.Close;
+    END;
+
+    PROCEDURE GetObjectOutdated@8(VAR NAVDatabase@1000 : Record 11102099;ObjectType2@1001 : ',Table,Form,Report,Dataport,Codeunit,XMLport,MenuSuite,Page,Query';ObjectNo@1002 : Integer) ExitValue : Integer;
+    VAR
+      HOPresent@1003 : Integer;
+      KOEPresent@1004 : Integer;
+      DataReader@1005 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      SqlCommand@1006 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlConnection@1007 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+    BEGIN
+      SqlConnection := SqlConnection.SqlConnection(NAVDatabase.ConnectionString);
+      SqlConnection.Open;
+
+      SqlCommand := SqlConnection.CreateCommand;
+
+      SqlCommand.CommandText(
+        'SELECT ' +
+        'CASE ' +
+        'WHEN h.[Object Name] IS NULL ' +
+        'THEN 0 ' +
+        'ELSE 1 ' +
+        'END HOPresent, ' +
+        'CASE ' +
+        'WHEN koe.[Object No_] IS NULL ' +
+        'THEN 0 ' +
+        'ELSE 1 ' +
+        'END KOEPresent ' +
+        'FROM [Object] o ' +
+        'LEFT OUTER JOIN ' +
+        '( ' +
+        'SELECT [Object Name], [Modified], [Compiled], [Version List], [Object Date], [Object Time] ' +
+        'FROM [OM - C_AL History Object] ' +
+        'WHERE [Object Type] = ' + FORMAT(ObjectType2 + 0) + ' ' +
+        'AND [Object No_]= ' + FORMAT(ObjectNo) + ' ' +
+        'AND [Entry No_] IN ' +
+        '( ' +
+        'SELECT MAX([Entry No_]) ' +
+        'FROM [OM - C_AL History Object] ' +
+        'WHERE [Object Type] = ' + FORMAT(ObjectType2 + 0) + ' ' +
+        'AND [Object No_]= ' + FORMAT(ObjectNo) + ' ' +
+        ') ' +
+        ') h ' +
+        'ON o.[Name] = h.[Object Name] ' +
+        'AND o.[Modified] = h.[Modified] ' +
+        'AND o.[Compiled] = h.[Compiled] ' +
+        'AND REPLACE(REPLACE(REPLACE(o.[Version List], '','', ''''), ''#'', ''''), ''LOCKED'', '''') = ' +
+        'REPLACE(REPLACE(REPLACE(h.[Version List], '','', ''''), ''#'', ''''), ''LOCKED'', '''') ' +
+        'AND o.[Date] = h.[Object Date] ' +
+        'AND ABS(DATEDIFF(SECOND, o.[Time], h.[Object Time])) < 2 ' +
+        'LEFT OUTER JOIN [OM - Known Object Export Error] koe ' +
+        'ON [Object Type] = ' + FORMAT(ObjectType2 + 0) + ' ' +
+        'AND [Object No_]= ' + FORMAT(ObjectNo) + ' ' +
+        'WHERE o.Type = ' + FORMAT(ObjectType2 + 0) + ' ' +
+        'AND o.ID = ' + FORMAT(ObjectNo));
+
+      DataReader := SqlCommand.ExecuteReader;
+
+      IF DataReader.Read THEN BEGIN
+        ExitValue := 1;
+
+        HOPresent := DataReader.Item('HOPresent');
+        KOEPresent := DataReader.Item('KOEPresent');
+
+        IF KOEPresent = 1 THEN
+          ExitValue := 2;
+        IF HOPresent = 1 THEN
+          ExitValue := 0;
+
+      END;
+
+      DataReader.Close;
+    END;
+
+    PROCEDURE MarkObject@4(VAR NAVDatabase@1000 : Record 11102099;ObjectType2@1001 : Option;ObjectNo@1002 : Integer;VAR NewVersionList@1003 : Text);
+    VAR
+      Object@1004 : Record 2000000001;
+      VersionListLength@1005 : Integer;
+      DataReader@1006 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      SqlCommand@1007 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlConnection@1008 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+    BEGIN
+      SqlConnection := SqlConnection.SqlConnection(NAVDatabase.ConnectionString);
+      SqlConnection.Open;
+
+      SqlCommand := SqlConnection.CreateCommand;
+      VersionListLength := MAXSTRLEN(Object."Version List");
+
+      SqlCommand.CommandText(
+        'UPDATE [Object] SET [Version List] = ''#'' + REPLACE([Version List], ''#'','''') ' +
+        'WHERE [Type] = ' + FORMAT(ObjectType2) + ' ' +
+        'AND [ID] = ' + FORMAT(ObjectNo) + ' ' +
+        'AND LEN(REPLACE([Version List], ''#'','''')) < ' + FORMAT(VersionListLength));
+      SqlCommand.ExecuteNonQuery;
+
+      SqlCommand.CommandText(
+        'SELECT [Version List] ' +
+        'FROM [Object] ' +
+        'WHERE [Type] = ' + FORMAT(ObjectType2) + ' ' +
+        'AND [ID] = ' + FORMAT(ObjectNo) + ' ');
+      DataReader := SqlCommand.ExecuteReader;
+
+      IF DataReader.Read THEN
+        NewVersionList := DataReader.Item('Version List');
+      DataReader.Close;
+    END;
+
+    PROCEDURE RemoveMarkObject@5(VAR NAVDatabase@1000 : Record 11102099;ObjectType2@1001 : Option;ObjectNo@1002 : Integer;VAR NewVersionList@1003 : Text);
+    VAR
+      DataReader@1004 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      SqlCommand@1005 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlConnection@1006 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+    BEGIN
+      SqlConnection := SqlConnection.SqlConnection(NAVDatabase.ConnectionString);
+      SqlConnection.Open;
+
+      SqlCommand := SqlConnection.CreateCommand;
+
+      SqlCommand.CommandText(
+        'UPDATE [Object] SET [Version List] = REPLACE([Version List], ''#'','''') ' +
+        'WHERE [Type] = ' + FORMAT(ObjectType2) + ' ' +
+        'AND [ID] = ' + FORMAT(ObjectNo));
+      SqlCommand.ExecuteNonQuery;
+
+      SqlCommand.CommandText(
+        'SELECT [Version List] ' +
+        'FROM [Object] ' +
+        'WHERE [Type] = ' + FORMAT(ObjectType2) + ' ' +
+        'AND [ID] = ' + FORMAT(ObjectNo));
+      DataReader := SqlCommand.ExecuteReader;
+
+      IF DataReader.Read THEN
+        NewVersionList := DataReader.Item('Version List');
+      DataReader.Close;
+    END;
+
+    PROCEDURE RemoveAllMarks@7(VAR NAVDatabase@1000 : Record 11102099);
+    VAR
+      SqlCommand@1001 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlConnection@1002 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+    BEGIN
+      SqlConnection := SqlConnection.SqlConnection(NAVDatabase.ConnectionString);
+      SqlConnection.Open;
+
+      SqlCommand := SqlConnection.CreateCommand;
+
+      SqlCommand.CommandText('UPDATE [Object] SET [Version List] = REPLACE([Version List], ''#'','''')');
+      SqlCommand.ExecuteNonQuery;
+    END;
+
+    PROCEDURE TestConnection@6(VAR NAVDatabase@1000 : Record 11102099);
+    VAR
+      ReturnValue@1001 : Integer;
+      ctConnectionOke@1002 : TextConst 'DEU=Connection OK.;ENU=Connection OK.;ESP=Connection OK.;FRA=Connection OK.;NLD=Connectie ok‚.;DEA=Connection OK.';
+      DataReader@1003 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      SqlCommand@1004 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlConnection@1005 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+    BEGIN
+      SqlConnection := SqlConnection.SqlConnection(NAVDatabase.ConnectionString);
+      SqlConnection.Open;
+
+      SqlCommand := SqlConnection.CreateCommand;
+
+      SqlCommand.CommandText('SELECT TOP 1 1 Test FROM [Object]');
+      DataReader := SqlCommand.ExecuteReader;
+
+      IF DataReader.Read THEN
+        ReturnValue := DataReader.Item('Test');
+      DataReader.Close;
+
+      IF ReturnValue = 1 THEN
+        MESSAGE(ctConnectionOke);
+    END;
+
+    PROCEDURE GetFieldDefinitions@11(VAR NAVDatabase@1000 : Record 11102099;TableNo@1001 : Integer;VAR FieldCompareLine@1002 : Record 11102067);
+    VAR
+      TmpCALHistoryLine@1003 : TEMPORARY Record 11102053;
+      Object@1004 : Record 2000000001;
+      FieldName2@1005 : Text;
+      TypeName@1006 : Text;
+      FieldNo2@1007 : Integer;
+      Enabled@1008 : Boolean;
+      StopLoop@1009 : Boolean;
+    BEGIN
+      Object.Type := Object.Type::Table;
+      Object.ID := TableNo;
+      GetObjectContent(NAVDatabase, Object, TmpCALHistoryLine);
+
+      TmpCALHistoryLine.SETRANGE("Sub Line No.", 1);
+      TmpCALHistoryLine.SETRANGE(Code, '  FIELDS');
+      IF TmpCALHistoryLine.FINDFIRST THEN BEGIN
+        TmpCALHistoryLine.SETRANGE(Code);
+        IF TmpCALHistoryLine.NEXT <> 0 THEN
+          REPEAT
+            IF TmpCALHistoryLine.Code[5] = '{' THEN BEGIN
+              ParseFieldLine(TmpCALHistoryLine.Code, FieldNo2, Enabled, FieldName2, TypeName);
+
+              FieldCompareLine.INIT;
+              FieldCompareLine."Table No." := TableNo;
+              FieldCompareLine."No." := FieldNo2;
+              FieldCompareLine.Name := FieldName2;
+              FieldCompareLine.VALIDATE("Type Name", TypeName);
+              FieldCompareLine.Enabled := Enabled;
+              FieldCompareLine.INSERT;
+            END;
+
+            CASE COPYSTR(TmpCALHistoryLine.Code, 52, 10) OF
+
+              'FieldClass' :
+                BEGIN
+                  IF EVALUATE(FieldCompareLine.Class, GetPropertyValue(TmpCALHistoryLine.Code)) THEN
+                    ;
+                  FieldCompareLine.MODIFY;
+                END;
+
+              'OptionStri' :
+                BEGIN
+                  FieldCompareLine."Option String" := COPYSTR(GetPropertyValue(GetCompleteLine(TmpCALHistoryLine)), 1, 250);
+                  FieldCompareLine.MODIFY;
+                END;
+
+              'SQL Data T' :
+                BEGIN
+                  IF EVALUATE(FieldCompareLine."SQL Data Type", GetPropertyValue(TmpCALHistoryLine.Code)) THEN
+                    ;
+                  FieldCompareLine.MODIFY;
+                END;
+            END;
+
+            IF TmpCALHistoryLine.Code = '  }' THEN
+              StopLoop := TRUE;
+            IF TmpCALHistoryLine.NEXT = 0 THEN
+              StopLoop := TRUE;
+          UNTIL StopLoop;
+      END;
+    END;
+
+    LOCAL PROCEDURE ParseFieldLine@10(Code@1000 : Text;VAR FieldNo2@1001 : Integer;VAR Enabled@1002 : Boolean;VAR FieldName2@1003 : Text;VAR TypeName@1004 : Text);
+    VAR
+      OptionArray@1005 : ARRAY [10] OF Text;
+      i@1006 : Integer;
+      OptionNo@1007 : Integer;
+      AddChar@1008 : Boolean;
+      BracketOpen@1009 : Boolean;
+      FirstCharacter@1010 : Boolean;
+    BEGIN
+      OptionNo := 1;
+      FOR i := 6 TO STRLEN(Code) DO BEGIN
+        AddChar := FALSE;
+        CASE Code[i] OF
+
+          '[' :
+            IF FirstCharacter THEN
+              BracketOpen := TRUE
+            ELSE
+              AddChar := TRUE;
+
+          ']' :
+            IF BracketOpen THEN
+              IF Code[i + 1] = ']' THEN BEGIN
+                AddChar := TRUE;
+                i += 1;
+              END ELSE
+                BracketOpen := FALSE
+            ELSE
+              AddChar := TRUE;
+
+          ';' :
+            IF BracketOpen THEN
+              AddChar := TRUE
+            ELSE BEGIN
+              OptionNo += 1;
+              FirstCharacter := TRUE;
+            END;
+
+          '}' :
+            IF BracketOpen THEN
+              AddChar := TRUE;
+
+          ELSE
+            AddChar := TRUE;
+        END;
+        IF AddChar THEN
+          OptionArray[OptionNo] := OptionArray[OptionNo] + FORMAT(Code[i]);
+      END;
+
+      IF EVALUATE(FieldNo2, OptionArray[1]) THEN
+        ;
+      IF NOT EVALUATE(Enabled, OptionArray[2]) THEN
+        Enabled := TRUE;
+
+      FieldName2 := DELCHR(OptionArray[3], '<>');
+      TypeName := DELCHR(OptionArray[4], '<>');
+    END;
+
+    LOCAL PROCEDURE GetPropertyValue@12(Code@1000 : Text) ReturnValue : Text;
+    VAR
+      i@1001 : Integer;
+      StartPos@1002 : Integer;
+      AccoladeOpen@1003 : Boolean;
+    BEGIN
+      Code := COPYSTR(Code, 52);
+
+      StartPos := STRPOS(Code, '=');
+      IF StartPos = 0 THEN
+        EXIT;
+
+      StartPos += 1;
+
+      IF Code[StartPos] = '[' THEN BEGIN
+        AccoladeOpen := TRUE;
+        StartPos += 1;
+      END;
+
+      FOR i := StartPos TO STRLEN(Code) DO
+        CASE TRUE OF
+
+          AccoladeOpen :
+            IF Code[i] = ']' THEN
+              IF Code[i + 1] = ']' THEN BEGIN
+                i += 1;
+                ReturnValue += FORMAT(Code[i]);
+              END ELSE
+                EXIT
+            ELSE
+              ReturnValue += FORMAT(Code[i]);
+
+          Code[i] = ';' :
+            EXIT;
+
+          Code[i] = '}' :
+            BEGIN
+              ReturnValue := DELSTR(ReturnValue, STRLEN(ReturnValue));
+              EXIT;
+            END;
+
+          ELSE
+            ReturnValue += FORMAT(Code[i]);
+        END;
+    END;
+
+    LOCAL PROCEDURE GetCompleteLine@15(VAR CALHistoryLine@1000 : Record 11102053) ExitValue : Text;
+    BEGIN
+      WITH CALHistoryLine DO BEGIN
+        SETRANGE("Line No.", "Line No.");
+        SETRANGE("Sub Line No.");
+        IF FINDSET THEN
+          REPEAT
+            ExitValue := ExitValue + Code;
+          UNTIL NEXT = 0;
+        SETRANGE("Line No.");
+        SETRANGE("Sub Line No.", 1);
+      END;
+    END;
+
+    LOCAL PROCEDURE OMAPresent@9(VAR SqlConnection@1000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection") ExitValue : Boolean;
+    VAR
+      DataReader@1001 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      SqlCommand@1002 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+    BEGIN
+      SqlCommand := SqlConnection.CreateCommand;
+
+      SqlCommand.CommandText('SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID(N''dbo.[OM - C_AL History Object]'') AND type in (N''U'')');
+      DataReader := SqlCommand.ExecuteReader;
+      ExitValue := DataReader.HasRows;
+      DataReader.Close;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

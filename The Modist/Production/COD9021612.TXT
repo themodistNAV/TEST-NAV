@@ -1,0 +1,1344 @@
+OBJECT Codeunit 9021612 Internet Order to Sales-Doc
+{
+  OBJECT-PROPERTIES
+  {
+    Date=17/12/18;
+    Time=[ 1:47:35 PM];
+    Modified=Yes;
+    Version List=EC2016.6,OP9031,DEL-118,OP10530,OP10987,OP11536;
+  }
+  PROPERTIES
+  {
+    TableNo=9021666;
+    Permissions=TableData 81=rimd,
+                TableData 232=rimd;
+    OnRun=VAR
+            TxtQuote@1000000000 : TextConst 'ENU=Quote;ENG=Quote';
+            TxtOrder@1000000001 : TextConst 'ENU=Order;ENG=Order';
+            TxtInvoice@1000000002 : TextConst 'ENU=Invoice;ENG=Invoice';
+            TxtError@1000000003 : TextConst 'ENU=Error in CU9021612, not designed to handle Document Type of %1;ENG=Error in CU9021612, not designed to handle Document Type of %1';
+            TxtInternetOrderAdjustment@1000000004 : TextConst 'ENU=Internet Order Adjustment;ENG=Internet Order Adjustment';
+            TxtAdjustTotalIpi@1000000005 : TextConst 'ENU=ADJUSTTOTAL;ENG=ADJUSTTOTAL';
+            TxtAdjustVatIpi@1000000006 : TextConst 'ENU=ADJUSTVAT;ENG=ADJUSTVAT';
+            TxtWarningIpi@1000000007 : TextConst 'ENU=WARNING;ENG=WARNING';
+            GLSetup@1000000016 : Record 98;
+            SalesSetup@1000000017 : Record 311;
+            Currency@1000000013 : Record 4;
+            SalesPayment@1000000018 : Record 50008;
+            SalesInvHeader@1000000024 : Record 112;
+            SalesPostPrepayments@1000000023 : Codeunit 442;
+            VATAmt@1000000012 : Decimal;
+            NewAmountIncludingVAT@1000000011 : Decimal;
+            NewAmount@1000000010 : Decimal;
+            NewVATBaseAmount@1000000009 : Decimal;
+            StandardVAT@1000000008 : Decimal;
+            VATDiffErr1@1000000015 : TextConst 'ENU="%1 for %2 must not exceed %3 = %4."';
+            VATDiffErr2@1000000014 : TextConst 'ENU="%1 must not exceed %2 = %3."';
+            PaymentTotal@1000000019 : Decimal;
+            TotalPrepmtAmount@1000000022 : Decimal;
+            LineTotal@1000000020 : Decimal;
+            LastLineNo@1000000021 : Integer;
+            SalesSummaryLine@1000000025 : Record 9087031;
+            ShipmentMethod@1000000026 : Record 10;
+            PayDocNo@1000000027 : Code[20];
+            "--TMlVariables--"@1000000028 : Integer;
+            lCountryRegion@1000000029 : Record 9;
+            lVATPostingSetup@1000000031 : Record 325;
+            lVATPostingGroupExist@1000000030 : Boolean;
+            lParentLineNo@1001000031 : Integer;
+          BEGIN
+            InternetSetup.GET;
+            GLSetup.GET;
+            CollectError := '';
+            IF ("Internet Order Reference" = '') THEN ErrorFound(FIELDNAME("Internet Order Reference") + Text000);
+            IF (Status <> Status::New) THEN ErrorFound(FIELDNAME(Status) + Text001);
+            IF ("Sell-to Customer No." = '') THEN ErrorFound(Text002 + FIELDNAME("Sell-to Customer No.") + '.');
+            //DOC OP9031 RK 27/10/16 -
+            SalesPaySetup.GET;
+            SalesPaySetup.TESTFIELD("G/L Journals Doc No. Series");
+            //Label.GET("Label Code");
+            SummaryLineNo := 0;
+            SalesAndReceiveSetup.GET;
+            SalesAndReceiveSetup.TESTFIELD("Duty Account");
+            //DOC OP11536 RK 30/08/17 -
+            SalesAndReceiveSetup.TESTFIELD("Product Tax Account");
+            //DOC OP11536 RK 30/08/17 +
+            SalesAndReceiveSetup.TESTFIELD("Gift Certificate G/L Account");
+            SalesAndReceiveSetup.TESTFIELD("Gift Certificate Revenue Acc.");
+            OrderDutyAmount := 0; //DOC OP9031 RK 04/01/16
+            OrderTaxAmount := 0; //DOC OP11536 RK 30/08/17
+            //DOC OP9031 RK 27/10/16 +
+
+            // Creating Sales Header
+            SalesHeader.INIT;
+
+            CASE "Document Type" OF
+              '' :
+                SalesHeader."Document Type" := InternetSetup."Convert To Document Type";
+              TxtQuote :
+                SalesHeader."Document Type" := SalesHeader."Document Type"::Quote;
+              TxtOrder :
+                SalesHeader."Document Type" := SalesHeader."Document Type"::Order;
+              TxtInvoice :
+                SalesHeader."Document Type" := SalesHeader."Document Type"::Invoice;
+              ELSE
+                CollectError := Text003 + "Document Type";
+                ERROR(CollectError);
+            END;
+
+
+            // Creating new number for Sales Order
+            CLEAR(NoSeriesMgt);
+            //DOC OP9031 RK 17/01/17 -
+            ModistSetup.GET;
+
+            //FF-
+            IF "Farfetch Order" THEN BEGIN
+              IF ModistSetup."Farfetch Order No. as Order No" THEN
+                SalesHeader."No." := "Internet Order Reference"
+              ELSE BEGIN
+                ModistSetup.TESTFIELD("Farftech Order Nos");
+                SalesHeader."No." := NoSeriesMgt.GetNextNo(ModistSetup."Farftech Order Nos",0D,TRUE);
+                SalesHeader."No. Series" := ModistSetup."Farftech Order Nos";
+              END;
+            END ELSE BEGIN
+            //FF+
+
+              IF ModistSetup."Use Web Order No.as Order No." THEN
+                SalesHeader."No." := "Internet Order Reference"
+              ELSE BEGIN
+              //DOC OP9031 RK 17/01/17 +
+              //DOC EC2015.5.04 -
+              CASE SalesHeader."Document Type" OF
+                SalesHeader."Document Type"::Quote :
+                  BEGIN
+                    SalesAndReceiveSetup.GET;
+                    SalesAndReceiveSetup.TESTFIELD("Quote Nos.");
+                    SalesHeader."No." := NoSeriesMgt.GetNextNo(SalesAndReceiveSetup."Quote Nos.",0D,TRUE);
+                    SalesHeader."No. Series" := SalesAndReceiveSetup."Quote Nos.";
+                  END;
+                SalesHeader."Document Type"::Order :
+                  BEGIN
+                    //Original Code -
+                    InternetSetup.TESTFIELD("New Sales Document Nos.");
+                    SalesHeader."No." := NoSeriesMgt.GetNextNo(InternetSetup."New Sales Document Nos.",0D,TRUE);
+                    SalesHeader."No. Series" := InternetSetup."New Sales Document Nos.";
+                    //Original Code +
+                  END;
+                SalesHeader."Document Type"::Invoice :
+                  BEGIN
+                    SalesAndReceiveSetup.GET;
+                    SalesAndReceiveSetup.TESTFIELD("Invoice Nos.");
+                    SalesHeader."No." := NoSeriesMgt.GetNextNo(SalesAndReceiveSetup."Invoice Nos.",0D,TRUE);
+                    SalesHeader."No. Series" := SalesAndReceiveSetup."Invoice Nos.";
+                  END;
+                ELSE
+                  ERROR(TxtError,SalesHeader."Document Type");
+              END;
+              //DOC EC2015.5.04 +
+              //DOC OP9031 RK 17/01/17 -
+              END;
+              //DOC OP9031 RK 17/01/17 +
+            END; //FF-+
+
+            SalesHeader."Internet Order Reference" := "Internet Order Reference";
+            SalesHeader."Farfetch Order" := "Farfetch Order"; //FF -+
+            SalesLine.LOCKTABLE;
+            SalesHeader.INSERT(TRUE); //Allows customers to put their own code in OnInsert of Internet Order Ref <> ''
+            //DOC OP9031 RK 27/10/16 -
+            SalesHeader.Gift := Gift;
+            SalesHeader."Gift Message" := "Gift Message";
+            SalesHeader."Shipment ID" := "Shipment ID";
+            SalesHeader."Order Status" := 'PROCESS';
+            SalesHeader."Ship-to Phone No." := "Ship-to Phone No.";
+            SalesHeader."Bill-to Phone No." := "Phone No.";
+            SalesHeader."Marketing ID" := "Marketing ID"; //DOC OP9031 RK 09/02/17
+            SalesHeader."Package Type" := "Package Type"; //DOC OP11536 RK 31/08/17
+            //DOC OP9031 RK 27/10/16 +
+            SalesHeader.VALIDATE("Sell-to Customer No.","Sell-to Customer No.");
+            //sets "User Guid" and "Is An Internet Customer" from Customer
+
+            IF SalesHeader."Bill-to Customer No." = "Sell-to Customer No." THEN BEGIN
+              SalesHeader."Bill-to Name" := COPYSTR("Bill-to Name",1,
+                          MAXSTRLEN(SalesHeader."Bill-to Name"));
+              SalesHeader."Bill-to Address" := COPYSTR("Bill-to Address",1,
+                          MAXSTRLEN(SalesHeader."Bill-to Address"));
+              SalesHeader."Bill-to Address 2" := COPYSTR("Bill-to Address 2",1,
+                          MAXSTRLEN(SalesHeader."Bill-to Address 2"));
+            //DOC OP9031 RK 18/01/17 -
+              SalesHeader."Bill-to Address 3" := COPYSTR("Bill-to Address 3",1,
+                          MAXSTRLEN(SalesHeader."Bill-to Address 3"));
+            //DOC OP9031 RK 18/01/17 +
+              SalesHeader."Bill-to Post Code" := COPYSTR("Bill-to Post Code",1,
+                          MAXSTRLEN(SalesHeader."Bill-to Post Code"));
+              SalesHeader."Bill-to City" := COPYSTR("Bill-to City",1,
+                          MAXSTRLEN(SalesHeader."Bill-to City"));
+              SalesHeader."Bill-to County" := COPYSTR("Bill-to County",1,
+                          MAXSTRLEN(SalesHeader."Bill-to County"));
+              SalesHeader."Bill-to Country/Region Code" := COPYSTR("Bill-to Country Code",1,
+                          MAXSTRLEN(SalesHeader."Bill-to Country/Region Code"));
+              SalesHeader."Bill-to Contact" := COPYSTR("Bill-to Contact",1,
+                          MAXSTRLEN(SalesHeader."Bill-to Contact"));
+            END;
+
+            SalesHeader."Ship-to Name" := COPYSTR("Ship-to Name",1,
+                        MAXSTRLEN(SalesHeader."Ship-to Name"));
+            SalesHeader."Ship-to Address" := COPYSTR("Ship-to Address",1,
+                        MAXSTRLEN(SalesHeader."Ship-to Address"));
+            SalesHeader."Ship-to Address 2" := COPYSTR("Ship-to Address 2",1,
+                        MAXSTRLEN(SalesHeader."Ship-to Address 2"));
+            //DOC OP9031 RK 18/01/17 -
+              SalesHeader."Ship-to Address 3" := COPYSTR("Ship-to Address 3",1,
+                          MAXSTRLEN(SalesHeader."Ship-to Address 3"));
+            //DOC OP9031 RK 18/01/17 +
+            SalesHeader."Ship-to Post Code" := COPYSTR("Ship-to Post Code",1,
+                        MAXSTRLEN(SalesHeader."Ship-to Post Code"));
+            SalesHeader."Ship-to City" := COPYSTR("Ship-to City",1,
+                        MAXSTRLEN(SalesHeader."Ship-to City"));
+            SalesHeader."Ship-to County" := COPYSTR("Ship-to County",1,
+                        MAXSTRLEN(SalesHeader."Ship-to County"));
+            SalesHeader."Ship-to Country/Region Code" := COPYSTR("Ship-to Country Code",1,
+                        MAXSTRLEN(SalesHeader."Ship-to Country/Region Code"));
+            SalesHeader."Ship-to Contact" := COPYSTR("Ship-to Contact",1,
+                        MAXSTRLEN(SalesHeader."Ship-to Contact"));
+            //DOC OP9031 RK 20/02/17 -
+            SalesHeader."Bill-to Name 2" := COPYSTR("Bill-to Name 2",1,
+                        MAXSTRLEN(SalesHeader."Bill-to Name 2"));
+            SalesHeader."Ship-to Name 2" := COPYSTR("Ship-to Name 2",1,
+                        MAXSTRLEN(SalesHeader."Ship-to Name 2"));
+            //DOC OP9031 RK 20/02/17 +
+            SalesHeader."Prices Including VAT" := "Prices Including VAT";
+            //DOC OP9031 RK 14/02/17 -
+            SalesHeader."Bill-to E-Mail" := "Bill-to E-Mail";
+            //DOC OP9031 RK 14/02/17 +
+            SalesHeader."Ship-to Code":="Ship-to Address Code";
+            SalesHeader."Order GuID" := "Order Guid";  //overwrites OnInsert of Order Guid = No.
+            //DOC OP9031 RK 11/01/17 -
+            IF "Shipment Method" <> '' THEN BEGIN
+              ShipmentMethod.RESET;
+              ShipmentMethod.SETRANGE("Ecom Item ID","Shipment Method");
+              IF NOT ShipmentMethod.FINDFIRST THEN BEGIN
+                ShipmentMethod.SETRANGE(Code,"Shipment Method");
+              END;
+              IF ShipmentMethod.FINDFIRST THEN BEGIN
+                SalesHeader.VALIDATE("Shipment Method Code",ShipmentMethod.Code);
+              END;
+            END;
+            //DOC OP9031 RK 11/01/17 +
+            //OP10987 <<
+            SalesHeader."Customer Locale" := "Customer Locale";
+            //OP10987 >>
+            // Make sure that Validataion dialogs are not shown when changing dates.
+            SalesHeader.SetHideValidationDialog(TRUE);
+
+            // Remove the currency code from the imported order if it matches the default NAV currency
+            IF "Currency Code" = InternetSetup."Internet Default Currency Code" THEN
+              SalesHeader.VALIDATE("Currency Code", '')
+            ELSE
+              SalesHeader.VALIDATE("Currency Code", "Currency Code");
+
+            IF "DateTime Created" <> 0DT THEN
+              "Order Date" := DT2DATE("DateTime Created");
+            SalesHeader.VALIDATE("Posting Date","Order Date");
+            SalesHeader.VALIDATE("Order Date","Order Date");
+
+            //Shipment Date
+            IF "Shipment Date" <> 0D THEN
+              SalesHeader.VALIDATE("Shipment Date","Shipment Date");
+
+            // Setting the location
+            IF "Inventory Location" <> '' THEN
+              SalesHeader.VALIDATE("Location Code","Inventory Location");
+
+            //Salesperson Code
+            //DOC EC2013.3.80 -
+            IF SalesHeader."Salesperson Code" = '' THEN
+              SalesHeader.VALIDATE("Salesperson Code",InternetSetup."Default Sales Person Code")
+            ELSE
+              SalesHeader.VALIDATE("Salesperson Code","Salesperson Code");
+
+            SalesHeader.VALIDATE("Payment Method Code",'');
+
+            TomDixonTransferCheque := FALSE;
+            //Just dealing with excess payment
+            {IF CreditPayEntGuid <> '' THEN BEGIN
+              IF InternetSetup."Use PCI Charge" = FALSE THEN BEGIN  //DOC EC2013.3.80 PCI does not handle excess payments.
+              //Check Payments CU should stop code getting here if there is an excess
+                ExcessPayDocNo := '';
+                PaymentMethod.GET(CreditPayMethod);
+                PaymentMethod.TESTFIELD("Bal. Account No.");
+                IF PaymentMethod."Bal. Account Type" = PaymentMethod."Bal. Account Type"::"G/L Account" THEN
+                  BalAcType := BalAcType::"G/L Account"
+                ELSE
+                  BalAcType := BalAcType::"Bank Account";
+                IF PayEntsAmt > "Amount Including Tax" THEN BEGIN
+                  ExcessAmt := PayEntsAmt - "Amount Including Tax";
+                  CreatePostGenJournal(SalesHeader."Sell-to Customer No.",'Payment on Account from Web',
+                                        -ExcessAmt,BalAcType,PaymentMethod."Bal. Account No.",
+                                        '',Label."Allocate Payments to Oldest",'');
+                  ExcessPayDocNo := DocNo;
+                END;
+              END;
+            END;
+            }
+            SalesHeader.VALIDATE("Shipping Agent Code","Shipping Agent Code");
+
+            //DOC EC2013.3.50 -
+            IF "Shipping Agent Service Code" <> '' THEN
+              SalesHeader.VALIDATE("Shipping Agent Service Code","Shipping Agent Service Code");
+            //DOC EC2013.3.50 +
+
+            SalesHeader."Your Reference" := "Your Reference";
+            //DOC OP9031 -
+            SalesHeader."Order Status" := 'PROCESS';
+            //DOC OP9031 +
+            IF SalesHeader."Document Type" <> SalesHeader."Document Type"::Quote THEN BEGIN  //DOC EC2015.5.04
+              //DOC EC2013.3.60 - Dealing with Rounding
+              IF InternetSetup."Conversion Max Corr. Tolerance" > 0 THEN BEGIN
+                DifferenceAmt := 0;
+                InternetOrderLine.RESET;
+                InternetOrderLine.SETCURRENTKEY("Order Guid","Line No.");
+                InternetOrderLine.SETRANGE("Order Guid","Order Guid");
+                DifferenceAmt := - ROUND((Amount - "Shipping Amount" - "Handling Amount" - "Payment Fee Amount"),0.01);
+                IF InternetOrderLine.FIND('-') THEN
+                REPEAT
+                  DifferenceAmt := DifferenceAmt + ROUND(InternetOrderLine.Amount,0.01);
+                UNTIL InternetOrderLine.NEXT = 0;
+                IF (ABS(DifferenceAmt) <= InternetSetup."Conversion Max Corr. Tolerance") AND
+                   (DifferenceAmt <> 0) THEN BEGIN
+                  InternetSetup.TESTFIELD("G/L Account for Tolerance");
+                  SalesLineLineNo := InternetOrderLine."Line No." + 10000;
+                  CLEAR(InternetOrderLine);
+                  InternetOrderLine.INIT;
+                  InternetOrderLine."Order Guid" := "Order Guid";
+                  InternetOrderLine."Line No." := SalesLineLineNo;
+                  InternetOrderLine."Order Line Guid" := CREATEGUID;
+                  InternetOrderLine."Order Line Guid" := COPYSTR(InternetOrderLine."Order Line Guid",2,36);
+                  InternetOrderLine.Type := InternetOrderLine.Type::"G/L Account";
+                  InternetOrderLine."No." := InternetSetup."G/L Account for Tolerance";;
+                  InternetOrderLine.Description := COPYSTR(Text009,1,50);
+                  InternetOrderLine.Quantity := 1;
+                  InternetOrderLine."Unit Price" := -DifferenceAmt;
+                  InternetOrderLine."Line Discount %" := 0;
+                  InternetOrderLine.Amount := -DifferenceAmt;
+                  InternetOrderLine."Amount Including Tax" := 0;
+                  InternetOrderLine."Label Code" := "Label Code";
+                  InternetOrderLine.INSERT;
+                  CreateIPI.CreateIPI(0,"Order Guid",'','ADJUSTLINE',"Bill-to Net Customer No.",Text011,
+                            FALSE,FALSE,SalesHeader."Sell-to Customer No.",TRUE);
+                END;
+                DifferenceAmt := 0;
+              END;
+              //DOC EC2013.3.60 +
+            END;  //DOC EC2015.5.04 +
+
+            SalesHeader."External Document No." := "Internet Order Reference";
+
+            IF "Total Discount %" <> 0 THEN BEGIN
+              TotalDiscAmt := ROUND("Total Discount %",0.00001);  //DOC EC2013.4.60
+              InvDiscPercentCode := 'Z' + FORMAT(TotalDiscAmt);  //DOC EC2013.4.60 use TotalDiscAmt
+              IF NOT CustInvDisc.GET(InvDiscPercentCode,SalesHeader."Currency Code",0) THEN BEGIN
+                CustInvDisc.INIT;
+                CustInvDisc.Code := InvDiscPercentCode;
+                CustInvDisc."Currency Code" := SalesHeader."Currency Code";
+                CustInvDisc."Minimum Amount" := 0;
+                CustInvDisc."Discount %" := TotalDiscAmt; //DOC EC2013.4.60 use TotalDiscAmt
+                CustInvDisc.INSERT;
+              END;
+              SalesHeader."Invoice Disc. Code" := InvDiscPercentCode;
+            END;
+
+            //DOC TM0009 AW 07/12/17 -
+            SalesHeader.VALIDATE("VAT Country/Region Code",SalesHeader."Ship-to Country/Region Code");
+            //SalesHeader.VALIDATE("VAT City Code",SalesHeader."Ship-to City");
+            lCountryRegion.GET(SalesHeader."Ship-to Country/Region Code");
+            lVATPostingGroupExist := lCountryRegion."VAT Bus. Posting Group" <> '';
+            IF lVATPostingGroupExist THEN BEGIN
+              SalesHeader.VALIDATE("Gen. Bus. Posting Group",lCountryRegion."Gen. Bus. Posting Group");
+              SalesHeader.VALIDATE("VAT Bus. Posting Group",lCountryRegion."VAT Bus. Posting Group");
+              SalesHeader.VALIDATE("Prices Including VAT",ModistSetup."Internet Order Price Inc. VAT");
+              //FF-
+              IF SalesHeader."Farfetch Order" THEN
+                SalesHeader.VALIDATE("Prices Including VAT",ModistSetup."Farfetch Order Price Incl. VAT");
+              //FF+
+            END;
+            //DOC TM0009 AW 07/12/17 +
+
+            SalesHeader.MODIFY;
+            "Converted-To Document Type" := SalesHeader."Document Type";
+            "Converted-To Document No." := SalesHeader."No.";
+            Status := Status::Invalid;
+            MODIFY;
+
+
+            // Creating Sales Lines
+            SalesLineLineNo := 0;
+
+            InternetOrderLine.RESET;
+            InternetOrderLine.SETRANGE("Order Guid","Order Guid");
+            InternetOrderLine.SETCURRENTKEY("Order Guid", "Line No.");
+            InternetOrderLine.SETRANGE("Do Not Convert Line",FALSE);  //DOC EC2013.3.30
+
+            LineHandlingFee := 0;
+            BOMExploded := FALSE;  //DOC EC2013.3.6
+            IF InternetOrderLine.FIND('-') THEN
+              REPEAT
+              //DOC OP9031 RK 27/10/16 -
+                IF InternetOrderLine.Type = InternetOrderLine.Type::Item THEN BEGIN
+                  IF NOT Item.GET(InternetOrderLine."No.") THEN
+                    ErrorFound(STRSUBSTNO(Text008,Item.TABLECAPTION,InternetOrderLine."No.",
+                                InternetOrderLine."No."))
+                  ELSE BEGIN
+                    SalesSummaryLine.SETRANGE("Document Type",SalesHeader."Document Type");
+                    SalesSummaryLine.SETRANGE("Document No.",SalesHeader."No.");
+                    SalesSummaryLine.SETRANGE(Type,SalesSummaryLine.Type::Item);
+                    SalesSummaryLine.SETRANGE("No.",InternetOrderLine."No.");
+                    IF SalesSummaryLine.ISEMPTY THEN BEGIN
+                      SalesSummaryLine.INIT;
+                      SalesSummaryLine."Document Type" := SalesHeader."Document Type";
+                      SalesSummaryLine."Document No." := SalesHeader."No.";
+                      SummaryLineNo := SummaryLineNo + 10000;
+                      SalesSummaryLine."Line No." := SummaryLineNo;
+                      SalesSummaryLine.Type := SalesSummaryLine.Type::Item;
+                      SalesSummaryLine.VALIDATE("No.",InternetOrderLine."No.");
+                      SalesSummaryLine.INSERT;
+                    END;
+                  END;
+                END;
+              //DOC OP9031 RK 27/10/16 +
+                SalesLine.INIT;
+                SetupSalesLine("Label Code","Order Guid"); //DOC EC2013.3.70
+                //DOC EC2013.3.60 -
+                IF BOMExploded = TRUE THEN BEGIN
+                  SalesLine1.RESET;
+                  SalesLine1.SETRANGE("Document Type",SalesHeader."Document Type");
+                  SalesLine1.SETRANGE("Document No.",SalesHeader."No.");
+                  IF SalesLine1.FINDLAST THEN
+                    SalesLineLineNo := SalesLine1."Line No." + 10000
+                  ELSE
+                    SalesLineLineNo := 10000;
+                  BOMExploded := FALSE;
+                END ELSE
+                //DOC EC2013.3.60 +
+                SalesLineLineNo := SalesLineLineNo + 10000;
+                SalesLine."Line No." := SalesLineLineNo;
+                SalesLine."Document Type" := SalesHeader."Document Type";
+                //WARD SalesLine."Business Type" := SalesHeader."Business Type"; //WARD
+                SalesLine."Document No." := SalesHeader."No.";
+                SalesLine.INSERT(TRUE); //DOC EC2013.3.70
+                IF InternetOrderLine."No." <> '' THEN BEGIN
+                  SalesLine.VALIDATE(Type,InternetOrderLine.Type);
+                  //WARD SalesLine.VALIDATE(Type,SalesLine.Type::Service); //WARD
+                  CASE InternetOrderLine.Type OF
+                    InternetOrderLine.Type::Item:
+                      IF NOT Item.GET(InternetOrderLine."No.") THEN
+                        ErrorFound(STRSUBSTNO(Text008,Item.TABLECAPTION,InternetOrderLine."No.",
+                                   InternetOrderLine."No."));
+                    InternetOrderLine.Type::Resource:
+                      IF NOT Resource.GET(InternetOrderLine."No.") THEN
+                        ErrorFound(STRSUBSTNO(Text008,Resource.TABLECAPTION,InternetOrderLine."No.",
+                                   InternetOrderLine."No."));
+                    //DOC EC2013.3.60 -
+                    InternetOrderLine.Type::"G/L Account":
+                      IF NOT GLAccount.GET(InternetOrderLine."No.") THEN
+                        ErrorFound(STRSUBSTNO(Text008,GLAccount.TABLECAPTION,InternetOrderLine."No.",
+                                   InternetOrderLine."No."));
+                    //DOC EC2013.3.60 +
+                  END;
+                  SalesLine.VALIDATE("No.", InternetOrderLine."No.");
+                  //DOC OP9031 RK 27/10/16 -
+                  SalesLine.Gift := InternetOrderLine.Gift;
+                  SalesLine."Gift Message" := InternetOrderLine."Gift Message";
+                  SalesLine."Coupon Code" := InternetOrderLine."Coupon Code";
+                  SalesLine.Campaign := InternetOrderLine.Campaign;
+                  SalesLine."Shipment ID" := InternetOrderLine."Shipment ID";
+                //DOC OP9031 RK 07/02/17 -
+                  SalesLine."Line Type" := InternetOrderLine."Line Type";
+                  SalesLine."Is Returnable" := Item."Is Returnable";
+                  IF (InternetOrderLine.Type = InternetOrderLine.Type::Item) OR (InternetOrderLine."Line Type" = InternetOrderLine."Line Type"::Shipping) THEN BEGIN
+                    SalesLine."Parent Line No." := InternetOrderLine."Line No.";
+                    //SalesLine."Parent Line No." := SalesLine."Line No." //TM0020.03
+                    SalesLine."Main Line No." := SalesLine."Line No."; //TM0020.03
+                    IF InternetOrderLine."Line Type" = InternetOrderLine."Line Type"::Item THEN //TM0020.03
+                      MainItemLineNo := SalesLine."Line No." //TM0020.03
+                  END ELSE BEGIN
+                    SalesLine."Parent Line No." := InternetOrderLine."Parent Line No.";
+                    IF InternetOrderLine."Parent Line No." <> 0 THEN
+                      IF MainItemLineNo = 0 THEN
+                        SalesLine."Main Line No." := InternetOrderLine."Parent Line No." //TM0020.03
+                      ELSE
+                        SalesLine."Main Line No." := MainItemLineNo; //TM0020.03
+                  END;
+                //DOC OP9031 RK 07/02/17 +
+                  IF SalesLine.Type = SalesLine.Type::Item THEN
+                    SalesLine."Line Status" := SalesLine."Line Status"::Processing;
+                  //DOC OP9031 RK 27/10/16 +
+                  //DOC OP9031 RK 04/01/16 -
+                  SalesLine."Duty Amount" := InternetOrderLine."Duty Amount";
+                  SalesLine."Total Duty Amount" := InternetOrderLine."Total Duty Amount";
+                //DOC OP10530 RK 07/04/17 -
+                  //OrderDutyAmount := OrderDutyAmount + SalesLine."Total Duty Amount";
+                //DOC OP10530 RK 07/04/17 +
+                  //DOC OP9031 RK 04/01/16 +
+                //DOC OP11536 RK 30/08/17 -
+                  SalesLine."Product Tax Amount" := InternetOrderLine."Total Product Tax";
+                //DOC OP11536 RK 30/08/17 +
+                  //IF InternetOrderLine.Type = InternetOrderLine.Type::"G/L Account" THEN
+                  IF InternetOrderLine.Description <> '' THEN
+                    SalesLine.Description := InternetOrderLine.Description;
+                  IF ItemVariant.GET(InternetOrderLine."No.", InternetOrderLine."Variant Code") THEN
+                    SalesLine.VALIDATE("Variant Code", InternetOrderLine."Variant Code");
+                  SalesLine.VALIDATE(Quantity, InternetOrderLine.Quantity); //DOC EC2009.2.74 moved from below VALIDATE Unit Price
+                  IF InternetOrderLine."Is Loyalty Point Purchase" = FALSE THEN  //DOC EC2009.2.74
+                  IF "Prices Including VAT" THEN
+                    SalesLine.VALIDATE("Unit Price", InternetOrderLine."Unit Price Including Tax")
+                  ELSE
+                    SalesLine.VALIDATE("Unit Price", InternetOrderLine."Unit Price");
+                   //DOC EC2009.2.74 SalesLine.VALIDATE(Quantity, InternetOrderLine.Quantity);
+                  SalesLine.VALIDATE("Location Code");
+                  IF InternetOrderLine.Description <> '' THEN
+                    SalesLine.Description := InternetOrderLine.Description;
+                  //DOC OP9031 RK 03/02/17 -
+                  IF InternetOrderLine."Description 2" <> '' THEN
+                   SalesLine."Description 2" := InternetOrderLine."Description 2";
+                  //DOC OP9031 RK 03/02/17 +
+                  // Set the Qty. to Ship based on "Quantity Shipped" if it is a Mobile Sales order
+                  IF "Bill-to Net Customer No." = '' THEN
+                    SalesLine.VALIDATE("Qty. to Ship", InternetOrderLine."Quantity Shipped");
+                  SalesLine.VALIDATE("Line Discount %", InternetOrderLine."Line Discount %");
+                  IF "Prices Including VAT" THEN BEGIN
+                    IF InternetOrderLine."Amount Including Tax" <> 0 THEN BEGIN
+                      //DOC EC2013.4.50 -
+                      //SalesLine.VALIDATE(SalesLine."Line Amount", InternetOrderLine."Amount Including Tax");
+                      IF ROUND(SalesLine."Line Amount",0.01) <>
+                         ROUND((InternetOrderLine."Amount Including Tax" -
+                                InternetOrderLine."Handling Fee Including Tax"),0.01) THEN BEGIN
+                        SalesLine.VALIDATE("Line Amount",(InternetOrderLine."Amount Including Tax" -
+                              InternetOrderLine."Handling Fee Including Tax"));
+                      END;
+                      //DOC EC2013.4.50 +
+                      LineHandlingFee := LineHandlingFee + InternetOrderLine."Handling Fee Including Tax";
+                    END
+                  END ELSE BEGIN
+                    IF InternetOrderLine.Amount <> 0 THEN BEGIN
+                      //SalesLine.VALIDATE(SalesLine."Line Amount", InternetOrderLine.Amount);
+                      //DOC EC2013.3.60 add IF statement so not to alter Line Discount % very slightly
+                      IF ROUND(SalesLine."Line Amount",0.01) <>
+                         ROUND((InternetOrderLine.Amount - InternetOrderLine."Handling Fee"),0.01) THEN
+
+                      SalesLine.VALIDATE("Line Amount",(InternetOrderLine.Amount -
+                                InternetOrderLine."Handling Fee")); //MQ 01/04/2011 - GW110401
+                      LineHandlingFee := LineHandlingFee + InternetOrderLine."Handling Fee";
+                    END;
+                  END;
+                END ELSE BEGIN
+                  // When no item number is specified the line is treated as a comment.
+                  SalesLine.VALIDATE(Type, SalesLine.Type::" ");
+                  SalesLine.VALIDATE(Description, InternetOrderLine.Description);
+                //DOC OP9031 RK 03/02/17 -
+                  SalesLine."Description 2" := InternetOrderLine."Description 2";
+                //DOC OP9031 RK 03/02/17 +
+                END;
+                //DOC EC2013.3.70 SalesLine.INSERT(TRUE);
+                //SalesLine.MODIFY(TRUE); //DOC EC2013.3.70 130809 moved further down
+
+                SalesLine.MODIFY(TRUE); //DOC EC2013.3.70 130809 from a little higher up
+
+                SalesLineModify := FALSE;
+                //DOC EC2013.3.60 code to get around the COMMIT in the AutoReserve - if cannot fully reserve
+                //then create an IPI
+                //used by BONZ, TD, SKS
+                IF SalesHeader."Document Type" <> SalesHeader."Document Type"::Quote THEN BEGIN  //DOC EC2015.5.04
+                  IF (SalesLine.Type=SalesLine.Type::Item) AND (SalesLine."No." <> '') AND
+                      (SalesLine."Shipment Date" <> 0D) AND
+                      (SalesLine.Reserve = SalesLine.Reserve::Always) THEN
+                    SalesLineModify := ReserveFunc.SalesLineReserve(SalesLine,"Processing In Progress");
+                END; //DOC EC2015.5.04
+            //DOC OP9031 RK 04/01/16 -
+              {
+              //DOC OP9031 RK 27/10/16 -
+                IF SalesHeader."Currency Code" = '' THEN
+                  Currency.InitRoundingPrecision
+                ELSE
+                  Currency.GET(SalesHeader."Currency Code");
+                VATAmt := ROUND(InternetOrderLine.Quantity *(InternetOrderLine."Unit Price Including Tax" - InternetOrderLine."Unit Price"),Currency."Amount Rounding Precision");
+                IF SalesHeader."Prices Including VAT" THEN BEGIN
+                  NewAmountIncludingVAT := SalesLine."Amount Including VAT";
+                  NewAmount :=
+                    ROUND(NewAmountIncludingVAT,Currency."Amount Rounding Precision") -
+                    ROUND(VATAmt,Currency."Amount Rounding Precision");
+                  NewVATBaseAmount :=
+                    ROUND(
+                      NewAmount * (1 - SalesHeader."VAT Base Discount %" / 100),
+                      Currency."Amount Rounding Precision");
+                END ELSE BEGIN
+                  NewAmount := SalesLine."Line Amount" - SalesLine."Inv. Discount Amount";
+                  NewVATBaseAmount :=
+                    ROUND(
+                      NewAmount * (1 - SalesHeader."VAT Base Discount %" / 100),
+                      Currency."Amount Rounding Precision");
+                  IF SalesLine."VAT Base Amount" = 0 THEN
+                    VATAmt := 0;
+                  NewAmountIncludingVAT := NewAmount + ROUND(VATAmt,Currency."Amount Rounding Precision");
+                END;
+                IF SalesHeader."Prices Including VAT" THEN
+                  StandardVAT :=
+                    ROUND(
+                      (SalesLine."Line Amount") * SalesLine."VAT %" / (100 + SalesLine."VAT %"),
+                      Currency."Amount Rounding Precision",Currency.VATRoundingDirection)
+                ELSE
+                  StandardVAT :=
+                    ROUND(
+                      (SalesLine."Line Amount") * SalesLine."VAT %" / 100,
+                      Currency."Amount Rounding Precision",Currency.VATRoundingDirection);
+                IF (VATAmt <> StandardVAT) THEN BEGIN
+                  SalesSetup.GET;
+                  SalesSetup.TESTFIELD("Allow VAT Difference",TRUE);
+                  GLSetup.GET;
+                  SalesLine."VAT Difference" := VATAmt - StandardVAT;
+                  IF ABS(SalesLine."VAT Difference") > Currency."Max. VAT Difference Allowed" THEN
+                    IF SalesHeader."Currency Code" <> '' THEN
+                      ERROR(
+                        VATDiffErr1,SalesLine.FIELDCAPTION("VAT Difference"),Currency.Code,
+                        Currency.FIELDCAPTION("Max. VAT Difference Allowed"),Currency."Max. VAT Difference Allowed")
+                    ELSE BEGIN
+                      IF ABS(SalesLine."VAT Difference") > GLSetup."Max. VAT Difference Allowed" THEN
+                        ERROR(
+                          VATDiffErr2,SalesLine.FIELDCAPTION("VAT Difference"),
+                          GLSetup.FIELDCAPTION("Max. VAT Difference Allowed"),GLSetup."Max. VAT Difference Allowed");
+                    END;
+                  SalesLineModify := TRUE;
+                END;
+              //DOC OP9031 RK 27/10/16 +
+              }
+            //DOC OP9031 RK 04/01/16 +
+                IF SalesLineModify THEN
+                  SalesLine.MODIFY;
+              //DOC OP11536 RK 30/08/17 -
+                OrderDutyAmount := SalesLine."Total Duty Amount";
+                OrderTaxAmount := SalesLine."Product Tax Amount";
+              //DOC OP11536 RK 30/08/17 +
+              //DOC OP10530 RK 07/04/17 -
+              //DOC OP11536 RK 30/08/17 -
+                //IF SalesLine."Total Duty Amount" <> 0 THEN BEGIN
+                //  OrderDutyAmount := SalesLine."Total Duty Amount";
+                IF OrderDutyAmount <> 0 THEN BEGIN
+              //DOC OP11536 RK 30/08/17 +
+                  lParentLineNo := SalesLine."Line No.";
+                  SalesLine.INIT;
+                  SalesLineLineNo := SalesLineLineNo + 10000;
+                  SalesLine."Line No." := SalesLineLineNo;
+                  SalesLine."Document Type" := SalesHeader."Document Type";
+                  SalesLine."Document No." := SalesHeader."No.";
+                  SalesLine.INSERT(TRUE);
+                  SalesLine.VALIDATE(Type,SalesLine.Type::"G/L Account");
+                  SalesLine.VALIDATE("No.",SalesAndReceiveSetup."Duty Account");
+                  SalesLine.VALIDATE(Quantity,1);
+                  SalesLine.VALIDATE("Unit Price",OrderDutyAmount);
+                  SalesLine.VALIDATE("Main Line No.",lParentLineNo); //TM0020.03 -+
+                  SalesLine.MODIFY(TRUE);
+                END;
+              //DOC OP10530 RK 07/04/17 +
+              //DOC OP11536 RK 30/08/17 -
+               //IF OrderTaxAmount <> 0 THEN BEGIN //DOC TM0009 07/12/17 -+
+               lVATPostingSetup.GET(SalesHeader."VAT Bus. Posting Group",SalesLine."VAT Prod. Posting Group");
+               IF (OrderTaxAmount <> 0) AND (lVATPostingSetup."VAT %" = 0) THEN BEGIN //DOC TM0009 AW 07/12/17 -+
+                  //TM0020.03 -
+                  IF lParentLineNo = 0 THEN
+                   lParentLineNo := SalesLine."Line No.";
+                  //TM0020.03 +
+                  SalesLine.INIT;
+                  SalesLineLineNo := SalesLineLineNo + 10000;
+                  SalesLine."Line No." := SalesLineLineNo;
+                  SalesLine."Document Type" := SalesHeader."Document Type";
+                  SalesLine."Document No." := SalesHeader."No.";
+                  SalesLine.INSERT(TRUE);
+                  SalesLine.VALIDATE(Type,SalesLine.Type::"G/L Account");
+                  SalesLine.VALIDATE("No.",SalesAndReceiveSetup."Product Tax Account");
+                  SalesLine.VALIDATE(Quantity,1);
+                  SalesLine.VALIDATE("Unit Price",OrderTaxAmount);
+                  SalesLine.VALIDATE("Main Line No.",lParentLineNo); //TM0020.03 -+
+                  SalesLine.MODIFY(TRUE);
+                END;
+              //DOC OP11536 RK 30/08/17 +
+              UNTIL InternetOrderLine.NEXT = 0;
+            //DOC OP9031 RK 04/01/16 -
+            //DOC OP10530 RK 07/04/17 -
+            {
+            IF OrderDutyAmount > 0 THEN BEGIN
+              SalesLine.INIT;
+              SalesLineLineNo := SalesLineLineNo + 10000;
+              SalesLine."Line No." := SalesLineLineNo;
+              SalesLine."Document Type" := SalesHeader."Document Type";
+              SalesLine."Document No." := SalesHeader."No.";
+              SalesLine.INSERT(TRUE);
+              SalesLine.VALIDATE(Type,SalesLine.Type::"G/L Account");
+              SalesLine.VALIDATE("No.",SalesAndReceiveSetup."Duty Account");
+              SalesLine.VALIDATE(Quantity,1);
+              SalesLine.VALIDATE("Unit Price",OrderDutyAmount);
+              SalesLine.MODIFY(TRUE);
+            END;
+            }
+            //DOC OP10530 RK 07/04/17 +
+            //DOC OP9031 RK 04/01/16 +
+            //DOC EC2013.3.60 -
+            IF BOMExploded = TRUE THEN BEGIN
+              SalesLine1.RESET;
+              SalesLine1.SETRANGE("Document Type",SalesHeader."Document Type");
+              SalesLine1.SETRANGE("Document No.",SalesHeader."No.");
+              SalesLine1.FINDLAST;
+                SalesLineLineNo := SalesLine1."Line No.";
+            END;
+            //DOC EC2013.3.60 +
+
+            IF "Shipping Amount" <> 0 THEN
+            BEGIN
+              IF GLAccountCode = '' THEN ErrorFound('blank GLAccountCode in Shipping');
+              SalesLine.INIT;
+              SetupSalesLine("Label Code","Order Guid"); //DOC EC2013.3.70
+              SalesLine."Document Type" := SalesHeader."Document Type";
+              SalesLine."Document No." := SalesHeader."No.";
+              SalesLineLineNo := SalesLineLineNo + 10000;
+              SalesLine."Line No." := SalesLineLineNo;
+              //DOC EC2015.5.02 -
+              IF "Label Code" = 'LM' THEN
+                SalesLine.VALIDATE(Type,SalesLine.Type::Item)
+              ELSE
+              //DOC EC2015.5.02 +
+              SalesLine.Type := SalesLine.Type::"G/L Account";
+              SalesLine.VALIDATE("No.",GLAccountCode);
+              SalesLine.Description := Text007;
+              SalesLine.VALIDATE(Quantity,1);
+              IF "Prices Including VAT" THEN
+                SalesLine.VALIDATE("Unit Price","Shipping Amount Incl. Tax")
+              ELSE
+                SalesLine.VALIDATE("Unit Price","Shipping Amount");
+              SalesLine."Allow Invoice Disc." := FALSE;
+              SalesLine.DateTimeInsertedModified := CURRENTDATETIME;
+              SalesLine.INSERT;
+            END;
+
+            // Handling
+            IF (LineHandlingFee <> 0) OR ("Handling Amount" <> 0) THEN BEGIN //MQ 01/04/2011 - GW110401
+            //IF ("Handling Amount" <> 0) THEN BEGIN //MQ 01/04/2011 - GW110401
+              SalesLine.INIT;
+              SetupSalesLine("Label Code","Order Guid"); //DOC EC2013.3.70
+              SalesLine."Document Type" := SalesHeader."Document Type";
+              //WARD SalesLine."Business Type" := SalesHeader."Business Type"; //WARD
+              SalesLine."Document No." := SalesHeader."No.";
+              SalesLineLineNo := SalesLineLineNo + 10000;
+              SalesLine."Line No." := SalesLineLineNo;
+              //SalesLine.Description := TEXT006;
+              SalesLine.Type := SalesLine.Type::"G/L Account";
+              CustPostingGr.GET(SalesHeader."Customer Posting Group");
+              CustPostingGr.TESTFIELD("Service Charge Acc.");
+              SalesLine.VALIDATE("No.",CustPostingGr."Service Charge Acc.");
+              SalesLine.Description := Text006;
+              SalesLine.VALIDATE(Quantity,1);
+              IF "Prices Including VAT" THEN
+                SalesLine.VALIDATE("Unit Price","Handling Amount Including Tax" + LineHandlingFee)
+              ELSE
+                SalesLine.VALIDATE("Unit Price","Handling Amount" + LineHandlingFee);
+              SalesLine."Allow Invoice Disc." := FALSE;
+              SalesLine.DateTimeInsertedModified := CURRENTDATETIME;
+              SalesLine.INSERT;
+            END;
+
+            // e-Payment fee
+            IF ("Payment Fee Amount" <> 0) THEN BEGIN
+              CustPostingGr.GET(SalesHeader."Customer Posting Group");
+              //DOC EC2013.3.70 checking wrong account CustPostingGr.TESTFIELD("Service Charge Acc.");
+              //DOC EC2013.3.80 use Service Charge Acc.
+              CustPostingGr.TESTFIELD("Service Charge Acc.");
+              //DOC EC2013.3.80 CustPostingGr.TESTFIELD("Additional Fee Account");  //DOC EC2013.3.70
+              SalesLine.INIT;
+              SetupSalesLine("Label Code","Order Guid"); //DOC EC2013.3.70
+              SalesLine."Document Type" := SalesHeader."Document Type";
+              SalesLine."Document No." := SalesHeader."No.";
+              SalesLineLineNo := SalesLineLineNo + 10000;
+              SalesLine."Line No." := SalesLineLineNo;
+              SalesLine.Type := SalesLine.Type::"G/L Account";
+              //DOC EC2013.3.80 SalesLine.VALIDATE("No.", CustPostingGr."Additional Fee Account");
+              SalesLine.VALIDATE("No.", CustPostingGr."Service Charge Acc.");  //DOC EC2013.3.80
+              SalesLine.Description := FIELDCAPTION("Payment Fee Amount");
+              SalesLine.VALIDATE(Quantity,1);
+              IF "Prices Including VAT" THEN
+                SalesLine.VALIDATE("Unit Price","Payment Fee Amount Incl. Tax")
+              ELSE
+                SalesLine.VALIDATE("Unit Price","Payment Fee Amount");
+              SalesLine."Allow Invoice Disc." := FALSE;
+              SalesLine.DateTimeInsertedModified := CURRENTDATETIME;
+              SalesLine.INSERT;
+            END;
+
+            IF SalesHeader."Document Type" <> SalesHeader."Document Type"::Quote THEN BEGIN  //DOC EC2015.5.04
+              // Calculate Invoice Discounts and Service Charges
+              SalesLine.RESET;
+              SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+              SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+              IF SalesLine.FIND('-') THEN
+                SalesCalcDisc.RUN(SalesLine);
+
+              //DOC EC2013.3.60 -
+              IF "Split Orders" THEN BEGIN
+                SalesLine.RESET;
+                SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+                SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+                SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+                IF SalesLine.FIND('-') THEN
+                REPEAT
+                  ReserveFunc.SalesLineItemCheckAvail(SalesLine);
+                UNTIL SalesLine.NEXT = 0;
+              END;
+              //DOC EC2013.3.60 +
+            END;  //DOC EC2015.5.04 +
+
+            WebCommentLine.RESET;
+            WebCommentLine.SETCURRENTKEY("Header Guid","Line No.");
+            WebCommentLine.SETRANGE("Header Guid","Order Guid");
+            IF WebCommentLine.FIND('-') THEN
+              REPEAT
+                SalesCommentLine.RESET;
+                SalesCommentLine.INIT;
+                SalesCommentLine."Document Type" := SalesHeader."Document Type";
+                SalesCommentLine."No." := SalesHeader."No." ;
+                IF WebCommentLine."Line No." = 10000 THEN
+                  SalesCommentLine.Date := "Order Date";
+                SalesCommentLine."Line No." :=  WebCommentLine."Line No.";
+                SalesCommentLine.Comment := WebCommentLine.Comment;
+                SalesCommentLine.INSERT;
+              UNTIL WebCommentLine.NEXT = 0
+            ELSE BEGIN
+              IF Comment <> '' THEN BEGIN
+                SalesCommentLine.RESET;
+                SalesCommentLine.INIT;
+                SalesCommentLine."Document Type" := SalesHeader."Document Type";
+                SalesCommentLine."No." := SalesHeader."No." ;
+                SalesCommentLine.Date := "Order Date";
+                SalesCommentLine."Line No." := 10000;
+                SalesCommentLine.Comment := Comment;
+                SalesCommentLine.INSERT;
+              END;
+            END;
+            //DOC OP9031 RK 27/10/16 -
+            SalesPayment.SETRANGE("Order Guid","Order Guid");
+            SalesPayment.SETFILTER(Amount,'>%1',0);
+            //SalesPayment.SETRANGE("Payment Type",SalesPayment."Payment Type"::"Gift Voucher");
+            IF SalesPayment.FINDFIRST THEN BEGIN
+              Currency.Initialize(SalesHeader."Currency Code");
+            {  PaymentTotal := 0;
+              LineTotal := 0;
+              TotalPrepmtAmount := 0;
+              SalesLine.RESET;
+              SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+              SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+              SalesLine.SETFILTER(Type,'<>%1',SalesLine.Type::" ");
+              SalesLine.SETFILTER("Line Amount",'>0');
+              IF SalesLine.FINDFIRST THEN
+                REPEAT
+                  LineTotal := LineTotal + SalesLine."Line Amount";
+                  LastLineNo := SalesLine."Line No.";
+                UNTIL SalesLine.NEXT = 0;
+              REPEAT
+                PaymentTotal := PaymentTotal + SalesPayment.Amount;
+              UNTIL SalesPayment.NEXT = 0;
+              IF LineTotal >= PaymentTotal THEN BEGIN
+                IF SalesLine.FINDFIRST THEN
+                  REPEAT
+                    IF SalesLine."Line No." <> LastLineNo THEN
+                      SalesLine.VALIDATE(
+                        "Prepmt. Line Amount",
+                        ROUND(
+                          PaymentTotal * SalesLine."Line Amount" / LineTotal,
+                          Currency."Amount Rounding Precision"))
+                    ELSE
+                      SalesLine.VALIDATE("Prepmt. Line Amount",PaymentTotal - TotalPrepmtAmount);
+                    TotalPrepmtAmount := TotalPrepmtAmount + SalesLine."Prepmt. Line Amount";
+                    SalesLine.MODIFY;
+                  UNTIL SalesLine.NEXT = 0;
+                SalesPostPrepayments.Invoice(SalesHeader);
+                COMMIT;
+                SalesInvHeader.SETRANGE("Prepayment Order No.",SalesHeader."No.");
+                SalesInvHeader.FINDFIRST;}
+                PaymentMethod.RESET;
+            //    IF SalesPayment.FINDFIRST THEN BEGIN
+                  //gAppDocNo := SalesInvHeader."No.";
+                  REPEAT
+                  //DOC OP9031 RK 07/02/17 -
+                  //DOC OP9031 RK 08/03/17 -
+                    PaymentMethod.SETRANGE("Card Type");
+                  //DOC OP9031 RK 08/03/17 +
+                    IF SalesPayment."Payment Type" = SalesPayment."Payment Type"::"Gift Voucher" THEN
+                      PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::"Gift Voucher")
+                    ELSE IF SalesPayment."Payment Type" = SalesPayment."Payment Type"::CreditCard THEN BEGIN
+                      PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::CreditCard);
+                  //DOC OP9031 RK 08/03/17 -
+                      PaymentMethod.SETRANGE("Card Type",SalesPayment."Card Type");
+                  //DOC OP9031 RK 08/03/17 +
+                  //DOC OP11536 RK 03/10/17 -
+                    //END ELSE
+                    END ELSE IF SalesPayment."Payment Type" = SalesPayment."Payment Type"::PayPal THEN
+                      PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::PayPal)
+                    ELSE
+                      PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::COD);
+                  //DOC OP11536 RK 03/10/17 +
+                    IF SalesHeader."Currency Code" = GLSetup."LCY Code" THEN
+                      PaymentMethod.SETFILTER("Currency Code",'%1|%2','',SalesHeader."Currency Code")
+                    ELSE
+                      PaymentMethod.SETRANGE("Currency Code",SalesHeader."Currency Code");
+                    PaymentMethod.FINDFIRST;
+                    SalesHeader."Payment Method Code" := PaymentMethod.Code;
+                    //FF -
+                    IF PaymentMethod."Payment Type" = PaymentMethod."Payment Type"::COD THEN BEGIN
+                      SalesHeader."Bal. Account Type" := PaymentMethod."Bal. Account Type";
+                      SalesHeader."Bal. Account No." := PaymentMethod."Bal. Account No.";
+                    END;
+                    //FF+
+                    SalesHeader.MODIFY;
+                    IF SalesPayment."Payment Type" = SalesPayment."Payment Type"::"Gift Voucher" THEN BEGIN
+                      IF PaymentMethod."Bal. Account Type" = PaymentMethod."Bal. Account Type"::"G/L Account" THEN
+                        BalAcType := BalAcType::"G/L Account"
+                      ELSE
+                        BalAcType := BalAcType::"Bank Account";
+
+                      CreatePostGenJournal(SalesHeader."Sell-to Customer No.",'Prepay ' + FORMAT(SalesPayment."Payment Type") + ' ' + SalesPayment."Transaction ID",
+                                            -SalesPayment.Amount,BalAcType,PaymentMethod."Bal. Account No.",
+                                            SalesAndReceiveSetup."Gift Certificate G/L Account",SalesAndReceiveSetup."Gift Certificate Revenue Acc.",FALSE,'',PayDocNo);
+                      SalesPayment."Payment Doc. No." := PayDocNo;
+                      SalesPayment."Payment Journal Created" := TRUE;
+                    END;
+                    //SalesPayment."Prepay Invoice No." := gAppDocNo;
+                    SalesPayment."Sales Order No." := SalesHeader."No.";
+                    SalesPayment.MODIFY;
+                  UNTIL SalesPayment.NEXT = 0;
+                  gAppDocNo := '';
+            //    END;
+            //  END;
+            //DOC OP11536 RK 03/10/17 -
+            //END;
+            END ELSE BEGIN
+                //FF-
+              IF "Farfetch Order" THEN BEGIN
+                PaymentMethod.RESET;
+                PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::Farfetch);
+                IF SalesHeader."Currency Code" = GLSetup."LCY Code" THEN
+                  PaymentMethod.SETFILTER("Currency Code",'%1|%2','',SalesHeader."Currency Code")
+                ELSE
+                  PaymentMethod.SETRANGE("Currency Code",SalesHeader."Currency Code");
+                IF PaymentMethod.FINDFIRST THEN BEGIN
+                  SalesHeader.VALIDATE("Payment Method Code",PaymentMethod.Code);
+                  SalesHeader.MODIFY;
+                END;
+              END ELSE BEGIN
+              //FF+
+                PaymentMethod.RESET;
+                PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::COD);
+                IF SalesHeader."Currency Code" = GLSetup."LCY Code" THEN
+                  PaymentMethod.SETFILTER("Currency Code",'%1|%2','',SalesHeader."Currency Code")
+                ELSE
+                  PaymentMethod.SETRANGE("Currency Code",SalesHeader."Currency Code");
+                IF PaymentMethod.FINDFIRST THEN BEGIN
+                  SalesHeader.VALIDATE("Payment Method Code",PaymentMethod.Code);
+                  SalesHeader.MODIFY;
+                END;
+              END; //FF-+
+            END;
+            //DOC OP11536 RK 03/10/17 +
+            //DOC OP9031 RK 27/10/16 +
+            "Converted-To Document Type" := SalesHeader."Document Type";
+            "Converted-To Document No." := SalesHeader."No.";
+            Status := Status::Converted;
+            "Processing In Progress" := FALSE;
+            InternetOrderLine.SETRANGE("Do Not Convert Line");  //DOC EC2013.3.30
+            InternetOrderLine.MODIFYALL(Status,InternetOrderLine.Status::Converted);
+
+            IF SalesHeader."Document Type" <> SalesHeader."Document Type"::Quote THEN BEGIN  //DOC EC2015.5.04
+              //DOC EC2013.3.60 -
+              IF InternetSetup."Conv. VAT Max Corr. Tolerance" > 0 THEN BEGIN
+                //DOC EC2013.4.50 -
+                //CLEAR(SalesPost);
+                //SalesPost.SumSalesLines(
+                //  SalesHeader,0,TotalSalesLine,TotalSalesLineLCY,
+                //  VATAmount,VATAmountText,ProfitLCY,ProfitPct,TotalAdjCostLCY);
+                //DOC EC2015.5.02 IF ("Label Code" = 'DERMAUB2B') THEN BEGIN
+                CLEAR(V5andOver);
+                V5andOver.SalesPostSumSalesLines(SalesHeader,TotalSalesLine);
+                //DOC EC2013.4.50 +
+                //DOC EC2013.4.00 -
+                IF "Prices Including VAT" THEN BEGIN
+                  IF ABS(ROUND("Amount Including Tax",0.01) - ROUND(TotalSalesLine."Amount Including VAT",0.01)) <=
+                         InternetSetup."Conv. VAT Max Corr. Tolerance" THEN BEGIN
+                    DifferenceAmt := ROUND("Amount Including Tax",0.01) -
+                                     ROUND(TotalSalesLine."Amount Including VAT",0.01);
+                    IF (ABS(DifferenceAmt) <= InternetSetup."Conv. VAT Max Corr. Tolerance") AND
+                       (DifferenceAmt <> 0) THEN BEGIN
+                      InternetSetup.TESTFIELD("G/L Account for Tolerance");
+                      SalesLine.INIT;
+                      SetupSalesLine("Label Code","Order Guid");
+                      SalesLine."Document Type" := SalesHeader."Document Type";
+                      SalesLine."Document No." := SalesHeader."No.";
+                      SalesLineLineNo := SalesLineLineNo + 10000;
+                      SalesLine."Line No." := SalesLineLineNo;
+                      SalesLine.Type := SalesLine.Type::"G/L Account";
+                      SalesLine.VALIDATE("No.",InternetSetup."G/L Account for Tolerance");
+                      SalesLine.Description := TxtInternetOrderAdjustment;
+                      SalesLine.VALIDATE(Quantity,1);
+                      SalesLine.VALIDATE("Unit Price",DifferenceAmt);
+                      SalesLine."Allow Invoice Disc." := FALSE;
+                      SalesLine.DateTimeInsertedModified := CURRENTDATETIME;
+                      SalesLine.INSERT;
+                      CreateIPI.CreateIPI(0,"Order Guid",'',TxtAdjustTotalIpi,"Bill-to Net Customer No.",Text015,
+                                          FALSE,FALSE,SalesHeader."Sell-to Customer No.",TRUE);
+                    END;
+                  END;
+                END ELSE BEGIN
+                //DOC EC2013.4.00 +
+                  IF ABS(ROUND(Amount,0.01) - ROUND(TotalSalesLine.Amount,0.01)) <=
+                         InternetSetup."Conv. VAT Max Corr. Tolerance" THEN BEGIN
+                    DifferenceAmt := ROUND("Amount Including Tax",0.01) -
+                                     ROUND(TotalSalesLine."Amount Including VAT",0.01);
+                    IF (ABS(DifferenceAmt) <= InternetSetup."Conv. VAT Max Corr. Tolerance") AND
+                       (DifferenceAmt <> 0) THEN BEGIN
+                      SalesLine.RESET;
+                      SalesLine.SETCURRENTKEY("Document Type","Document No.","Line No.");
+                      SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+                      SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+                      SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+                      SalesHeader.SETFILTER(Amount,'>%1',DifferenceAmt);
+                      SalesLine.SETFILTER("VAT %",'<>%1',0);
+                      IF SalesLine.FINDFIRST THEN BEGIN
+                        SalesLine."VAT Difference" := DifferenceAmt;
+                        SalesLine.MODIFY;
+                        "VAT Adjusted" := TRUE;
+                      CreateIPI.CreateIPI(0,"Order Guid",'',TxtAdjustVatIpi,"Bill-to Net Customer No.",Text012,
+                                          FALSE,FALSE,SalesHeader."Sell-to Customer No.",TRUE);
+                      END;
+                    END;
+                  END;
+                END; //DOC EC2013.4.00
+              END;
+              //DOC EC2013.3.60 +
+            END; //DOC EC2015.5.04 +
+
+            //DOC EC2013.3.80 -
+            //DOC EC2013.4.00 Add IF to stop error for TNP
+            IF SalesHeadMQ.GET(SalesHeader."Document Type",SalesHeader."No.") THEN BEGIN
+              SalesHeadMQ."Label Code" := "Label Code";
+              SalesHeadMQ."Is An Internet Customer" := SalesHeader."Is An Internet Customer";
+              SalesHeadMQ.DateTimeInsertedModified := SalesHeader.DateTimeInsertedModified;
+              SalesHeadMQ."User GuID" := SalesHeader."User GuID";
+              SalesHeadMQ."Internet Source Code" := "Internet Source Code";
+              SalesHeadMQ."Internet Order Reference" := "Internet Order Reference";
+              SalesHeadMQ."Order GuID" := "Order Guid";
+              SalesHeadMQ.MODIFY;
+            END;
+            //DOC EC2013.3.80 +
+
+            //DOC EC2013.3.60 -
+            IF "Create IPI" THEN
+              CreateIPI.CreateIPI(0,"Order Guid",'',TxtWarningIpi,"Bill-to Net Customer No.",Text010,FALSE,FALSE,
+                                  SalesHeader."Sell-to Customer No.",FALSE);
+            //DOC EC2013.3.60 +
+
+            MODIFY;
+
+            COMMIT;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ModistSetup@1000000031 : Record 50000;
+      SalesHeader@1000 : Record 36;
+      SalesLine@1001 : Record 37;
+      SalesLine1@1000000033 : Record 37;
+      InternetOrderLine@1002 : Record 9021667;
+      InternetSetup@1003 : Record 9021609;
+      PaymentMethod@1004 : Record 289;
+      Item@1006 : Record 27;
+      ItemVariant@1000000007 : Record 5401;
+      SalesCommentLine@1000000000 : Record 44;
+      CustPostingGr@1010 : Record 92;
+      Text000@1000000001 : TextConst 'DAN=" mÜ ikke vëre tomt.";DEU=" sind nicht angemeldet.";ENU=" must not be empty.";ESP=No debe estar vac°o.;SVE=" fÜr inte vara tom.";ENG=" must not be empty."';
+      Text001@1000000002 : TextConst 'DAN=" skal vëre ''ny''.";DEU=" sollte ''neu'' sein.";ENU=" should be ''new''.";ESP=Deber°a ser ''nuevo''.;SVE=" bîr vara ''ny''.";ENG=" should be ''new''."';
+      Text002@1000000003 : TextConst 'DAN="Kunne ikke bestemme ";DEU="Kann nicht bestimmt werden. ";ENU="Unable to determin ";ESP="Imposible determinar ";SVE="Saknas ";ENG="Unable to determin "';
+      Text003@1000000004 : TextConst 'DAN="Ukendt dokumenttype ";DEU="Nicht unterstÅtzter Dokumententyp. ";ENU="Unsupported Document Type ";ESP="Tipo de Documento no Soportado ";SVE="Felaktig dokumenttyp ";ENG="Unsupported Document Type "';
+      Text004@1000000005 : TextConst 'DAN=Vare %1 kunne ikke findes.;DEU=Artikel %1 nicht gefunden.;ENU=Item %1 not found.;ESP=Producto %1 no Encontrado.;SVE=Artikel %1 saknas.;ENG=Item %1 not found.';
+      Text005@1000000006 : TextConst 'DAN=Opkrëvningsgebyr;DEU=Servicekosten;ENU=Customer %1 is a B2C customer but is paying by account even though their Credit Limit less their Balance is not even zero.;ESP=Cargo Servicio;SVE=Faktureringsavgift;ENG=Customer %1 is a B2C customer but is paying by account even though their Credit Limit less their Balance is not even zero.';
+      Text006@1000000008 : TextConst 'DAN=Ekspeditionsgebyr 2;DEU=Bearbeitungsbetrag;ENU=Handling Amount;ESP=Importe Manipulado;SVE=Kîpt belopp;ENG=Handling Amount';
+      Text007@1000000009 : TextConst 'DAN=Leveringgebyr;DEU=Versandbetrag;ENU=Shipping Amount;ESP=Importe Env°o;SVE=Leveransbelopp;ENG=Shipping Amount';
+      Text008@1000000013 : TextConst 'ENU=%1 %2 on Line No. %3 not found.;ENG=%1 %2 on Line No. %3 not found.';
+      SalesHeader1@1000000026 : Record 36;
+      CustInvDisc@1040004 : Record 19;
+      Customer@1000000019 : Record 18;
+      InternetCust@1000000020 : Record 9021642;
+      Label@1000000012 : Record 9021618;
+      Resource@1000000014 : Record 156;
+      GLAccount@1000000047 : Record 15;
+      WebCommentLine@1000000022 : Record 9021665;
+      CustSpecParam@1000000023 : Record 9021606;
+      LinkedAtValWeb@1000000029 : Record 9021683;
+      StockUsed@1000000030 : Record 9021684;
+      TotalSalesLine@1000000015 : Record 37;
+      SalesHeadMQ@1000000054 : Record 9021605;
+      SalesAndReceiveSetup@1000000062 : Record 311;
+      InvDiscPercentCode@1000000011 : Code[10];
+      GLAccountCode@1000000025 : Code[20];
+      CreditPayMethod@1000000032 : Code[10];
+      NewPayMethod@1000000056 : Code[10];
+      ExcessPayDocNo@1000000057 : Code[20];
+      SalesLineLineNo@1000000016 : Integer;
+      NoSeriesMgt@1000000021 : Codeunit 396;
+      SalesCalcDisc@1000000010 : Codeunit 60;
+      ReserveFunc@1000000041 : Codeunit 9021600;
+      CreateIPI@1000000039 : Codeunit 9021601;
+      IntOrdExplodeBOM@1000000053 : Codeunit 9021683;
+      V5andOver@1000000069 : Codeunit 9021605;
+      LineHandlingFee@1000000045 : Decimal;
+      DifferenceAmt@1000000046 : Decimal;
+      Text009@1040001 : TextConst 'ENU=Internet Order Rounding Adjustment;ENG=Internet Order Rounding Adjustment';
+      PayEntsAmt@1000000058 : Decimal;
+      ExcessAmt@1000000059 : Decimal;
+      CreditAmt@1000000060 : Decimal;
+      BillAmt@1000000061 : Decimal;
+      TotalDiscAmt@1000000043 : Decimal;
+      CollectError@1000000027 : Text[50];
+      BillPayEntGuid@1000000063 : Text[38];
+      CreditPayEntGuid@1000000064 : Text[38];
+      DescText@1000000065 : Text[50];
+      WarnText@1000000040 : Text[80];
+      SalesLineModify@1000000051 : Boolean;
+      BOMExploded@1000000050 : Boolean;
+      TomDixonTransferCheque@1000000049 : Boolean;
+      Text010@1000000036 : TextConst 'ENU=Attention.........   Customer Services must contact customer because stock is low.;ENG=Attention.........   Customer Services must contact customer because stock is low.';
+      Text011@1000000038 : TextConst 'ENU=Value of Internet Order Lines adjusted to total on Internet Order Header.;ENG=Value of Internet Order Lines adjusted to total on Internet Order Header.';
+      Text012@1000000052 : TextConst 'ENU=Value of VAT on Sales Order Lines adjusted to total on Internet Order Header.;ENG=Value of VAT on Sales Order Lines adjusted to total on Internet Order Header.';
+      SetAppliesToID@1000000067 : Boolean;
+      BalAcType@1000000066 : 'G/L Account,Customer,Vendor,Bank Account';
+      Text013@1000000037 : TextConst 'ENU=Customer has indicated they will pay %1 by bank transfer.;ENG=Customer has indicated they will pay %1 by bank transfer.';
+      Text014@1000000034 : TextConst 'ENU=Customer has indicated they will pay %1 by cheque.;ENG=Customer has indicated they will pay %1 by cheque.';
+      Text015@1000000042 : TextConst 'ENU=Adjustment line added to sales order.;ENG=Adjustment line added to sales order.;ENA=Adjustment line added to sales order.';
+      gAppDocNo@1000000017 : Code[20];
+      SummaryLineNo@1000000018 : Integer;
+      OrderDutyAmount@1000000024 : Decimal;
+      SalesPaySetup@1000000028 : Record 50010;
+      OrderTaxAmount@1000000035 : Decimal;
+      MainItemLineNo@1000000044 : Integer;
+
+    PROCEDURE CollectLastError@1() : Text[50];
+    BEGIN
+      EXIT(CollectError);
+    END;
+
+    PROCEDURE ErrorFound@2(ErrorText@1000 : Text[50]);
+    BEGIN
+      CollectError := ErrorText;
+      ERROR(ErrorText);
+    END;
+
+    PROCEDURE CreatePostGenJournal@1190000005(AcNo@1190000009 : Code[20];Desc@1190000011 : Text[50];InAmount@1190000013 : Decimal;BalAcType@1190000014 : 'G/L Account,Customer,Vendor,Bank Account';BalAcNo@1190000015 : Code[20];Line2AcNo@1190000017 : Code[20];Line2BalAcNo@1000000004 : Code[20];PayOldest@1190000020 : Boolean;AppliesToID@1040000 : Code[20];VAR DocNo@1000000002 : Code[20]);
+    VAR
+      GenJnlLine@1190000007 : Record 81;
+      GenJnlPost@1190000006 : Codeunit 12;
+      NoSeriesMgt@1190000005 : Codeunit 396;
+      JournalTemplate@1000000000 : Code[10];
+      JournalBatch@1000000001 : Code[10];
+      LineNo@1000000003 : Integer;
+    BEGIN
+      CLEAR(NoSeriesMgt);
+      DocNo := NoSeriesMgt.GetNextNo(SalesPaySetup."G/L Journals Doc No. Series",TODAY,TRUE);
+
+      //DOC EC2013.3.80 -
+      IF Line2AcNo <> '' THEN BEGIN
+        SalesPaySetup.TESTFIELD("Payment Journal Template");
+        SalesPaySetup.TESTFIELD("Payment Journal Batch");
+      END;
+      JournalTemplate := SalesPaySetup."Payment Journal Template";
+      JournalBatch := SalesPaySetup."Payment Journal Batch";
+      //END;  EC2013.3.80
+
+      GenJnlLine.RESET;
+      GenJnlLine.SETRANGE("Journal Template Name",JournalTemplate);
+      GenJnlLine.SETRANGE("Journal Batch Name",JournalBatch);
+      //DOC EC2013.3.60 -
+      {
+      IF TomDixonTransferCheque THEN BEGIN
+        IF GenJnlLine.FINDLAST THEN
+          LineNo := GenJnlLine."Line No." + 10000
+        ELSE
+          LineNo := 10000;
+      END ELSE BEGIN
+      }
+      //DOC EC2013.3.60 +
+      GenJnlLine.DELETEALL;
+      LineNo := 10000;
+      //END;  EC2013.3.80
+
+      GenJnlLine.INIT;
+      //DOC EC2013.3.80 IF (Line2AcNo <> '') OR (TomDixonTransferCheque = TRUE) THEN BEGIN
+      IF Line2AcNo <> '' THEN BEGIN
+        GenJnlLine."Journal Template Name" := JournalTemplate;
+        GenJnlLine."Journal Batch Name" := JournalBatch;
+        GenJnlLine."Line No." := LineNo;
+      END;
+      GenJnlLine.VALIDATE("Posting Date",TODAY);
+      //IF InAmount < 0 THEN
+        GenJnlLine.VALIDATE("Document Type",GenJnlLine."Document Type"::Payment);
+      GenJnlLine.VALIDATE("Account Type",GenJnlLine."Account Type"::Customer);
+      GenJnlLine.VALIDATE("Account No.",AcNo);
+      GenJnlLine.VALIDATE("Document No.",DocNo);
+      GenJnlLine.Description := Desc;
+      GenJnlLine.VALIDATE("Currency Code",SalesHeader."Currency Code");
+      GenJnlLine.VALIDATE(Amount,InAmount);
+      GenJnlLine.TESTFIELD("Gen. Posting Type",GenJnlLine."Gen. Posting Type"::" ");
+      IF BalAcNo = '' THEN BEGIN
+        GenJnlLine.VALIDATE("Bal. Account Type",GenJnlLine."Bal. Account Type"::"G/L Account");
+        GenJnlLine.VALIDATE("Bal. Account No.",'');
+      END ELSE BEGIN
+        GenJnlLine.VALIDATE("Bal. Account Type",BalAcType);
+        GenJnlLine.VALIDATE("Bal. Account No.",BalAcNo);
+      END;
+      IF PayOldest = TRUE THEN
+        GenJnlLine."Force Apply to Cust. Oldest" := TRUE
+      ELSE
+        GenJnlLine."Applies-to ID" := AppliesToID;
+
+      IF Line2AcNo = '' THEN BEGIN
+        //DOC EC2013.3.80 IF TomDixonTransferCheque = FALSE THEN BEGIN  //DOC EC2013.3.60
+        //DOC OP9031 RK 27/10/16 -
+        IF gAppDocNo <> '' THEN BEGIN
+          GenJnlLine.VALIDATE("Applies-to Doc. Type",GenJnlLine."Applies-to Doc. Type"::Invoice);
+          GenJnlLine.VALIDATE("Applies-to Doc. No.",gAppDocNo);
+        END;
+        //DOC OP9031 RK 27/10/16 +
+        CLEAR(GenJnlPost);
+        GenJnlPost.RUN(GenJnlLine);
+        CLEAR(GenJnlPost);
+        //DOC EC2013.3.60 -
+        //DOC EC2013.3.80 END ELSE
+        //DOC EC2013.3.80  GenJnlLine.INSERT;
+        //DOC EC2013.3.60 +
+      END ELSE BEGIN
+        GenJnlLine.INSERT;
+        GenJnlLine.INIT;
+        GenJnlLine."Journal Template Name" := JournalTemplate;
+        GenJnlLine."Journal Batch Name" := JournalBatch;
+        GenJnlLine."Line No." := LineNo + 10000;
+        GenJnlLine.VALIDATE("Posting Date",TODAY);
+      //  IF InAmount > 0 THEN
+          GenJnlLine.VALIDATE("Document Type",GenJnlLine."Document Type"::Payment);
+      //  GenJnlLine.VALIDATE("Account Type",GenJnlLine."Account Type"::Customer);
+        GenJnlLine.VALIDATE("Account Type",GenJnlLine."Account Type"::"G/L Account");
+        GenJnlLine.VALIDATE("Account No.",Line2AcNo);
+        GenJnlLine.VALIDATE("Document No.",DocNo);
+        GenJnlLine.Description := Desc;
+        GenJnlLine.VALIDATE("Currency Code",SalesHeader."Currency Code");
+        GenJnlLine.VALIDATE(Amount,-InAmount);
+        GenJnlLine.TESTFIELD("Gen. Posting Type",GenJnlLine."Gen. Posting Type"::" ");
+        GenJnlLine.VALIDATE("Bal. Account Type",GenJnlLine."Bal. Account Type"::"G/L Account");
+        GenJnlLine.VALIDATE("Bal. Account No.",Line2BalAcNo);
+        GenJnlLine."Applies-to ID" := AppliesToID;
+        GenJnlLine.INSERT;
+
+        //DOC EC2013.3.80 IF TomDixonTransferCheque = FALSE THEN BEGIN  //DOC EC2013.3.60
+        CLEAR(GenJnlPost);
+        GenJnlLine.RESET;
+        GenJnlLine.SETRANGE("Journal Template Name",JournalTemplate);
+        GenJnlLine.SETRANGE("Journal Batch Name",JournalBatch);
+        GenJnlLine.SETFILTER("Line No.",'%1|%2',LineNo,LineNo + 10000);
+        GenJnlLine.FIND('-');
+        REPEAT
+          GenJnlPost.RUN(GenJnlLine);
+        UNTIL GenJnlLine.NEXT = 0;
+        CLEAR(GenJnlPost);
+        //DOC EC2013.3.80 END;
+      END;
+
+      //DOC EC2013.3.80 IF TomDixonTransferCheque = FALSE THEN BEGIN  //DOC EC2013.3.60
+      GenJnlLine.RESET;
+      GenJnlLine.SETRANGE("Journal Template Name",JournalTemplate);
+      GenJnlLine.SETRANGE("Journal Batch Name",JournalBatch);
+      GenJnlLine.DELETEALL;
+      //DOC EC2013.3.80 END;
+
+      CLEAR(NoSeriesMgt);
+    END;
+
+    PROCEDURE SetupSalesLine@1000000000(LabCode@1000000000 : Code[10];OrdGUID@1000000002 : Text[38]);
+    BEGIN
+      SalesLine."Label Code" := LabCode;
+      SalesLine."Is An Internet Customer" := TRUE;  //always will be true
+      SalesLine."Order GuID" := OrdGUID;
+    END;
+
+    BEGIN
+    {
+      //DOC EC2013.3.10 MQ 27/09/2012 - GW120927 Changed Applies-To ID
+      //DOC EC2013.3.20 MQ 05/10/2012 - GW121005 FINBRANDS specific code
+      //DOC EC2013.3.30 MQ 05/12/2012 - GW121205 Add permission to delete Gen. Journal Line and Gen. Journal Batch
+      //DOC EC2013.3.30 MQ 05/12/2012 - Limit Internet Order Lines to "Do Not Convert Line" = false for processing.
+      //DOC EC2013.3.40 MQ 13/02/2013 - GW130213 SKS additions and Linked Attribute Values for COSTA; Addition for TomDixon
+      //DOC EC2013.3.50 MQ 22/02/2013 - GW130222 Addition for TomDixon
+      //DOC EC2013.3.50 MQ 04/03/2013 - GW130304 Is Dev Safe Mode
+      //DOC EC2013.3.50 MQ 18/03/2013 - GW130318 Change in EC2013.3.40 for Costa
+      //DOC EC2013.3.50 MQ 25/03/2013 - GW130325 use "Shipping Agent Service Code" (SKS)
+      //DOC EC2013.3.50 MQ 27/03/2013 - GW130327 Costa
+      //DOC EC2013.3.60 MQ 01/05/2013 - GW130501 DERM mod to cope with Proforma Accounts with zero value
+      //DOC EC2013.3.60 MQ 14/05/2013 - GW130514 TomDixon improved handling of AutoReserve and Consolidate Orders
+      //DOC EC2013.3.60 MQ 02/07/2013 - GW130702 VAT and Amount Adjustment
+      //DOC EC2013.3.60 MQ 11/06/2013 - GW130611 Create IPI for TomD
+      //DOC EC2013.3.70 MQ 15/07/2013 - GW130715 Call Explode BOM CU
+      //DOC EC2013.3.70 MQ 02/08/2013 - GW130802 Will work with EC2013.3.60 providing CU 9022483 Internet Order Explode BOM is added
+      //DOC EC2013.3.70 MQ 02/08/2013 - Work involves changing position of SalesLine.INSERT cos otherwise MC is getting an error when doing reservations that the SalesLine does not exist.
+      //DOC EC2013.3.70 MQ 02/08/2013 - Added function SetupSalesLine to populate with initial values. Correct TESTFIELD account for Payment Fee
+      //DOC EC2013.3.70 MQ 09/08/2013 - GW130809 Moved SalesLine.MODIFY slightly further down of Explode BOM functionality
+      //DOC EC2013.3.70 MQ 24/08/2013 - GW130824 Add call to CustomModsTD.ConfirmExplodeBOM
+      //DOC EC2013.3.80 MQ 05/09/2013 - GW130905 Handle PCI and SalesHeaderMQ
+      //DOC EC2013.3.80 MQ 02/10/2013 - GW131002 Enhanced for TD BankTrans/Cheque
+      //DOC EC2013.3.80 MQ 22/10/2013 - GW131022 Change to Salesperson and Your Reference for SKS
+      //DOC EC2013.3.80 MQ 07/11/2013 - GW131107 TOMD Payment Method
+      //DOC EC2013.4.00 MQ 17/10/2013 - GW131017 TNP; LM External Doc No.
+      //DOC EC2013.4.50 MQ 21/01/2014 - GW140121 DERMAUB2B
+      //DOC EC2013.4.50 MQ 22/01/2014 - GW140122 TOMD Salesperson code set
+      //DOC EC2013.4.50 MQ 10/02/2014 - GW140210 ECOM / SKS do not use Applies-To
+      //DOC EC2013.4.60 MQ 19/03/2014 - GW140319 DERMAUB2B change to make Shipping Inc. Tax
+      //DOC EC2013.4.60 MQ 02/04/2014 - GW140402 add COPYSTR
+      //DOC EC2013.4.60 MQ 11/04/2014 - GW140411 add SalesLine.SetHideValidationDialog for ELL
+      //DOC EC2013.4.60 MQ 15/04/2014 - GW140415 Only go to EECCCredMgt if Payment Method is PCI (i.e. not for CASH)
+      //DOC EC2013.4.64 MQ 19/06/2014 - GW140619 Updated for new PCI Charge and ELL
+      //DOC EC2013.4.64 MQ 24/07/2014 - GW140724 Use field Phone No. for TD
+      //DOC EC2013.4.65 MQ 29/08/2014 - GW140829 Payment Method Code for PCI can be PCI or PCI-TOKEN
+      //DOC EC2013.4.67 MQ 29/10/2014 - GW141029 Add LM to Saleperson Code
+      //DOC EC2015.5.01 MQ 09/01/2015 - GW150109 Now DERM updates StockUsed as well as TOMD
+      //DOC EC2015.5.02 MQ 04/02/2015 - GW150204 Deal with Zero Value Basket; Another InternetSetup."In Dev Safe Mode"
+      //DOC EC2015.5.02 MQ 09/02/2015 - GW150209 Add FDBE to population of External Document No.
+      //DOC EC2015.5.02 MQ 18/03/2015 - GW150318 Add a call to new fuction for TOMD
+      //DOC EC2015.5.02 MQ 16/04/2015 - GW150416 Add support for DERMUK2015 x8
+      //DOC EC2015.5.02 MQ 17/04/2015 - GW150417 LM shipping
+      //DOC EC2015.5.03 MQ 26/06/2015 - GW150626 Add another InternetSetup."In Dev Safe Mode"; Add code for FBDE
+      //DOC EC2015.5.04 MQ 17/07/2015 - GW150717 Handle Quotes (TD)
+      //DOC EC2015.5.04 MQ 20/07/2015 - GW150720 Made FBDE more like FINBRANDS
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+      //DOC OP9031 RK 27/10/16 - Code changes for Modist.
+      //DOC OP9031 RK 04/01/16 - Create duty amount line for order.
+      //DOC OP9031 RK 11/01/17 - Use shipment method from order file.
+      //DOC OP9031 RK 17/01/17 - New field to use web order number as navision order number.
+      //DOC OP9031 RK 18/01/17 - Save address 3 from internet order into sales order.
+      //DOC OP9031 RK 03/02/17 - Use description 2 to catch description longer than 50 char.
+      //DOC OP9031 RK 07/02/17 - Transfer parent line no. and line type to send promotion discounts to GAC.
+      //DOC OP9031 RK 07/02/17 - Use paymetn method by currency.
+      //DOC OP9031 RK 09/02/17 - Store bronto order id.
+      //DOC OP9031 RK 14/02/17 - Store bill-to email address from internet order onto sales order.
+      //DOC OP9031 RK 20/02/17 - Use first name and last name instead of customer name.
+      //DOC OP9031 RK 08/03/17 - For credit card payment find payment method by card type.
+      //DOC OP10530 RK 07/04/17 - Create individual duty line per sales line instead of single total duty line.
+      //DOC OP10987 TM 16/06/17 - Copy Customer Locale from the Internet Header to the Sales Header
+      //DOC OP11536 RK 30/08/17 - Create product tax g/l line on sales order.
+      //DOC OP11536 RK 31/08/17 - Store package type on order header.
+      //DOC OP11536 RK 03/10/17 - Changes for COD Payment.
+    }
+    END.
+  }
+}
+

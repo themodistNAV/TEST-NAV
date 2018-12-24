@@ -1,0 +1,844 @@
+OBJECT Codeunit 11102058 OM - Convert Object Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE Downgrade@1(VAR Object@1000 : Record 2000000001;FileName@1001 : Text;Version@1002 : Decimal);
+    VAR
+      CALHistoryObject@1003 : Record 11102052;
+      TmpCALHistoryObject@1004 : TEMPORARY Record 11102052;
+      Progressbar@1005 : Codeunit 11102044;
+      SourceControl@1006 : Codeunit 11102050;
+      FileHandler@1007 : Codeunit 11102097;
+      oFile@1008 : File;
+      TempFileName@1009 : Text;
+      ctCheckingObjects@1010 : TextConst 'DEU=Checking objects...;ENU=Checking objects...;ESP=Checking objects...;FRA=Checking objects...;NLD=Objecten controleren...;DEA=Checking objects...';
+      ctExportingObjects@1011 : TextConst 'DEU=Exporting objects...;ENU=Exporting objects...;ESP=Exporting objects...;FRA=Exporting objects...;NLD=Objecten exporteren...;DEA=Exporting objects...';
+    BEGIN
+      Object.FINDFIRST;
+
+      Progressbar.NoOfBars := 2;
+      Progressbar.Open('', 2);
+      Progressbar.BarSize := 3;
+      Progressbar.AddToBar(1);
+
+      Progressbar.NextBar;
+      Progressbar.Text1 := ctCheckingObjects;
+      Progressbar.BarSize := Object.COUNT;
+
+      FileHandler.QueryReplace(FileName);
+
+      REPEAT
+
+        Progressbar.Text2Object := Object;
+        Progressbar.AddToBar(1);
+
+        IF SourceControl.LatestHistoryIsOutdated(Object) THEN
+          SourceControl.AddObject(Object, 0, FALSE, FALSE, 1, FALSE);
+
+        IF CALHistoryObject.TryGoToLastRecord(Object.Type, Object.ID) THEN
+          CALHistoryObject.AddToTempRecord(TmpCALHistoryObject);
+
+      UNTIL Object.NEXT = 0;
+
+      Progressbar.PreviousBar;
+      Progressbar.AddToBar(1);
+
+      Progressbar.NextBar;
+      Progressbar.Text1 := ctExportingObjects;
+      Progressbar.BarSize := TmpCALHistoryObject.COUNT;
+
+      IF TmpCALHistoryObject.FINDSET THEN BEGIN
+
+        TempFileName := FileHandler.TempDirectory + 'SaveAsObjects.txt';
+        IF EXISTS(TempFileName) THEN
+          ERASE(TempFileName);
+        oFile.WRITEMODE(TRUE);
+        oFile.TEXTMODE(TRUE);
+        oFile.CREATE(TempFileName);
+
+        REPEAT
+          Progressbar.Text2 :=
+            FORMAT(TmpCALHistoryObject."Object Type") + ' ' +
+            FORMAT(TmpCALHistoryObject."Object No.") + ' ' +
+            TmpCALHistoryObject."Object Name";
+          Progressbar.AddToBar(1);
+
+          SourceControl.AppendHistoryObjectToFile(oFile, TmpCALHistoryObject."Entry No.");
+        UNTIL TmpCALHistoryObject.NEXT = 0;
+        oFile.CLOSE;
+      END;
+
+      Progressbar.PreviousBar;
+      Progressbar.AddToBar(1);
+      Progressbar.NextBar;
+
+      SLEEP(200);
+      ConvertFile(TempFileName, FileName, Version, Progressbar);
+
+      Progressbar.Close;
+    END;
+
+    PROCEDURE ConvertFile@2(SourceFileName@1000 : Text;TargetFileName@1001 : Text;Version@1002 : Decimal;VAR Progressbar@1003 : Codeunit 11102044);
+    VAR
+      Object@1004 : Record 2000000001;
+      SourceControl@1005 : Codeunit 11102050;
+      SourceFile@1006 : File;
+      TargetFile@1007 : File;
+      CurrentSectionName@1008 : Text;
+      TextLine@1009 : Text;
+      ReadChar@1010 : Char;
+      WriteChar@1011 : Char;
+      CodeSectionOpenedAt@1012 : Integer;
+      i@1013 : Integer;
+      IsEmptyPos@1014 : Integer;
+      ObjectBitmapPos@1015 : Integer;
+      EndOfLine@1016 : Boolean;
+      SourceTableTemporaryWarning@1017 : Boolean;
+      WriteLine@1018 : Boolean;
+      ctConvertingObjects@1019 : TextConst 'DEU=Converting objects...;ENU=Converting objects...;ESP=Converting objects...;FRA=Converting objects...;NLD=Objecten converteren...;DEA=Converting objects...';
+      ctSourceTableTempWarning@1020 : TextConst 'DEU=The property SourceTableTemporary is removed on one or more forms.\The form will work with real data instead of a temporary record.;ENU=The property SourceTableTemporary is removed on one or more forms.\The form will work with real data instead of a temporary record.;ESP=The property SourceTableTemporary is removed on one or more forms.\The form will work with real data instead of a temporary record.;FRA=The property SourceTableTemporary is removed on one or more forms.\The form will work with real data instead of a temporary record.;NLD=De eigenschap SourceTableTemporary is verwijderd op ‚‚n of meerdere forms.\Deze forms zullen met echte data werken in plaats van tijdelijk data.;DEA=The property SourceTableTemporary is removed on one or more forms.\The form will work with real data instead of a temporary record.';
+    BEGIN
+      SourceFile.OPEN(SourceFileName);
+
+      TargetFile.TEXTMODE(FALSE);
+      TargetFile.WRITEMODE(TRUE);
+      TargetFile.CREATE(TargetFileName);
+
+      Progressbar.Text1 := ctConvertingObjects;
+      Progressbar.BarSize := SourceFile.LEN;
+
+      WHILE SourceFile.READ(ReadChar) > 0 DO BEGIN
+
+        IF SourceFile.POS MOD 250 = 0 THEN
+          Progressbar.BarPosition := SourceFile.POS + 1;
+
+        CASE ReadChar OF
+
+          13, 10 :
+            BEGIN
+
+              WriteLine := TRUE;
+
+              IF DELSTR(TextLine, 7) = 'OBJECT' THEN BEGIN
+                SourceControl.GetObjectProperties(Object, TextLine);
+                Progressbar.Text2Object := Object;
+              END;
+
+              IF STRLEN(TextLine) > 5 THEN BEGIN
+
+                IF TextLine[3] <> ' ' THEN
+                  CurrentSectionName := COPYSTR(TextLine, 3);
+
+                IF CodeSectionOpenedAt = 0 THEN
+                  IF COPYSTR(TextLine, STRLEN(TextLine) - 4) = 'BEGIN' THEN
+                    CodeSectionOpenedAt := STRLEN(TextLine) - 4;
+
+                IF CodeSectionOpenedAt <> 0 THEN
+                  IF COPYSTR(TextLine, CodeSectionOpenedAt, 3) = 'END' THEN
+                    CodeSectionOpenedAt := 0;
+
+              END;
+
+              IF Version >= 7 THEN BEGIN
+                IF (Object.Type = Object.Type::"2") OR
+                   ((Object.Type = Object.Type::MenuSuite) AND (Object.ID <= 1000))
+                THEN BEGIN
+                  SkipObject(SourceFile);
+                  CLEAR(Object);
+                  WriteLine := FALSE;
+                END;
+
+                CASE CurrentSectionName OF
+
+                  'PROPERTIES', 'CONTROLS' :
+                    BEGIN
+                      TextLine := Replace(TextLine, 'FormID=Form', 'PageID=Page');
+                      TextLine := Replace(TextLine, 'FormID=', 'PageID=');
+                      TextLine := Replace(TextLine, 'FormView=', 'PageView=');
+                      TextLine := Replace(TextLine, 'FormLink=', 'PageLink=');
+                    END;
+
+                  'FIELDS' :
+                    IF CodeSectionOpenedAt = 0 THEN BEGIN
+                      TextLine := Replace(TextLine, 'Object Type=' + 'CONST(Dataport)', 'Object Type=CONST(4)');
+                      TextLine := Replace(TextLine, 'Object Type=' + 'CONST(Form)', 'Object Type=CONST(Page)');
+                    END;
+
+                  'REQUESTFORM' :
+                    BEGIN
+                      SkipSection(SourceFile);
+                      WriteLine := FALSE;
+                      CurrentSectionName := '';
+                    END;
+
+                END;
+
+                TextLine := Replace(TextLine, 'FO' + 'RM.RUN', 'PAGE.RUN');
+                TextLine := Replace(TextLine, '.FO' + 'RM.', '.PAGE.');
+                TextLine := Replace(TextLine, 'USEREQUEST' + 'FORM', 'USEREQUESTPAGE');
+
+                TextLine := Replace(TextLine, ' : Fo' + 'rm', ' : Page');
+                TextLine := Replace(TextLine, '::' + 'Form', '::"2"');
+                TextLine := Replace(TextLine, 'FO' + 'RM::', 'PA' + 'GE::');
+
+                TextLine := Replace(TextLine, '::' + 'Dataport', '::"4"');
+
+                IF Object.Type = Object.Type::Page THEN BEGIN
+                  ReplaceProperty(TextLine, 'Visible', 'No', 'FALSE');
+                  ReplaceProperty(TextLine, 'Visible', 'Yes', 'TRUE');
+                  ReplaceProperty(TextLine, 'Enabled', 'No', 'FALSE');
+                  ReplaceProperty(TextLine, 'Enabled', 'Yes', 'TRUE');
+                END;
+
+              END;
+
+              IF Version < 7 THEN BEGIN
+                IF Object.Type = Object.Type::Query THEN BEGIN
+                  SkipObject(SourceFile);
+                  CLEAR(Object);
+                  WriteLine := FALSE;
+                END;
+
+                CASE CurrentSectionName OF
+
+                  'PROPERTIES', 'CONTROLS' :
+                    BEGIN
+                      TextLine := Replace(TextLine, 'PageID=Page', 'FormID=Form');
+                      TextLine := Replace(TextLine, 'PageID=', 'FormID=');
+                      TextLine := Replace(TextLine, 'PageView=', 'FormView=');
+                      TextLine := Replace(TextLine, 'PageLink=', 'FormLink=');
+                      TextLine := Replace(TextLine, 'RunPageMode=', 'RunFormMode=');
+                      TextLine := Replace(TextLine, 'RunPageOnRec=', 'RunFormOnRec=');
+
+                      RemoveProperty(TextLine, 'Width');
+                      RemoveProperty(TextLine, 'QuickEntry');
+                      RemoveProperty(TextLine, 'ShowFilter');
+
+                      IF STRPOS(TextLine, 'OnAfterGetCurrRecord=') > 0 THEN BEGIN
+                        SkipFunction(SourceFile, TextLine);
+                        WriteLine := FALSE;
+                      END;
+
+                    END;
+
+                END;
+
+                TextLine := Replace(TextLine, ' : ' + 'Text)', ' : Text[1024])');
+                TextLine := Replace(TextLine, ' : ' + 'Text;', ' : Text[1024];');
+
+                TextLine := Replace(TextLine, '] OF ' + 'Text)', '] OF Text[1024])');
+                TextLine := Replace(TextLine, '] OF ' + 'Text;', '] OF Text[1024];');
+                TextLine := Replace(TextLine, ': ' + 'Text INDATASET', ': Text[1024] INDATASET');
+
+                TextLine := Replace(TextLine, '@@@=', 'ZUL=');
+
+                RemoveParameter(TextLine, 'SECURITYFILTERING', 1);
+                TextLine := Replace(TextLine, ' SECURITY' + 'FILTERING()', '');
+
+                IF Object.Type = Object.Type::Page THEN BEGIN
+                  ReplaceProperty(TextLine, 'Visible', 'FALSE', 'No');
+                  ReplaceProperty(TextLine, 'Visible', 'TRUE', 'Yes');
+                  ReplaceProperty(TextLine, 'Enabled', 'FALSE', 'FALSE');
+                  ReplaceProperty(TextLine, 'Enabled', 'TRUE', 'Yes');
+
+                  ReplaceProperty(TextLine, 'PageType', 'StandardDialog', 'Card');
+
+                  RemoveProperty(TextLine, 'CardFormID');
+                  RemoveProperty(TextLine, 'ShowCaption');
+
+                  TextLine := Replace(TextLine, '=GridLayout', '=FixedLayout');
+                  RemoveProperty(TextLine, 'Layout');
+                  RemoveProperty(TextLine, 'ColumnSpan');
+                END;
+
+                IF Object.Type = Object.Type::XMLport THEN
+                  TextLine := Replace(TextLine, 'UseRequestPage=', 'UseRequestForm=');
+
+              END;
+
+              IF Version < 6 THEN BEGIN
+
+                IF (Object.Type = Object.Type::Page) OR
+                   ((Object.Type = Object.Type::MenuSuite) AND (Object.ID >= 1000))
+                THEN BEGIN
+                  SkipObject(SourceFile);
+                  CLEAR(Object);
+                  WriteLine := FALSE;
+                END;
+
+                CASE CurrentSectionName OF
+
+                  'CONTROLS' :
+                    BEGIN
+                      TextLine := Replace(TextLine, 'Bitmap=' + '2008', 'Bitmap=2109');
+                      ObjectBitmapPos := STRPOS(TextLine, ',2008');
+                      IF ObjectBitmapPos > 0 THEN
+                        TextLine := DELSTR(TextLine, ObjectBitmapPos, 5);
+
+                      IF STRPOS(TextLine, 'ShortCutKey') > 0 THEN
+                        TextLine := Replace(TextLine, 'Umsch' + 'alt', 'Groá');
+
+                    END;
+
+                  'DATAITEMS' :
+                    IF CodeSectionOpenedAt = 0 THEN
+                      RemoveProperty(TextLine, 'DataSetFieldName');
+
+                  'ELEMENTS' :
+                    IF CodeSectionOpenedAt = 0 THEN
+                      RemoveProperty(TextLine, 'ReqFilterFields');
+
+                  'FIELDGROUPS', 'RDLDATA', 'REQUESTPAGE' :
+                    BEGIN
+                      SkipSection(SourceFile);
+                      WriteLine := FALSE;
+                      CurrentSectionName := '';
+                    END;
+
+                  'FIELDS' :
+                    IF CodeSectionOpenedAt = 0 THEN BEGIN
+                      RemoveProperty(TextLine, 'ExtendedDatatype');
+                      RemoveProperty(TextLine, 'Volatile');
+                      TextLine := Replace(TextLine, 'Object Type=' + 'CONST(Page)', 'Object Type=CONST(8)');
+                    END;
+
+                  'PROPERTIES' :
+                    IF CodeSectionOpenedAt = 0 THEN BEGIN
+                      IF Object.Type = Object.Type::XMLport THEN BEGIN
+                        RemoveProperty(TextLine, 'FieldDelimiter');
+                        RemoveProperty(TextLine, 'FieldSeparator');
+                        RemoveProperty(TextLine, 'Format');
+                        RemoveProperty(TextLine, 'TableSeparator');
+                        RemoveProperty(TextLine, 'UseRequestForm');
+                        RemoveProperty(TextLine, 'UseDefaultNamespace');
+                        RemoveProperty(TextLine, 'DefaultNamespace');
+                      END;
+                      RemoveProperty(TextLine, 'TrackingObject');
+
+                    END;
+
+                END;
+
+                IF CodeSectionOpenedAt <> 0 THEN BEGIN
+                  RemoveParameter(TextLine, 'CREATE', 3);
+                  RemoveParameter(TextLine, 'STRMENU', 3);
+                  TextLine := Replace(TextLine, 'PAGE' + '.RUN', 'FORM.RUN');
+                  TextLine := Replace(TextLine, 'PAGE' + '::', 'FORM::');
+                  TextLine := SlashIfBegin(TextLine, 'DOWNLOAD(');
+                  TextLine := SlashIfBegin(TextLine, 'DOWNLOADFROMSTREAM(');
+                  TextLine := SlashIfBegin(TextLine, 'UPLOAD(');
+                  TextLine := SlashIfBegin(TextLine, 'UPLOADINTOSTREAM(');
+                END;
+
+                TextLine := Replace(TextLine, '::' + 'Page', '::"8"');
+                TextLine := Replace(TextLine, ' INDATA' + 'SET;', ';');
+              END;
+
+              IF Version < 5 THEN BEGIN
+
+                CASE CurrentSectionName OF
+
+                  'PROPERTIES' :
+                    IF CodeSectionOpenedAt = 0 THEN BEGIN
+                      RemoveProperty(TextLine, 'LinksAllowed');
+                      IF RemoveProperty(TextLine, 'SourceTableTemporary') THEN
+                        SourceTableTemporaryWarning := TRUE;
+
+                    END;
+
+                  'CONTROLS' :
+                    IF CodeSectionOpenedAt = 0 THEN
+                      IF STRPOS(TextLine, 'Bitmap') > 0 THEN BEGIN
+                        TextLine := Replace(TextLine, 'Bitmap=' + '53', 'Bitmap=20');
+                        TextLine := Replace(TextLine, 'BitmapList=' + '47,46', 'BitmapList=39,40');
+                        TextLine := Replace(TextLine, 'BitmapList=' + '45', 'BitmapList=8');
+                        TextLine := Replace(TextLine, 'BitmapList=' + '49,48', 'BitmapList=1290,1290');
+                        TextLine := Replace(TextLine, 'BitmapList=' + '51,50', 'BitmapList=1286,1286');
+                      END;
+
+                END;
+
+                IF CodeSectionOpenedAt <> 0 THEN BEGIN
+                  TextLine := ReplaceIsolated(TextLine, 'APPLICATION' + 'PATH', 'ENVIRON(''APPPATH'')');
+                  TextLine := ReplaceIsolated(TextLine, 'TEMPORARY' + 'PATH', 'ENVIRON(''TEMP'')');
+                  TextLine := ReplaceIsolated(TextLine, 'GET' + 'LASTERRORTEXT()', '''Error occured.''');
+                  TextLine := ReplaceIsolated(TextLine, 'GET' + 'LASTERRORTEXT', '''Error occured.''');
+                  TextLine := ReplaceIsolated(TextLine, 'CLEAR' + 'LASTERROR', '');
+                  TextLine := Replace(TextLine, '::' + 'Page', '::"8"');
+                  TextLine := Replace(TextLine, 'DATABASE::' + '"Record Link"', 'DATABASE::' + '"2000000068"');
+                END;
+
+              END;
+
+              IF Version < 4.2 THEN BEGIN
+
+                IF STRPOS(TextLine, ' : XML' + 'port ') > 0 THEN
+                  WriteLine := FALSE;
+
+                CASE CurrentSectionName OF
+                  'KEYS' :
+                    BEGIN
+                      TextLine := Replace(TextLine, 'Clustered=' + 'Yes', '');
+                      TextLine := Replace(TextLine, 'Clustered=' + 'No', '');
+                    END;
+
+                  'CONTROLS' :
+                    IF STRPOS(TextLine, 'RunObject=XMLport') > 0 THEN
+                      RemoveProperty(TextLine, 'RunObject');
+
+                END;
+
+                IF CodeSectionOpenedAt > 0 THEN BEGIN
+                  TextLine := ReplaceIsolated(TextLine, 'FIND' + 'SET', 'FIND(''-'')');
+                  TextLine := ReplaceIsolated(TextLine, 'FIND' + 'FIRST', 'FIND(''-'')');
+                  TextLine := ReplaceIsolated(TextLine, 'FIND' + 'LAST', 'FIND(''+'')');
+                  WHILE STRPOS(TextLine, 'IS' + 'EMPTY') > 0 DO BEGIN
+                    IsEmptyPos := STRPOS(TextLine, 'IS' + 'EMPTY');
+                    TextLine := DELSTR(TextLine, IsEmptyPos) + 'FIND(''-''))' + COPYSTR(TextLine, IsEmptyPos + 7);
+                    TextLine := INSSTR(TextLine, '(NOT ', StartPosOfIsEmpty(TextLine, IsEmptyPos));
+                  END;
+                  IF STRPOS(TextLine, 'FIND(''-'')(') > 0 THEN BEGIN
+                    TextLine := ReplaceIsolated(TextLine, 'FIND(''-'')' + '(FALSE,FALSE)', 'FIND(''-'')');
+                    TextLine := ReplaceIsolated(TextLine, 'FIND(''-'')' + '(FALSE,TRUE)', 'FIND(''-'')');
+                    TextLine := ReplaceIsolated(TextLine, 'FIND(''-'')' + '(TRUE,FALSE)', 'FIND(''-'')');
+                    TextLine := ReplaceIsolated(TextLine, 'FIND(''-'')' + '(TRUE,TRUE)', 'FIND(''-'')');
+                    TextLine := ReplaceIsolated(TextLine, 'FIND(''-'')' + '(FALSE, FALSE)', 'FIND(''-'')');
+                    TextLine := ReplaceIsolated(TextLine, 'FIND(''-'')' + '(FALSE, TRUE)', 'FIND(''-'')');
+                    TextLine := ReplaceIsolated(TextLine, 'FIND(''-'')' + '(TRUE, FALSE)', 'FIND(''-'')');
+                    TextLine := ReplaceIsolated(TextLine, 'FIND(''-'')' + '(TRUE, TRUE)', 'FIND(''-'')');
+                    TextLine := ReplaceIsolated(TextLine, 'FIND(''-'')' + '(FALSE)', 'FIND(''-'')');
+                    TextLine := ReplaceIsolated(TextLine, 'FIND(''-'')' + '(TRUE)', 'FIND(''-'')');
+                  END;
+
+                END;
+
+              END;
+
+              IF Version < 4 THEN BEGIN
+
+                IF Object.Type IN [Object.Type::XMLport, Object.Type::MenuSuite] THEN BEGIN
+                  SkipObject(SourceFile);
+                  WriteLine := FALSE;
+                END;
+
+                CASE CurrentSectionName OF
+
+                  'FIELDS' :
+                    IF CodeSectionOpenedAt = 0 THEN BEGIN
+                      TextLine := Replace(TextLine, 'Object Type=' + 'CONST(XMLport)', 'Object Type=CONST(6)');
+                      TextLine := Replace(TextLine, 'Object Type=' + 'CONST(MenuSuite)', 'Object Type=CONST(7)');
+                    END;
+
+                  'CONTROLS' :
+                    IF CodeSectionOpenedAt = 0 THEN
+                      IF STRPOS(TextLine, 'Bitmap') > 0 THEN BEGIN
+                        TextLine := Replace(TextLine, 'Bitmap=' + '2006', 'Bitmap=2109');
+                        TextLine := Replace(TextLine, 'Bitmap=' + '2007', 'Bitmap=2109');
+                        TextLine := Replace(TextLine, 'Bitmap=' + '2106', 'Bitmap=2109');
+                        TextLine := Replace(TextLine, 'Bitmap=' + '2107', 'Bitmap=2109');
+                        ObjectBitmapPos := STRPOS(TextLine, ',2006');
+                        IF ObjectBitmapPos > 0 THEN
+                          TextLine := DELSTR(TextLine, ObjectBitmapPos, 5);
+                        ObjectBitmapPos := STRPOS(TextLine, ',2007');
+                        IF ObjectBitmapPos > 0 THEN
+                          TextLine := DELSTR(TextLine, ObjectBitmapPos, 5);
+                      END;
+
+                END;
+
+                TextLine := Replace(TextLine, '::' + 'XMLport', '::"6"');
+                TextLine := Replace(TextLine, '::' + 'MenuSuite', '::"7"');
+                TextLine := Replace(TextLine, '<>' + 'MenuSuite', '<>7');
+                TextLine := Replace(TextLine, ' : ' + 'BigText', ' : Variant');
+
+                IF CodeSectionOpenedAt <> 0 THEN
+                  RemoveParameter(TextLine, 'EVALUATE', 3);
+
+              END;
+
+              IF Version < 3.6 THEN
+                ;
+
+              IF WriteLine THEN BEGIN
+                FOR i := 1 TO STRLEN(TextLine) DO BEGIN
+                  WriteChar := TextLine[i];
+                  TargetFile.WRITE(WriteChar);
+                END;
+                TargetFile.WRITE(ReadChar);
+              END;
+
+              IF SourceFile.READ(ReadChar) > 0 THEN
+                IF ReadChar IN [10, 13] THEN BEGIN
+                  IF WriteLine THEN
+                    TargetFile.WRITE(ReadChar);
+                END ELSE
+                  SourceFile.SEEK(SourceFile.POS - 1);
+
+              TextLine := '';
+            END;
+          ELSE BEGIN
+            TextLine += FORMAT(ReadChar);
+            IF STRLEN(TextLine) = 1024 THEN BEGIN
+              IF WriteLine THEN
+                FOR i := 1 TO STRLEN(TextLine) DO BEGIN
+                  WriteChar := TextLine[i];
+                  TargetFile.WRITE(WriteChar);
+                END;
+              REPEAT
+                SourceFile.READ(ReadChar);
+                EndOfLine := ReadChar IN [10, 13];
+                IF WriteLine THEN
+                  TargetFile.WRITE(ReadChar);
+              UNTIL EndOfLine;
+
+              SourceFile.READ(ReadChar);
+              IF ReadChar IN [10, 13] THEN BEGIN
+                IF WriteLine THEN
+                  TargetFile.WRITE(ReadChar);
+              END ELSE
+                SourceFile.SEEK(SourceFile.POS - 1);
+
+              TextLine := '';
+            END;
+          END;
+
+        END;
+
+      END;
+
+      SourceFile.CLOSE;
+      TargetFile.CLOSE;
+
+      IF SourceTableTemporaryWarning THEN
+        MESSAGE(ctSourceTableTempWarning);
+    END;
+
+    LOCAL PROCEDURE StartPosOfIsEmpty@3(TextLine@1000 : Text;StartPos@1001 : Integer) : Integer;
+    VAR
+      LoopPos@1002 : Integer;
+      BracketFound@1003 : Boolean;
+      SearchQuote@1004 : Boolean;
+    BEGIN
+      IF TextLine[StartPos - 1] <> '.' THEN
+        EXIT(StartPos);
+
+      IF TextLine[StartPos - 2] = ']' THEN BEGIN
+        LoopPos := StartPos - 3;
+        WHILE (LoopPos > 1) AND NOT BracketFound DO
+          IF TextLine[LoopPos] = '[' THEN
+            BracketFound := TRUE
+          ELSE
+            LoopPos -= 1;
+        IF BracketFound THEN
+          StartPos := LoopPos + 1;
+      END;
+
+      SearchQuote := TextLine[StartPos - 2] = '"';
+
+      IF SearchQuote THEN
+        LoopPos := StartPos - 3
+      ELSE
+        LoopPos := StartPos - 2;
+
+      WHILE LoopPos > 1 DO BEGIN
+
+        IF SearchQuote THEN BEGIN
+          IF TextLine[LoopPos] = '"' THEN
+            EXIT(LoopPos);
+        END ELSE
+          IF TextLine[LoopPos] IN ['(', ' ', '['] THEN
+            EXIT(LoopPos + 1);
+
+        LoopPos -= 1;
+      END;
+    END;
+
+    LOCAL PROCEDURE SkipSection@4(VAR SourceFile@1000 : File);
+    VAR
+      TextLine@1001 : Text;
+      ReadChar@1002 : Char;
+    BEGIN
+      WHILE SourceFile.READ(ReadChar) <> 0 DO
+
+        CASE ReadChar OF
+
+          13, 10 :
+            TextLine := '';
+
+          ELSE
+            IF STRLEN(TextLine) < 3 THEN BEGIN
+              TextLine += FORMAT(ReadChar);
+              IF TextLine = '  }' THEN BEGIN
+                SourceFile.READ(ReadChar);
+                SourceFile.READ(ReadChar);
+                EXIT;
+              END;
+            END;
+        END;
+    END;
+
+    LOCAL PROCEDURE SkipObject@5(VAR SourceFile@1000 : File);
+    VAR
+      ReadChar@1001 : Char;
+      FirstCharacter@1002 : Boolean;
+    BEGIN
+      WHILE SourceFile.READ(ReadChar) <> 0 DO
+
+        CASE ReadChar OF
+
+          13, 10 :
+            FirstCharacter := TRUE;
+
+          ELSE BEGIN
+            IF FirstCharacter AND (FORMAT(ReadChar) = '}') THEN
+              EXIT;
+            FirstCharacter := FALSE;
+          END;
+        END;
+    END;
+
+    LOCAL PROCEDURE SkipFunction@13(VAR SourceFile@1000 : File;VAR TextLine@1001 : Text[1024]);
+    VAR
+      EndCode@1002 : Text[1024];
+      ReadChar@1003 : Char;
+      EndFound@1004 : Boolean;
+    BEGIN
+      IF COPYSTR(TextLine, STRLEN(TextLine) - 3) = '=VAR' THEN
+        EndCode := PADSTR('', STRPOS(TextLine, '=VAR')) + 'END;';
+
+      IF COPYSTR(TextLine, STRLEN(TextLine) - 5) = '=BEGIN' THEN
+        EndCode := PADSTR('', STRPOS(TextLine, '=BEGIN')) + 'END;';
+
+      IF EndCode = '' THEN
+        EXIT;
+
+      TextLine := '';
+      WHILE (SourceFile.READ(ReadChar) <> 0) AND NOT EndFound DO
+
+        CASE ReadChar OF
+
+          13, 10 :
+            BEGIN
+              EndFound := TextLine = EndCode;
+              TextLine := '';
+            END;
+
+          ELSE
+            TextLine += FORMAT(ReadChar);
+
+        END;
+    END;
+
+    LOCAL PROCEDURE RemoveProperty@6(VAR TextLine@1000 : Text;Property@1001 : Text) : Boolean;
+    VAR
+      PropertyPos@1002 : Integer;
+      ctSection@1003 : TextConst 'DEU=Section not implemented.;ENU=Section not implemented.;ESP=Section not implemented.;FRA=Section not implemented.;NLD=Section niet gemaakt.;DEA=Section not implemented.';
+    BEGIN
+      PropertyPos := STRPOS(TextLine, Property);
+
+      IF PropertyPos > 1 THEN
+        IF NOT (TextLine[PropertyPos - 1] IN [';', ' ']) THEN
+          EXIT;
+
+      IF PropertyPos > 0 THEN
+        CASE TRUE OF
+
+          TextLine[PropertyPos + STRLEN(Property) + 2] = '[' :
+            ERROR(ctSection);
+
+          TextLine[STRLEN(TextLine)] = ';' :
+            TextLine := DELSTR(TextLine, PropertyPos);
+
+          TextLine[STRLEN(TextLine)] = '}' :
+            TextLine := DELSTR(TextLine, PropertyPos) + '}';
+        END;
+
+      EXIT(PropertyPos > 0);
+    END;
+
+    LOCAL PROCEDURE ReplaceProperty@7(VAR TextLine@1000 : Text;Property@1001 : Text;OldValue@1002 : Text;NewValue@1003 : Text);
+    VAR
+      ExpectedNewLine@1004 : Text;
+      ExpectedOldLine@1005 : Text;
+      PropertyPos@1006 : Integer;
+    BEGIN
+      PropertyPos := STRPOS(TextLine, Property);
+      IF PropertyPos > 0 THEN BEGIN
+        CASE TRUE OF
+
+          TextLine[STRLEN(TextLine)] = ';' :
+            BEGIN
+              ExpectedOldLine := Property + '=' + OldValue + ';';
+              ExpectedNewLine := Property + '=' + NewValue + ';';
+            END;
+
+          TextLine[STRLEN(TextLine)] = '}' :
+            BEGIN
+              ExpectedOldLine := Property + '=' + OldValue + ' }';
+              ExpectedNewLine := Property + '=' + NewValue + ' }';
+            END;
+
+        END;
+        IF STRPOS(TextLine, ExpectedOldLine) > 0 THEN
+          TextLine := Replace(TextLine, ExpectedOldLine, ExpectedNewLine);
+      END;
+    END;
+
+    LOCAL PROCEDURE RemoveParameter@8(VAR TextLine@1000 : Text;Command@1001 : Text;ParameterNo@1002 : Integer);
+    VAR
+      Char@1003 : Char;
+      BracketsOpen@1004 : Integer;
+      CommandPos@1005 : Integer;
+      ParameterCounter@1006 : Integer;
+      ParameterStartedAt@1007 : Integer;
+      ReadPos@1008 : Integer;
+      RemarkOpen@1009 : Integer;
+      StopLoop@1010 : Boolean;
+      TextOpen@1011 : Boolean;
+      VariableOpen@1012 : Boolean;
+    BEGIN
+      CommandPos := STRPOS(TextLine, Command + '(');
+      IF CommandPos = 0 THEN
+        EXIT;
+
+      ReadPos := CommandPos + STRLEN(Command) + 1;
+      ParameterCounter := 1;
+      IF ParameterNo = 1 THEN
+        ParameterStartedAt := ReadPos;
+      BracketsOpen := 1;
+
+      WHILE (ReadPos <= STRLEN(TextLine)) AND NOT StopLoop DO BEGIN
+
+        Char := TextLine[ReadPos];
+
+        CASE TRUE OF
+
+          RemarkOpen > 0 :
+            BEGIN
+              IF Char = '{' THEN
+                RemarkOpen += 1;
+              IF Char = '}' THEN
+                RemarkOpen -= 1;
+            END;
+
+          TextOpen :
+            IF Char = '''' THEN
+              TextOpen := FALSE;
+
+          VariableOpen :
+            IF Char = '"' THEN
+              VariableOpen := FALSE;
+
+          Char = '''' :
+            TextOpen := TRUE;
+
+          Char = '{' :
+            RemarkOpen += 1;
+
+          Char = '"' :
+            VariableOpen := TRUE;
+
+          Char IN ['(', '['] :
+            BracketsOpen += 1;
+
+          Char IN [')', ']'] :
+            BEGIN
+              BracketsOpen -= 1;
+              StopLoop := BracketsOpen = 0;
+            END;
+
+          Char = ',' :
+            IF BracketsOpen = 1 THEN BEGIN
+              ParameterCounter += 1;
+              IF ParameterCounter = ParameterNo THEN
+                ParameterStartedAt := ReadPos;
+              StopLoop := ParameterCounter > ParameterNo;
+            END;
+        END;
+        ReadPos += 1;
+      END;
+
+      IF StopLoop AND (ParameterStartedAt > 0) THEN
+        TextLine := DELSTR(TextLine, ParameterStartedAt) + COPYSTR(TextLine, ReadPos - 1);
+    END;
+
+    LOCAL PROCEDURE Replace@9(String1@1000 : Text;String2@1001 : Text;String3@1002 : Text) RetValue : Text;
+    VAR
+      LoopCounter@1003 : Integer;
+      StringPosition@1004 : Integer;
+    BEGIN
+      RetValue := String1;
+
+      StringPosition := STRPOS(RetValue, String2);
+      WHILE (StringPosition > 0) AND (LoopCounter <= 100) DO BEGIN
+        LoopCounter += 1;
+        RetValue := INSSTR(DELSTR(RetValue, StringPosition, STRLEN(String2)), String3, StringPosition);
+        StringPosition := STRPOS(RetValue, String2);
+      END;
+    END;
+
+    LOCAL PROCEDURE ReplaceIsolated@10(String1@1000 : Text;String2@1001 : Text;String3@1002 : Text) RetValue : Text;
+    VAR
+      AfterChar@1003 : Char;
+      BeforeChar@1004 : Char;
+      i@1005 : Integer;
+    BEGIN
+      RetValue := String1;
+
+      IF STRPOS(RetValue, String2) = 0 THEN
+        EXIT;
+
+      i := 1;
+      WHILE i <= STRLEN(RetValue) DO BEGIN
+        IF COPYSTR(RetValue, i, STRLEN(String2)) = String2 THEN BEGIN
+
+          BeforeChar := 0;
+          IF i > 1 THEN
+            BeforeChar := RetValue[i - 1];
+          AfterChar := RetValue[i + STRLEN(String2)];
+
+          IF SpecialCharacter(BeforeChar) AND SpecialCharacter(AfterChar) THEN
+            RetValue := INSSTR(DELSTR(RetValue, i, STRLEN(String2)), String3, i);
+        END;
+        i += 1;
+      END;
+    END;
+
+    LOCAL PROCEDURE SlashIfBegin@11(String1@1000 : Text;String2@1001 : Text) RetValue : Text;
+    BEGIN
+      RetValue := String1;
+
+      IF STRPOS(RetValue, String2) = 0 THEN
+        EXIT;
+
+      IF DELCHR(DELSTR(String1, STRPOS(String1, String2))) = '' THEN
+        RetValue := INSSTR(String1, ';//', STRPOS(String1, String2));
+    END;
+
+    LOCAL PROCEDURE SpecialCharacter@12(Char@1000 : Char) : Boolean;
+    BEGIN
+      EXIT(
+        NOT (Char IN
+          [
+            48..57, 65..90, 95, 97..122, 128..155, 157, 160..165, 181..183, 198..199,
+            208..212, 214..216, 222, 224, 226..229, 231..237]));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

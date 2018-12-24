@@ -1,0 +1,1953 @@
+OBJECT Codeunit 11102043 OM - Im Export Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            LastUsedFileName@1000 : Text;
+          BEGIN
+            Open(LastUsedFileName);
+          END;
+
+  }
+  CODE
+  {
+
+    LOCAL PROCEDURE Open@1(VAR FileName@1000 : Text);
+    VAR
+      BackupAndRestore@1001 : Codeunit 11102055;
+      CommonDialog@1002 : Codeunit 11102059;
+      ImportTransport@1003 : Codeunit 11102087;
+      ServerFileName@1004 : Text;
+      ctExtAll@1005 : TextConst 'DEU="Object Manager Files|*.fib;*.fab;*.fob;*.txt;*.obp;*.dbk;*.lic;*.fld";ENU="Object Manager Files|*.fib;*.fab;*.fob;*.txt;*.obp;*.dbk;*.lic;*.fld";ESP="Object Manager Files|*.fib;*.fab;*.fob;*.txt;*.obp;*.dbk;*.lic;*.fld";FRA="Object Manager Files|*.fib;*.fab;*.fob;*.txt;*.obp;*.dbk;*.lic;*.fld";NLD="Object Manager Files|*.fib;*.fab;*.fob;*.txt;*.obp;*.dbk;*.lic;*.fld";DEA="Object Manager Files|*.fib;*.fab;*.fob;*.txt;*.obp;*.dbk;*.lic;*.fld"';
+      ctExtObjectTxt@1006 : TextConst 'DEU=NAV Object Text Files (*.txt)|*.txt;ENU=NAV Object Text Files (*.txt)|*.txt;ESP=NAV Object Text Files (*.txt)|*.txt;FRA=NAV Object Text Files (*.txt)|*.txt;NLD=NAV Object Text Files (*.txt)|*.txt;DEA=NAV Object Text Files (*.txt)|*.txt';
+      ctExtTransTxt@1007 : TextConst 'DEU=NAV Translation Files (*.txt)|*.txt;ENU=NAV Translation Files (*.txt)|*.txt;ESP=NAV Translation Files (*.txt)|*.txt;FRA=NAV Translation Files (*.txt)|*.txt;NLD=NAV Translation Files (*.txt)|*.txt;DEA=NAV Translation Files (*.txt)|*.txt';
+      ctNotValid@1008 : TextConst 'DEU=The extension ''%1'' is not valid.;ENU=The extension ''%1'' is not valid.;ESP=The extension ''%1'' is not valid.;FRA=The extension ''%1'' is not valid.;NLD=De extensie ''%1'' is niet geldig.;DEA=The extension ''%1'' is not valid.';
+    BEGIN
+      CommonDialog.AddExtension(ctExtAll, '');
+
+      CommonDialog.AddKnownExtension('fib');
+      CommonDialog.AddKnownExtension('fab');
+      CommonDialog.AddKnownExtension('fob');
+      CommonDialog.AddExtension(ctExtObjectTxt, 'txt-o');
+      CommonDialog.AddExtension(ctExtTransTxt, 'txt-t');
+      CommonDialog.AddKnownExtension('obp');
+      CommonDialog.AddKnownExtension('dbk');
+      CommonDialog.AddKnownExtension('lic');
+      CommonDialog.AddKnownExtension('fld');
+
+      IF NOT CommonDialog.OpenFile(FileName, ServerFileName) THEN
+        EXIT;
+
+      CASE CommonDialog.GetExtension OF
+        'fib' : ImportTransport.ImportWithWizard(ServerFileName);
+        'fab' : ImportFab(ServerFileName);
+        'fob' : ImportFob(ServerFileName);
+        'txt-o' : ImportObjectTextFile(ServerFileName);
+        'txt-t' : ImportTranslationTextFile(ServerFileName);
+        'txt' : ImportTextFile(ServerFileName);
+        'obp' : ImportObp(ServerFileName);
+        'dbk' : BackupAndRestore.ImportBackupFile(ServerFileName);
+        'lic' : ImportLicenseDefinition(ServerFileName);
+        'fld' : ImportFieldsFile(ServerFileName);
+        ELSE
+          MESSAGE(ctNotValid, LOWERCASE(COPYSTR(FileName, STRLEN(FileName) - 2)));
+      END;
+    END;
+
+    LOCAL PROCEDURE ImportFob@2(FileName@1000 : Text);
+    VAR
+      TmpObjectHeaders@1001 : TEMPORARY Record 2000000001;
+      ImportObjectsWorksheet@1002 : Page 11102080;
+      oFile@1003 : File;
+      InStr@1004 : InStream;
+    BEGIN
+      oFile.OPEN(FileName);
+      oFile.CREATEINSTREAM(InStr);
+
+      GetObjectHeadersFromFob(InStr, TmpObjectHeaders);
+
+      ImportObjectsWorksheet.SetFobHeaders(TmpObjectHeaders);
+      ImportObjectsWorksheet.SetImportedFileName(FileName);
+      ImportObjectsWorksheet.RUN;
+
+      oFile.CLOSE;
+    END;
+
+    PROCEDURE ImportFobFromStream@3(VAR InStr@1000 : InStream);
+    VAR
+      ObjectMgt@1001 : Codeunit 11102046;
+      FileHandler@1002 : Codeunit 11102097;
+      oFile@1003 : File;
+      OutStr@1004 : OutStream;
+      FobFileName@1005 : Text;
+    BEGIN
+      FobFileName := FileHandler.CreateServerTempFileName('fob');
+      oFile.CREATE(FobFileName);
+
+      oFile.CREATEOUTSTREAM(OutStr);
+      COPYSTREAM(OutStr, InStr);
+      oFile.CLOSE;
+
+      ObjectMgt.ImportObject(FobFileName);
+
+      ERASE(FobFileName);
+    END;
+
+    LOCAL PROCEDURE ImportObp@4(FileName@1000 : Text);
+    VAR
+      TmpObject@1001 : TEMPORARY Record 2000000001;
+      ImportObjectsWorksheet@1002 : Page 11102080;
+    BEGIN
+      ImportObpFromFile(FileName, TmpObject);
+
+      ImportObjectsWorksheet.SetObjectProperties(TmpObject);
+      ImportObjectsWorksheet.SetImportedFileName(FileName);
+
+      ImportObjectsWorksheet.RUN;
+    END;
+
+    PROCEDURE ImportObpFromFile@5(FileName@1000 : Text;VAR TmpObject@1001 : TEMPORARY Record 2000000001);
+    VAR
+      Progressbar@1002 : Codeunit 11102044;
+      oFile@1003 : File;
+      SplitLine@1004 : ARRAY [500] OF Text[250];
+      Char@1005 : Char;
+      Day@1006 : Integer;
+      FieldCounter@1007 : Integer;
+      Month@1008 : Integer;
+      Year@1009 : Integer;
+      ctImporting@1010 : TextConst 'DEU=Importing object properties...;ENU=Importing object properties...;ESP=Importing object properties...;FRA=Importing object properties...;NLD=Objecteigenschappen importeren...;DEA=Importing object properties...';
+    BEGIN
+      TmpObject.RESET;
+      TmpObject.DELETEALL;
+
+      oFile.OPEN(FileName);
+
+      Progressbar.Open(ctImporting, 0);
+
+      FieldCounter := 1;
+
+      Progressbar.BarSize := oFile.LEN;
+
+      WHILE oFile.POS < oFile.LEN DO BEGIN
+
+        oFile.READ(Char);
+
+        CASE Char OF
+          0, 13 :
+            Progressbar.BarPosition := oFile.POS;
+
+          9 :
+            FieldCounter += 1;
+
+          10 :
+            BEGIN
+              IF SplitLine[1] = 'Object' THEN
+                WITH TmpObject DO BEGIN
+                  EVALUATE(Type, SplitLine[2]);
+                  EVALUATE(ID, SplitLine[3]);
+                  EVALUATE(Name, SplitLine[4]);
+                  EVALUATE(Modified, SplitLine[5]);
+                  EVALUATE(Compiled, SplitLine[6]);
+                  EVALUATE("BLOB Size", SplitLine[7]);
+                  IF SplitLine[8] = '' THEN
+                    Date := 0D
+                  ELSE BEGIN
+                    EVALUATE(Year, COPYSTR(SplitLine[8], 1, 4));
+                    EVALUATE(Month, COPYSTR(SplitLine[8], 5, 2));
+                    EVALUATE(Day, COPYSTR(SplitLine[8], 7, 2));
+                    Date := DMY2DATE(Day, Month, Year);
+                  END;
+                  EVALUATE(Time, SplitLine[9]);
+                  EVALUATE("Version List", SplitLine[10]);
+                  INSERT;
+                END;
+
+              CLEAR(SplitLine);
+              FieldCounter := 1;
+            END;
+          ELSE
+            SplitLine[FieldCounter] := SplitLine[FieldCounter] + FORMAT(Char);
+        END;
+      END;
+
+      Progressbar.Close;
+
+      oFile.CLOSE;
+    END;
+
+    LOCAL PROCEDURE ImportFab@6(FileName@1000 : Text);
+    VAR
+      ActionMgt@1001 : Codeunit 11102038;
+    BEGIN
+      ActionMgt.ImportFile(FileName, TRUE);
+    END;
+
+    LOCAL PROCEDURE ImportTextFile@7(FileName@1000 : Text);
+    VAR
+      ctFileNotValid@1001 : TextConst 'DEU=The file is not valid.;ENU=The file is not valid.;ESP=The file is not valid.;FRA=The file is not valid.;NLD=Geen geldig bestand.;DEA=The file is not valid.';
+    BEGIN
+      CASE TRUE OF
+
+        IsObjectFile(FileName) :
+          ImportObjectTextFile(FileName);
+
+        IsTranslationFile(FileName) :
+          ImportTranslationTextFile(FileName);
+
+        ELSE
+          MESSAGE(ctFileNotValid);
+      END;
+    END;
+
+    LOCAL PROCEDURE ImportObjectTextFile@8(FileName@1000 : Text);
+    VAR
+      TmpCALHistoryObject@1001 : TEMPORARY Record 11102052;
+      TmpCALHistoryLine@1002 : TEMPORARY Record 11102053;
+      Progressbar@1003 : Codeunit 11102044;
+      SourceControl@1004 : Codeunit 11102050;
+      ImportObjectsWorksheet@1005 : Page 11102080;
+      ctImportingTextfile@1006 : TextConst 'DEU=Importing text file...;ENU=Importing text file...;ESP=Importing text file...;FRA=Importing text file...;NLD=Tekstbestand inlezen...;DEA=Importing text file...';
+    BEGIN
+      Progressbar.Open(ctImportingTextfile, 1);
+      Progressbar.BarSize := LengthOfFile(FileName);
+      SourceControl.ImportTextFile2(FileName, 1, Progressbar, 0, TmpCALHistoryObject, TmpCALHistoryLine, TRUE);
+      ImportObjectsWorksheet.SetCALCodeObjects(TmpCALHistoryObject, TmpCALHistoryLine);
+      ImportObjectsWorksheet.SetImportedFileName(FileName);
+      ImportObjectsWorksheet.RUN;
+    END;
+
+    LOCAL PROCEDURE ImportTranslationTextFile@9(ServerFileName@1000 : Text);
+    VAR
+      TranslationMgt@1001 : Codeunit 11102051;
+      TranslationTool@1002 : Page 11102099;
+    BEGIN
+      TranslationMgt.ImportTranslationFile(ServerFileName);
+      TranslationTool.SetCreateMissingCaptions(TRUE);
+      TranslationTool.RUN;
+    END;
+
+    LOCAL PROCEDURE ImportLicenseDefinition@11(FileName@1000 : Text);
+    VAR
+      CheckLicense@1001 : Page 11102082;
+    BEGIN
+      CheckLicense.SetOpeningFileName(FileName);
+      CheckLicense.RUN;
+    END;
+
+    LOCAL PROCEDURE ImportFieldsFile@44(FileName@1000 : Text);
+    VAR
+      CompareFields@1001 : Page 11102106;
+    BEGIN
+      CompareFields.SetOpeningClientFileName(FileName);
+      CompareFields.RUN;
+    END;
+
+    PROCEDURE ImportFldFromFile@46(ServerFileName@1000 : Text[250];VAR FieldCompareLine@1001 : TEMPORARY Record 11102067;VAR Progressbar@1002 : Codeunit 11102044;ProgressbarFrom@1003 : Integer;ProgressbarTill@1004 : Integer);
+    VAR
+      oFile@1005 : File;
+      SplitLine@1006 : ARRAY [500] OF Text[250];
+      Char@1007 : Char;
+      FieldCounter@1008 : Integer;
+    BEGIN
+      oFile.OPEN(ServerFileName);
+
+      FieldCounter := 1;
+
+      IF ProgressbarTill <> 0 THEN BEGIN
+        Progressbar.BarSize := oFile.LEN;
+        Progressbar.UseRange(ProgressbarFrom, ProgressbarTill);
+      END;
+
+      WHILE oFile.POS < oFile.LEN DO BEGIN
+
+        oFile.READ(Char);
+
+        CASE Char OF
+          0, 13 :
+            IF ProgressbarTill <> 0 THEN
+              Progressbar.BarPosition := oFile.POS;
+
+          9 :
+            FieldCounter += 1;
+
+          10 :
+            BEGIN
+              IF SplitLine[1] <> '' THEN
+                WITH FieldCompareLine DO BEGIN
+                  EVALUATE("Table No.", SplitLine[1]);
+                  "Table Name" := DELCHR(SplitLine[2], '>');
+                  EVALUATE("No.", SplitLine[3]);
+                  Name := DELCHR(SplitLine[4], '>');
+                  VALIDATE("Type Name", DELCHR(SplitLine[5], '>'));
+                  EVALUATE(Class, SplitLine[6]);
+                  Enabled := DELCHR(SplitLine[7]) = '';
+                  EVALUATE("SQL Data Type", DELCHR(SplitLine[8], '>'));
+                  "Option String" := DELCHR(SplitLine[9], '>');
+                  IF INSERT THEN
+                    ;
+                END;
+              CLEAR(SplitLine);
+              FieldCounter := 1;
+            END;
+          ELSE
+            SplitLine[FieldCounter] := SplitLine[FieldCounter] + FORMAT(Char);
+        END;
+      END;
+
+      oFile.CLOSE;
+    END;
+
+    PROCEDURE ImportDirectory@45(Directory@1000 : Text[1024]);
+    VAR
+      TmpFile@1001 : TEMPORARY Record 11102094;
+      FileHandler@1002 : Codeunit 11102097;
+      NoOfFieldFiles@1003 : Integer;
+      NoOfFobFiles@1004 : Integer;
+      NoOfTextFiles@1005 : Integer;
+    BEGIN
+      IF Directory[STRLEN(Directory)] <> '\' THEN
+        Directory += '\';
+
+      FileHandler.GetClientDirectoryContent(TmpFile, Directory);
+      IF TmpFile.FINDSET THEN
+        REPEAT
+          IF STRLEN(TmpFile.Name) > 4 THEN
+            CASE LOWERCASE(COPYSTR(TmpFile.Name, STRLEN(TmpFile.Name) - 3)) OF
+              '.txt' :
+                NoOfTextFiles += 1;
+              '.fld' :
+                NoOfFieldFiles += 1;
+              '.fob' :
+                NoOfFobFiles += 1;
+            END;
+
+        UNTIL TmpFile.NEXT = 0;
+
+      IF NoOfTextFiles > 0 THEN
+        ImportSplitTextFiles(Directory);
+
+      IF NoOfFieldFiles > 0 THEN
+        ImportSplitFldFiles(Directory);
+
+      IF NoOfFobFiles > 0 THEN
+        ImportSplitFobFiles(Directory);
+    END;
+
+    LOCAL PROCEDURE ImportSplitTextFiles@10(Directory@1000 : Text);
+    VAR
+      TmpCALHistoryObject@1001 : TEMPORARY Record 11102052;
+      TmpCALHistoryLine@1002 : TEMPORARY Record 11102053;
+      TmpFile@1003 : TEMPORARY Record 11102094;
+      Object@1004 : Record 2000000001;
+      Progressbar@1005 : Codeunit 11102044;
+      SourceControl@1006 : Codeunit 11102050;
+      FileHandler@1007 : Codeunit 11102097;
+      ImportObjectsWorksheet@1008 : Page 11102080;
+      oFile@1009 : File;
+      ObjectLine@1010 : Text[1024];
+      ServerFileName@1011 : Text[1024];
+      ctImportingObjects@1012 : TextConst 'DEU=Importing objects...;ENU=Importing objects...;ESP=Importing objects...;FRA=Importing objects...;NLD=Objecten importeren...;DEA=Importing objects...';
+    BEGIN
+      IF Directory[STRLEN(Directory)] <> '\' THEN
+        Directory += '\';
+
+      Progressbar.Open(ctImportingObjects, 1);
+
+      FileHandler.GetClientDirectoryContent(TmpFile, Directory);
+      TmpFile.SETFILTER(Name, '*.txt|*.TXT');
+      IF TmpFile.FINDSET THEN BEGIN
+        Progressbar.BarSize := TmpFile.COUNT;
+
+        REPEAT
+
+          Progressbar.AddToBar(1);
+
+          ServerFileName := FileHandler.UploadToServer(Directory + TmpFile.Name, '');
+
+          oFile.WRITEMODE(FALSE);
+          oFile.TEXTMODE(TRUE);
+          oFile.OPEN(ServerFileName);
+          oFile.READ(ObjectLine);
+          oFile.CLOSE;
+
+          SourceControl.GetObjectProperties(Object, ObjectLine);
+          Progressbar.Text1Object := Object;
+
+          SourceControl.ImportTextFile2(ServerFileName, 0, Progressbar, 0, TmpCALHistoryObject, TmpCALHistoryLine, TRUE);
+
+        UNTIL TmpFile.NEXT = 0;
+
+      END;
+
+      ImportObjectsWorksheet.SetCALCodeObjects(TmpCALHistoryObject, TmpCALHistoryLine);
+      ImportObjectsWorksheet.RUN;
+
+      Progressbar.Close;
+    END;
+
+    LOCAL PROCEDURE ImportSplitFldFiles@48(Directory@1000 : Text[1024]);
+    VAR
+      CompareFields@1001 : Page 11102106;
+    BEGIN
+      CompareFields.SetOpeningClientDirectoryName(Directory);
+      CompareFields.RUN;
+    END;
+
+    LOCAL PROCEDURE ImportSplitFobFiles@60(Directory@1000 : Text);
+    VAR
+      TmpFile@1001 : TEMPORARY Record 11102094;
+      TmpObject@1002 : TEMPORARY Record 2000000001;
+      TmpObjectHeaders@1003 : TEMPORARY Record 2000000001;
+      Progressbar@1004 : Codeunit 11102044;
+      FileHandler@1005 : Codeunit 11102097;
+      ImportObjectsWorksheet@1006 : Page 11102080;
+      oFile@1007 : File;
+      InStr@1008 : InStream;
+      ServerFileName@1009 : Text[1024];
+      ctImportingObjects@1010 : TextConst 'DEU=Importing objects...;ENU=Importing objects...;ESP=Importing objects...;FRA=Importing objects...;NLD=Objecten importeren...;DEA=Importing objects...';
+      ctMultipleObjects@1011 : TextConst 'DEU=%1 contains more then one object.\It cannot be imported in a split FOB import.;ENU=%1 contains more then one object.\It cannot be imported in a split FOB import.;ESP=%1 contains more then one object.\It cannot be imported in a split FOB import.;FRA=%1 contains more then one object.\It cannot be imported in a split FOB import.;NLD=%1 bevat meer dan ‚‚n object.\Dit bestand kan niet worden ge‹mporteerd in een gescheiden FOB import.;DEA=%1 contains more then one object.\It cannot be imported in a split FOB import.';
+    BEGIN
+      IF Directory[STRLEN(Directory)] <> '\' THEN
+        Directory += '\';
+
+      Progressbar.Open(ctImportingObjects, 1);
+
+      FileHandler.GetClientDirectoryContent(TmpFile, Directory);
+      TmpFile.SETFILTER(Name, '*.fob|*.FOB');
+      IF TmpFile.FINDSET THEN BEGIN
+        Progressbar.BarSize := TmpFile.COUNT;
+
+        REPEAT
+
+          Progressbar.AddToBar(1);
+
+          ServerFileName := FileHandler.UploadToServer(Directory + TmpFile.Name, '');
+
+          TmpObjectHeaders.RESET;
+          TmpObjectHeaders.DELETEALL;
+
+          oFile.OPEN(ServerFileName);
+          oFile.CREATEINSTREAM(InStr);
+
+          GetObjectHeadersFromFob(InStr, TmpObjectHeaders);
+          oFile.CLOSE;
+
+          IF TmpObjectHeaders.COUNT > 1 THEN
+            ERROR(ctMultipleObjects);
+
+          Progressbar.Text1Object := TmpObjectHeaders;
+
+          IF NOT TmpObject.GET(TmpObjectHeaders.Type, '', TmpObjectHeaders.ID) THEN BEGIN
+            TmpObject := TmpObjectHeaders;
+            TmpObject."BLOB Reference".IMPORT(ServerFileName);
+            TmpObject.INSERT;
+          END;
+
+        UNTIL TmpFile.NEXT = 0;
+
+      END;
+
+      ImportObjectsWorksheet.SetSplitFob(TmpObject);
+      ImportObjectsWorksheet.RUN;
+
+      Progressbar.Close;
+    END;
+
+    PROCEDURE GetFieldsFromDirectory@49(ClientDirectoryName@1000 : Text[1024];VAR FieldCompareLine@1001 : Record 11102067);
+    VAR
+      TmpFile@1002 : TEMPORARY Record 11102094;
+      Progressbar@1003 : Codeunit 11102044;
+      FileHandler@1004 : Codeunit 11102097;
+      ServerFileName@1005 : Text;
+      ctFieldFileName@1006 : TextConst 'DEU=fields.fld;ENU=fields.fld;ESP=fields.fld;FRA=fields.fld;NLD=fields.fld;DEA=fields.fld';
+      ctImportingObjects@1007 : TextConst 'DEU=Importing objects...;ENU=Importing objects...;ESP=Importing objects...;FRA=Importing objects...;NLD=Objecten importeren...;DEA=Importing objects...';
+    BEGIN
+      FileHandler.GetClientDirectoryContent(TmpFile, ClientDirectoryName);
+      TmpFile.SETRANGE("Is a File", TRUE);
+      TmpFile.SETFILTER(Name, '*.fld|*.FLD');
+      IF TmpFile.FINDSET THEN BEGIN
+
+        Progressbar.Open(ctImportingObjects, 1);
+        Progressbar.BarSize := TmpFile.COUNT;
+        REPEAT
+          Progressbar.AddToBar(1);
+          ServerFileName := FileHandler.UploadToServer(ClientDirectoryName + TmpFile.Name, ctFieldFileName);
+          ImportFldFromFile(ServerFileName, FieldCompareLine, Progressbar, 0, 0);
+
+        UNTIL TmpFile.NEXT = 0;
+
+        Progressbar.Close;
+
+      END;
+    END;
+
+    PROCEDURE FillOutstreamFob@12(VAR OutStr@1000 : OutStream;VAR Object@1001 : Record 2000000001;VAR Progressbar@1002 : Codeunit 11102044);
+    VAR
+      ObjectMgt@1003 : Codeunit 11102046;
+      FileHandler@1004 : Codeunit 11102097;
+      oFile@1005 : File;
+      Instr@1006 : InStream;
+      FileName@1007 : Text;
+      ctFileName@1008 : TextConst 'DEU=objects.fob;ENU=objects.fob;ESP=objects.fob;FRA=objects.fob;NLD=objects.fob;DEA=objects.fob';
+    BEGIN
+      Progressbar.BarSize := 2;
+
+      Progressbar.AddToBar(1);
+
+      FileName := FileHandler.TempDirectory + ctFileName;
+      ObjectMgt.ExportFob(Object, FileName);
+
+      Progressbar.AddToBar(1);
+
+      oFile.OPEN(FileName);
+      oFile.CREATEINSTREAM(Instr);
+
+      COPYSTREAM(OutStr, Instr);
+
+      oFile.CLOSE;
+      ERASE(FileName);
+    END;
+
+    PROCEDURE FillOutstreamObp@13(VAR OutStr@1000 : OutStream;VAR Object@1001 : Record 2000000001);
+    VAR
+      Progressbar@1002 : Codeunit 11102044;
+      ctExportingObjectProperties@1003 : TextConst 'DEU=Exporting objects properties...;ENU=Exporting objects properties...;ESP=Exporting objects properties...;FRA=Exporting objects properties...;NLD=Objecteigenschappen exporteren...;DEA=Exporting objects properties...';
+    BEGIN
+      Progressbar.Open(ctExportingObjectProperties, 0);
+
+      Progressbar.BarSize := Object.COUNT;
+
+      WITH Object DO BEGIN
+
+        Progressbar.AddToBar(1);
+
+        IF FINDSET THEN
+          REPEAT
+            FillOutstreamObpLine(OutStr, Object);
+          UNTIL NEXT = 0;
+
+      END;
+
+      Progressbar.Close;
+    END;
+
+    LOCAL PROCEDURE FillOutstreamObpLine@14(VAR OutStr@1000 : OutStream;VAR Object@1001 : Record 2000000001);
+    VAR
+      CrLf@1002 : Text;
+      Tab@1003 : Text;
+    BEGIN
+      Tab[1] := 9;
+      CrLf[1] := 13;
+      CrLf[2] := 10;
+
+      WITH Object DO BEGIN
+        OutStr.WRITETEXT('Object');
+        OutStr.WRITETEXT(Tab);
+        OutStr.WRITETEXT(FORMAT(0 + Type));
+        OutStr.WRITETEXT(Tab);
+        OutStr.WRITETEXT(FORMAT(ID));
+        OutStr.WRITETEXT(Tab);
+        OutStr.WRITETEXT(Name);
+        OutStr.WRITETEXT(Tab);
+        OutStr.WRITETEXT(BooleanValue(Modified));
+        OutStr.WRITETEXT(Tab);
+        OutStr.WRITETEXT(BooleanValue(Compiled));
+        OutStr.WRITETEXT(Tab);
+        OutStr.WRITETEXT(FORMAT("BLOB Size"));
+        OutStr.WRITETEXT(Tab);
+        OutStr.WRITETEXT(FORMAT(Date, 0, '<Year4><Month,2><Day,2>'));
+        OutStr.WRITETEXT(Tab);
+        OutStr.WRITETEXT(FORMAT(Time, 0, '<Hours24>:<Minutes,2>:<Seconds,2><Second dec>'));
+        OutStr.WRITETEXT(Tab);
+        OutStr.WRITETEXT("Version List");
+        OutStr.WRITETEXT(CrLf);
+      END;
+    END;
+
+    PROCEDURE FillOutstreamTxt@15(VAR OutStr@1000 : OutStream;VAR Object@1001 : Record 2000000001);
+    VAR
+      CALHistoryObject@1002 : Record 11102052;
+      SourceControl@1003 : Codeunit 11102050;
+    BEGIN
+      WriteObjectManagerVersion(OutStr, 'TXT');
+
+      WITH Object DO
+        IF FINDSET THEN
+          REPEAT
+            CALHistoryObject.GoToLastRecord(Type, ID);
+            SourceControl.AppendObjectToStream(OutStr, CALHistoryObject."Entry No.");
+          UNTIL NEXT = 0;
+    END;
+
+    PROCEDURE FillOutstreamObjectFlds@47(VAR OutStr@1000 : OutStream;VAR Object@1001 : Record 2000000001;VAR Progressbar@1002 : Codeunit 11102044);
+    VAR
+      TmpFieldCompareLine@1003 : TEMPORARY Record 11102067;
+      Fld@1004 : Record 2000000041;
+    BEGIN
+      Object.FILTERGROUP(10);
+      Object.SETRANGE(Type, Object.Type::Table);
+
+      Progressbar.BarSize := Object.COUNT;
+
+      WITH Object DO
+        IF FINDSET THEN
+          REPEAT
+
+            Progressbar.AddToBar(1);
+
+            IF Type = Type::Table THEN BEGIN
+              Fld.SETRANGE(TableNo, ID);
+              IF Fld.FINDSET THEN
+                REPEAT
+                  TmpFieldCompareLine.FillLeftFromField(Fld);
+                  TmpFieldCompareLine.INSERT;
+                UNTIL Fld.NEXT = 0;
+              FillOutstreamFld(OutStr, TmpFieldCompareLine);
+
+              TmpFieldCompareLine.RESET;
+              TmpFieldCompareLine.DELETEALL;
+
+            END;
+          UNTIL NEXT = 0;
+
+      Object.SETRANGE(Type);
+      Object.FILTERGROUP(0);
+    END;
+
+    PROCEDURE FillOutstreamFld@50(VAR OutStr@1000 : OutStream;VAR FieldCompareLine@1001 : Record 11102067);
+    VAR
+      CrLf@1002 : Text[2];
+      Tab@1003 : Text[1];
+    BEGIN
+      Tab[1] := 9;
+      CrLf[1] := 13;
+      CrLf[2] := 10;
+
+      WITH FieldCompareLine DO
+        IF FINDSET THEN
+          REPEAT
+            OutStr.WRITETEXT(PadStrLeft(FORMAT("Table No."), 10));
+            OutStr.WRITETEXT(Tab);
+            OutStr.WRITETEXT(PADSTR("Table Name", 30));
+            OutStr.WRITETEXT(Tab);
+            OutStr.WRITETEXT(PadStrLeft(FORMAT("No."), 10));
+            OutStr.WRITETEXT(Tab);
+            OutStr.WRITETEXT(PADSTR(Name, 30));
+            OutStr.WRITETEXT(Tab);
+            OutStr.WRITETEXT(PADSTR(FORMAT("Type Name"), 15));
+            OutStr.WRITETEXT(Tab);
+            OutStr.WRITETEXT(PADSTR(FORMAT(Class), 10));
+            OutStr.WRITETEXT(Tab);
+            IF NOT Enabled AND (Name <> '') THEN
+              OutStr.WRITETEXT('X')
+            ELSE
+              OutStr.WRITETEXT('');
+            OutStr.WRITETEXT(Tab);
+            OutStr.WRITETEXT(PADSTR(FORMAT("SQL Data Type"), 10));
+            OutStr.WRITETEXT(Tab);
+            OutStr.WRITETEXT("Option String");
+            OutStr.WRITETEXT(CrLf);
+          UNTIL NEXT = 0;
+    END;
+
+    PROCEDURE ExportTextFile@16(VAR Object@1000 : Record 2000000001;ServerFileName@1001 : Text);
+    VAR
+      Progressbar@1002 : Codeunit 11102044;
+      ObjectMgt@1003 : Codeunit 11102046;
+      SourceControl@1004 : Codeunit 11102050;
+      FileHandler@1005 : Codeunit 11102097;
+      ctErrorOccured@1006 : TextConst 'DEU=Not all objects are exported.\Are you using a developer license?;ENU=Not all objects are exported.\Are you using a developer license?;ESP=Not all objects are exported.\Are you using a developer license?;FRA=Not all objects are exported.\Are you using a developer license?;NLD=Niet alle objecten zijn ge‰xporteerd.\Gebruikt u een ontwikkellicentie?;DEA=Not all objects are exported.\Are you using a developer license?';
+      ctExportingObjects@1007 : TextConst 'DEU=Exporting objects...;ENU=Exporting objects...;ESP=Exporting objects...;FRA=Exporting objects...;NLD=Objecten exporteren...;DEA=Exporting objects...';
+    BEGIN
+      FileHandler.QueryReplace(ServerFileName);
+
+      Object.FINDSET;
+
+      Progressbar.Open(ctExportingObjects, 0);
+      Progressbar.BarSize := Object.COUNT;
+
+      SourceControl.UpdateCALHistory(Object, FALSE, FALSE);
+
+      ObjectMgt.SetErrorHandling(TRUE);
+      ObjectMgt.ExportRangeTxt(Object, ServerFileName);
+      IF ObjectMgt.GetErrorOccured THEN
+        MESSAGE(ctErrorOccured);
+
+      Progressbar.Close;
+    END;
+
+    PROCEDURE ExportHistoryTextFile@59(VAR CALHistoryObject@1000 : Record 11102052;ServerFileName@1001 : Text);
+    VAR
+      Object@1002 : Record 2000000001;
+      Progressbar@1003 : Codeunit 11102044;
+      SourceControl@1004 : Codeunit 11102050;
+      FileHandler@1005 : Codeunit 11102097;
+      oFile@1006 : File;
+      ctExportingObjects@1007 : TextConst 'DEU=Exporting objects...;ENU=Exporting objects...;ESP=Exporting objects...;FRA=Exporting objects...;NLD=Objecten exporteren...;DEA=Exporting objects...';
+    BEGIN
+      FileHandler.QueryReplace(ServerFileName);
+
+      CALHistoryObject.SETCURRENTKEY("Object Type", "Object No.");
+      CALHistoryObject.SETRANGE("C/AL Code Present", TRUE);
+      CALHistoryObject.FINDSET;
+
+      oFile.TEXTMODE(TRUE);
+      oFile.WRITEMODE(TRUE);
+      oFile.CREATE(ServerFileName);
+      Progressbar.Open(ctExportingObjects, 1);
+      Progressbar.BarSize := CALHistoryObject.COUNT;
+      REPEAT
+
+        Object.Type := CALHistoryObject."Object Type";
+        Object.ID := CALHistoryObject."Object No.";
+        Object.Name := CALHistoryObject."Object Name";
+
+        Progressbar.Text1Object := Object;
+        Progressbar.AddToBar(1);
+
+        SourceControl.AppendHistoryObjectToFile(oFile, CALHistoryObject."Entry No.");
+
+      UNTIL CALHistoryObject.NEXT = 0;
+
+      Progressbar.Close;
+      oFile.CLOSE;
+    END;
+
+    PROCEDURE ExportSplitTextFiles@17(VAR Object@1000 : Record 2000000001;ClientDirectoryName@1001 : Text;VAR Progressbar@1002 : Codeunit 11102044);
+    VAR
+      ObjectMgt@1003 : Codeunit 11102046;
+      FileHandler@1004 : Codeunit 11102097;
+      FileNameMgt@1005 : Codeunit 11102107;
+      FileName@1006 : Text;
+      ServerDirectoryName@1007 : Text;
+      ErrorOccured@1008 : Boolean;
+      ctErrorOccured@1009 : TextConst 'DEU=Not all objects are exported.\Are you using a developer license?;ENU=Not all objects are exported.\Are you using a developer license?;ESP=Not all objects are exported.\Are you using a developer license?;FRA=Not all objects are exported.\Are you using a developer license?;NLD=Niet alle objecten zijn ge‰xporteerd.\Gebruikt u een ontwikkellicentie?;DEA=Not all objects are exported.\Are you using a developer license?';
+    BEGIN
+      Object.FINDSET;
+
+      IF ClientDirectoryName[STRLEN(ClientDirectoryName)] <> '\' THEN
+        ClientDirectoryName += '\';
+
+      FileHandler.CheckCreateClientDirectory(ClientDirectoryName);
+      ServerDirectoryName := FileHandler.CreateServerDirectoryForDownload(ClientDirectoryName);
+
+      Progressbar.BarSize := Object.COUNT;
+
+      REPEAT
+        Progressbar.AddToBar(1);
+        Progressbar.Text1Object := Object;
+
+        IF Object."BLOB Size" = -1 THEN
+          FileName := Object."Version List"
+        ELSE
+          FileName := FileNameMgt.ObjectFileName(Object, 'txt');
+
+        ObjectMgt.SetErrorHandling(TRUE);
+        ObjectMgt.ExportObject(Object, ServerDirectoryName + FileName);
+        IF ObjectMgt.GetErrorOccured THEN
+          ErrorOccured := TRUE;
+
+      UNTIL Object.NEXT = 0;
+
+      FileHandler.DownloadDirectoryToClient(ServerDirectoryName, ClientDirectoryName);
+
+      IF ErrorOccured THEN
+        MESSAGE(ctErrorOccured);
+    END;
+
+    PROCEDURE ExportSplitHistoryTextFiles@58(VAR CALHistoryObject@1000 : Record 11102052;ClientDirectoryName@1001 : Text;VAR Progressbar@1002 : Codeunit 11102044);
+    VAR
+      Object@1003 : Record 2000000001;
+      SourceControl@1004 : Codeunit 11102050;
+      FileHandler@1005 : Codeunit 11102097;
+      FileNameMgt@1006 : Codeunit 11102107;
+      oFile@1007 : File;
+      FileName@1008 : Text;
+      ServerDirectoryName@1009 : Text;
+      ErrorOccured@1010 : Boolean;
+      ctErrorOccured@1011 : TextConst 'DEU=Not all objects are exported.\Are you using a developer license?;ENU=Not all objects are exported.\Are you using a developer license?;ESP=Not all objects are exported.\Are you using a developer license?;FRA=Not all objects are exported.\Are you using a developer license?;NLD=Niet alle objecten zijn ge‰xporteerd.\Gebruikt u een ontwikkellicentie?;DEA=Not all objects are exported.\Are you using a developer license?';
+    BEGIN
+      CALHistoryObject.SETCURRENTKEY("Object Type", "Object No.");
+      CALHistoryObject.SETRANGE("C/AL Code Present", TRUE);
+      CALHistoryObject.FINDSET;
+
+      IF ClientDirectoryName[STRLEN(ClientDirectoryName)] <> '\' THEN
+        ClientDirectoryName += '\';
+
+      FileHandler.CheckCreateClientDirectory(ClientDirectoryName);
+      ServerDirectoryName := FileHandler.CreateServerDirectoryForDownload(ClientDirectoryName);
+
+      Progressbar.BarSize := CALHistoryObject.COUNT;
+
+      REPEAT
+
+        Object.Type := CALHistoryObject."Object Type";
+        Object.ID := CALHistoryObject."Object No.";
+        Object.Name := CALHistoryObject."Object Name";
+
+        Progressbar.Text1Object := Object;
+        Progressbar.AddToBar(1);
+
+        FileName := FileNameMgt.ObjectFileName(Object, 'txt');
+
+        oFile.CREATE(ServerDirectoryName + FileName);
+        SourceControl.AppendHistoryObjectToFile(oFile, CALHistoryObject."Entry No.");
+        oFile.CLOSE;
+
+      UNTIL CALHistoryObject.NEXT = 0;
+
+      FileHandler.DownloadDirectoryToClient(ServerDirectoryName, ClientDirectoryName);
+
+      IF ErrorOccured THEN
+        MESSAGE(ctErrorOccured);
+    END;
+
+    PROCEDURE ExportSplitFieldsFiles@52(VAR Object@1000 : Record 2000000001;Directory@1001 : Text[1024];VAR Progressbar@1002 : Codeunit 11102044);
+    VAR
+      TmpFieldCompareLine@1003 : TEMPORARY Record 11102067;
+      Fld@1004 : Record 2000000041;
+      FileHandler@1005 : Codeunit 11102097;
+      FileNameMgt@1006 : Codeunit 11102107;
+      oFile@1007 : File;
+      OutStr@1008 : OutStream;
+      FileName@1009 : Text[1024];
+    BEGIN
+      Object.FINDSET;
+      IF Directory[STRLEN(Directory)] <> '\' THEN
+        Directory += '\';
+
+      FileHandler.CheckCreateServerDirectory(Directory);
+
+      Progressbar.BarSize := Object.COUNT;
+
+      REPEAT
+
+        Progressbar.AddToBar(1);
+        Progressbar.Text1Object := Object;
+
+        TmpFieldCompareLine.RESET;
+        TmpFieldCompareLine.DELETEALL;
+
+        Fld.SETRANGE(TableNo, Object.ID);
+        IF Fld.FINDSET THEN
+          REPEAT
+            TmpFieldCompareLine.FillLeftFromField(Fld);
+            TmpFieldCompareLine.INSERT;
+          UNTIL Fld.NEXT = 0;
+
+        oFile.WRITEMODE(TRUE);
+
+        IF Object."BLOB Size" = -1 THEN
+          FileName := Directory + Object."Version List"
+        ELSE
+          FileName := Directory + FileNameMgt.ObjectFileName(Object, 'fld');
+
+        oFile.CREATE(FileName);
+        oFile.CREATEOUTSTREAM(OutStr);
+        FillOutstreamFld(OutStr, TmpFieldCompareLine);
+        oFile.CLOSE;
+
+      UNTIL Object.NEXT = 0;
+    END;
+
+    PROCEDURE ExportSplitFobFiles@56(VAR Object@1000 : Record 2000000001;ClientDirectoryName@1001 : Text;VAR Progressbar@1002 : Codeunit 11102044);
+    VAR
+      ObjectMgt@1003 : Codeunit 11102046;
+      FileHandler@1004 : Codeunit 11102097;
+      FileNameMgt@1005 : Codeunit 11102107;
+      FileName@1006 : Text;
+      ServerDirectoryName@1007 : Text;
+      ErrorOccured@1008 : Boolean;
+      ctErrorOccured@1009 : TextConst 'DEU=Not all objects are exported.\Are you using a developer license?;ENU=Not all objects are exported.\Are you using a developer license?;ESP=Not all objects are exported.\Are you using a developer license?;FRA=Not all objects are exported.\Are you using a developer license?;NLD=Niet alle objecten zijn ge‰xporteerd.\Gebruikt u een ontwikkellicentie?;DEA=Not all objects are exported.\Are you using a developer license?';
+    BEGIN
+      Object.FINDSET;
+
+      IF ClientDirectoryName[STRLEN(ClientDirectoryName)] <> '\' THEN
+        ClientDirectoryName += '\';
+
+      FileHandler.CheckCreateClientDirectory(ClientDirectoryName);
+      ServerDirectoryName := FileHandler.CreateServerDirectoryForDownload(ClientDirectoryName);
+
+      Progressbar.BarSize := Object.COUNT;
+
+      REPEAT
+        Progressbar.AddToBar(1);
+        Progressbar.Text1Object := Object;
+
+        IF Object."BLOB Size" = -1 THEN
+          FileName := Object."Version List"
+        ELSE
+          FileName := FileNameMgt.ObjectFileName(Object, 'fob');
+
+        ObjectMgt.SetErrorHandling(TRUE);
+        ObjectMgt.ExportObject(Object, ServerDirectoryName + FileName);
+        IF ObjectMgt.GetErrorOccured THEN
+          ErrorOccured := TRUE;
+
+      UNTIL Object.NEXT = 0;
+
+      FileHandler.DownloadDirectoryToClient(ServerDirectoryName, ClientDirectoryName);
+
+      IF ErrorOccured THEN
+        MESSAGE(ctErrorOccured);
+    END;
+
+    PROCEDURE ExportSplitHistoryFobFiles@57(VAR CALHistoryObject@1000 : Record 11102052;ClientDirectoryName@1001 : Text;VAR Progressbar@1002 : Codeunit 11102044);
+    VAR
+      CALHistoryCompiled@1003 : Record 11102077;
+      Object@1004 : Record 2000000001;
+      FileHandler@1005 : Codeunit 11102097;
+      FileNameMgt@1006 : Codeunit 11102107;
+      oFile@1007 : File;
+      InStr@1008 : InStream;
+      OutStr@1009 : OutStream;
+      FileName@1010 : Text;
+      ServerDirectoryName@1011 : Text;
+      ErrorOccured@1012 : Boolean;
+      ctErrorOccured@1013 : TextConst 'DEU=Not all objects are exported.\Are you using a developer license?;ENU=Not all objects are exported.\Are you using a developer license?;ESP=Not all objects are exported.\Are you using a developer license?;FRA=Not all objects are exported.\Are you using a developer license?;NLD=Niet alle objecten zijn ge‰xporteerd.\Gebruikt u een ontwikkellicentie?;DEA=Not all objects are exported.\Are you using a developer license?';
+    BEGIN
+      CALHistoryObject.FINDSET;
+
+      IF ClientDirectoryName[STRLEN(ClientDirectoryName)] <> '\' THEN
+        ClientDirectoryName += '\';
+
+      FileHandler.CheckCreateClientDirectory(ClientDirectoryName);
+      ServerDirectoryName := FileHandler.CreateServerDirectoryForDownload(ClientDirectoryName);
+
+      Progressbar.BarSize := CALHistoryObject.COUNT;
+
+      REPEAT
+
+        Object.Type := CALHistoryObject."Object Type";
+        Object.ID := CALHistoryObject."Object No.";
+        Object.Name := CALHistoryObject."Object Name";
+
+        Progressbar.AddToBar(1);
+        Progressbar.Text1Object := Object;
+
+        IF CALHistoryCompiled.GET(CALHistoryObject."Entry No.") THEN BEGIN
+          CALHistoryCompiled.TESTFIELD(Type, CALHistoryCompiled.Type::Fob);
+          CALHistoryCompiled.CALCFIELDS("BLOB Reference");
+          IF CALHistoryCompiled."BLOB Reference".HASVALUE THEN BEGIN
+
+            FileName := FileNameMgt.ObjectFileName(Object, 'fob');
+
+            oFile.CREATE(ServerDirectoryName + FileName);
+            oFile.CREATEOUTSTREAM(OutStr);
+            CALHistoryCompiled."BLOB Reference".CREATEINSTREAM(InStr);
+            COPYSTREAM(OutStr, InStr);
+            oFile.CLOSE;
+          END;
+        END;
+
+      UNTIL CALHistoryObject.NEXT = 0;
+
+      FileHandler.DownloadDirectoryToClient(ServerDirectoryName, ClientDirectoryName);
+
+      IF ErrorOccured THEN
+        MESSAGE(ctErrorOccured);
+    END;
+
+    PROCEDURE MarkObjectsWithImportFile@18(VAR FileName@1000 : Text);
+    VAR
+      Object@1001 : Record 2000000001;
+      TmpObject@1002 : TEMPORARY Record 2000000001;
+      VersionControl@1003 : Codeunit 11102040;
+      CommonDialog@1004 : Codeunit 11102059;
+      ImportTransport@1005 : Codeunit 11102087;
+      oFile@1006 : File;
+      InStr@1007 : InStream;
+      Field1@1008 : Text;
+      Field2@1009 : Text;
+      Line1@1010 : Text[1024];
+      Line2@1011 : Text[1024];
+      ServerFileName@1012 : Text;
+      StopLoop@1013 : Boolean;
+      ctExtAll@1014 : TextConst 'DEU="Object Manager Files|*.fob;*.fib;*.obp;*.txt;*.fld";ENU="Object Manager Files|*.fob;*.fib;*.obp;*.txt;*.fld";ESP="Object Manager Files|*.fob;*.fib;*.obp;*.txt;*.fld";FRA="Object Manager Files|*.fob;*.fib;*.obp;*.txt;*.fld";NLD="Object Manager Files|*.fob;*.fib;*.obp;*.txt;*.fld";DEA="Object Manager Files|*.fob;*.fib;*.obp;*.txt;*.fld"';
+      ctFileNotValid@1015 : TextConst 'DEU=This file is not valid.;ENU=This file is not valid.;ESP=This file is not valid.;FRA=This file is not valid.;NLD=Bestand is niet geldig.;DEA=This file is not valid.';
+      ctNotValid@1016 : TextConst 'DEU=The extension ''%1'' is not valid.;ENU=The extension ''%1'' is not valid.;ESP=The extension ''%1'' is not valid.;FRA=The extension ''%1'' is not valid.;NLD=De extensie ''%1'' is niet geldig.;DEA=The extension ''%1'' is not valid.';
+    BEGIN
+      CommonDialog.AddExtension(ctExtAll, '');
+
+      CommonDialog.AddKnownExtension('fib');
+      CommonDialog.AddKnownExtension('fob');
+      CommonDialog.AddKnownExtension('obp');
+      CommonDialog.AddKnownExtension('txt-o');
+      CommonDialog.AddKnownExtension('txt-t');
+      CommonDialog.AddKnownExtension('fld');
+
+      IF NOT CommonDialog.OpenFile(FileName, ServerFileName) THEN
+        EXIT;
+
+      CASE CommonDialog.GetExtension OF
+        'fob' :
+          BEGIN
+            VersionControl.CheckMarkLock;
+
+            oFile.TEXTMODE(TRUE);
+            oFile.OPEN(ServerFileName);
+            REPEAT
+              oFile.READ(Line1);
+              StopLoop := oFile.READ(Line2) = 0;
+              IF STRLEN(Line1) < 79 THEN
+                StopLoop := TRUE;
+              IF NOT StopLoop THEN
+                IF EVALUATE(Object.Type, DELSTR(Line1, 11)) THEN BEGIN
+                  Object.SETFILTER(Type, DELSTR(Line1, 11));
+                  Object.SETFILTER(ID, COPYSTR(Line1, 11, 10));
+                  IF Object.FINDFIRST THEN
+                    VersionControl.MarkObject(Object, TRUE);
+                END;
+            UNTIL StopLoop;
+          END;
+
+        'fib' :
+          BEGIN
+            VersionControl.CheckMarkLock;
+
+            ImportTransport.ReadSections(ServerFileName, TmpObject);
+            TmpObject.SETRANGE("Company Name", 'FOB');
+            TmpObject.FINDFIRST;
+            TmpObject.CALCFIELDS("BLOB Reference");
+            TmpObject."BLOB Reference".CREATEINSTREAM(InStr);
+
+            ReadLine(InStr, Line1);
+            ReadLine(InStr, Line1);
+            REPEAT
+              ReadField(InStr, Field1);
+              IF Field1 = 'Compiled' THEN
+                StopLoop := TRUE
+              ELSE BEGIN
+                ReadField(InStr, Field1);
+                ReadField(InStr, Field2);
+                IF EVALUATE(Object.Type, Field1) THEN BEGIN
+                  Object.SETFILTER(Type, Field1);
+                  Object.SETFILTER(ID, Field2);
+                  IF Object.FINDFIRST THEN
+                    VersionControl.MarkObject(Object, TRUE);
+                END;
+
+              END;
+
+              ReadLine(InStr, Line1);
+            UNTIL Field1 = 'Compiled';
+
+          END;
+
+        'obp' :
+          BEGIN
+            VersionControl.CheckMarkLock;
+
+            ImportObpFromFile(ServerFileName, TmpObject);
+            IF TmpObject.FINDSET THEN
+              REPEAT
+                Object := TmpObject;
+                IF Object.FIND('=') THEN
+                  VersionControl.MarkObject(Object, TRUE);
+              UNTIL TmpObject.NEXT = 0;
+          END;
+
+        'txt' :
+          CASE TRUE OF
+            IsObjectFile(ServerFileName) :
+              MarkObjectsWithTextFile(ServerFileName);
+
+            IsTranslationFile(ServerFileName) :
+              MarkObjectsWithTranslationFile(ServerFileName);
+
+            ELSE
+              MESSAGE(ctFileNotValid);
+
+          END;
+
+        'txt-o' :
+          MarkObjectsWithTextFile(ServerFileName);
+
+        'txt-t' :
+          MarkObjectsWithTranslationFile(ServerFileName);
+
+        'fld' :
+          MarkObjectsWithFieldsFile(FileName);
+
+        ELSE
+          MESSAGE(ctNotValid, CommonDialog.GetExtension);
+      END;
+    END;
+
+    LOCAL PROCEDURE MarkObjectsWithTextFile@19(VAR FileName@1000 : Text);
+    VAR
+      Object@1001 : Record 2000000001;
+      VersionControl@1002 : Codeunit 11102040;
+      oFile@1003 : File;
+      InStr@1004 : InStream;
+      Line1@1005 : Text;
+      ObjectNo@1006 : Text;
+      ObjectType2@1007 : Text;
+    BEGIN
+      VersionControl.CheckMarkLock;
+
+      oFile.OPEN(FileName);
+      oFile.CREATEINSTREAM(InStr);
+      WHILE ReadLine(InStr, Line1) DO
+        IF DELSTR(Line1, 7) = 'OBJECT' THEN BEGIN
+          ObjectType2 := COPYSTR(Line1, 8);
+          ObjectNo := COPYSTR(ObjectType2, STRPOS(ObjectType2, ' ') + 1);
+          ObjectNo := DELSTR(ObjectNo, STRPOS(ObjectNo, ' '));
+          ObjectType2 := DELSTR(ObjectType2, STRPOS(ObjectType2, ' '));
+          IF EVALUATE(Object.Type, ObjectType2) THEN BEGIN
+            Object.SETFILTER(Type, ObjectType2);
+            Object.SETFILTER(ID, ObjectNo);
+            IF Object.FINDFIRST THEN
+              VersionControl.MarkObject(Object, TRUE);
+          END;
+
+        END;
+    END;
+
+    LOCAL PROCEDURE MarkObjectsWithTranslationFile@20(VAR FileName@1000 : Text);
+    VAR
+      TmpLine@1001 : ARRAY [2] OF TEMPORARY Record 11102068;
+      Object@1002 : Record 2000000001;
+      TmpObject@1003 : TEMPORARY Record 2000000001;
+      TmpPreviousObject@1004 : TEMPORARY Record 2000000001;
+      VersionControl@1005 : Codeunit 11102040;
+      oFile@1006 : File;
+      InStr@1007 : InStream;
+      Line1@1008 : Text;
+    BEGIN
+      VersionControl.CheckMarkLock;
+
+      oFile.OPEN(FileName);
+      oFile.CREATEINSTREAM(InStr);
+      WHILE ReadLine(InStr, Line1) DO BEGIN
+
+        TmpLine[1].INIT;
+        TmpLine[1].ValidateTranslationFileLine(Line1, TmpLine[2]);
+        TmpObject.Type := TmpLine[1]."Object Type";
+        TmpObject.ID := TmpLine[1]."Object No.";
+
+        IF (TmpObject.Type <> TmpPreviousObject.Type) OR (TmpObject.ID <> TmpPreviousObject.ID) THEN BEGIN
+          Object := TmpObject;
+          IF Object.FIND('=') THEN
+            VersionControl.MarkObject(Object, TRUE);
+        END;
+
+        TmpPreviousObject := TmpObject;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE MarkObjectsWithFieldsFile@53(VAR FileName@1000 : Text[1024]);
+    VAR
+      Object@1001 : Record 2000000001;
+      TmpObject@1002 : TEMPORARY Record 2000000001;
+      TmpPreviousObject@1003 : TEMPORARY Record 2000000001;
+      VersionControl@1004 : Codeunit 11102040;
+      oFile@1005 : File;
+      InStr@1006 : InStream;
+      Line1@1007 : Text[1024];
+    BEGIN
+      VersionControl.CheckMarkLock;
+
+      oFile.OPEN(FileName);
+      oFile.CREATEINSTREAM(InStr);
+      WHILE ReadLine(InStr, Line1) DO
+
+        IF EVALUATE(TmpObject.ID, DELCHR(COPYSTR(Line1, 1, 11))) THEN BEGIN
+          TmpObject.Type := TmpObject.Type::Table;
+
+          IF (TmpObject.Type <> TmpPreviousObject.Type) OR (TmpObject.ID <> TmpPreviousObject.ID) THEN BEGIN
+            Object := TmpObject;
+            IF Object.FIND('=') THEN
+              VersionControl.MarkObject(Object, TRUE);
+          END;
+
+          TmpPreviousObject := TmpObject;
+        END;
+    END;
+
+    PROCEDURE MarkObjectsWithSplitFiles@62(ClientDirectoryName@1000 : Text);
+    VAR
+      Object@1001 : Record 2000000001;
+      TmpObject@1002 : TEMPORARY Record 2000000001;
+      VersionControl@1003 : Codeunit 11102040;
+    BEGIN
+      GetSplitFileObjProperties(ClientDirectoryName, TmpObject);
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          Object := TmpObject;
+          IF Object.FIND('=') THEN
+            VersionControl.MarkObject(Object, TRUE);
+        UNTIL TmpObject.NEXT = 0;
+    END;
+
+    PROCEDURE LockObjectsWithImportFile@21(VAR FileName@1000 : Text);
+    VAR
+      ObjectLock@1001 : Record 11102054;
+      Object@1002 : Record 2000000001;
+      TmpObject@1003 : TEMPORARY Record 2000000001;
+      CommonDialog@1004 : Codeunit 11102059;
+      ImportTransport@1005 : Codeunit 11102087;
+      oFile@1006 : File;
+      InStr@1007 : InStream;
+      Field1@1008 : Text;
+      Field2@1009 : Text;
+      Line1@1010 : Text[1024];
+      Line2@1011 : Text[1024];
+      ServerFileName@1012 : Text;
+      StopLoop@1013 : Boolean;
+      ctExtAll@1014 : TextConst 'DEU="Object Manager Files|*.fob;*.fib;*.txt;*.fld";ENU="Object Manager Files|*.fob;*.fib;*.txt;*.fld";ESP="Object Manager Files|*.fob;*.fib;*.txt;*.fld";FRA="Object Manager Files|*.fob;*.fib;*.txt;*.fld";NLD="Object Manager Files|*.fob;*.fib;*.txt;*.fld";DEA="Object Manager Files|*.fob;*.fib;*.txt;*.fld"';
+      ctFileNotValid@1015 : TextConst 'DEU=This file is not valid.;ENU=This file is not valid.;ESP=This file is not valid.;FRA=This file is not valid.;NLD=Bestand is niet geldig.;DEA=This file is not valid.';
+      ctNotValid@1016 : TextConst 'DEU=The extension ''%1'' is not valid.;ENU=The extension ''%1'' is not valid.;ESP=The extension ''%1'' is not valid.;FRA=The extension ''%1'' is not valid.;NLD=De extensie ''%1'' is niet geldig.;DEA=The extension ''%1'' is not valid.';
+    BEGIN
+      CommonDialog.AddExtension(ctExtAll, '');
+
+      CommonDialog.AddKnownExtension('fib');
+      CommonDialog.AddKnownExtension('fob');
+      CommonDialog.AddKnownExtension('txt-o');
+      CommonDialog.AddKnownExtension('txt-t');
+      CommonDialog.AddKnownExtension('fld');
+
+      IF NOT CommonDialog.OpenFile(FileName, ServerFileName) THEN
+        EXIT;
+
+      CASE CommonDialog.GetExtension OF
+        'fob' :
+          BEGIN
+            oFile.TEXTMODE(TRUE);
+            oFile.OPEN(ServerFileName);
+            REPEAT
+              oFile.READ(Line1);
+              StopLoop := oFile.READ(Line2) = 0;
+              IF STRLEN(Line1) < 79 THEN
+                StopLoop := TRUE;
+              IF NOT StopLoop THEN BEGIN
+                Object.SETFILTER(Type, DELSTR(Line1, 11));
+                Object.SETFILTER(ID, COPYSTR(Line1, 11, 10));
+                IF Object.FINDFIRST THEN
+                  ObjectLock.InsertLock(Object);
+              END;
+            UNTIL StopLoop;
+          END;
+
+        'fib' :
+          BEGIN
+            ImportTransport.ReadSections(ServerFileName, TmpObject);
+            TmpObject.SETRANGE("Company Name", 'FOB');
+            TmpObject.FINDFIRST;
+            TmpObject.CALCFIELDS("BLOB Reference");
+            TmpObject."BLOB Reference".CREATEINSTREAM(InStr);
+
+            ReadLine(InStr, Line1);
+            ReadLine(InStr, Line1);
+            REPEAT
+              ReadField(InStr, Field1);
+              IF Field1 = 'Compiled' THEN
+                StopLoop := TRUE
+              ELSE BEGIN
+                ReadField(InStr, Field1);
+                ReadField(InStr, Field2);
+                Object.SETFILTER(Type, Field1);
+                Object.SETFILTER(ID, Field2);
+                IF Object.FINDFIRST THEN
+                  ObjectLock.InsertLock(Object);
+
+              END;
+
+              ReadLine(InStr, Line1);
+            UNTIL Field1 = 'Compiled';
+
+          END;
+
+        'txt' :
+          CASE TRUE OF
+            IsObjectFile(ServerFileName) :
+              LockObjectsWithTextFile(ServerFileName);
+
+            IsTranslationFile(ServerFileName) :
+              LockObjectsWithTranslationFile(ServerFileName);
+
+            ELSE
+              MESSAGE(ctFileNotValid);
+
+          END;
+
+        'txt-o' :
+          LockObjectsWithTextFile(ServerFileName);
+
+        'txt-t' :
+          LockObjectsWithTranslationFile(ServerFileName);
+
+        'fld' :
+          LockObjectsWithFieldsFile(FileName);
+
+        ELSE
+          MESSAGE(ctNotValid, LOWERCASE(COPYSTR(ServerFileName, STRLEN(ServerFileName) - 2)));
+      END;
+    END;
+
+    LOCAL PROCEDURE LockObjectsWithTextFile@22(VAR FileName@1000 : Text);
+    VAR
+      ObjectLock@1001 : Record 11102054;
+      Object@1002 : Record 2000000001;
+      oFile@1003 : File;
+      InStr@1004 : InStream;
+      Line1@1005 : Text;
+      ObjectNo@1006 : Text;
+      ObjectType2@1007 : Text;
+    BEGIN
+      oFile.OPEN(FileName);
+      oFile.CREATEINSTREAM(InStr);
+      WHILE ReadLine(InStr, Line1) DO
+        IF DELSTR(Line1, 7) = 'OBJECT' THEN BEGIN
+          ObjectType2 := COPYSTR(Line1, 8);
+          ObjectNo := COPYSTR(ObjectType2, STRPOS(ObjectType2, ' ') + 1);
+          ObjectNo := DELSTR(ObjectNo, STRPOS(ObjectNo, ' '));
+          ObjectType2 := DELSTR(ObjectType2, STRPOS(ObjectType2, ' '));
+          Object.SETFILTER(Type, ObjectType2);
+          Object.SETFILTER(ID, ObjectNo);
+          IF Object.FINDFIRST THEN
+            ObjectLock.InsertLock(Object);
+
+        END;
+    END;
+
+    LOCAL PROCEDURE LockObjectsWithTranslationFile@23(VAR FileName@1000 : Text);
+    VAR
+      ObjectLock@1001 : Record 11102054;
+      TmpLine@1002 : ARRAY [2] OF TEMPORARY Record 11102068;
+      Object@1003 : Record 2000000001;
+      TmpObject@1004 : TEMPORARY Record 2000000001;
+      TmpPreviousObject@1005 : TEMPORARY Record 2000000001;
+      oFile@1006 : File;
+      InStr@1007 : InStream;
+      Line1@1008 : Text;
+    BEGIN
+      oFile.OPEN(FileName);
+      oFile.CREATEINSTREAM(InStr);
+      WHILE ReadLine(InStr, Line1) DO BEGIN
+
+        TmpLine[1].INIT;
+        TmpLine[1].ValidateTranslationFileLine(Line1, TmpLine[2]);
+        TmpObject.Type := TmpLine[1]."Object Type";
+        TmpObject.ID := TmpLine[1]."Object No.";
+
+        IF (TmpObject.Type <> TmpPreviousObject.Type) OR (TmpObject.ID <> TmpPreviousObject.ID) THEN BEGIN
+          Object := TmpObject;
+          IF Object.FIND('=') THEN
+            ObjectLock.InsertLock(Object);
+        END;
+
+        TmpPreviousObject := TmpObject;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE LockObjectsWithFieldsFile@54(VAR FileName@1000 : Text[1024]);
+    VAR
+      ObjectLock@1001 : Record 11102054;
+      Object@1002 : Record 2000000001;
+      TmpObject@1003 : TEMPORARY Record 2000000001;
+      TmpPreviousObject@1004 : TEMPORARY Record 2000000001;
+      oFile@1005 : File;
+      InStr@1006 : InStream;
+      Line1@1007 : Text[1024];
+    BEGIN
+      oFile.OPEN(FileName);
+      oFile.CREATEINSTREAM(InStr);
+      WHILE ReadLine(InStr, Line1) DO
+
+        IF EVALUATE(TmpObject.ID, DELCHR(COPYSTR(Line1, 1, 11))) THEN BEGIN
+          TmpObject.Type := TmpObject.Type::Table;
+
+          IF (TmpObject.Type <> TmpPreviousObject.Type) OR (TmpObject.ID <> TmpPreviousObject.ID) THEN BEGIN
+            Object := TmpObject;
+            IF Object.FIND('=') THEN
+              ObjectLock.InsertLock(Object);
+          END;
+
+          TmpPreviousObject := TmpObject;
+        END;
+    END;
+
+    PROCEDURE LockObjectsWithSplitFiles@63(Directory@1000 : Text);
+    VAR
+      ObjectLock@1001 : Record 11102054;
+      Object@1002 : Record 2000000001;
+      TmpObject@1003 : TEMPORARY Record 2000000001;
+    BEGIN
+      GetSplitFileObjProperties(Directory, TmpObject);
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          Object := TmpObject;
+          IF Object.FIND('=') THEN
+            ObjectLock.InsertLock(Object);
+        UNTIL TmpObject.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE GetSplitFileObjProperties@64(ClientDirectoryName@1000 : Text;VAR TmpObject@1001 : TEMPORARY Record 2000000001);
+    VAR
+      TmpFile@1002 : TEMPORARY Record 11102094;
+      Object@1003 : Record 2000000001;
+      FileHandler@1004 : Codeunit 11102097;
+    BEGIN
+      FileHandler.GetClientDirectoryContent(TmpFile, ClientDirectoryName);
+      FileHandler.AddBackSlash(ClientDirectoryName);
+
+      IF TmpFile.FINDSET THEN
+        REPEAT
+          IF TmpFile."Is a File" THEN BEGIN
+            IF GetFileObjProperties(ClientDirectoryName + TmpFile.Name, Object) THEN
+              IF NOT TmpObject.GET(Object.Type, '', Object.ID) THEN BEGIN
+                TmpObject.Type := Object.Type;
+                TmpObject.ID := Object.ID;
+                TmpObject.INSERT;
+              END;
+          END ELSE
+            GetSplitFileObjProperties(ClientDirectoryName + TmpFile.Name, TmpObject);
+        UNTIL TmpFile.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE GetFileObjProperties@65(ClientFileName@1000 : Text;VAR Object@1001 : Record 2000000001) : Boolean;
+    VAR
+      TmpLine@1002 : ARRAY [2] OF TEMPORARY Record 11102068;
+      FileHandler@1003 : Codeunit 11102097;
+      oFile@1004 : File;
+      InStr@1005 : InStream;
+      Field1@1006 : Text;
+      Field2@1007 : Text;
+      Line1@1008 : Text;
+      ObjectNo@1009 : Text;
+      ObjectType@1010 : Text;
+      ServerFileName@1011 : Text;
+    BEGIN
+      ServerFileName := FileHandler.UploadToServer(ClientFileName, '');
+
+      CASE FileHandler.GetExtension(ServerFileName) OF
+
+        'fob' :
+          BEGIN
+            oFile.TEXTMODE(TRUE);
+            oFile.OPEN(ServerFileName);
+            oFile.READ(Line1);
+            IF STRLEN(Line1) >= 79 THEN BEGIN
+              IF NOT EVALUATE(Object.Type, DELSTR(Line1, 11)) THEN
+                EXIT;
+              IF NOT EVALUATE(Object.ID, COPYSTR(Line1, 11, 10)) THEN
+                EXIT;
+              EXIT(TRUE);
+            END;
+          END;
+
+        'obj' :
+          BEGIN
+            oFile.OPEN(ServerFileName);
+            oFile.CREATEINSTREAM(InStr);
+
+            ReadLine(InStr, Line1);
+            ReadLine(InStr, Line1);
+            ReadField(InStr, Field1);
+            ReadField(InStr, Field1);
+            ReadField(InStr, Field2);
+            IF NOT EVALUATE(Object.Type, Field1) THEN
+              EXIT;
+            IF NOT EVALUATE(Object.ID, Field2) THEN
+              EXIT;
+
+            EXIT(TRUE);
+
+          END;
+
+        'txt' :
+          CASE TRUE OF
+            IsObjectFile(ServerFileName) :
+              BEGIN
+                oFile.OPEN(ServerFileName);
+                oFile.CREATEINSTREAM(InStr);
+                IF ReadLine(InStr, Line1) THEN BEGIN
+                  ObjectType := COPYSTR(Line1, 8);
+                  ObjectNo := COPYSTR(ObjectType, STRPOS(ObjectType, ' ') + 1);
+                  ObjectNo := DELSTR(ObjectNo, STRPOS(ObjectNo, ' '));
+                  ObjectType := DELSTR(ObjectType, STRPOS(ObjectType, ' '));
+                  IF NOT EVALUATE(Object.Type, ObjectType) THEN
+                    EXIT;
+                  IF NOT EVALUATE(Object.ID, ObjectNo) THEN
+                    EXIT;
+                  EXIT(TRUE);
+                END;
+              END;
+
+            IsTranslationFile(ServerFileName) :
+              BEGIN
+                oFile.OPEN(ServerFileName);
+                oFile.CREATEINSTREAM(InStr);
+                IF ReadLine(InStr, Line1) THEN BEGIN
+                  TmpLine[1].INIT;
+                  TmpLine[1].ValidateTranslationFileLine(Line1, TmpLine[2]);
+                  Object.Type := TmpLine[1]."Object Type";
+                  Object.ID := TmpLine[1]."Object No.";
+                  EXIT(TRUE);
+                END;
+              END;
+          END;
+
+        'fld' :
+          BEGIN
+            oFile.OPEN(ServerFileName);
+            oFile.CREATEINSTREAM(InStr);
+            IF ReadLine(InStr, Line1) THEN
+              IF EVALUATE(Object.ID, DELCHR(COPYSTR(Line1, 1, 11))) THEN BEGIN
+                Object.Type := Object.Type::Table;
+                EXIT(TRUE);
+              END;
+          END;
+
+      END;
+    END;
+
+    PROCEDURE CompileObjects@24(VAR TmpObject@1000 : TEMPORARY Record 2000000001);
+    VAR
+      Progressbar@1001 : Codeunit 11102044;
+      ObjectMgt@1002 : Codeunit 11102046;
+      ctCompilingObjects@1003 : TextConst 'DEU=Compiling Objects...;ENU=Compiling Objects...;ESP=Compiling Objects...;FRA=Compiling Objects...;NLD=Objecten compileren...;DEA=Compiling Objects...';
+    BEGIN
+      Progressbar.Open(ctCompilingObjects, 1);
+      Progressbar.BarSize := TmpObject.COUNT;
+
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+          Progressbar.Text1Object := TmpObject;
+
+          ObjectMgt.CompileObject(TmpObject);
+        UNTIL TmpObject.NEXT = 0;
+
+      Progressbar.Close;
+    END;
+
+    PROCEDURE AddFileSection@25(VAR TmpFile@1000 : File;VAR FileOutStr@1001 : OutStream;SectionName@1002 : Text);
+    VAR
+      InStr@1003 : InStream;
+      CrLf@1004 : Text;
+    BEGIN
+      CrLf[1] := 13;
+      CrLf[2] := 10;
+
+      TmpFile.CREATEINSTREAM(InStr);
+
+      FileOutStr.WRITETEXT(PADSTR(SectionName, 20));
+      FileOutStr.WRITETEXT(PADSTR(FORMAT(TmpFile.LEN + 1), 20));
+
+      FileOutStr.WRITETEXT(CrLf);
+      COPYSTREAM(FileOutStr, InStr);
+
+      FileOutStr.WRITETEXT(CrLf);
+    END;
+
+    PROCEDURE WriteObjectManagerVersion@26(VAR OutStr@1000 : OutStream;FileType@1001 : Text);
+    VAR
+      CrLf@1002 : Text;
+    BEGIN
+      CrLf[1] := 13;
+      CrLf[2] := 10;
+
+      OutStr.WRITETEXT(PADSTR(ObjectManagerVersion, 20));
+      OutStr.WRITETEXT(CrLf);
+      OutStr.WRITETEXT(PADSTR(FileType, 20));
+      OutStr.WRITETEXT(CrLf);
+    END;
+
+    PROCEDURE CheckObjectManagerVersion@27(VAR InStr@1000 : InStream;ExpectedFileType@1001 : Text);
+    VAR
+      FileType@1002 : Text;
+      VersionNo@1003 : Text;
+      ctWrongFileType@1004 : TextConst 'DEU=This is not a %1-file.;ENU=This is not a %1-file.;ESP=This is not a %1-file.;FRA=This is not a %1-file.;NLD=Dit is geen %1-bestand.;DEA=This is not a %1-file.';
+      ctWrongVersion@1005 : TextConst 'DEU=This %1 is created with another version of Object Manager.;ENU=This %1 is created with another version of Object Manager.;ESP=This %1 is created with another version of Object Manager.;FRA=This %1 is created with another version of Object Manager.;NLD=Deze %1 is gemaakt met een andere versie van Object Manager.;DEA=This %1 is created with another version of Object Manager.';
+    BEGIN
+      InStr.READTEXT(VersionNo, 22);
+      VersionNo := DELCHR(DELSTR(VersionNo, 21), '>');
+
+      InStr.READTEXT(FileType, 22);
+      FileType := DELCHR(DELSTR(FileType, 21), '>');
+
+      IF ExpectedFileType <> FileType THEN
+        ERROR(ctWrongFileType, ExpectedFileType);
+
+      IF VersionNo <> ObjectManagerVersion THEN
+        ERROR(ctWrongVersion, ExpectedFileType);
+    END;
+
+    PROCEDURE IsSplitFile@55(VAR InStr@1000 : InStream) : Boolean;
+    VAR
+      FileType@1001 : Text[22];
+      VersionNo@1002 : Text[22];
+      ctWrongVersion@1003 : TextConst 'DEU=This file is created with another version of Object Manager.;ENU=This file is created with another version of Object Manager.;ESP=This file is created with another version of Object Manager.;FRA=This file is created with another version of Object Manager.;NLD=Dit bestand is gemaakt met een andere versie van Object Manager.;DEA=This file is created with another version of Object Manager.';
+    BEGIN
+      InStr.READTEXT(VersionNo, 22);
+      VersionNo := DELCHR(DELSTR(VersionNo, 21), '>');
+
+      InStr.READTEXT(FileType, 22);
+      FileType := DELCHR(DELSTR(FileType, 21), '>');
+
+      IF VersionNo <> ObjectManagerVersion THEN
+        ERROR(ctWrongVersion);
+
+      EXIT(FileType = 'SPLITTED');
+    END;
+
+    LOCAL PROCEDURE ObjectManagerVersion@28() : Text;
+    BEGIN
+      EXIT('Object Manager v9.00');
+    END;
+
+    PROCEDURE AddCurrentChanges@29();
+    VAR
+      CALHistoryObject@1000 : Record 11102052;
+      KnownObjectExportError@1001 : Record 11102073;
+      ObjectCompareLine@1002 : Record 11102079;
+      Object2@1003 : Record 2000000001;
+      Progressbar@1004 : Codeunit 11102044;
+      SourceControl@1005 : Codeunit 11102050;
+      RecordFound@1006 : Boolean;
+      ctAddingChanges@1007 : TextConst 'DEU=Adding changes...;ENU=Adding changes...;ESP=Adding changes...;FRA=Adding changes...;NLD=Wijzigingen toevoegen...;DEA=Adding changes...';
+    BEGIN
+      Progressbar.Open(ctAddingChanges, 0);
+
+      Object2.SETFILTER(Type, '<>%1', Object2.Type::TableData);
+      Object2.SETRANGE("Company Name", '');
+      Object2.SETFILTER(Date, '<>%1', 0D);
+
+      Progressbar.BarSize := Object2.COUNT;
+
+      IF Object2.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+
+          IF SourceControl.ObjectChangedSinceTransport(Object2) THEN
+            IF NOT ObjectCompareLine.GET(ObjectCompareLine."Line Type"::"Object Compare Sheet", Object2.Type, Object2.ID) THEN BEGIN
+              IF NOT KnownObjectExportError.GET(Object2.Type, Object2.ID) THEN BEGIN
+                ObjectCompareLine.INIT;
+                ObjectCompareLine."Line Type" := ObjectCompareLine."Line Type"::"Object Compare Sheet";
+                ObjectCompareLine.Type := Object2.Type;
+                ObjectCompareLine."No." := Object2.ID;
+                ObjectCompareLine.Name := Object2.Name;
+                ObjectCompareLine."Object Changed" := TRUE;
+                ObjectCompareLine.INSERT;
+              END;
+            END ELSE BEGIN
+              ObjectCompareLine."Object Changed" := TRUE;
+              ObjectCompareLine.MODIFY;
+            END;
+
+          Progressbar.BarSize := Progressbar.GetBarSize + 1;
+
+        UNTIL Object2.NEXT = 0;
+
+      IF ObjectCompareLine.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+
+          IF Object2.GET(ObjectCompareLine.Type, '', ObjectCompareLine."No.") THEN BEGIN
+            ObjectCompareLine."Existing Name" := Object2.Name;
+            ObjectCompareLine."Existing Version List" := Object2."Version List";
+            ObjectCompareLine."Existing Date" := Object2.Date;
+            ObjectCompareLine."Existing Time" := Object2.Time;
+            ObjectCompareLine.MODIFY;
+          END;
+
+          CALHistoryObject.SETCURRENTKEY("Action Type", "Object Type", "Object No.");
+          CALHistoryObject.SETFILTER("Action Type",
+            '%1|%2', CALHistoryObject."Action Type"::"After Imp. Transport",
+            CALHistoryObject."Action Type"::"Confirmed in Import Sheet");
+
+          CALHistoryObject.SETRANGE("Object Type", ObjectCompareLine.Type);
+          CALHistoryObject.SETRANGE("Object No.", ObjectCompareLine."No.");
+          CALHistoryObject.SETRANGE("C/AL Code Present", TRUE);
+
+          RecordFound := CALHistoryObject.FINDLAST;
+          IF NOT RecordFound THEN BEGIN
+            CALHistoryObject.SETCURRENTKEY("Object Type", "Object No.");
+            CALHistoryObject.SETRANGE("Action Type");
+            RecordFound := CALHistoryObject.FINDFIRST;
+          END;
+
+          IF RecordFound THEN BEGIN
+            ObjectCompareLine."Prev. C/AL Object Entry No." := CALHistoryObject."Entry No.";
+            ObjectCompareLine."Prev. Name" := CALHistoryObject."Object Name";
+            ObjectCompareLine."Prev. Version List" := CALHistoryObject."Version List";
+            ObjectCompareLine."Prev. Date" := CALHistoryObject."Object Date";
+            ObjectCompareLine."Prev. Time" := CALHistoryObject."Object Time";
+            ObjectCompareLine.MODIFY;
+          END;
+
+          IF ObjectCompareLine.CurrNewerThenPrevious AND
+             ObjectCompareLine."Object Changed" AND
+             NOT (ObjectCompareLine."New Name" = '')
+          THEN BEGIN
+            ObjectCompareLine.Conflicting := TRUE;
+            ObjectCompareLine.MODIFY;
+
+          END;
+
+        UNTIL ObjectCompareLine.NEXT = 0;
+
+      Progressbar.Close;
+    END;
+
+    PROCEDURE GetObjectHeadersFromFob@30(VAR InStr@1000 : InStream;VAR TmpObject@1001 : TEMPORARY Record 2000000001);
+    VAR
+      SourceControl@1002 : Codeunit 11102050;
+      Line1@1003 : Text;
+      Line2@1004 : Text;
+      ObjectDate@1005 : Text;
+      ObjectName@1006 : Text;
+      ObjectNo@1007 : Text;
+      ObjectTime@1008 : Text;
+      ObjectType2@1009 : Text;
+      ObjectVersionList@1010 : Text;
+    BEGIN
+      REPEAT
+
+        InStr.READTEXT(Line1);
+        InStr.READTEXT(Line2);
+
+        IF (STRLEN(Line1) < 79) OR (STRLEN(Line2) < 78) THEN
+          EXIT;
+
+        ObjectType2 := DELCHR(COPYSTR(Line1, 1, 10), '<>');
+        ObjectNo := DELCHR(COPYSTR(Line1, 11, 10), '<>');
+        ObjectName := DELCHR(COPYSTR(Line1, 22, 30), '<>');
+        ObjectDate := DELCHR(COPYSTR(Line1, 53, 11), '<>');
+        ObjectTime := FORMAT(SourceControl.ParseTime(DELCHR(COPYSTR(Line1, 65, 14), '<>')));
+        ObjectVersionList := DELCHR(COPYSTR(Line2, 22, 56), '<>');
+        IF ObjectVersionList[1] = '#' THEN
+          ObjectVersionList := COPYSTR(ObjectVersionList, 2);
+
+        IF EVALUATE(TmpObject.Type, ObjectType2) AND
+           EVALUATE(TmpObject.ID, ObjectNo) AND
+           EVALUATE(TmpObject.Name, ObjectName) AND
+           EVALUATE(TmpObject.Date, ObjectDate) AND
+           EVALUATE(TmpObject.Time, ObjectTime) AND
+           EVALUATE(TmpObject."Version List", ObjectVersionList)
+        THEN
+          TmpObject.INSERT;
+
+      UNTIL FALSE;
+    END;
+
+    PROCEDURE GetObjectHeadersFromTxt@61(VAR InStr@1000 : InStream;VAR TmpObject@1001 : TEMPORARY Record 2000000001);
+    VAR
+      SourceControl@1002 : Codeunit 11102050;
+      Line@1003 : Text;
+    BEGIN
+      WHILE ReadLine(InStr, Line) DO
+        IF DELSTR(Line, 7) = 'OBJECT' THEN BEGIN
+          SourceControl.GetObjectProperties(TmpObject, Line);
+          IF TmpObject.INSERT THEN
+            ;
+        END;
+    END;
+
+    PROCEDURE CreateTempFile@31(VAR TmpFile@1000 : File;VAR TmpFileName@1001 : Text);
+    BEGIN
+      TmpFile.CREATETEMPFILE;
+      TmpFileName := TmpFile.NAME;
+      SLEEP(15);
+      TmpFile.CLOSE;
+      TmpFile.WRITEMODE(TRUE);
+      TmpFile.CREATE(TmpFileName);
+    END;
+
+    PROCEDURE ReadLine@32(VAR InStr@1000 : InStream;VAR Line@1001 : Text) : Boolean;
+    VAR
+      Char@1002 : Char;
+    BEGIN
+      Line := '';
+      WHILE InStr.READ(Char) > 0 DO
+        IF Char = 10 THEN
+          EXIT(TRUE)
+        ELSE
+          IF STRLEN(Line) < 1024 THEN
+            IF Char <> 13 THEN
+              Line += FORMAT(Char);
+    END;
+
+    LOCAL PROCEDURE ReadField@33(VAR InStr@1000 : InStream;VAR Field@1001 : Text) : Boolean;
+    VAR
+      Char@1002 : Char;
+    BEGIN
+      Field := '';
+      WHILE InStr.READ(Char) > 0 DO
+        IF Char IN [9, 10] THEN
+          EXIT(TRUE)
+        ELSE
+          IF Char <> 13 THEN
+            Field += FORMAT(Char);
+    END;
+
+    PROCEDURE InOutStream@34(VAR InStr@1000 : InStream;VAR OutStr@1001 : OutStream;NoOfBytes@1002 : Integer);
+    BEGIN
+      COPYSTREAM(OutStr, InStr, NoOfBytes);
+    END;
+
+    LOCAL PROCEDURE BooleanValue@35(Condition@1000 : Boolean) : Text;
+    BEGIN
+      IF Condition THEN
+        EXIT('1')
+      ELSE
+        EXIT('0');
+    END;
+
+    PROCEDURE IsObjectFile@36(VAR ServerFileName@1000 : Text) : Boolean;
+    VAR
+      oFile@1001 : File;
+      FirstLine@1002 : Text[1024];
+    BEGIN
+      oFile.TEXTMODE(TRUE);
+      oFile.OPEN(ServerFileName);
+      oFile.READ(FirstLine);
+      oFile.CLOSE;
+
+      EXIT(DELSTR(FirstLine, 7) = 'OBJECT');
+    END;
+
+    PROCEDURE IsTranslationFile@37(VAR ServerFileName@1000 : Text) : Boolean;
+    VAR
+      oFile@1001 : File;
+      FirstLine@1002 : Text[1024];
+    BEGIN
+      oFile.TEXTMODE(TRUE);
+      oFile.OPEN(ServerFileName);
+      oFile.READ(FirstLine);
+      oFile.CLOSE;
+
+      EXIT(STRPOS(FirstLine, ':') > 0);
+    END;
+
+    PROCEDURE IsObpFile@38(VAR ServerFileName@1000 : Text) : Boolean;
+    VAR
+      oFile@1001 : File;
+      FirstLine@1002 : Text[1024];
+    BEGIN
+      oFile.TEXTMODE(TRUE);
+      oFile.OPEN(ServerFileName);
+      oFile.READ(FirstLine);
+      oFile.CLOSE;
+
+      EXIT(DELSTR(FirstLine, 7) = 'Object');
+    END;
+
+    PROCEDURE IsFobFile@39(VAR FileName@1000 : Text) : Boolean;
+    BEGIN
+      IF STRLEN(FileName) > 2 THEN
+        EXIT(LOWERCASE(COPYSTR(FileName, STRLEN(FileName) - 2)) = 'fob');
+    END;
+
+    PROCEDURE ExportCaptionFile@40(VAR Object@1000 : Record 2000000001;FileName@1001 : Text);
+    VAR
+      Buffer@1002 : TEMPORARY Record 11102068;
+      TmpLine@1003 : ARRAY [2] OF TEMPORARY Record 11102068;
+      Progressbar@1004 : Codeunit 11102044;
+      Progressbar2@1005 : Codeunit 11102044;
+      SourceControl@1006 : Codeunit 11102050;
+      TranslationMgt@1007 : Codeunit 11102051;
+      FileHandler@1008 : Codeunit 11102097;
+      oFile@1009 : File;
+      QuestionAsked@1010 : Boolean;
+      ctExportingCaptions@1011 : TextConst 'DEU=Exporting captions...;ENU=Exporting captions...;ESP=Exporting captions...;FRA=Exporting captions...;NLD=Objecten exporteren...;DEA=Exporting captions...';
+      ctNotUpToDate@1012 : TextConst 'DEU=Not all objects are up to date.\Continue?;ENU=Not all objects are up to date.\Continue?;ESP=Not all objects are up to date.\Continue?;FRA=Not all objects are up to date.\Continue?;NLD=Niet alle objecten zijn bijgewerkt.\Doorgaan?;DEA=Not all objects are up to date.\Continue?';
+    BEGIN
+      FileHandler.QueryReplace(FileName);
+
+      SourceControl.AddObjects(Object, 0, TRUE, TRUE, 2, FALSE);
+
+      FileHandler.QueryReplace(FileName);
+      oFile.WRITEMODE(TRUE);
+      oFile.TEXTMODE(TRUE);
+      oFile.CREATE(FileName);
+
+      Progressbar.Open(ctExportingCaptions, 1);
+      Progressbar.BarSize := Object.COUNT;
+      IF Object.FINDSET THEN
+        REPEAT
+
+          Progressbar.Text1Object := Object;
+          Progressbar.AddToBar(1);
+
+          IF SourceControl.ObjectHeaderIsOutdated(Object, TRUE) THEN BEGIN
+            IF NOT QuestionAsked THEN
+              IF NOT CONFIRM(ctNotUpToDate, TRUE) THEN
+                EXIT;
+            QuestionAsked := TRUE;
+          END;
+
+          Buffer.RESET;
+          Buffer.DELETEALL;
+
+          TmpLine[1].RESET;
+          TmpLine[1].DELETEALL;
+
+          TranslationMgt.ImportObject(Object, Buffer);
+          TranslationMgt.FinalizeBuffer(Buffer, TmpLine, Object.Type, Object.ID);
+          TranslationMgt.CreateMissingCaptions(TmpLine, TranslationMgt.BaseLanguage, TRUE);
+
+          TmpLine[1].SETFILTER("Language Id", '0|%1', TranslationMgt.BaseLanguage);
+          TranslationMgt.AddToFile(oFile, TmpLine, Progressbar2);
+
+        UNTIL Object.NEXT = 0;
+
+      oFile.CLOSE;
+
+      Progressbar.Close;
+    END;
+
+    PROCEDURE LengthOfFile@41(FileName@1000 : Text) ExitValue : Integer;
+    VAR
+      oFile@1001 : File;
+    BEGIN
+      oFile.OPEN(FileName);
+      ExitValue := oFile.LEN;
+      oFile.CLOSE;
+    END;
+
+    PROCEDURE Split@42(String@1000 : Text;SplitCharacter@1001 : Text;VAR IntoArray@1002 : ARRAY [50] OF Text[30]);
+    VAR
+      i@1003 : Integer;
+      NoOfEntries@1004 : Integer;
+      PrevSplitPos@1005 : Integer;
+    BEGIN
+      CLEAR(IntoArray);
+
+      FOR i := 1 TO STRLEN(String) DO
+        IF String[i] = SplitCharacter[1] THEN BEGIN
+          NoOfEntries += 1;
+          IntoArray[NoOfEntries] := COPYSTR(String, PrevSplitPos + 1, i - PrevSplitPos - 1);
+          PrevSplitPos := i;
+        END;
+
+      NoOfEntries += 1;
+      IntoArray[NoOfEntries] := COPYSTR(String, PrevSplitPos + 1, STRLEN(String) - PrevSplitPos);
+    END;
+
+    PROCEDURE RemoveSpecialCharacters@43(FileName@1000 : Text) : Text;
+    BEGIN
+      EXIT(DELCHR(FileName, '=', '/\:*?"<>|'));
+    END;
+
+    LOCAL PROCEDURE PadStrLeft@51(String@1000 : Text[1024];Length@1001 : Integer) : Text[30];
+    BEGIN
+      EXIT(COPYSTR(PADSTR('', Length) + String, STRLEN(String)));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

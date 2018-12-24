@@ -1,0 +1,587 @@
+OBJECT Codeunit 50043 Payment Mgmt. V2
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/12/18;
+    Time=11:48:01 AM;
+    Modified=Yes;
+    Version List=TM3017.01,TM3026;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SalesReceivablesSetup@1170000005 : Record 311;
+      RefundDOPaymentTransLogEntry@1000000001 : Record 50018;
+      SalesPaymentSetup@1000000005 : Record 50010;
+      EmailItem@1000000011 : Record 9500;
+      Dict@1000000016 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.Dictionary`2";
+      Arr@1000000015 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      Type@1000000017 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Type";
+      Str@1000000018 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      Activator@1000000019 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Activator";
+      DOPaymentTransLogMgt@1000000000 : Codeunit 829;
+      BRONTOIntegrationProcessor@1000000014 : Codeunit 50022;
+      CreateRefundSRO@1170000004 : Report 50043;
+      TransactionLogEntryNo@1000000003 : Integer;
+      PostingNotFinished@1000000002 : Boolean;
+      PaymentSetupRead@1000000004 : Boolean;
+      Text000@1000000006 : TextConst 'ENU=%1 cannot be greater than %2';
+      Text001@1000000007 : TextConst 'ENU=%1 has been performed successfully.';
+      Text002@1000000009 : TextConst 'ENU=Payment transaction has been initialized but has not been completed.';
+      Text003@1000000010 : TextConst 'ENU="Error Code = %1; Message = %2"';
+      Text004@1000000012 : TextConst 'ENU=Refund for Order No. %1 Amount %2 %3  Payment Type %4 - %5';
+      Text005@1000000013 : TextConst 'ENU=Refund for Order No. %1 - %2';
+      Text006@1170000007 : TextConst 'ENU=Refund API was success but Creating CM had this error: %1';
+      Text007@1170000006 : TextConst 'ENU=Source Document not found for this Sales Payment Entry. Please contact System Administrator.';
+      RefundTxt@1000000008 : TextConst 'ENU=Refund';
+      ServicePointManagerG@1000000021 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.ServicePointManager";
+      SecurityProtocolTypeG@1000000020 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.SecurityProtocolType";
+      SalesSetupOK@1170000003 : Boolean;
+      RefundReasonCode@1170000002 : Code[20];
+      RefundAccountNo@1170000001 : Code[20];
+      RefundType@1170000000 : ' ,Tax Amount,After Sales';
+
+    [EventSubscriber(Page,50010,OnAfterActionEvent,Refund2)]
+    PROCEDURE OnAfterActionEvent_RefundPayment@1000000008(VAR Rec@1000000000 : Record 50008);
+    VAR
+      lRefundAmount@1170000000 : Decimal;
+    BEGIN
+      //RefundSalesDoc(Rec,TRUE); //Comment By: //DOC TM2022 AW 06/12/2018 -
+
+      //DOC TM2022 AW 06/12/2018 -
+      RefundType := RefundType::" ";
+      RefundReasonCode := '';
+      RefundAccountNo := '';
+      lRefundAmount := Rec."Refund Amount";
+      CLEAR(CreateRefundSRO);
+
+      GetSalesSetup;
+      SalesReceivablesSetup.TESTFIELD("Product Tax Account");
+      SalesReceivablesSetup.TESTFIELD("Good Will Account");
+      SalesReceivablesSetup.TESTFIELD("SRO Good Will Reason Code");
+      SalesReceivablesSetup.TESTFIELD("SRO Tax Reason Code");
+
+      CLEARLASTERROR;
+      CreateRefundSRO.RUNMODAL;
+      IF NOT CreateRefundSRO.GetRunOK THEN
+        EXIT;
+      CreateRefundSRO.GetRefundType(RefundType);
+      CASE RefundType OF
+        RefundType::" ":
+          BEGIN
+            RefundSalesDoc(Rec,TRUE); //Log error only.
+            EXIT;
+          END;
+        RefundType::"After Sales": //Log error and show to user
+          BEGIN
+            RefundReasonCode := SalesReceivablesSetup."SRO Good Will Reason Code";
+            RefundAccountNo := SalesReceivablesSetup."Good Will Account";
+          END;
+        RefundType::"Tax Amount": //Log error and show to user
+          BEGIN
+            RefundReasonCode := SalesReceivablesSetup."SRO Tax Reason Code";
+            RefundAccountNo := SalesReceivablesSetup."Product Tax Account";
+          END;
+      END;
+
+      CLEARLASTERROR;
+      IF RefundSalesDoc(Rec,TRUE) THEN BEGIN
+        IF NOT CreateRefundCM(Rec,RefundAccountNo,RefundReasonCode,lRefundAmount) THEN
+          ERROR(Text006,GETLASTERRORTEXT);
+      END ELSE
+        ERROR(GETLASTERRORTEXT);
+
+      //DOC TM2022 AW 06/12/2018 +
+    END;
+
+    [TryFunction]
+    PROCEDURE RefundSalesDoc@1000000002(VAR pSalesPayments@1000000000 : Record 50008;pManual@1000000004 : Boolean);
+    VAR
+      lResponseID@1000000001 : Text;
+      lResponseCode@1000000002 : Code[20];
+      lJrnlDocumentNo@1000000003 : Code[20];
+      UserSessionL@1170000001 : Codeunit 50049;
+    BEGIN
+      WITH pSalesPayments DO BEGIN
+        GetPaymentSetup;
+        ValidateRefund(pSalesPayments);
+        TransactionLogEntryNo := 0;
+        lResponseCode := '';
+        lResponseID := '';
+        lJrnlDocumentNo := '';
+        CLEAR(RefundDOPaymentTransLogEntry);
+
+        IF FindPostingNotFinishedEntry(
+            RefundDOPaymentTransLogEntry."Document Type"::Refund,
+            "Internet Order No.",
+            RefundDOPaymentTransLogEntry)
+        THEN BEGIN
+          CLEARLASTERROR;
+          IF CreateAndPostJournalLogEntry(RefundDOPaymentTransLogEntry,lJrnlDocumentNo,pManual) THEN BEGIN
+            RefundDOPaymentTransLogEntry."NAV Transaction Status" := RefundDOPaymentTransLogEntry."NAV Transaction Status"::Refunded;
+            RefundDOPaymentTransLogEntry."Transaction Description" := STRSUBSTNO(Text001,RefundTxt);
+          END ELSE
+            RefundDOPaymentTransLogEntry."Transaction Description" := COPYSTR(GETLASTERRORTEXT,1,249);
+          RefundDOPaymentTransLogEntry."User ID" := USERID;
+          RefundDOPaymentTransLogEntry."Transaction Date-Time" := CURRENTDATETIME;
+          RefundDOPaymentTransLogEntry.MODIFY;
+          EXIT;
+        END;
+
+        InitializeTransactionLogEntry(RefundDOPaymentTransLogEntry,
+                                      RefundDOPaymentTransLogEntry."Document Type"::Refund,
+                                      "Internet Order No.",
+                                      RefundDOPaymentTransLogEntry."Transaction Type"::Refund,
+                                      "Order Guid",
+                                      '',
+                                      "Reason Code");
+
+        CLEARLASTERROR;
+        IF RefundCaptureAPI(pSalesPayments,lResponseID,lResponseCode,pManual) THEN BEGIN
+          RefundDOPaymentTransLogEntry."Transaction Result" := RefundDOPaymentTransLogEntry."Transaction Result"::Success;
+          RefundDOPaymentTransLogEntry."Transaction Description" := STRSUBSTNO(Text001,RefundTxt);
+          RefundDOPaymentTransLogEntry."Transaction GUID" := CREATEGUID;
+          RefundDOPaymentTransLogEntry."Transaction ID" := lResponseID;
+          RefundDOPaymentTransLogEntry.Amount := "Refund Amount";
+          RefundDOPaymentTransLogEntry."Currency Code" := "Currency Code";
+          "Response ID" := lResponseID;
+          "Response Reason Code" := lResponseCode;
+          IF pManual THEN
+            Status := Status::Refunded;
+          "Total Refunded Amnt." += "Refund Amount";
+          UserSessionL.SetRefundAmount("Refund Amount"); // DOC TM3017.01 ST 07/10/2018
+          "Refund Amount" := 0;
+          MODIFY;
+          IF ("Payment Type" <> "Payment Type"::"Gift Voucher") THEN
+            RefundCustomerNotification(pSalesPayments);
+        END ELSE BEGIN
+          RefundDOPaymentTransLogEntry."Transaction Result" := RefundDOPaymentTransLogEntry."Transaction Result"::Failed;
+          RefundDOPaymentTransLogEntry."Transaction Description" := STRSUBSTNO(Text003,GETLASTERRORCODE,COPYSTR(GETLASTERRORTEXT,1,249));
+        END;
+        RefundInternalNotification(pSalesPayments);
+
+        RefundDOPaymentTransLogEntry."NAV Transaction Status" := RefundDOPaymentTransLogEntry."NAV Transaction Status"::"Posting Not Finished";
+        RefundDOPaymentTransLogEntry."Transaction Date-Time" := CURRENTDATETIME;
+        RefundDOPaymentTransLogEntry."User ID" := USERID;
+        RefundDOPaymentTransLogEntry.MODIFY;
+        COMMIT;
+
+        IF RefundDOPaymentTransLogEntry."Transaction Result" = RefundDOPaymentTransLogEntry."Transaction Result"::Failed THEN
+          EXIT;
+        CLEARLASTERROR;
+        IF CreateAndPostJournalLogEntry(RefundDOPaymentTransLogEntry,lJrnlDocumentNo,pManual) THEN BEGIN
+          RefundDOPaymentTransLogEntry."NAV Transaction Status" := RefundDOPaymentTransLogEntry."NAV Transaction Status"::Refunded;
+          RefundDOPaymentTransLogEntry."Transaction Description" := STRSUBSTNO(Text001,RefundTxt);
+        END ELSE BEGIN
+          RefundDOPaymentTransLogEntry."Transaction Description" := COPYSTR(GETLASTERRORTEXT,1,249);
+        END;
+        RefundDOPaymentTransLogEntry."User ID" := USERID;
+        RefundDOPaymentTransLogEntry."Transaction Date-Time" := CURRENTDATETIME;
+        RefundDOPaymentTransLogEntry.MODIFY;
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE RefundCaptureAPI@1000000009(pSalesPayments@1000000002 : Record 50008;VAR pResponseID@1000000001 : Text;VAR pReasonCode@1000000000 : Code[20];pManual@1000000003 : Boolean);
+    VAR
+      SalesPaymentProcessingL@1170000000 : Codeunit 50026;
+      OperationL@1170000001 : 'Capture,Refund,Cancel,ReAuthorize';
+      ErrorTextL@1170000002 : Text;
+    BEGIN
+      WITH pSalesPayments DO BEGIN
+        CASE "Payment Type" OF
+      //DOC TM3026 ST 03/10/2018 -
+          //"Payment Type"::CreditCard: RefundCaptureCreditCardAPI(pSalesPayments,pResponseID,pReasonCode,pManual);
+          "Payment Type"::CreditCard:
+            BEGIN
+              IF NOT pManual THEN
+                ERROR('Auto. Not Supported');
+              SalesPaymentProcessingL.SetSalesPayment(pSalesPayments);
+              SalesPaymentProcessingL.ProcessPaymentRequest(FALSE, OperationL::Refund, pSalesPayments."Transaction ID",
+                                                            "Currency Code", pSalesPayments."Refund Amount", pResponseID,
+                                                            ErrorTextL, "Internet Order No.", pReasonCode);
+              IF ErrorTextL > '' THEN
+                ERROR(ErrorTextL);
+              SalesPaymentProcessingL.GetSalesPayment(pSalesPayments);
+           END;
+      //DOC TM3026 ST 03/10/2018 +
+          "Payment Type"::PayPal    : RefundCapturePayPal(pSalesPayments,pResponseID,pReasonCode,pManual);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE RefundCaptureCreditCardAPI@1000000006(pSalesPayments@1000000000 : Record 50008;VAR pResponseID@1000000018 : Text;VAR pReasonCode@1000000017 : Code[20];pManual@1000000001 : Boolean);
+    VAR
+      StrBuild@1000000016 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      URIObj@1000000015 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Uri";
+      WebRequest@1000000014 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      StrWriter@1000000013 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamWriter";
+      WebResponse@1000000012 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+      Stream@1000000011 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Stream";
+      Reader@1000000010 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlTextReader";
+      Encoding@1000000009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      CredCache@1000000008 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.CredentialCache";
+      NWCred@1000000007 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.NetworkCredential";
+      SysConvert@1000000006 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Convert";
+      STREAD@1000000005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader";
+      AuthLevel@1000000004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.Security.AuthenticationLevel";
+    BEGIN
+      IF NOT pManual THEN
+        ERROR('Auto. Not Supported');
+        //IF "Refund Amount" = 0 THEN
+          //EXIT;
+
+      ServicePointManagerG := ServicePointManagerG;
+      SecurityProtocolTypeG := SecurityProtocolTypeG;
+      ServicePointManagerG.SecurityProtocol := SecurityProtocolTypeG.Tls12;
+
+      GetPaymentSetup;
+      CLEAR(StrBuild);
+      URIObj := URIObj.Uri(SalesPaymentSetup."Cybersource url");
+      WebRequest := WebRequest.CreateDefault(URIObj);
+      WebRequest.Method := 'POST';
+      WebRequest.ContentType := 'application/soap+xml; charset=utf-8';
+      WebRequest.Headers.Add('SOAPAction','runTransaction');
+      StrBuild := StrBuild.StringBuilder();
+      StrBuild.Append('<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:schemas-cybersource-com:transaction-data-1.132">');
+      StrBuild.Append(' <soapenv:Header> <wsse:Security soapenv:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">');
+      StrBuild.Append(' <wsse:UsernameToken> <wsse:Username>' + SalesPaymentSetup."Cybersource Merchant ID" + '</wsse:Username>');
+      StrBuild.Append(' <wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">' +
+                            SalesPaymentSetup."Cybersource Security Key 1" + SalesPaymentSetup."Cybersource Security Key 2" + '</wsse:Password>');
+      StrBuild.Append(' </wsse:UsernameToken> </wsse:Security> </soapenv:Header>');
+      StrBuild.Append(' <soapenv:Body> <urn:requestMessage xmlns="urn:schemas-cybersource-com:transaction-data-1.37">');
+      StrBuild.Append('<urn:merchantID>' + SalesPaymentSetup."Cybersource Merchant ID" + '</urn:merchantID>');
+      StrBuild.Append('<urn:merchantReferenceCode>' + pSalesPayments."Internet Order No." + '</urn:merchantReferenceCode>');
+      StrBuild.Append('<urn:purchaseTotals> <urn:currency>' + pSalesPayments."Currency Code" + '</urn:currency>');
+      StrBuild.Append('<urn:grandTotalAmount>' + FORMAT(pSalesPayments."Refund Amount",0,'<Integer><Decimals,3>') + '</urn:grandTotalAmount> </urn:purchaseTotals>');
+      StrBuild.Append(' <urn:ccCreditService run="true"> <urn:captureRequestID>' + pSalesPayments."Request ID"+ '</urn:captureRequestID> </urn:ccCreditService>');
+      StrBuild.Append(' </urn:requestMessage> </soapenv:Body> </soapenv:Envelope>');
+
+      StrWriter := StrWriter.StreamWriter(WebRequest.GetRequestStream(), Encoding.ASCII);
+      StrWriter.Write(StrBuild.ToString());
+      StrWriter.Close();
+      WebResponse := WebRequest.GetResponse();
+      Stream := WebResponse.GetResponseStream();
+      Reader := Reader.XmlTextReader(Stream);
+      WHILE Reader.Read DO BEGIN
+        IF Reader.IsStartElement THEN BEGIN
+          CASE Reader.Name OF
+            'c:requestToken':
+              pResponseID := Reader.ReadString;
+            'c:reasonCode':
+              pReasonCode := Reader.ReadString;
+          END;
+        END;
+      END;
+      IF pReasonCode <> '100' THEN
+        ERROR('Transaction API Failed');
+      Reader.Close();
+      Stream.Close();
+      CLEAR(StrBuild);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE RefundCapturePayPal@1000000017(pSalesPayments@1000000002 : Record 50008;VAR pResponseID@1000000001 : Text;VAR pReasonCode@1000000000 : Code[20];pManual@1000000003 : Boolean);
+    VAR
+      PaypalAPIContext@1000000009 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.APIContext";
+      OAuth@1000000008 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.OAuthTokenCredential";
+      PaypalCapture@1000000007 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.Capture";
+      PaypalRefund@1000000006 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.Refund";
+      ResponseRefund@1000000005 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.Refund";
+      PaypalAmount@1000000004 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.Amount";
+    BEGIN
+      IF NOT pManual THEN
+        ERROR('Auto. Not Supported');
+      GetPaymentSetup;
+      PaypalAPIContext := PaypalAPIContext.APIContext(GetAccessToken(SalesPaymentSetup."PayPal Client ID",SalesPaymentSetup."PayPal Client Secret"));
+      //DOC OP9031 RK 08/03/17 -
+      PaypalAPIContext.Config := Dict;
+      //DOC OP9031 RK 08/03/17 +
+      PaypalCapture := PaypalCapture.Get(PaypalAPIContext,pSalesPayments."Capture ID");
+      PaypalRefund := PaypalRefund.Refund;
+      PaypalAmount := PaypalAmount.Amount;
+      PaypalAmount.currency := pSalesPayments."Currency Code";
+      PaypalAmount.total := FORMAT(pSalesPayments."Refund Amount",0,'<Integer><Decimals,3>');
+      PaypalRefund.amount := PaypalAmount;
+      ResponseRefund := PaypalCapture.Refund(PaypalAPIContext,PaypalRefund);
+      pResponseID := ResponseRefund.id;
+    END;
+
+    LOCAL PROCEDURE GetAccessToken@1000000013(ClientID@1000000001 : Text;ClientSecret@1000000000 : Text) : Text;
+    VAR
+      OAuth@1000000003 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.OAuthTokenCredential";
+    BEGIN
+      //DOC OP9031 RK 08/03/17 -
+      CLEAR(Arr);
+      CLEAR(Dict);
+      //DOC OP9031 RK 08/03/17 +
+      Arr := Arr.CreateInstance(GETDOTNETTYPE(Type),2);
+      Arr.SetValue(GETDOTNETTYPE(Str),0);
+      Arr.SetValue(GETDOTNETTYPE(Str),1);
+      Type := GETDOTNETTYPE(Dict);
+      Type := Type.MakeGenericType(Arr);
+      Dict := Activator.CreateInstance(Type);
+      IF SalesPaymentSetup."PayPal Mode" = SalesPaymentSetup."PayPal Mode"::Sandbox THEN
+        Dict.Add('mode','sandbox')
+      ELSE
+        Dict.Add('mode','live');
+      Dict.Add('clientId',ClientID);
+      Dict.Add('clientSecret',ClientSecret);
+      Dict.Add('trust level','Full');
+      OAuth := OAuth.OAuthTokenCredential(ClientID,ClientSecret,Dict);
+      EXIT(OAuth.GetAccessToken);
+    END;
+
+    LOCAL PROCEDURE InitializeTransactionLogEntry@1000000004(VAR pDOPaymentTransLogEntry@1000000005 : Record 50018;pDocumentType@1000000000 : ' ,Order,Invoice,Payment,Refund';pDocumentNo@1000000001 : Code[20];pTransactionType@1000000002 : 'Authorization,Void,Capture,Refund';pParentGUID@1000000003 : GUID;pRefDocNo@1000000004 : Code[20];pReasonCode@1000000007 : Code[10]);
+    VAR
+      lNewDOPaymentTransLogEntry@1000000006 : Record 50018;
+    BEGIN
+      WITH lNewDOPaymentTransLogEntry DO BEGIN
+        INIT;
+        "Entry No." := 0;
+        "Document Type" := pDocumentType;
+        "Document No." := pDocumentNo;
+        "Transaction Type" := pTransactionType;
+        "Transaction Result" := "Transaction Result"::Failed;
+        "Transaction Description" := Text002;
+        "NAV Transaction Status" := "NAV Transaction Status"::" ";
+        "Reference GUID" := pParentGUID;
+        "User ID" := USERID;
+        "Transaction Date-Time" := CURRENTDATETIME;
+        "Reference Document No." := pRefDocNo;
+        "Reason Code" := pReasonCode;
+        IF NOT pDOPaymentTransLogEntry.ISEMPTY THEN
+          "Parent Entry No." := pDOPaymentTransLogEntry."Entry No.";
+        INSERT;
+        pDOPaymentTransLogEntry:= lNewDOPaymentTransLogEntry;
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE CreateAndPostJournalLogEntry@1000000000(VAR pRefundDOPaymentTransLogEntry@1000000000 : Record 50018;VAR pJournalDocumentNo@1000000010 : Code[20];pManual@1000000011 : Boolean);
+    VAR
+      lGenJournalLine@1000000003 : Record 81;
+      lPaymentMethod@1000000007 : Record 289;
+      lSalesInvoiceHeader@1000000004 : Record 112;
+      lGenJnlPost@1000000009 : Codeunit 12;
+      lLastDocNo@1000000002 : Code[20];
+      lLastLineNo@1000000001 : Integer;
+      lText000@1000000006 : TextConst 'ENU=Default Batch not found for %1';
+      lText001@1000000005 : TextConst 'ENU=Payment Journal No. %1 Created Successfully.';
+      lPaymentTxt@1000000008 : TextConst 'ENU=%1 Cust. No. %2 Order No. %3';
+    BEGIN
+      WITH pRefundDOPaymentTransLogEntry DO BEGIN
+        IF NOT pManual THEN
+          ERROR('Auto. not yet supported');
+        GetPaymentSetup;
+        lSalesInvoiceHeader.RESET;
+        lSalesInvoiceHeader.SETCURRENTKEY("Order No.");
+        lSalesInvoiceHeader.SETRANGE("Order No.","Document No.");
+        lSalesInvoiceHeader.FINDLAST;
+        lSalesInvoiceHeader.TESTFIELD("Payment Method Code");
+
+        lPaymentMethod.GET(lSalesInvoiceHeader."Payment Method Code");
+        lPaymentMethod.TESTFIELD("Bal. Account No.");
+
+        lGenJournalLine.RESET;
+        lGenJournalLine.SETRANGE("Journal Template Name",SalesPaymentSetup."Payment Journal Template");
+        lGenJournalLine.SETRANGE("Journal Batch Name",SalesPaymentSetup."Payment Journal Batch");
+        lGenJournalLine.DELETEALL;
+
+        lLastLineNo := 0;
+        lLastDocNo := '';
+
+        lGenJournalLine.INIT;
+        lGenJournalLine."Journal Template Name" := SalesPaymentSetup."Payment Journal Template";
+        lGenJournalLine."Journal Batch Name" := SalesPaymentSetup."Payment Journal Batch";
+        lGenJournalLine."Line No." := lLastLineNo + 10000;
+        EVALUATE(lGenJournalLine."Posting Date",FORMAT("Transaction Date-Time"));
+        lGenJournalLine.VALIDATE("Posting Date");
+        CASE "Document Type" OF
+          "Document Type"::Refund  : lGenJournalLine."Document Type" := lGenJournalLine."Document Type"::Refund;
+          "Document Type"::Payment : lGenJournalLine."Document Type" := lGenJournalLine."Document Type"::Payment;
+        END;
+
+        lGenJournalLine."Account Type" := lGenJournalLine."Account Type"::Customer;
+        lGenJournalLine.VALIDATE("Account No.",lSalesInvoiceHeader."Sell-to Customer No.");
+        EVALUATE(lGenJournalLine."Bal. Account Type",FORMAT(lPaymentMethod."Bal. Account Type"));
+        lGenJournalLine.VALIDATE("Bal. Account No.",lPaymentMethod."Bal. Account No.");
+        lGenJournalLine.VALIDATE("Currency Code","Currency Code");
+        lGenJournalLine.Description := STRSUBSTNO(lPaymentTxt,"Document Type",lSalesInvoiceHeader."Sell-to Customer No.","Document No.");
+        lGenJournalLine."Shortcut Dimension 1 Code" := lSalesInvoiceHeader."Shortcut Dimension 1 Code";
+        lGenJournalLine."Shortcut Dimension 2 Code" := lSalesInvoiceHeader."Shortcut Dimension 2 Code";
+        lGenJournalLine."Dimension Set ID" := lSalesInvoiceHeader."Dimension Set ID";
+        lGenJournalLine.VALIDATE(Amount,Amount);
+        lGenJournalLine."Applies-to Ext. Doc. No." := "Document No.";
+        lGenJournalLine."External Document No." := "Reference Document No.";
+        lGenJournalLine."Document No." := GetDocumentNo(lGenJournalLine,lLastDocNo);
+        lGenJournalLine.INSERT;
+        pJournalDocumentNo := lGenJournalLine."Document No.";
+        lLastLineNo += 10000;
+        CLEAR(lGenJnlPost);
+        lGenJnlPost.RUN(lGenJournalLine);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetDocumentNo@1000000005(pGenJournalLine@1000000003 : Record 81;pLasDocNo@1000000002 : Code[20]) : Code[20];
+    VAR
+      lGenJournalBatch@1000000000 : Record 232;
+      lNoSeriesMgt@1000000001 : Codeunit 396;
+      lText000@1000000004 : TextConst 'ENU=No. Series is missing for Template %1 Batch %2';
+    BEGIN
+      lGenJournalBatch.GET(pGenJournalLine."Journal Template Name",pGenJournalLine."Journal Batch Name");
+      IF lGenJournalBatch."No. Series" = '' THEN
+        IF pLasDocNo = '' THEN
+          ERROR(lText000,pGenJournalLine."Journal Template Name",pGenJournalLine."Journal Batch Name");
+
+      CLEAR(lNoSeriesMgt);
+      EXIT(lNoSeriesMgt.GetNextNo(lGenJournalBatch."No. Series",pGenJournalLine."Posting Date",TRUE));
+    END;
+
+    LOCAL PROCEDURE GetPaymentSetup@1000000003();
+    BEGIN
+      IF NOT PaymentSetupRead THEN BEGIN
+        SalesPaymentSetup.GET;
+        PaymentSetupRead := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE ValidateRefund@1000000001(pSalesPayment@1000000000 : Record 50008);
+    BEGIN
+      WITH pSalesPayment DO BEGIN
+        IF ("Refund Amount" > Amount) OR
+           ("Refund Amount" + "Total Refunded Amnt." > Amount)
+        THEN
+          ERROR(Text000,FIELDCAPTION("Refund Amount"),FIELDCAPTION(Amount));
+      END;
+    END;
+
+    [EventSubscriber(Table,50008,OnAfterValidateEvent,"Refund Amount")]
+    PROCEDURE OnAfterValidateEvent_RefundAmount@1000000007(VAR Rec@1000000000 : Record 50008;VAR xRec@1000000001 : Record 50008;CurrFieldNo@1000000002 : Integer);
+    VAR
+      lText0000@1000000003 : TextConst 'ENU=Refund Amount cannot be greater than Paied Amount';
+    BEGIN
+      ValidateRefund(Rec);
+    END;
+
+    PROCEDURE FindPostingNotFinishedEntry@5(DocumentType@1000 : Integer;DocumentNo@1001 : Code[20];VAR DOPaymentTransLogEntry@1002 : Record 50018) : Boolean;
+    BEGIN
+      WITH DOPaymentTransLogEntry DO BEGIN
+        RESET;
+        SETCURRENTKEY("Document Type","Document No.","Transaction Type","Transaction Result","NAV Transaction Status");
+        SETRANGE("Document Type",DocumentType);
+        SETRANGE("Document No.",DocumentNo);
+        SETFILTER("Transaction Type",'%1|%2',"Transaction Type"::Void,"Transaction Type"::Refund);
+        SETRANGE("Transaction Result","Transaction Result"::Success);
+        SETRANGE("NAV Transaction Status","NAV Transaction Status"::"Posting Not Finished");
+        EXIT(FINDFIRST);
+      END;
+    END;
+
+    LOCAL PROCEDURE RefundInternalNotification@1000000010(pSalesPayments@1000000000 : Record 50008);
+    BEGIN
+      EmailItem.Init;
+      EmailItem."Send to" := 'Red.bamba@themodist.com';
+      EmailItem."Send CC" := 'amr.wafa@themodist.com';
+      EmailItem."From Name" := COMPANYNAME;
+      EmailItem.Subject := STRSUBSTNO(Text005,RefundDOPaymentTransLogEntry."Document No.",RefundDOPaymentTransLogEntry."Transaction Result");
+      EmailItem.SetBodyText(STRSUBSTNO(Text004,RefundDOPaymentTransLogEntry."Document No.",
+                                               RefundDOPaymentTransLogEntry.Amount,
+                                               RefundDOPaymentTransLogEntry."Currency Code",
+                                               pSalesPayments."Payment Type",
+                                               RefundDOPaymentTransLogEntry."Transaction Result"));
+      EmailItem.Sent := TRUE;
+      EmailItem.INSERT;
+      EmailItem.Send(TRUE);
+    END;
+
+    LOCAL PROCEDURE RefundCustomerNotification@1000000011(pSalesPayments@1000000000 : Record 50008);
+    VAR
+      lConfirmationID@1000000001 : Text;
+    BEGIN
+      WITH pSalesPayments DO BEGIN
+        CLEAR(BRONTOIntegrationProcessor);
+        lConfirmationID := '';
+        //IF BRONTOIntegrationProcessor.SendRefundMessage("Internet Order No.",'0bd703eb0000000000000000000000158710',"Refund Amount","Currency Code",GetCustomerEmail(pSalesPayments),lConfirmationID) THEN;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetCustomerEmail@1000000014(pSalesPayments@1000000000 : Record 50008) : Text;
+    VAR
+      lCustomer@1000000001 : Record 18;
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE GetSalesSetup@1170000000();
+    BEGIN
+      //DOC TM2022 AW 06/12/2018
+      IF NOT SalesSetupOK THEN BEGIN
+        SalesReceivablesSetup.GET;
+        SalesSetupOK := TRUE;
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE CreateRefundCM@1170000006(pSalesPayments@1170000002 : Record 50008;pAccountNo@1170000000 : Code[20];pReasonCode@1170000001 : Code[20];pRefundAmount@1170000008 : Decimal);
+    VAR
+      lSalesHeader@1170000003 : Record 36;
+      lSalesReturnHeader@1170000005 : Record 36;
+      lSalesReturnLine@1170000006 : Record 37;
+      lSalesInvoiceHeader@1170000004 : Record 112;
+      lSalesPost@1170000007 : Codeunit 80;
+    BEGIN
+      //DOC TM2022 AW 06/12/2018
+      IF lSalesHeader.GET(lSalesHeader."Document Type"::Order,pSalesPayments."Sales Order No.") THEN BEGIN
+        lSalesReturnHeader.INIT;
+        lSalesReturnHeader.TRANSFERFIELDS(lSalesHeader);
+      END ELSE BEGIN
+        lSalesInvoiceHeader.RESET;
+        lSalesInvoiceHeader.SETCURRENTKEY("Order No.");
+        lSalesInvoiceHeader.SETRANGE("Order No.",pSalesPayments."Sales Order No.");
+        IF lSalesInvoiceHeader.FINDFIRST THEN BEGIN
+          lSalesReturnHeader.INIT;
+          lSalesReturnHeader.TRANSFERFIELDS(lSalesInvoiceHeader);
+        END ELSE
+          ERROR(Text007);
+      END;
+
+      lSalesReturnHeader."Document Type" := lSalesReturnHeader."Document Type"::"Return Order";
+      lSalesReturnHeader."No." := '';
+      lSalesReturnHeader."Order Date" := WORKDATE;
+      lSalesReturnHeader."Document Date" := WORKDATE;
+      lSalesReturnHeader."Posting Date" := WORKDATE;
+      lSalesReturnHeader."Reason Code" := pReasonCode;
+      lSalesReturnHeader.Invoice := TRUE;
+      lSalesReturnHeader.Receive := TRUE;
+      lSalesReturnHeader.INSERT(TRUE);
+
+      lSalesReturnLine.INIT;
+      lSalesReturnLine."Document Type" := lSalesReturnHeader."Document Type";
+      lSalesReturnLine."Document No." := lSalesReturnHeader."No.";
+      lSalesReturnLine."Line No." := 10000;
+      lSalesReturnLine.VALIDATE(Type, lSalesReturnLine.Type::"G/L Account");
+      lSalesReturnLine.VALIDATE("No.", pAccountNo);
+      lSalesReturnLine.VALIDATE(Quantity, 1);
+      lSalesReturnLine.VALIDATE("Unit Price", pRefundAmount);
+      lSalesReturnLine.INSERT(TRUE);
+
+      CLEAR(lSalesPost);
+      lSalesPost.RUN(lSalesReturnHeader);
+    END;
+
+    BEGIN
+    {
+      //DOC TM3017.01 ST 07/10/18 - Code added to fix refund issue.
+      //DOC TM3026 ST 08/10/18 - Code added for CheckOut Integration.
+      //DOC TM2022 AW 06/12/2018 - Fix Credit Memo Create & Post with Refunds
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,375 @@
+OBJECT Codeunit 50024 Gate Pass Mgmt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/08/18;
+    Time=11:57:28 AM;
+    Modified=Yes;
+    Version List=TM0001,TM3007;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ToGatePassLine@1000000004 : Record 50031;
+      SalesLineRef@1000000003 : Record 37;
+      TransferLineRef@1000000008 : Record 5741;
+      WarehouseReceiptLineRef@1000000018 : Record 7317;
+      CopytoGatePassDoc@1000000002 : Report 50004;
+      ModistSetup@1000000020 : Record 50000;
+      EmailItem@1000000011 : Record 9500;
+      FileManagement@1000000010 : Codeunit 419;
+      ModistSetupOK@1000000019 : Boolean;
+      SalesDocType@1000000001 : 'Quote,Blanket Order,Order,Invoice,Return Order,Credit Memo,Posted Shipment,Posted Invoice,Posted Return Receipt,Posted Credit Memo,Transfer Order,Posted Transfer Shipment,Posted Transfer Receipt,Whse. Receipt,Posted Whse. Receipt';
+      NextLineNo@1000000000 : Integer;
+      Text000@1000000007 : TextConst 'ENU=There is nothing to release.';
+      Text001@1000000006 : TextConst 'ENU=Please enter a Document No.;ENG=Please enter a Document No.';
+      Text002@1000000005 : TextConst 'ENU=No Lines found';
+      ServerAttachmentFilePathPDF@1000000009 : Text;
+      Text003@1000000012 : TextConst 'ENU=Could not generate commercial invoice, please contact system administrator';
+      ServerAttachmentFilePathXLS@1000000013 : Text;
+      ServerAttachmentFilePathZIP@1000000014 : Text;
+      CommInvoiceTxt@1000000015 : TextConst 'ENU=Commerical Invoice %1-%2';
+      HSCODETxt@1000000016 : TextConst 'ENU=HSCODE %1-%2';
+      GatePassTxt@1000000017 : TextConst 'ENU=Gate Pass No.: %1';
+      C_NoLines@1000100021 : TextConst 'ENU=Order not found.';
+      Currency@1000000021 : Record 4;
+      CurrencyExchangeRate@1000000022 : Record 330;
+      Company@1000000023 : Record 2000000006;
+      CurrencyExchangeRate2@1000000024 : Record 330;
+
+    PROCEDURE SendToGAC@1000000000(VAR pGatePassHeader@1000000000 : Record 50033);
+    BEGIN
+      WITH pGatePassHeader DO BEGIN
+        GetModistSetup;
+        ModistSetup.TESTFIELD("GAC Gate Pass Email");
+        TESTFIELD(Status,Status::Released);
+        SETRECFILTER;
+        ServerAttachmentFilePathPDF := FileManagement.ServerTempFileName('xlsx'); //DOC TM3007 ST 05/07/18
+        REPORT.SAVEASEXCEL(REPORT::"Gate Pass - Commercial Invoice" ,ServerAttachmentFilePathPDF,pGatePassHeader);
+        IF NOT EXISTS(ServerAttachmentFilePathPDF) THEN
+          ERROR(Text003);
+
+        ServerAttachmentFilePathXLS := FileManagement.ServerTempFileName('xlsx');
+        REPORT.SAVEASEXCEL(REPORT::"Gate Pass HSCODE Summary",ServerAttachmentFilePathXLS,pGatePassHeader);
+        IF NOT EXISTS(ServerAttachmentFilePathXLS) THEN
+          ERROR(Text003);
+
+        FILE.RENAME(ServerAttachmentFilePathPDF,FileManagement.GetDirectoryName(ServerAttachmentFilePathPDF) + '\' + STRSUBSTNO(CommInvoiceTxt,"No.","No. of Sent to GAC") + '.xlsx'); //DOC TM3007 ST 05/07/18
+        FILE.RENAME(ServerAttachmentFilePathXLS,FileManagement.GetDirectoryName(ServerAttachmentFilePathXLS) + '\' + STRSUBSTNO(HSCODETxt,"No.","No. of Sent to GAC") + '.xlsx');
+
+        ServerAttachmentFilePathPDF := FileManagement.GetDirectoryName(ServerAttachmentFilePathPDF) + '\' + STRSUBSTNO(CommInvoiceTxt,"No.","No. of Sent to GAC") + '.xlsx'; //DOC TM3007 ST 05/07/18
+        ServerAttachmentFilePathXLS := FileManagement.GetDirectoryName(ServerAttachmentFilePathXLS) + '\' + STRSUBSTNO(HSCODETxt,"No.","No. of Sent to GAC") + '.xlsx';
+
+        ServerAttachmentFilePathZIP := FileManagement.CreateZipArchiveObject;
+        FileManagement.AddFileToZipArchive(ServerAttachmentFilePathPDF,FileManagement.GetFileName(ServerAttachmentFilePathPDF));
+        FileManagement.AddFileToZipArchive(ServerAttachmentFilePathXLS,FileManagement.GetFileName(ServerAttachmentFilePathXLS));
+        FileManagement.CloseZipArchive;
+
+        EmailItem.Init;
+        EmailItem."From Name" := COMPANYNAME;
+        EmailItem.Subject := 'The Modist Gate Pass';
+        EmailItem."Send to" := ModistSetup."GAC Gate Pass Email";
+        EmailItem."Attachment File Path" := ServerAttachmentFilePathZIP;
+        EmailItem."Attachment Name" := 'Gate Pass No. ' + "No." + '-' + FORMAT("No. of Sent to GAC") + '.zip';
+        EmailItem.SetBodyText(STRSUBSTNO(GatePassTxt,"No."));
+        EmailItem.Send(FALSE);
+
+        "Last Sent By" := USERID;
+        "Last Sent Date" := TODAY;
+        "No. of Sent to GAC" += 1;
+        MODIFY;
+      END;
+    END;
+
+    PROCEDURE ReleaseReopenGatePass@1000000001(VAR pGatePassHeader@1000000000 : Record 50033);
+    VAR
+      lGatePassLine@1000000001 : Record 50031;
+    BEGIN
+      WITH pGatePassHeader DO BEGIN
+        CASE Status OF
+          Status::Open:
+            BEGIN
+              IF NOT LinesExist(lGatePassLine) THEN
+                ERROR(Text000);
+              Status := Status::Released;
+            END;
+          Status::Released:
+            BEGIN
+              //TESTFIELD("No. of Printed",0);
+              Status := Status::Open;
+            END;
+        END;
+        MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE CopyGatePassDocAllLines@16(FromDocType@1007 : Option;FromDocNo@1006 : Code[20];ToGatePassHeader@1008 : Record 50033);
+    VAR
+      RRef@1000000000 : RecordRef;
+      PaymentTerms@1009 : Record 3;
+      OldSalesHeader@1024 : Record 36;
+      FromSalesHeader@1023 : Record 36;
+      FromSalesLine@1022 : Record 37;
+      FromSalesShptHeader@1021 : Record 110;
+      FromSalesShptLine@1020 : Record 111;
+      FromSalesInvHeader@1019 : Record 112;
+      FromSalesInvLine@1018 : Record 113;
+      FromReturnRcptHeader@1017 : Record 6660;
+      FromReturnRcptLine@1016 : Record 6661;
+      FromSalesCrMemoHeader@1015 : Record 114;
+      FromSalesCrMemoLine@1014 : Record 115;
+      FromTransferHeader@1000000001 : Record 5740;
+      FromTransferLine@1000000004 : Record 5741;
+      FromTransferShipmentHeader@1000000002 : Record 5744;
+      FromTransferShipmentLine@1000000005 : Record 5745;
+      FromTransferReceiptHeader@1000000003 : Record 5746;
+      FromTransferReceiptLine@1000000006 : Record 5747;
+      FromWarehouseReceiptHeader@1000000007 : Record 7316;
+      FromWarehouseReceiptLine@1000000008 : Record 7317;
+      SalesInvHdrL@1000000009 : Record 112;
+      SalesCrMemoHdrL@1000000011 : Record 114;
+      DocumentNoL@1000000010 : Code[20];
+    BEGIN
+      WITH ToGatePassHeader DO BEGIN
+        TESTFIELD(Status,Status::Open);
+        IF FromDocNo = '' THEN
+          ERROR(Text001);
+        ToGatePassLine.RESET;
+        ToGatePassLine.SETRANGE("Document No.","No.");
+        CASE FromDocType OF
+          SalesDocType::Quote,
+          SalesDocType::"Blanket Order",
+          SalesDocType::Order,
+          SalesDocType::Invoice,
+          SalesDocType::"Return Order",
+          SalesDocType::"Credit Memo":
+      //Doc TM3007 ST 05/07/2018 -
+            BEGIN
+              IF NOT FromSalesHeader.GET(SalesHeaderDocType(FromDocType), FromDocNo) THEN BEGIN
+                CASE TRUE OF
+                  FromDocType = SalesDocType::Order:
+                    BEGIN
+                      SalesInvHdrL.SETCURRENTKEY("No.");
+                      SalesInvHdrL.SETRANGE("Order No.", FromDocNo);
+                      IF SalesInvHdrL.ISEMPTY THEN
+                        ERROR(C_NoLines);
+                      SalesInvHdrL.FINDFIRST;
+                      DocumentNoL := SalesInvHdrL."No.";
+                      FromSalesInvHeader.GET(DocumentNoL);
+                      FromDocType := SalesDocType::"Posted Invoice";
+                    END;
+                  FromDocType = SalesDocType::"Return Order":
+                    BEGIN
+                      SalesCrMemoHdrL.SETCURRENTKEY("No.");
+                      SalesCrMemoHdrL.SETRANGE("Origianl Order No.", FromDocNo);
+                      IF SalesCrMemoHdrL.ISEMPTY THEN
+                        ERROR(C_NoLines);
+                      SalesCrMemoHdrL.FINDFIRST;
+                      DocumentNoL := SalesCrMemoHdrL."No.";
+                      SalesCrMemoHdrL.GET(DocumentNoL);
+                      FromDocType := SalesDocType::"Posted Credit Memo";
+                    END;
+                END;
+              END
+            END;
+      //Doc TM3007 ST 05/07/2018 +
+          SalesDocType::"Posted Shipment":          FromSalesShptHeader.GET(FromDocNo);
+          SalesDocType::"Posted Invoice":           FromSalesInvHeader.GET(FromDocNo);
+          SalesDocType::"Posted Return Receipt":    FromReturnRcptHeader.GET(FromDocNo);
+          SalesDocType::"Posted Credit Memo":       FromSalesCrMemoHeader.GET(FromDocNo);
+          SalesDocType::"Transfer Order":           FromTransferHeader.GET(FromDocNo);
+          SalesDocType::"Posted Transfer Receipt":  FromTransferReceiptHeader.GET(FromDocNo);
+          SalesDocType::"Posted Transfer Shipment": FromTransferShipmentHeader.GET(FromDocNo);
+          SalesDocType::"Whse. Receipt":            FromWarehouseReceiptHeader.GET(FromDocNo);
+        END;
+        ToGatePassLine.LOCKTABLE;
+
+        IF ToGatePassLine.FINDLAST THEN
+          NextLineNo := ToGatePassLine."Line No." + 10000
+        ELSE
+          NextLineNo := 0;
+
+        ToGatePassLine.INIT;
+        ToGatePassLine."Document No." := "No.";
+        CASE FromDocType OF
+          SalesDocType::Quote,
+          SalesDocType::"Blanket Order",
+          SalesDocType::Order,
+          SalesDocType::Invoice,
+          SalesDocType::"Return Order",
+          SalesDocType::"Credit Memo":
+            BEGIN
+              FromSalesLine.RESET;
+              FromSalesLine.SETRANGE("Document Type",FromSalesHeader."Document Type");
+              FromSalesLine.SETRANGE("Document No.",FromSalesHeader."No.");
+              FromSalesLine.SETRANGE(Type,FromSalesLine.Type::Item);
+              RRef.GETTABLE(FromSalesLine);
+            END;
+          SalesDocType::"Posted Shipment":
+            BEGIN
+              FromSalesHeader.TRANSFERFIELDS(FromSalesShptHeader);
+              FromSalesShptLine.RESET;
+              FromSalesShptLine.SETRANGE("Document No.",FromSalesShptHeader."No.");
+              FromSalesShptLine.SETRANGE(Type,FromSalesLine.Type::Item);
+              RRef.GETTABLE(FromSalesShptLine);
+            END;
+          SalesDocType::"Posted Invoice":
+            BEGIN
+              FromSalesHeader.TRANSFERFIELDS(FromSalesInvHeader);
+              FromSalesInvLine.RESET;
+              FromSalesInvLine.SETRANGE("Document No.",FromSalesInvHeader."No.");
+              FromSalesInvLine.SETRANGE(Type, FromSalesInvLine.Type::Item); //Doc TM3007 ST 05/07/2018
+              RRef.GETTABLE(FromSalesInvLine);
+            END;
+          SalesDocType::"Posted Return Receipt":
+            BEGIN
+              FromSalesHeader.TRANSFERFIELDS(FromReturnRcptHeader);
+              FromReturnRcptLine.RESET;
+              FromReturnRcptLine.SETRANGE("Document No.",FromReturnRcptHeader."No.");
+              FromReturnRcptLine.SETRANGE(Type,FromSalesLine.Type::Item);
+              RRef.GETTABLE(FromReturnRcptLine);
+            END;
+          SalesDocType::"Posted Credit Memo":
+            BEGIN
+              FromSalesHeader.TRANSFERFIELDS(FromSalesCrMemoHeader);
+              FromSalesCrMemoLine.RESET;
+              FromSalesCrMemoLine.SETRANGE("Document No.",FromSalesCrMemoHeader."No.");
+              FromSalesCrMemoLine.SETRANGE(Type,FromSalesLine.Type::Item);
+              RRef.GETTABLE(FromSalesCrMemoLine);
+            END;
+          SalesDocType::"Transfer Order":
+            BEGIN
+              FromTransferLine.RESET;
+              FromTransferLine.SETRANGE("Document No.",FromTransferHeader."No.");
+              FromTransferLine.SETRANGE("Derived From Line No.",0);
+              RRef.GETTABLE(FromTransferLine);
+            END;
+          SalesDocType::"Posted Transfer Receipt":
+            BEGIN
+              FromTransferReceiptLine.RESET;
+              FromTransferReceiptLine.SETRANGE("Document No.",FromTransferReceiptHeader."No.");
+              RRef.GETTABLE(FromTransferReceiptLine);
+            END;
+          SalesDocType::"Posted Transfer Shipment":
+            BEGIN
+              FromTransferShipmentLine.RESET;
+              FromTransferShipmentLine.SETRANGE("Document No.",FromTransferShipmentHeader."No.");
+              RRef.GETTABLE(FromTransferShipmentLine);
+            END;
+          SalesDocType::"Whse. Receipt":
+            BEGIN
+              FromWarehouseReceiptLine.RESET;
+              FromWarehouseReceiptLine.SETRANGE("No.",FromWarehouseReceiptHeader."No.");
+              RRef.GETTABLE(FromWarehouseReceiptLine);
+            END;
+        END;
+        CopySalesLinesToGatePassLines(RRef,ToGatePassHeader);
+      END;
+    END;
+
+    LOCAL PROCEDURE SalesHeaderDocType@1(DocType@1001 : Option) : Integer;
+    VAR
+      SalesHeader@1000 : Record 36;
+    BEGIN
+      CASE DocType OF
+        SalesDocType::Quote:
+          EXIT(SalesHeader."Document Type"::Quote);
+        SalesDocType::"Blanket Order":
+          EXIT(SalesHeader."Document Type"::"Blanket Order");
+        SalesDocType::Order:
+          EXIT(SalesHeader."Document Type"::Order);
+        SalesDocType::Invoice:
+          EXIT(SalesHeader."Document Type"::Invoice);
+        SalesDocType::"Return Order":
+          EXIT(SalesHeader."Document Type"::"Return Order");
+        SalesDocType::"Credit Memo":
+          EXIT(SalesHeader."Document Type"::"Credit Memo");
+      END;
+    END;
+
+    PROCEDURE CopySalesLinesToGatePassLines@1000000005(pRRef@1000000000 : RecordRef;pToGatePassHeader@1000000001 : Record 50033);
+    VAR
+      ItemNoFRef@1000000002 : FieldRef;
+      QtyFRef@1000000003 : FieldRef;
+    BEGIN
+      WITH pRRef DO BEGIN
+        IF FINDSET THEN BEGIN
+          REPEAT
+            ItemNoFRef := FIELD(GetItemNoFieldNo(pRRef));
+            QtyFRef := FIELD(GetQtyFieldNo(pRRef));
+            ToGatePassLine.SETRANGE("Item No.",FORMAT(ItemNoFRef.VALUE));
+            IF ToGatePassLine.ISEMPTY THEN BEGIN
+              ToGatePassLine.INIT;
+              ToGatePassLine.VALIDATE("Line No.",NextLineNo);
+              ToGatePassLine.VALIDATE("Item No.",FORMAT(ItemNoFRef.VALUE));
+              EVALUATE(ToGatePassLine.Quantity,FORMAT(QtyFRef.VALUE));
+              ToGatePassLine.VALIDATE(Quantity);
+              ToGatePassLine.INSERT(TRUE);
+              NextLineNo += 10000;
+            END;
+          UNTIL NEXT=0;
+        END ELSE
+          ERROR(Text002);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetItemNoFieldNo@1000000012(pRRef@1000000000 : RecordRef) : Integer;
+    BEGIN
+      CASE pRRef.NUMBER OF
+        DATABASE::"Transfer Line",
+        DATABASE::"Transfer Shipment Line",
+        DATABASE::"Transfer Receipt Line":
+          BEGIN
+            EXIT(TransferLineRef.FIELDNO("Item No."));
+          END;
+        DATABASE::"Warehouse Receipt Line",
+        DATABASE::"Posted Whse. Receipt Line":
+          BEGIN
+            EXIT(WarehouseReceiptLineRef.FIELDNO("Item No."));
+          END;
+        ELSE
+          EXIT(SalesLineRef.FIELDNO("No."));
+      END;
+    END;
+
+    LOCAL PROCEDURE GetQtyFieldNo@1000000004(pRRef@1000000000 : RecordRef) : Decimal;
+    BEGIN
+      CASE pRRef.NUMBER OF
+        DATABASE::"Transfer Line",
+        DATABASE::"Transfer Shipment Line",
+        DATABASE::"Transfer Receipt Line":
+          BEGIN
+            EXIT(TransferLineRef.FIELDNO(Quantity));
+          END;
+        DATABASE::"Warehouse Receipt Line",
+        DATABASE::"Posted Whse. Receipt Line":
+          BEGIN
+            EXIT(WarehouseReceiptLineRef.FIELDNO(Quantity));
+          END;
+        ELSE
+          EXIT(SalesLineRef.FIELDNO(Quantity));
+      END;
+    END;
+
+    LOCAL PROCEDURE GetModistSetup@1000000002();
+    BEGIN
+      IF NOT ModistSetupOK THEN BEGIN
+        ModistSetup.GET;
+        ModistSetupOK := TRUE;
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC TM3007 ST 05/07/18 - Code added to copy posted sales invoice & credit memo based on order no.
+    }
+    END.
+  }
+}
+

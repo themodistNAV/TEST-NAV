@@ -1,0 +1,134 @@
+OBJECT Report 50047 Create SO from SCM & SI
+{
+  OBJECT-PROPERTIES
+  {
+    Date=30/10/18;
+    Time=[ 4:20:23 PM];
+    Modified=Yes;
+    Version List=TM3030;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Create SO from SCM & SI;
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  IF DocumentType IN [DocumentType::"Blanket Order", DocumentType::Order, DocumentType::"Return Order", DocumentType::Quote] THEN
+                    ERROR('you can select only Posted Credit Memo/Invoice to Copy');
+
+                  FileNameG := FileMgtG.UploadFile(C_SelectFile, '*.xls');
+                  IF FileNameG = '' THEN
+                    ERROR('');
+                  SheetNameG := ExcelBufG.SelectSheetsName(FileNameG);
+
+                  ExcelBufG.LOCKTABLE;
+                  ExcelBufG.OpenBook(FileNameG, SheetNameG);
+                  ExcelBufG.ReadSheet;
+                  GetLastRowandColumn;
+
+                  FOR CountG := 2 TO TotalRowsG DO
+                    CreateSalesOrderFromCreditMemo(CountG);
+                END;
+
+    OnPostReport=BEGIN
+                   MESSAGE('Created');
+                 END;
+
+  }
+  DATASET
+  {
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+      { 1170000000;;Container;
+                  ContainerType=ContentArea }
+
+      { 1170000001;1;Field  ;
+                  SourceExpr=DocumentType }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      ExcelBufG@1170000006 : TEMPORARY Record 370;
+      FileMgtG@1170000005 : Codeunit 419;
+      FileNameG@1170000004 : Text;
+      SheetNameG@1170000003 : Text;
+      TotalRowsG@1170000002 : Integer;
+      TotalColumnsG@1170000001 : Integer;
+      CountG@1170000000 : Integer;
+      CheckBlankG@1170000007 : Text;
+      C_SelectFile@1170000008 : TextConst 'ENU=Select the file to import';
+      CheckBlank2G@1170000009 : Text;
+      DocumentType@1170000010 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order';
+      Count2G@1170000011 : Integer;
+
+    PROCEDURE GetLastRowandColumn@1000000000();
+    BEGIN
+      ExcelBufG.SETRANGE(ExcelBufG."Row No.", 1);
+      TotalColumnsG := ExcelBufG.COUNT;
+
+      ExcelBufG.RESET;
+      IF ExcelBufG.FINDLAST THEN
+        TotalRowsG := ExcelBufG."Row No.";
+    END;
+
+    PROCEDURE GetValueAtCell@1000000003(RowNo@1000000000 : Integer;ColNo@1000000001 : Integer) : Text;
+    BEGIN
+      IF ExcelBufG.GET(RowNo, ColNo) THEN
+        EXIT(ExcelBufG."Cell Value as Text");
+    END;
+
+    LOCAL PROCEDURE CreateSalesOrderFromCreditMemo@1000000010(RowNoP@1000000001 : Integer);
+    VAR
+      CopySalesDoc@1170000002 : Report 292;
+      SalesHdrL@1170000000 : Record 36;
+      SalesLineL@1170000001 : Record 37;
+      NewDocType@1170000003 : 'Quote,Blanket Order,Order,Invoice,Return Order,Credit Memo,Posted Shipment,Posted Invoice,Posted Return Receipt,Posted Credit Memo';
+    BEGIN
+      // 232300
+      EVALUATE(CheckBlankG, GetValueAtCell(RowNoP, 1));
+      EVALUATE(CheckBlank2G, GetValueAtCell(RowNoP, 3));
+      Count2G += 1;
+      SalesHdrL.INIT;
+      IF DocumentType = DocumentType::"Credit Memo" THEN
+        SalesHdrL.VALIDATE("Document Type", SalesHdrL."Document Type"::Order)
+      ELSE
+        SalesHdrL.VALIDATE("Document Type", SalesHdrL."Document Type"::"Return Order");
+      SalesHdrL."No." := '';
+      SalesHdrL.INSERT(TRUE);
+      //SalesHdrL.VALIDATE("Sell-to Customer No.", CheckBlankG);
+      //SalesHdrL.MODIFY(TRUE);
+
+      CopySalesDoc.SetSalesHeader(SalesHdrL);
+      IF DocumentType = DocumentType::"Credit Memo" THEN
+        CopySalesDoc.InitializeRequest(NewDocType::"Posted Credit Memo", CheckBlank2G, TRUE, FALSE)
+      ELSE
+        CopySalesDoc.InitializeRequest(NewDocType::"Posted Invoice", CheckBlank2G, TRUE, FALSE);
+      CopySalesDoc.USEREQUESTPAGE(FALSE);
+      CopySalesDoc.RUN;
+      CLEAR(CopySalesDoc);
+
+      SalesLineL.SETRANGE("Document Type", SalesHdrL."Document Type");
+      SalesLineL.SETRANGE("Document No.", SalesHdrL."No.");
+      SalesLineL.SETFILTER("No.", '<>%1', '231027'); // 231027
+      SalesLineL.SETFILTER(Type, '>%1', SalesLineL.Type::" "); // to keep the description line
+      SalesLineL.DELETEALL;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

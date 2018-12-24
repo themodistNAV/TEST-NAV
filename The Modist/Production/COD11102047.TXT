@@ -1,0 +1,186 @@
+OBJECT Codeunit 11102047 OM - Where Used Status
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            Object@1000 : Record 2000000001;
+            Window@1001 : Dialog;
+            NoOfRecords@1002 : Integer;
+            RecordCounter@1003 : Integer;
+            ctCheckingObjects@1004 : TextConst 'DEU=Checking objects...;ENU=Checking objects...;ESP=Checking objects...;FRA=Checking objects...;NLD=Objecten controleren...;DEA=Checking objects...';
+          BEGIN
+            CASE SqlsAnswer OF
+              '0' :
+                BEGIN
+                  CALUpToDate2 := FALSE;
+                  AllObjectsUpToDate2 := FALSE;
+                  AskSqlTriggerInstalled := TRUE;
+                  COMMIT;
+                  EXIT;
+                END;
+
+              '1' :
+                BEGIN
+                  CALUpToDate2 := TRUE;
+                  AllObjectsUpToDate2 := TRUE;
+                  COMMIT;
+                  EXIT;
+                END;
+            END;
+
+            IF GUIALLOWED THEN
+              Window.OPEN(ctCheckingObjects + '\' + '@2@@@@@@@@@@@@@@@@@@@@@@@');
+
+            Object.LOCKTABLE;
+
+            Object.SETFILTER(Type, '<>%1', Object.Type::TableData);
+            Object.SETRANGE("Company Name", '');
+            NoOfRecords := Object.COUNT;
+            IF Object.FINDSET THEN
+              REPEAT
+
+                RecordCounter += 1;
+                IF RecordCounter MOD 100 = 0 THEN
+                  IF GUIALLOWED THEN
+                    Window.UPDATE(2, ROUND(RecordCounter / NoOfRecords * 10000, 1));
+
+                IF StatusOfObject(Object) <> 0 THEN BEGIN
+                  FirstObjectToUpdate := Object;
+                  IF GUIALLOWED THEN
+                    Window.CLOSE;
+                  EXIT;
+                END;
+
+              UNTIL Object.NEXT = 0;
+
+            IF GUIALLOWED THEN
+              Window.CLOSE;
+
+            AllObjectsUpToDate2 := TRUE;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      FirstObjectToUpdate@1000 : Record 2000000001;
+      AllObjectsUpToDate2@1001 : Boolean;
+      AskSqlTriggerInstalled@1002 : Boolean;
+      CALUpToDate2@1003 : Boolean;
+
+    PROCEDURE AllObjectsUpToDate@1() : Boolean;
+    BEGIN
+      EXIT(AllObjectsUpToDate2);
+    END;
+
+    PROCEDURE CALUpToDate@2() : Boolean;
+    BEGIN
+      EXIT(CALUpToDate2);
+    END;
+
+    PROCEDURE StatusOfObject@3(VAR Object@1000 : Record 2000000001) ExitValue : Integer;
+    VAR
+      KnownObjectExportError@1001 : Record 11102073;
+      SourceControl@1002 : Codeunit 11102050;
+    BEGIN
+      ExitValue := StatusOfObject2(Object);
+      IF ExitValue = 1 THEN
+        IF NOT SourceControl.ExportObjectPermission(Object) THEN
+          ExitValue := 0
+        ELSE
+          IF KnownObjectExportError.GET(Object.Type, Object.ID) THEN
+            ExitValue := 0;
+    END;
+
+    LOCAL PROCEDURE StatusOfObject2@4(VAR Object@1000 : Record 2000000001) : Integer;
+    VAR
+      WhereUsedObject@1001 : Record 11102057;
+      SourceControl@1002 : Codeunit 11102050;
+    BEGIN
+      IF SourceControl.ObjectHeaderIsOutdated(Object, FALSE) THEN
+        EXIT(1);
+
+      IF NOT WhereUsedObject.GET(Object.Type, Object.ID) THEN
+        EXIT(2);
+
+      IF WhereUsedObject."C/AL Changed" THEN
+        EXIT(1);
+
+      IF (WhereUsedObject.Status < WhereUsedObject.Status::"Lines Updated") OR
+         (WhereUsedObject."Object Date" <> Object.Date) OR
+         (WhereUsedObject."Object Time" <> Object.Time) OR
+         (WhereUsedObject."Object Modified" <> Object.Modified) OR
+         (WhereUsedObject."Version No." < 701)
+      THEN
+        EXIT(2);
+
+      IF WhereUsedObject.Status < WhereUsedObject.Status::"Used in Updated" THEN
+        EXIT(3);
+    END;
+
+    PROCEDURE GetFirstObjectToUpdate@5(VAR Object@1000 : Record 2000000001);
+    BEGIN
+      Object := FirstObjectToUpdate;
+    END;
+
+    PROCEDURE GetAskSqlTriggerInstalled@6() : Boolean;
+    BEGIN
+      EXIT(AskSqlTriggerInstalled);
+    END;
+
+    PROCEDURE SqlsAnswer@7() : Text;
+    VAR
+      AskSQL@1000 : Record 11102075;
+    BEGIN
+      IF NOT AskSQL.LatestVersionInstalled THEN
+        EXIT('');
+
+      EXIT(AskSQL.GetAnswer(2));
+    END;
+
+    PROCEDURE WhereUsedUpToDate@8();
+    VAR
+      Setup@1000 : Record 11102035;
+      DummyObject@1001 : Record 2000000001;
+      WhereUsedMgt@1002 : Codeunit 11102045;
+      WhereUsedStatus2@1003 : Codeunit 11102047;
+      ctMessageRisk@1004 : TextConst 'DEU=The where used objects are not up to date.\There is a risk that not all references will be updated.;ENU=The where used objects are not up to date.\There is a risk that not all references will be updated.;ESP=The where used objects are not up to date.\There is a risk that not all references will be updated.;FRA=The where used objects are not up to date.\There is a risk that not all references will be updated.;NLD=De waar-gebruikt objecten zijn niet bijgewerkt.\Er bestaan een risico dat niet alle referenties worden bijgewerkt.;DEA=The where used objects are not up to date.\There is a risk that not all references will be updated.';
+      ctUpdateWhereUsedObjects@1005 : TextConst 'DEU=The where used objects are not up to date.\Update now?;ENU=The where used objects are not up to date.\Update now?;ESP=The where used objects are not up to date.\Update now?;FRA=The where used objects are not up to date.\Update now?;NLD=De waar-gebruikt objecten zijn niet bijgewerkt.\Nu bijwerken?;DEA=The where used objects are not up to date.\Update now?';
+    BEGIN
+      Setup.CustomGet;
+      IF Setup."Update Where Used" = Setup."Update Where Used"::Never THEN
+        EXIT;
+
+      IF NOT WhereUsedStatus2.RUN THEN BEGIN
+        MESSAGE(ctMessageRisk);
+        EXIT;
+      END;
+
+      IF WhereUsedStatus2.AllObjectsUpToDate THEN
+        EXIT;
+
+      IF GUIALLOWED THEN
+        IF Setup."Update Where Used" = Setup."Update Where Used"::Confirm THEN
+          IF NOT CONFIRM(ctUpdateWhereUsedObjects, TRUE) THEN BEGIN
+            MESSAGE(ctMessageRisk);
+            EXIT;
+          END;
+
+      WhereUsedMgt.SetAskSqlTriggerInstalled(WhereUsedStatus2.GetAskSqlTriggerInstalled);
+      WhereUsedMgt.SetRunType(3, DummyObject, FALSE);
+
+      IF NOT WhereUsedMgt.RUN THEN
+        MESSAGE(ctMessageRisk);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

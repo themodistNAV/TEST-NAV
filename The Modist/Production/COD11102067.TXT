@@ -1,0 +1,2077 @@
+OBJECT Codeunit 11102067 OM - Repository Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    TableNo=11102086;
+    OnRun=VAR
+            ProjectObject@1000 : Record 11102037;
+            Modification@1001 : Record 11102042;
+            ModificationBufRec@1002 : Record 11102087;
+            Object@1003 : Record 2000000001;
+            ActionMgt@1004 : Codeunit 11102038;
+            Progressbar@1005 : Codeunit 11102044;
+            SourceControl@1006 : Codeunit 11102050;
+            InStr@1007 : InStream;
+            ObjectDateTime@1008 : DateTime;
+            RepositoryDateTime@1009 : DateTime;
+            UpdateAnswer@1010 : Integer;
+          BEGIN
+            Status := Status::"In Progress";
+            MODIFY;
+
+            IF "Action Type" = "Action Type"::"Check-in" THEN
+              IF Object.GET("Object Type", '', "Object No.") THEN BEGIN
+
+                ObjectDateTime := SourceControl.CreateDateTime2(Object.Date, Object.Time);
+                RepositoryDateTime := SourceControl.CreateDateTime2("Object Date", "Object Time");
+
+                IF ObjectDateTime - RepositoryDateTime > 1000 THEN
+                  IF NOT AskUpdateNewerObject(Object, UpdateAnswer, FALSE) THEN BEGIN
+                    IF RepositorySetup."Delete Log when Processed" THEN
+                      DELETE
+                    ELSE BEGIN
+                      Status := Status::Processed;
+                      MODIFY;
+                    END;
+                    EXIT;
+                  END;
+              END;
+
+            CALCFIELDS(BLOB);
+            BLOB.CREATEINSTREAM(InStr);
+            ActionMgt.ImportInstream(InStr, FALSE, Progressbar, 0);
+
+            CASE "Action Type" OF
+              "Action Type"::"Check-in" :
+                BEGIN
+
+                  ModificationBufRec.SETCURRENTKEY("Token No.");
+                  ModificationBufRec.SETRANGE("Token No.", "Entry No.");
+                  IF ModificationBufRec.FINDSET THEN
+                    REPEAT
+                      Modification.TRANSFERFIELDS(ModificationBufRec, FALSE);
+                      CLEAR(Modification."Entry No.");
+                      Modification.INSERT(TRUE);
+                      IF Modification."Assigned to Project No." <> '' THEN
+                        IF NOT ProjectObject.GET(
+                             Modification."Assigned to Project No.",
+                             Modification."Object Type",
+                             Modification."Object No.")
+                        THEN BEGIN
+                          ProjectObject."Project No." := Modification."Assigned to Project No.";
+                          ProjectObject."Object Type" := Modification."Object Type";
+                          ProjectObject."Object No." := Modification."Object No.";
+                          ProjectObject.INSERT;
+                        END;
+                    UNTIL ModificationBufRec.NEXT = 0;
+
+                  ModificationBufRec.DELETEALL;
+
+                END;
+            END;
+
+            IF RepositorySetup."Delete Log when Processed" THEN
+              DELETE
+            ELSE BEGIN
+              Status := Status::Processed;
+              MODIFY;
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      RepositorySetup@1000 : Record 11102085;
+      FileNameToSave@1001 : Text;
+      PathToSave@1002 : Text;
+      LastToken@1003 : Integer;
+      TokensRead@1004 : Boolean;
+
+    PROCEDURE CreateRepository@1();
+    VAR
+      TmpFileRec@1000 : TEMPORARY Record 11102094;
+      oFile@1001 : File;
+      ctErrorLocationInUse@1002 : TextConst 'DEU=This location is already in use.;ENU=This location is already in use.;ESP=This location is already in use.;FRA=This location is already in use.;NLD=Deze locatie is reeds in gebruik.;DEA=This location is already in use.';
+    BEGIN
+      GetAndLockSetup;
+
+      ReadTFS;
+
+      CheckCreateDirectory('');
+      IF RepositorySetup."Archive Objects" THEN
+        CheckCreateDirectory('Archive\Objects\');
+      IF RepositorySetup."Archive Projects" THEN
+        CheckCreateDirectory('Archive\Projects\');
+      IF RepositorySetup."Archive Transports" THEN
+        CheckCreateDirectory('Archive\Transports\');
+      CheckCreateDirectory('Log\');
+      CheckCreateDirectory('Log\0-9999\0-99\');
+      CheckCreateDirectory('Objects\');
+      CheckCreateDirectory('Projects\');
+      CheckCreateDirectory('Transports\');
+      IF RepositorySetup."Repository Type" IN
+           [RepositorySetup."Repository Type"::"File System", RepositorySetup."Repository Type"::"Team Foundation Server"]
+      THEN
+        CheckCreateDirectory('Locks\');
+
+      FillFileRec(TmpFileRec, '');
+      TmpFileRec.SETFILTER(Name, 'TOKEN*');
+      IF TmpFileRec.FINDSET THEN
+        ERROR(ctErrorLocationInUse);
+
+      FileCreate(oFile, '', 'TOKEN-0');
+      FileClose(oFile);
+
+      RepositorySetup."Last Read Token No." := 0;
+      RepositorySetup.MODIFY;
+
+      WriteTFS;
+    END;
+
+    PROCEDURE TestConnection@2(VAR LastTokenNo@1000 : Integer;WithError@1001 : Boolean) : Boolean;
+    VAR
+      RepositoryFS@1002 : Codeunit 11102069;
+      RepositoryVSS@1003 : Codeunit 11102070;
+      RepositoryTFS@1004 : Codeunit 11102071;
+      RepositorySVN@1005 : Codeunit 11102072;
+    BEGIN
+      RepositorySetup.GET;
+
+      CASE RepositorySetup."Repository Type" OF
+
+        RepositorySetup."Repository Type"::"File System" :
+          BEGIN
+            IF WithError THEN
+              RepositoryFS.RUN
+            ELSE
+              IF RepositoryFS.RUN THEN
+                ;
+            LastTokenNo := RepositoryFS.GetLastTokenNo;
+            EXIT(TRUE);
+          END;
+
+        RepositorySetup."Repository Type"::"Visual SourceSafe" :
+          BEGIN
+            IF WithError THEN
+              RepositoryVSS.RUN
+            ELSE
+              IF RepositoryVSS.RUN THEN
+                ;
+            LastTokenNo := RepositoryVSS.GetLastTokenNo;
+            EXIT(TRUE);
+          END;
+
+        RepositorySetup."Repository Type"::"Team Foundation Server" :
+          BEGIN
+            IF WithError THEN
+              RepositoryTFS.RUN
+            ELSE
+              IF RepositoryTFS.RUN THEN
+                ;
+            LastTokenNo := RepositoryTFS.GetLastTokenNo;
+            EXIT(TRUE);
+          END;
+
+        RepositorySetup."Repository Type"::SubVersion :
+          BEGIN
+            IF WithError THEN
+              RepositorySVN.RUN
+            ELSE
+              IF RepositorySVN.RUN THEN
+                ;
+            LastTokenNo := RepositorySVN.GetLastTokenNo;
+            EXIT(TRUE);
+          END;
+
+      END;
+    END;
+
+    PROCEDURE Connect@3();
+    VAR
+      TmpFileRec@1000 : TEMPORARY Record 11102094;
+      ctCannotGetToken@1001 : TextConst 'DEU=The repository token cannot be found.\Please connect to the repository.;ENU=The repository token cannot be found.\Please connect to the repository.;ESP=The repository token cannot be found.\Please connect to the repository.;FRA=The repository token cannot be found.\Please connect to the repository.;NLD=Het repository token kan niet worden gevonden.\Maak aub connectie met de repository.;DEA=The repository token cannot be found.\Please connect to the repository.';
+    BEGIN
+      GetAndLockSetup;
+
+      FillFileRec(TmpFileRec, '');
+      TmpFileRec.SETFILTER(Name, 'TOKEN*');
+      IF NOT TmpFileRec.FINDFIRST THEN
+        ERROR(ctCannotGetToken);
+
+      EVALUATE(RepositorySetup."Last Read Token No.", COPYSTR(TmpFileRec.Name, 7));
+      RepositorySetup.MODIFY;
+    END;
+
+    PROCEDURE Synchronize@4(WithCommits@1000 : Boolean;AutoSync@1001 : Boolean);
+    VAR
+      RepositoryLog@1002 : Record 11102086;
+      RepositoryLog2@1003 : Record 11102086;
+      TmpFileRec@1004 : TEMPORARY Record 11102094;
+      ActionMgt@1005 : Codeunit 11102038;
+      Progressbar@1006 : Codeunit 11102044;
+      Progressbar2@1007 : Codeunit 11102044;
+      RepositoryMgt@1008 : Codeunit 11102067;
+      RepositoryTracer@1009 : Codeunit 11102068;
+      oFile@1010 : File;
+      InStr@1011 : InStream;
+      BusyTokenName@1012 : Text;
+      FabTokenName@1013 : Text;
+      TokenPath2@1014 : Text;
+      GlobalTokenNo@1015 : Integer;
+      i@1016 : Integer;
+      LocalTokenNo@1017 : Integer;
+      BusyTokenDestroyed@1018 : Boolean;
+      CompleteLogRead@1019 : Boolean;
+      ctAnErrorOccured@1020 : TextConst 'DEU=An error occured while synchronizing the repository.\Please resolve the issue manual and restart the synchronisation.;ENU=An error occured while synchronizing the repository.\Please resolve the issue manual and restart the synchronisation.;ESP=An error occured while synchronizing the repository.\Please resolve the issue manual and restart the synchronisation.;FRA=An error occured while synchronizing the repository.\Please resolve the issue manual and restart the synchronisation.;NLD=Er heeft een fout plaatsgevonden onder het synchroniseren van de repository.\Los dit probleem handmatig op en herstart de synchronisatie.;DEA=An error occured while synchronizing the repository.\Please resolve the issue manual and restart the synchronisation.';
+      ctCannotGetToken@1021 : TextConst 'DEU=The repository token cannot be found.\Please connect to the repository.;ENU=The repository token cannot be found.\Please connect to the repository.;ESP=The repository token cannot be found.\Please connect to the repository.;FRA=The repository token cannot be found.\Please connect to the repository.;NLD=Het repository token kan niet worden gevonden.\Maak aub connectie met de repository.;DEA=The repository token cannot be found.\Please connect to the repository.';
+      ctLastLogEntry@1022 : TextConst 'DEU=The log is further then the last read token.\Please delete the log.;ENU=The log is further then the last read token.\Please delete the log.;ESP=The log is further then the last read token.\Please delete the log.;FRA=The log is further then the last read token.\Please delete the log.;NLD=De log tabel is verder dan het laatst gelezen token.\Verwijder de log.;DEA=The log is further then the last read token.\Please delete the log.';
+      ctLastReadTokenHigher@1023 : TextConst 'DEU=The last read token no. is higher then the global token no..\Please synchronize all data and reconnect to the repository.;ENU=The last read token no. is higher then the global token no..\Please synchronize all data and reconnect to the repository.;ESP=The last read token no. is higher then the global token no..\Please synchronize all data and reconnect to the repository.;FRA=The last read token no. is higher then the global token no..\Please synchronize all data and reconnect to the repository.;NLD=Het laatst gelezen token heeft een hoger nummer dan het token in de repository.\Synchoniseer alle data en reconnect met de repository.;DEA=The last read token no. is higher then the global token no..\Please synchronize all data and reconnect to the repository.';
+      ctSynchronizingRepository@1024 : TextConst 'DEU=Synchronizing Repository...;ENU=Synchronizing Repository...;ESP=Synchronizing Repository...;FRA=Synchronizing Repository...;NLD=Repository synchroniseren...;DEA=Synchronizing Repository...';
+      ctTwoTokens@1025 : TextConst 'DEU=The repository has multiple tokens.\Please resolve this manually.;ENU=The repository has multiple tokens.\Please resolve this manually.;ESP=The repository has multiple tokens.\Please resolve this manually.;FRA=The repository has multiple tokens.\Please resolve this manually.;NLD=Er zijn meerdere repository tokens.\Los dit aub handmatig op.;DEA=The repository has multiple tokens.\Please resolve this manually.';
+    BEGIN
+      RepositoryTracer.SetErrorOccured(FALSE);
+
+      GetAndLockSetup;
+      IF NOT RepositorySetup."Use Repository" THEN
+        EXIT;
+
+      IF NOT RepositorySetup."Synchronize Databases" THEN BEGIN
+        IF WithCommits AND NOT AutoSync THEN
+          RepositorySetup.TESTFIELD("Synchronize Databases", TRUE);
+        EXIT;
+      END;
+
+      LocalTokenNo := RepositorySetup."Last Read Token No.";
+      LastToken := LocalTokenNo;
+
+      WHILE NOT CompleteLogRead DO BEGIN
+
+        RepositoryLog.SETFILTER(Status, '%1|%2', RepositoryLog.Status::New, RepositoryLog.Status::Error);
+        IF NOT RepositoryLog.ISEMPTY THEN BEGIN
+
+          RepositoryLog.SETRANGE(Status, RepositoryLog.Status::New);
+          RepositoryLog.FINDLAST;
+          IF RepositoryLog."Entry No." > RepositorySetup."Last Read Token No." THEN BEGIN
+            RepositoryTracer.SetErrorOccured(TRUE);
+            RepositoryTracer.StopTracing;
+            ERROR(ctLastLogEntry);
+          END;
+
+          RepositoryLog.SETFILTER(Status, '%1|%2', RepositoryLog.Status::New, RepositoryLog.Status::Error);
+          RepositoryLog.FINDSET;
+
+          IF NOT Progressbar.IsOpen THEN
+            Progressbar.Open(ctSynchronizingRepository, 0);
+
+          Progressbar.BarSize := Progressbar.GetBarSize + RepositoryLog.COUNT;
+
+          CompleteLogRead := FALSE;
+          REPEAT
+
+            Progressbar.AddToBar(1);
+
+            RepositoryLog2 := RepositoryLog;
+
+            IF WithCommits THEN
+              COMMIT;
+
+            IF AutoSync THEN BEGIN
+              IF NOT RepositoryMgt.RUN(RepositoryLog2) THEN BEGIN
+                RepositoryTracer.SetErrorOccured(TRUE);
+                RepositoryTracer.StopTracing;
+                RepositoryLog2 := RepositoryLog;
+                RepositoryLog2.Status := RepositoryLog2.Status::Error;
+                RepositoryLog2.MODIFY;
+                COMMIT;
+                MESSAGE(ctAnErrorOccured);
+                RepositoryMgt.RUN(RepositoryLog2);
+                ERROR('');
+              END;
+            END ELSE
+              RepositoryMgt.RUN(RepositoryLog2);
+
+            IF WithCommits THEN BEGIN
+              COMMIT;
+              GetAndLockSetup;
+            END;
+
+          UNTIL RepositoryLog.NEXT = 0;
+
+        END;
+
+        IF RepositorySetup."Repository Type" = RepositorySetup."Repository Type"::"Team Foundation Server" THEN
+          ReadTFS;
+
+        FillFileRec(TmpFileRec, '');
+        TmpFileRec.SETFILTER(Name, 'TOKEN*');
+        IF NOT TmpFileRec.FINDFIRST THEN
+          ERROR(ctCannotGetToken);
+        IF TmpFileRec.COUNT > 1 THEN
+          ERROR(ctTwoTokens);
+
+        EVALUATE(GlobalTokenNo, COPYSTR(TmpFileRec.Name, 7));
+
+        CompleteLogRead := GlobalTokenNo <= LocalTokenNo;
+
+        IF LocalTokenNo > GlobalTokenNo THEN
+          ERROR(ctLastReadTokenHigher);
+
+        IF GlobalTokenNo > LocalTokenNo THEN BEGIN
+
+          ReadTFS;
+
+          IF NOT Progressbar.IsOpen THEN
+            Progressbar.Open(ctSynchronizingRepository, 0);
+          Progressbar.BarSize := Progressbar.GetBarSize + GlobalTokenNo - LocalTokenNo;
+
+          FOR i := LocalTokenNo + 1 TO GlobalTokenNo DO BEGIN
+
+            Progressbar.AddToBar(1);
+
+            BusyTokenDestroyed := FALSE;
+            TokenPath2 := TokenPath(i);
+
+            BusyTokenName := FORMAT(i) + '.bus';
+            FabTokenName := FORMAT(i) + '.fab';
+
+            IF FileExists(TokenPath2, BusyTokenName) THEN BEGIN
+              SLEEP(ROUND(RepositorySetup."Token Duration" * 1000, 1));
+              IF FileExists(TokenPath2, BusyTokenName) THEN BEGIN
+                FileErase(TokenPath2, BusyTokenName);
+                BusyTokenDestroyed := TRUE;
+              END;
+            END;
+
+            RepositorySetup."Last Read Token No." := i;
+            RepositorySetup.MODIFY;
+
+            IF NOT FileExists(TokenPath2, FabTokenName) AND NOT BusyTokenDestroyed AND (i = GlobalTokenNo) THEN BEGIN
+              SLEEP(ROUND(RepositorySetup."Token Duration" * 1000, 1));
+              IF FileExists(TokenPath2, BusyTokenName) THEN BEGIN
+                FileErase(TokenPath2, BusyTokenName);
+                BusyTokenDestroyed := TRUE;
+              END;
+            END;
+
+            IF FileExists(TokenPath2, FabTokenName) AND NOT BusyTokenDestroyed THEN BEGIN
+
+              FileOpen(oFile, TokenPath2, FabTokenName);
+              oFile.CREATEINSTREAM(InStr);
+              ActionMgt.ImportInstream(InStr, FALSE, Progressbar2, 0);
+              FileClose(oFile);
+
+              IF WithCommits THEN BEGIN
+                COMMIT;
+                GetAndLockSetup;
+              END;
+
+              TokensRead := TRUE;
+
+            END;
+
+            LocalTokenNo := i;
+          END;
+
+        END;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE GetTokenNo@5() NewTokenNo : Integer;
+    VAR
+      TmpFileRec@1000 : TEMPORARY Record 11102094;
+      oFile@1001 : File;
+      LockedBy@1002 : Text[1024];
+      ctRepositoryIsLocked@1003 : TextConst 'DEU=Repository is locked by %1.;ENU=Repository is locked by %1.;ESP=Repository is locked by %1.;FRA=Repository is locked by %1.;NLD=Repository is vergrendeld door %1.;DEA=Repository is locked by %1.';
+    BEGIN
+      GetAndLockSetup;
+      IF NOT RepositorySetup."Use Repository" THEN
+        EXIT;
+
+      Synchronize(FALSE, FALSE);
+
+      FillFileRec(TmpFileRec, '');
+      TmpFileRec.SETFILTER(Name, 'LOCKED');
+      IF TmpFileRec.FINDFIRST THEN BEGIN
+        FileOpen(oFile, TmpFileRec.Path, TmpFileRec.Name);
+        oFile.READ(LockedBy);
+        FileClose(oFile);
+        ERROR(ctRepositoryIsLocked, LockedBy);
+      END;
+      TmpFileRec.SETFILTER(Name, 'TOKEN*');
+      TmpFileRec.FINDFIRST;
+
+      EVALUATE(LastToken, COPYSTR(TmpFileRec.Name, 7));
+      NewTokenNo := LastToken + 1;
+
+      FileRename('', TmpFileRec.Name, '', 'TOKEN-' + FORMAT(NewTokenNo));
+
+      CheckCreateDirectory(TokenPath(NewTokenNo));
+
+      FileCreate(oFile, TokenPath(NewTokenNo), FORMAT(NewTokenNo) + '.bus');
+      FileClose(oFile);
+
+      EXIT(NewTokenNo);
+    END;
+
+    LOCAL PROCEDURE ExportRepository@6(VAR RepositoryLog@1000 : Record 11102086) : Boolean;
+    VAR
+      TmpAction@1001 : TEMPORARY Record 11102048;
+      TmpActionField@1002 : TEMPORARY Record 11102049;
+      ActionMgt@1003 : Codeunit 11102038;
+      Progressbar@1004 : Codeunit 11102044;
+      oFile@1005 : File;
+      OutStr@1006 : OutStream;
+      BusyTokenName@1007 : Text;
+      FabTokenName@1008 : Text;
+      TokenPath2@1009 : Text;
+      ctTokenDeletedByOther@1010 : TextConst 'DEU=The token is deleted by another database.\Extend the token duration in the repository setup.;ENU=The token is deleted by another database.\Extend the token duration in the repository setup.;ESP=The token is deleted by another database.\Extend the token duration in the repository setup.;FRA=The token is deleted by another database.\Extend the token duration in the repository setup.;NLD=Het token is verwijderd door een andere database.\Verleng de tokenduur in de repository instellingen.;DEA=The token is deleted by another database.\Extend the token duration in the repository setup.';
+    BEGIN
+      WITH RepositoryLog DO BEGIN
+        TmpAction."Action Type" := TmpAction."Action Type"::"Transfer Data";
+        TmpAction."Object No." := DATABASE::"OM - Repository Log";
+        TmpAction."Object Name" := TABLENAME;
+        TmpAction.Evaluate1FieldFilter(FIELDNO("Entry No."), FORMAT("Entry No."));
+        TmpAction.INSERT;
+
+        TokenPath2 := TokenPath("Entry No.");
+        BusyTokenName := FORMAT("Entry No.") + '.bus';
+        FabTokenName := FORMAT("Entry No.") + '.fab';
+
+        FileCreate(oFile, TokenPath2, FabTokenName);
+        oFile.CREATEOUTSTREAM(OutStr);
+        ActionMgt.FillExportOutStream(TmpAction, TmpActionField, OutStr, Progressbar);
+        FileClose(oFile);
+
+        IF NOT FileExists(TokenPath2, BusyTokenName) THEN BEGIN
+          MESSAGE(ctTokenDeletedByOther);
+          Synchronize(FALSE, FALSE);
+          EXIT(FALSE);
+        END;
+
+        FileErase(TokenPath2, FORMAT("Entry No.") + '.bus');
+
+        RepositorySetup."Last Read Token No." := "Entry No.";
+        RepositorySetup.MODIFY;
+
+        IF RepositorySetup."Delete Log when Processed" THEN
+          DELETE
+        ELSE BEGIN
+          Status := Status::Processed;
+          MODIFY;
+        END;
+
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE TokenPath@7(TokenNo@1000 : Integer) ExitVale : Text;
+    VAR
+      C@1001 : Integer;
+      M@1002 : Integer;
+    BEGIN
+      ExitVale := 'Log\';
+
+      M := ROUND(TokenNo, 10000, '<');
+      C := ROUND(TokenNo, 100, '<');
+
+      ExitVale += FORMAT(M) + '-' + FORMAT(M + 9999) + '\';
+      ExitVale += FORMAT(C) + '-' + FORMAT(C + 99) + '\';
+    END;
+
+    LOCAL PROCEDURE GetAndLockSetup@8();
+    BEGIN
+      RepositorySetup.LOCKTABLE;
+      IF RepositorySetup.GET THEN
+        ;
+    END;
+
+    PROCEDURE CheckOutObject@9(VAR ObjectLock@1000 : Record 11102054);
+    VAR
+      TmpAction@1001 : TEMPORARY Record 11102048;
+      TmpActionField@1002 : TEMPORARY Record 11102049;
+      RepositoryLog@1003 : Record 11102086;
+      TmpFileRec@1004 : TEMPORARY Record 11102094;
+      Object@1005 : Record 2000000001;
+      Mgt@1006 : Codeunit 11102035;
+      ActionMgt@1007 : Codeunit 11102038;
+      Progressbar@1008 : Codeunit 11102044;
+      OutStr@1009 : OutStream;
+      FileName@1010 : Text;
+      Path@1011 : Text;
+      DeleteAnswer@1012 : Integer;
+      LastReadTokenNo@1013 : Integer;
+      TokenNo@1014 : Integer;
+      UpdateAnswer@1015 : Integer;
+      ctAnotherUser@1016 : TextConst
+        'DEU=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2',
+        'ENU=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2',
+        'ESP=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2',
+        'FRA=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2',
+        'NLD=Een andere gebruiker heeft het record van deze %1 in een andere database gewijzigd.\\Synchroniseer de repository en voer uw wijzigingen opnieuw in.\\Velden en waarden:\\%2',
+        'DEA=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2';
+    BEGIN
+      GetAndLockSetup;
+      IF NOT RepositorySetup."Use Repository" THEN
+        EXIT;
+
+      LastReadTokenNo := RepositorySetup."Last Read Token No.";
+
+      Synchronize(FALSE, FALSE);
+
+      Object.GET(ObjectLock."Object Type", '', ObjectLock."Object No.");
+
+      Path := ObjectPath(Object);
+      FileName := ObjectFileName(Object);
+      IF FileExists(Path, FileName) THEN BEGIN
+        IF (RepositorySetup."Export Object Format" <> RepositorySetup."Export Object Format"::TXT) AND
+           RepositorySetup."Synchronize Databases"
+        THEN
+          ReadObject(Object, Path, FileName, UpdateAnswer, DeleteAnswer, FALSE);
+      END ELSE
+        WriteObject(Object, Path, FileName);
+      FileLock(Path, FileName);
+
+      IF RepositorySetup."Synchronize Databases" THEN BEGIN
+        TokenNo := GetTokenNo;
+        ObjectLock."Token No." := TokenNo;
+        ObjectLock.MODIFY;
+
+        IF TokensRead THEN BEGIN
+          RepositoryLog.SETCURRENTKEY("Object Type", "Object No.");
+          RepositoryLog.SETRANGE("Object Type", ObjectLock."Object Type");
+          RepositoryLog.SETRANGE("Object No.", ObjectLock."Object No.");
+          RepositoryLog.SETFILTER("Entry No.", '>%1', LastReadTokenNo);
+          IF NOT RepositoryLog.ISEMPTY THEN BEGIN
+            ObjectLock.SETRECFILTER;
+            ERROR(ctAnotherUser, ObjectLock.TABLECAPTION, ObjectLock.GETFILTERS);
+          END;
+        END;
+
+        RepositoryLog."Entry No." := TokenNo;
+        RepositoryLog."User Id" := Mgt.ShortUserId;
+        RepositoryLog."Log Date" := TODAY;
+        RepositoryLog."Log Time" := TIME;
+        RepositoryLog."Action Type" := RepositoryLog."Action Type"::"Check-out";
+        RepositoryLog."Object Type" := Object.Type;
+        RepositoryLog."Object No." := Object.ID;
+        RepositoryLog."Object Date" := Object.Date;
+        RepositoryLog."Object Time" := Object.Time;
+
+        RepositoryLog.BLOB.CREATEOUTSTREAM(OutStr);
+
+        TmpAction.Type := TmpAction.Type::"Temporary";
+
+        TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+        TmpAction.VALIDATE("Object No.", DATABASE::"OM - Object Lock");
+        TmpAction.Evaluate2FieldsFilter(
+          ObjectLock.FIELDNO("Object Type"), FORMAT(ObjectLock."Object Type"),
+          ObjectLock.FIELDNO("Object No."), FORMAT(ObjectLock."Object No."));
+        TmpAction.INSERT;
+
+        ActionMgt.FillExportOutStream(TmpAction, TmpActionField, OutStr, Progressbar);
+
+        IF NOT RepositoryLog.INSERT THEN
+          RepositoryLog.MODIFY;
+
+        ExportRepository(RepositoryLog);
+
+      END;
+
+      IF RepositorySetup."Archive Objects" THEN BEGIN
+        FillFileRec(TmpFileRec, ObjectArchivePath(Object));
+        TmpFileRec.SETRANGE("Is a File", TRUE);
+        IF TmpFileRec.ISEMPTY THEN
+          WriteObject(Object, ObjectArchivePath(Object), ObjectArchiveFileName(Object));
+      END;
+    END;
+
+    PROCEDURE CheckInObject@10(VAR ObjectLock@1000 : Record 11102054);
+    VAR
+      Modification@1001 : Record 11102042;
+      TmpAction@1002 : TEMPORARY Record 11102048;
+      TmpActionField@1003 : TEMPORARY Record 11102049;
+      RepositoryLog@1004 : Record 11102086;
+      ModificationBufRec@1005 : Record 11102087;
+      Object@1006 : Record 2000000001;
+      Mgt@1007 : Codeunit 11102035;
+      ActionMgt@1008 : Codeunit 11102038;
+      Progressbar@1009 : Codeunit 11102044;
+      OutStr@1010 : OutStream;
+      LastReadTokenNo@1011 : Integer;
+      TokenNo@1012 : Integer;
+      ctAnotherUser@1013 : TextConst
+        'DEU=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2',
+        'ENU=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2',
+        'ESP=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2',
+        'FRA=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2',
+        'NLD=Een andere gebruiker heeft het record van deze %1 in een andere database gewijzigd.\\Synchroniseer de repository en voer uw wijzigingen opnieuw in.\\Velden en waarden:\\%2',
+        'DEA=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2';
+      ctPendingModifications@1014 : TextConst 'DEU=Not all modifications have been assigned to a project.\Please assign them first.;ENU=Not all modifications have been assigned to a project.\Please assign them first.;ESP=Not all modifications have been assigned to a project.\Please assign them first.;FRA=Not all modifications have been assigned to a project.\Please assign them first.;NLD=Niet alle wijzigingen zijn aan een project toegewezen.\Wijs deze eerst toe.;DEA=Not all modifications have been assigned to a project.\Please assign them first.';
+    BEGIN
+      GetAndLockSetup;
+      IF NOT RepositorySetup."Use Repository" THEN
+        EXIT;
+
+      ReadTFS;
+
+      LastReadTokenNo := RepositorySetup."Last Read Token No.";
+
+      Object.Type := ObjectLock."Object Type";
+      Object.ID := ObjectLock."Object No.";
+      IF Object.FIND('=') THEN
+        ;
+
+      ErrorIfLockedByOther(ObjectPath(Object), ObjectFileName(Object));
+
+      IF RepositorySetup."Synchronize Databases" THEN BEGIN
+
+        TokenNo := GetTokenNo;
+
+        IF TokensRead THEN BEGIN
+          RepositoryLog.SETCURRENTKEY("Object Type", "Object No.");
+          RepositoryLog.SETRANGE("Object Type", ObjectLock."Object Type");
+          RepositoryLog.SETRANGE("Object No.", ObjectLock."Object No.");
+          RepositoryLog.SETFILTER("Entry No.", '>%1', LastReadTokenNo);
+          IF NOT RepositoryLog.ISEMPTY THEN BEGIN
+            ObjectLock.SETRECFILTER;
+            ERROR(ctAnotherUser, ObjectLock.TABLECAPTION, ObjectLock.GETFILTERS);
+          END;
+        END;
+
+        IF ObjectLock."Token No." <> 0 THEN BEGIN
+          ModificationBufRec.DELETEALL;
+          Modification.SETCURRENTKEY("Token No.");
+          Modification.SETRANGE("Token No.", ObjectLock."Token No.");
+          IF Modification.FINDSET THEN
+            REPEAT
+              IF RepositorySetup."Assign Mods. before Check-in" THEN
+                IF Modification.Status = Modification.Status::Inserted THEN
+                  ERROR(ctPendingModifications);
+              ModificationBufRec.TRANSFERFIELDS(Modification);
+              ModificationBufRec."Token No." := TokenNo;
+              ModificationBufRec.INSERT;
+            UNTIL Modification.NEXT = 0;
+        END;
+
+        RepositoryLog."Entry No." := TokenNo;
+        RepositoryLog."User Id" := Mgt.ShortUserId;
+        RepositoryLog."Log Date" := TODAY;
+        RepositoryLog."Log Time" := TIME;
+        RepositoryLog."Action Type" := RepositoryLog."Action Type"::"Check-in";
+        RepositoryLog."Object Type" := Object.Type;
+        RepositoryLog."Object No." := Object.ID;
+        RepositoryLog."Object Date" := Object.Date;
+        RepositoryLog."Object Time" := Object.Time;
+
+        RepositoryLog.BLOB.CREATEOUTSTREAM(OutStr);
+
+        TmpAction.Type := TmpAction.Type::"Temporary";
+
+        TmpAction."Line No." += 10000;
+        TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Delete Data");
+        TmpAction.VALIDATE("Object No.", DATABASE::"OM - Object Lock");
+        TmpAction.Evaluate2FieldsFilter(
+          ObjectLock.FIELDNO("Object Type"), FORMAT(ObjectLock."Object Type"),
+          ObjectLock.FIELDNO("Object No."), FORMAT(ObjectLock."Object No."));
+        TmpAction.INSERT;
+
+        TmpAction."Line No." += 10000;
+
+        IF Object.GET(ObjectLock."Object Type", '', ObjectLock."Object No.") THEN
+          TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data")
+        ELSE
+          TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Delete Data");
+
+        TmpAction.VALIDATE("Object No.", DATABASE::Object);
+        TmpAction.Evaluate2FieldsFilter(
+          Object.FIELDNO(Type), FORMAT(ObjectLock."Object Type"),
+          Object.FIELDNO(ID), FORMAT(ObjectLock."Object No."));
+        TmpAction.INSERT;
+
+        IF ObjectLock."Token No." <> 0 THEN BEGIN
+          TmpAction."Line No." += 10000;
+          TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+          TmpAction.VALIDATE("Object No.", DATABASE::"OM - Modification Buffer");
+          TmpAction.Evaluate1FieldFilter(ModificationBufRec.FIELDNO("Token No."), FORMAT(TokenNo));
+          TmpAction.INSERT;
+        END;
+
+        ActionMgt.FillExportOutStream(TmpAction, TmpActionField, OutStr, Progressbar);
+
+        IF NOT RepositoryLog.INSERT THEN
+          RepositoryLog.MODIFY;
+
+        ModificationBufRec.SETCURRENTKEY("Token No.");
+        ModificationBufRec.SETRANGE("Token No.", ObjectLock."Token No.");
+        ModificationBufRec.DELETEALL;
+
+      END;
+
+      WriteObject(Object, ObjectPath(Object), ObjectFileName(Object));
+      FileUnlock(ObjectPath(Object), ObjectFileName(Object));
+
+      IF RepositorySetup."Archive Objects" THEN
+        WriteObject(Object, ObjectArchivePath(Object), ObjectArchiveFileName(Object));
+
+      IF RepositorySetup."Synchronize Databases" THEN
+        ExportRepository(RepositoryLog);
+    END;
+
+    PROCEDURE ExportObjects2@11(VAR Object@1000 : Record 2000000001);
+    VAR
+      Progressbar@1001 : Codeunit 11102044;
+      ctExportObjects@1002 : TextConst 'DEU=Export objects...;ENU=Export objects...;ESP=Export objects...;FRA=Export objects...;NLD=Objecten exporteren...;DEA=Export objects...';
+    BEGIN
+      GetAndLockSetup;
+
+      Object.FILTERGROUP(2);
+      Object.SETFILTER(Type, '>%1', Object.Type::TableData);
+
+      WHILE Object.FINDFIRST DO BEGIN
+        CheckCreateDirectory('Objects\' + FORMAT(Object.Type) + '\');
+        Object.SETFILTER(Type, '>%1', Object.Type);
+      END;
+
+      Object.SETFILTER(Type, '>%1', Object.Type::TableData);
+      Object.FILTERGROUP(0);
+
+      Progressbar.Open(ctExportObjects, 1);
+      Progressbar.BarSize := Object.COUNT;
+      IF Object.FINDSET THEN
+        REPEAT
+
+          Progressbar.AddToBar(1);
+          Progressbar.Text1Object := Object;
+          WriteObject(Object, ObjectPath(Object), ObjectFileName(Object));
+
+        UNTIL Object.NEXT = 0;
+
+      Progressbar.Close;
+    END;
+
+    PROCEDURE ImportObjectSelection@12(VAR Object@1000 : Record 2000000001);
+    VAR
+      Progressbar@1001 : Codeunit 11102044;
+      FileName@1002 : Text;
+      Path@1003 : Text;
+      DeleteAnswer@1004 : Integer;
+      UpdateAnswer@1005 : Integer;
+      ctImportObjects@1006 : TextConst 'DEU=Import objects...;ENU=Import objects...;ESP=Import objects...;FRA=Import objects...;NLD=Objecten importeren...;DEA=Import objects...';
+    BEGIN
+      GetAndLockSetup;
+
+      ReadTFS;
+
+      Progressbar.Open(ctImportObjects, 1);
+      Progressbar.BarSize := Object.COUNT;
+      IF Object.FINDSET THEN
+        REPEAT
+
+          Progressbar.AddToBar(1);
+          Progressbar.Text1Object := Object;
+
+          Path := ObjectPath(Object);
+          FileName := ObjectFileName(Object);
+
+          IF FileExists(Path, FileName) THEN
+            ReadObject(Object, Path, FileName, UpdateAnswer, DeleteAnswer, TRUE);
+
+        UNTIL Object.NEXT = 0;
+
+      Progressbar.Close;
+    END;
+
+    PROCEDURE ImportAllObjects@13();
+    VAR
+      ObjectLock@1000 : Record 11102054;
+      TmpDirectoryRec@1001 : TEMPORARY Record 11102094;
+      TmpFileRec@1002 : TEMPORARY Record 11102094;
+      Object@1003 : Record 2000000001;
+      Mgt@1004 : Codeunit 11102035;
+      Progressbar@1005 : Codeunit 11102044;
+      FileName@1006 : Text;
+      DeleteAnswer@1007 : Integer;
+      NoOfFiles@1008 : Integer;
+      UpdateAnswer@1009 : Integer;
+      ObjectPresent@1010 : Boolean;
+      ctRemoveYourLocks@1011 : TextConst 'DEU=Please remove your object locks.;ENU=Please remove your object locks.;ESP=Please remove your object locks.;FRA=Please remove your object locks.;NLD=Ontgrendel uw objecten.;DEA=Please remove your object locks.';
+      ctSyncObjects@1012 : TextConst 'DEU=Synchronize objects...;ENU=Synchronize objects...;ESP=Synchronize objects...;FRA=Synchronize objects...;NLD=Objecten synchroniseren...;DEA=Synchronize objects...';
+    BEGIN
+      GetAndLockSetup;
+
+      ReadTFS;
+
+      ObjectLock.SETCURRENTKEY("Locked By");
+      ObjectLock.SETFILTER("Locked By", '@*\' + Mgt.ShortUserId);
+      IF NOT ObjectLock.ISEMPTY THEN
+        ERROR(ctRemoveYourLocks);
+
+      FillFileRec(TmpDirectoryRec, 'Objects\');
+      TmpDirectoryRec.SETRANGE("Is a File", FALSE);
+      IF TmpDirectoryRec.FINDSET THEN
+        REPEAT
+          IF NOT (TmpDirectoryRec.Name IN [',', '..']) THEN BEGIN
+
+            FillFileRec(TmpFileRec, '\Objects\' + TmpDirectoryRec.Name);
+            TmpFileRec.SETRANGE("Is a File", TRUE);
+            TmpFileRec.SETFILTER(Name, '*.fob|*.FOB');
+            NoOfFiles += TmpFileRec.COUNT;
+          END;
+        UNTIL TmpDirectoryRec.NEXT = 0;
+
+      Progressbar.Open(ctSyncObjects, 1);
+      Progressbar.BarSize := NoOfFiles;
+
+      IF TmpDirectoryRec.FINDSET THEN
+        REPEAT
+          IF NOT (TmpDirectoryRec.Name IN [',', '..']) THEN BEGIN
+
+            FillFileRec(TmpFileRec, '\Objects\' + TmpDirectoryRec.Name);
+            TmpFileRec.SETRANGE("Is a File", TRUE);
+            TmpFileRec.SETFILTER(Name, '*.fob|*.FOB');
+            IF TmpFileRec.FINDSET THEN
+              REPEAT
+
+                ObjectPresent := FALSE;
+
+                FileName := TmpFileRec.Name;
+                FileName := DELSTR(FileName, STRPOS(FileName, '.'));
+                IF EVALUATE(Object.Type, DELSTR(FileName, STRPOS(FileName, ' '))) THEN
+                  IF EVALUATE(Object.ID, COPYSTR(FileName, STRPOS(FileName, ' ') + 1)) THEN
+                    ObjectPresent := Object.FIND('=');
+
+                IF NOT ObjectPresent THEN
+                  CLEAR(Object);
+
+                Progressbar.AddToBar(1);
+                Progressbar.Text1Object := Object;
+
+                ReadObject(Object, 'Objects\' + TmpDirectoryRec.Name + '\', TmpFileRec.Name, UpdateAnswer, DeleteAnswer, TRUE);
+
+              UNTIL TmpFileRec.NEXT = 0;
+          END;
+        UNTIL TmpDirectoryRec.NEXT = 0;
+
+      Progressbar.Close;
+    END;
+
+    LOCAL PROCEDURE ReadObject@14(VAR Object@1000 : Record 2000000001;Path@1001 : Text;FileName@1002 : Text;VAR UpdateAnswer@1003 : Integer;VAR DeleteAnswer@1004 : Integer;InRepeat@1005 : Boolean);
+    VAR
+      TmpObject@1006 : TEMPORARY Record 2000000001;
+      VersionControl@1007 : Codeunit 11102040;
+      ImExportMgt@1008 : Codeunit 11102043;
+      SourceControl@1009 : Codeunit 11102050;
+      oFile@1010 : File;
+      InStr@1011 : InStream;
+      ObjectDateTime@1012 : DateTime;
+      RepositoryDateTime@1013 : DateTime;
+      ImportObject@1014 : Boolean;
+    BEGIN
+      FileOpen(oFile, Path, FileName);
+      IF oFile.LEN < 10 THEN BEGIN
+
+        IF Object.Type > 0 THEN
+          IF AskDeleteObject(Object, DeleteAnswer, InRepeat) THEN
+            Object.DELETE;
+
+      END ELSE BEGIN
+
+        oFile.CREATEINSTREAM(InStr);
+        //ImExportMgt.ImportFobFromStream(InStr, TmpObject, Progressbar2, 0);
+
+        IF Object.Type = 0 THEN
+          ImportObject := TRUE
+        ELSE BEGIN
+
+          ObjectDateTime := SourceControl.CreateDateTime2(Object.Date, Object.Time);
+          RepositoryDateTime := SourceControl.CreateDateTime2(TmpObject.Date, TmpObject.Time);
+
+          IF ObjectDateTime - RepositoryDateTime > 1000 THEN
+            ImportObject := AskUpdateNewerObject(Object, UpdateAnswer, InRepeat)
+          ELSE
+            IF (ABS(ObjectDateTime - RepositoryDateTime) > 1000) OR
+               (Object.Name <> TmpObject.Name) OR
+               (Object.Compiled <> TmpObject.Compiled) OR
+               (Object.Modified <> TmpObject.Modified)
+            THEN
+              ImportObject := TRUE
+            ELSE BEGIN
+              Object."Version List" := VersionControl.CleanUpVersionList(Object."Version List");
+              TmpObject."Version List" := VersionControl.CleanUpVersionList(TmpObject."Version List");
+
+              IF Object."Version List" <> TmpObject."Version List" THEN
+                ImportObject := TRUE;
+            END;
+        END;
+
+        IF ImportObject THEN BEGIN
+          oFile.CREATEINSTREAM(InStr);
+          ImExportMgt.ImportFobFromStream(InStr);
+        END;
+
+      END;
+      FileClose(oFile);
+    END;
+
+    LOCAL PROCEDURE WriteObject@15(VAR Object@1000 : Record 2000000001;Path@1001 : Text;FileName@1002 : Text);
+    VAR
+      CALHistoryObject@1003 : Record 11102052;
+      KnownObjectExportError@1004 : Record 11102073;
+      Object2@1005 : Record 2000000001;
+      ImExportMgt@1006 : Codeunit 11102043;
+      Progressbar@1007 : Codeunit 11102044;
+      SourceControl@1008 : Codeunit 11102050;
+      oFile@1009 : File;
+      OutStr@1010 : OutStream;
+    BEGIN
+      Object2 := Object;
+
+      IF Object2.FIND('=') THEN BEGIN
+
+        WITH RepositorySetup DO
+          IF "Export Object Format" IN ["Export Object Format"::"FOB + TXT", "Export Object Format"::TXT] THEN
+            IF SourceControl.ObjectHeaderIsOutdated(Object2, TRUE) THEN
+              IF NOT KnownObjectExportError.GET(Object2.Type, Object2.ID) THEN
+                SourceControl.AddObject(Object2, 0, FALSE, FALSE, 1, FALSE);
+
+        Object2.SETRECFILTER;
+
+        CASE RepositorySetup."Export Object Format" OF
+
+          RepositorySetup."Export Object Format"::FOB :
+            BEGIN
+              FileCreate(oFile, Path, FileName);
+              oFile.CREATEOUTSTREAM(OutStr);
+              ImExportMgt.FillOutstreamFob(OutStr, Object2, Progressbar);
+              FileClose(oFile);
+            END;
+
+          RepositorySetup."Export Object Format"::"FOB + TXT" :
+            BEGIN
+              FileCreate(oFile, Path, FileName);
+              oFile.CREATEOUTSTREAM(OutStr);
+              ImExportMgt.FillOutstreamFob(OutStr, Object2, Progressbar);
+              ImExportMgt.FillOutstreamTxt(OutStr, Object2);
+              FileClose(oFile);
+            END;
+
+          RepositorySetup."Export Object Format"::TXT :
+            BEGIN
+              oFile.TEXTMODE(TRUE);
+              FileCreate(oFile, Path, FileName);
+              CALHistoryObject.GoToLastRecord(Object2.Type, Object2.ID);
+              SourceControl.AppendHistoryObjectToFile(oFile, CALHistoryObject."Entry No.");
+              FileClose(oFile);
+            END;
+
+        END;
+
+      END ELSE BEGIN
+
+        FileCreate(oFile, Path, FileName);
+        oFile.WRITE('DELETED');
+        FileClose(oFile);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE ObjectPath@16(VAR Object@1000 : Record 2000000001) ExitValue : Text;
+    BEGIN
+      CheckCreateDirectory('Objects\' + FORMAT(Object.Type) + '\');
+      ExitValue := 'Objects\' + FORMAT(Object.Type) + '\';
+    END;
+
+    LOCAL PROCEDURE ObjectFileName@17(VAR Object@1000 : Record 2000000001) ExitValue : Text;
+    BEGIN
+      IF RepositorySetup."Export Object Format" = RepositorySetup."Export Object Format"::TXT THEN
+        ExitValue := FORMAT(Object.Type) + ' ' + FORMAT(Object.ID) + '.txt'
+      ELSE
+        ExitValue := FORMAT(Object.Type) + ' ' + FORMAT(Object.ID) + '.fob';
+    END;
+
+    LOCAL PROCEDURE ObjectArchivePath@18(VAR Object@1000 : Record 2000000001) ExitValue : Text;
+    BEGIN
+      CheckCreateDirectory('Archive\Objects\' + FORMAT(Object.Type) + '\' + FORMAT(Object.Type) + ' ' + FORMAT(Object.ID) + '\');
+      ExitValue := 'Archive\Objects\' + FORMAT(Object.Type) + '\' + FORMAT(Object.Type) + ' ' + FORMAT(Object.ID) + '\';
+    END;
+
+    LOCAL PROCEDURE ObjectArchiveFileName@19(VAR Object@1000 : Record 2000000001) ExitValue : Text;
+    BEGIN
+      IF RepositorySetup."Export Object Format" = RepositorySetup."Export Object Format"::TXT THEN
+        ExitValue :=
+          FORMAT(Object.Type) + ' ' + FORMAT(Object.ID) + ' ' +
+          FORMAT(CURRENTDATETIME, 0, '<Year4>-<Month,2>-<Day,2> <Hours,2>.<Minutes,2>.<Seconds,2>') + '.txt'
+      ELSE
+        ExitValue :=
+          FORMAT(Object.Type) + ' ' + FORMAT(Object.ID) + ' ' +
+          FORMAT(CURRENTDATETIME, 0, '<Year4>-<Month,2>-<Day,2> <Hours,2>.<Minutes,2>.<Seconds,2>') + '.fob';
+    END;
+
+    PROCEDURE UpdateProject@20(VAR RecRef@1000 : RecordRef;ProjectNo@1001 : Code[20];Trigger@1002 : ' ,Insert,Modify,Delete,Rename');
+    VAR
+      Project@1003 : Record 11102036;
+      RepositoryLog@1004 : Record 11102086;
+      Mgt@1005 : Codeunit 11102035;
+      OutStr@1006 : OutStream;
+      LastReadTokenNo@1007 : Integer;
+      TokenNo@1008 : Integer;
+      ctAnotherUser@1009 : TextConst
+        'DEU=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2',
+        'ENU=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2',
+        'ESP=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2',
+        'FRA=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2',
+        'NLD=Een andere gebruiker heeft het record van deze %1 in een andere database gewijzigd.\\Synchroniseer de repository en voer uw wijzigingen opnieuw in.\\Velden en waarden:\\%2',
+        'DEA=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2';
+      ctCannotRename@1010 : TextConst 'DEU=You cannot rename this record with repository enabled.;ENU=You cannot rename this record with repository enabled.;ESP=You cannot rename this record with repository enabled.;FRA=You cannot rename this record with repository enabled.;NLD=U kunt dit record niet hernoemen wanneer repository is ingeschakeld.;DEA=You cannot rename this record with repository enabled.';
+    BEGIN
+      GetAndLockSetup;
+      IF NOT RepositorySetup."Use Repository" OR NOT RepositorySetup."Auto Export Projects" THEN
+        EXIT;
+
+      IF RepositorySetup."Synchronize Databases" THEN BEGIN
+
+        LastReadTokenNo := RepositorySetup."Last Read Token No.";
+
+        IF RecRef.NUMBER <> DATABASE::"OM - Project" THEN
+          IF Project.GET(ProjectNo) THEN
+            IF Project."Repository Busy" THEN
+              EXIT;
+
+        TokenNo := GetTokenNo;
+
+        IF TokensRead THEN BEGIN
+          RepositoryLog.SETCURRENTKEY("No.");
+          RepositoryLog.SETRANGE("No.", ProjectNo);
+          RepositoryLog.SETFILTER("Entry No.", '>%1', LastReadTokenNo);
+          IF NOT RepositoryLog.ISEMPTY THEN BEGIN
+            RecRef.SETRECFILTER;
+            ERROR(ctAnotherUser, RecRef.CAPTION, RecRef.GETFILTERS);
+          END;
+        END;
+
+      END;
+
+      CASE Trigger OF
+        Trigger::Insert :
+          RecRef.INSERT;
+        Trigger::Modify :
+          RecRef.MODIFY;
+        Trigger::Delete :
+          RecRef.DELETE;
+        Trigger::Rename :
+          ERROR(ctCannotRename);
+      END;
+
+      IF RepositorySetup."Synchronize Databases" THEN BEGIN
+
+        RepositoryLog."Entry No." := TokenNo;
+        RepositoryLog."User Id" := Mgt.ShortUserId;
+        RepositoryLog."Log Date" := TODAY;
+        RepositoryLog."Log Time" := TIME;
+        RepositoryLog."Action Type" := RepositoryLog."Action Type"::"Update Project";
+        RepositoryLog."No." := ProjectNo;
+
+        RepositoryLog.BLOB.CREATEOUTSTREAM(OutStr);
+
+        FillProjectOutstream(ProjectNo, OutStr);
+
+        IF NOT RepositoryLog.INSERT THEN
+          RepositoryLog.MODIFY;
+
+      END;
+
+      WriteProject(ProjectNo, ProjectPath, ProjectFileName(ProjectNo));
+
+      IF RepositorySetup."Archive Projects" THEN
+        WriteProject(ProjectNo, ProjectArchivePath(ProjectNo), ProjectArchiveFileName(ProjectNo));
+
+      CASE Trigger OF
+        Trigger::Insert :
+          RecRef.DELETE;
+        Trigger::Delete :
+          RecRef.INSERT;
+      END;
+
+      IF RepositorySetup."Synchronize Databases" THEN
+        ExportRepository(RepositoryLog);
+    END;
+
+    LOCAL PROCEDURE FillProjectOutstream@21(VAR ProjectNo@1000 : Code[20];VAR OutStr@1001 : OutStream);
+    VAR
+      TmpAction@1002 : TEMPORARY Record 11102048;
+      TmpActionField@1003 : TEMPORARY Record 11102049;
+      ActionMgt@1004 : Codeunit 11102038;
+      Progressbar@1005 : Codeunit 11102044;
+      ProjectMgt@1006 : Codeunit 11102052;
+    BEGIN
+      ProjectMgt.AddProjectActions(TmpAction, ProjectNo);
+
+      ActionMgt.FillExportOutStream(TmpAction, TmpActionField, OutStr, Progressbar);
+    END;
+
+    PROCEDURE ExportProjects@22(VAR Project@1000 : Record 11102036);
+    VAR
+      Progressbar@1001 : Codeunit 11102044;
+      ctExportProject@1002 : TextConst 'DEU=Export projects...;ENU=Export projects...;ESP=Export projects...;FRA=Export projects...;NLD=Projecten exporteren...;DEA=Export projects...';
+    BEGIN
+      GetAndLockSetup;
+
+      Progressbar.Open(ctExportProject, 1);
+      Progressbar.BarSize := Project.COUNT;
+
+      IF Project.FINDSET THEN
+        REPEAT
+
+          Progressbar.AddToBar(1);
+          Progressbar.Text1 := Project.TABLECAPTION + ' ' + Project."No.";
+
+          WriteProject(Project."No.", ProjectPath, ProjectFileName(Project."No."));
+        UNTIL Project.NEXT = 0;
+    END;
+
+    PROCEDURE ImportProjectSelection@23(VAR Project@1000 : Record 11102036);
+    VAR
+      Progressbar@1001 : Codeunit 11102044;
+      DeleteAnswer@1002 : Integer;
+      ctImportProjects@1003 : TextConst 'DEU=Import projects...;ENU=Import projects...;ESP=Import projects...;FRA=Import projects...;NLD=Projecten importeren...;DEA=Import projects...';
+    BEGIN
+      GetAndLockSetup;
+
+      ReadTFS;
+
+      Progressbar.Open(ctImportProjects, 1);
+      Progressbar.BarSize := Project.COUNT;
+      IF Project.FINDSET THEN
+        REPEAT
+
+          Progressbar.AddToBar(1);
+          Progressbar.Text1 := Project."No." + ' ' + Project.Description;
+
+          ReadProject(Project."No.", DeleteAnswer, TRUE);
+
+        UNTIL Project.NEXT = 0;
+
+      Progressbar.Close;
+    END;
+
+    PROCEDURE ImportAllProjects@24();
+    VAR
+      Project@1000 : Record 11102036;
+      TmpFileRec@1001 : TEMPORARY Record 11102094;
+      Progressbar@1002 : Codeunit 11102044;
+      FileName@1003 : Text;
+      DeleteAnswer@1004 : Integer;
+      ctImportProjects@1005 : TextConst 'DEU=Import projects...;ENU=Import projects...;ESP=Import projects...;FRA=Import projects...;NLD=Projecten importeren...;DEA=Import projects...';
+    BEGIN
+      GetAndLockSetup;
+
+      ReadTFS;
+
+      FillFileRec(TmpFileRec, 'Projects\');
+      TmpFileRec.SETRANGE("Is a File", TRUE);
+      IF TmpFileRec.FINDSET THEN BEGIN
+
+        Progressbar.Open(ctImportProjects, 1);
+        Progressbar.BarSize := TmpFileRec.COUNT;
+
+        REPEAT
+
+          FileName := TmpFileRec.Name;
+          FileName := DELSTR(FileName, STRPOS(FileName, '.'));
+          IF EVALUATE(Project."No.", COPYSTR(FileName, STRPOS(FileName, ' ') + 1)) THEN BEGIN
+
+            Progressbar.AddToBar(1);
+            Progressbar.Text1 := Project.TABLECAPTION + ' ' + Project."No.";
+
+            ReadProject(Project."No.", DeleteAnswer, TRUE);
+          END;
+
+        UNTIL TmpFileRec.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE ReadProject@25(VAR ProjectNo@1000 : Code[20];VAR DeleteAnswer@1001 : Integer;InRepeat@1002 : Boolean);
+    VAR
+      Project@1003 : Record 11102036;
+      ActionMgt@1004 : Codeunit 11102038;
+      Progressbar@1005 : Codeunit 11102044;
+      oFile@1006 : File;
+      InStr@1007 : InStream;
+      FileName@1008 : Text;
+      Path@1009 : Text;
+    BEGIN
+      Path := ProjectPath;
+      FileName := ProjectFileName(ProjectNo);
+
+      IF FileExists(Path, FileName) THEN BEGIN
+        FileOpen(oFile, Path, FileName);
+
+        IF oFile.LEN < 10 THEN BEGIN
+          IF AskDelete(Project.TABLECAPTION, ProjectNo, DeleteAnswer, InRepeat) THEN BEGIN
+            Project.DELETE;
+            Project.DeleteChildTables;
+          END;
+        END ELSE BEGIN
+          oFile.CREATEINSTREAM(InStr);
+
+          Progressbar.NextBar;
+          ActionMgt.ImportInstream(InStr, FALSE, Progressbar, 0);
+          Progressbar.PreviousBar;
+        END;
+
+        FileClose(oFile);
+      END;
+    END;
+
+    LOCAL PROCEDURE WriteProject@26(VAR ProjectNo@1000 : Code[20];Path@1001 : Text;FileName@1002 : Text);
+    VAR
+      oFile@1003 : File;
+      OutStr@1004 : OutStream;
+    BEGIN
+      FileCreate(oFile, Path, FileName);
+      oFile.CREATEOUTSTREAM(OutStr);
+      FillProjectOutstream(ProjectNo, OutStr);
+      FileClose(oFile);
+    END;
+
+    LOCAL PROCEDURE ProjectPath@27() ExitValue : Text;
+    BEGIN
+      CheckCreateDirectory('Projects\');
+      ExitValue := 'Projects\';
+    END;
+
+    LOCAL PROCEDURE ProjectFileName@28(ProjectNo@1000 : Code[20]) ExitValue : Text;
+    BEGIN
+      ExitValue := ProjectNo + '.fab';
+    END;
+
+    LOCAL PROCEDURE ProjectArchivePath@29(ProjectNo@1000 : Code[20]) ExitValue : Text;
+    BEGIN
+      CheckCreateDirectory('Archive\Projects\Project ' + ProjectNo + '\');
+      ExitValue := 'Archive\Projects\Project ' + ProjectNo + '\';
+    END;
+
+    LOCAL PROCEDURE ProjectArchiveFileName@30(ProjectNo@1000 : Code[20]) ExitValue : Text;
+    BEGIN
+      ExitValue :=
+        'Project ' + ProjectNo + ' ' +
+        FORMAT(CURRENTDATETIME, 0, '<Year4>-<Month,2>-<Day,2> <Hours,2>.<Minutes,2>.<Seconds,2>') + '.fab';
+    END;
+
+    PROCEDURE UpdateTransport@31(VAR RecRef@1000 : RecordRef;TransportNo@1001 : Code[20];Trigger@1002 : ' ,Insert,Modify,Delete,Rename');
+    VAR
+      Transport@1003 : Record 11102036;
+      RepositoryLog@1004 : Record 11102086;
+      Mgt@1005 : Codeunit 11102035;
+      OutStr@1006 : OutStream;
+      LastReadTokenNo@1007 : Integer;
+      TokenNo@1008 : Integer;
+      ctAnotherUser@1009 : TextConst
+        'DEU=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2',
+        'ENU=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2',
+        'ESP=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2',
+        'FRA=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2',
+        'NLD=Een andere gebruiker heeft het record van deze %1 in een andere database gewijzigd.\\Synchroniseer de repository en voer uw wijzigingen opnieuw in.\\Velden en waarden:\\%2',
+        'DEA=Another user has modified the record for this %1 in another database.\\Please synchronize the repository and enter your changes again.\\Identification fields and values:\\%2';
+      ctCannotRename@1010 : TextConst 'DEU=You cannot rename this record with repository enabled.;ENU=You cannot rename this record with repository enabled.;ESP=You cannot rename this record with repository enabled.;FRA=You cannot rename this record with repository enabled.;NLD=U kunt dit record niet hernoemen wanneer repository is ingeschakeld.;DEA=You cannot rename this record with repository enabled.';
+    BEGIN
+      GetAndLockSetup;
+      IF NOT RepositorySetup."Use Repository" OR NOT RepositorySetup."Auto Export Transports" THEN
+        EXIT;
+
+      IF RepositorySetup."Synchronize Databases" THEN BEGIN
+
+        LastReadTokenNo := RepositorySetup."Last Read Token No.";
+
+        IF RecRef.NUMBER <> DATABASE::"OM - Transport" THEN
+          IF Transport.GET(TransportNo) THEN
+            IF Transport."Repository Busy" THEN
+              EXIT;
+
+        TokenNo := GetTokenNo;
+
+        IF TokensRead THEN BEGIN
+          RepositoryLog.SETCURRENTKEY("No.");
+          RepositoryLog.SETRANGE("No.", TransportNo);
+          RepositoryLog.SETFILTER("Entry No.", '>%1', LastReadTokenNo);
+          IF NOT RepositoryLog.ISEMPTY THEN BEGIN
+            RecRef.SETRECFILTER;
+            ERROR(ctAnotherUser, RecRef.CAPTION, RecRef.GETFILTERS);
+          END;
+        END;
+      END;
+
+      CASE Trigger OF
+        Trigger::Insert :
+          RecRef.INSERT;
+        Trigger::Modify :
+          RecRef.MODIFY;
+        Trigger::Delete :
+          RecRef.DELETE;
+        Trigger::Rename :
+          ERROR(ctCannotRename);
+      END;
+
+      IF RepositorySetup."Synchronize Databases" THEN BEGIN
+
+        RepositoryLog."Entry No." := TokenNo;
+        RepositoryLog."User Id" := Mgt.ShortUserId;
+        RepositoryLog."Log Date" := TODAY;
+        RepositoryLog."Log Time" := TIME;
+        RepositoryLog."Action Type" := RepositoryLog."Action Type"::"Update Transport";
+        RepositoryLog."No." := TransportNo;
+
+        RepositoryLog.BLOB.CREATEOUTSTREAM(OutStr);
+
+        FillTransportOutstream(TransportNo, OutStr);
+
+        IF NOT RepositoryLog.INSERT THEN
+          RepositoryLog.MODIFY;
+
+      END;
+
+      WriteTransport(TransportNo, TransportPath, TransportFileName(TransportNo));
+      IF RepositorySetup."Archive Transports" THEN
+        WriteTransport(TransportNo, TransportArchivePath(TransportNo), TransportArchiveFileName(TransportNo));
+
+      CASE Trigger OF
+        Trigger::Insert :
+          RecRef.DELETE;
+        Trigger::Delete :
+          RecRef.INSERT;
+      END;
+
+      IF RepositorySetup."Synchronize Databases" THEN
+        ExportRepository(RepositoryLog);
+    END;
+
+    LOCAL PROCEDURE FillTransportOutstream@32(VAR TransportNo@1000 : Code[20];VAR OutStr@1001 : OutStream);
+    VAR
+      TmpAction@1002 : TEMPORARY Record 11102048;
+      TmpActionField@1003 : TEMPORARY Record 11102049;
+      ExportTransport@1004 : Codeunit 11102037;
+      ActionMgt@1005 : Codeunit 11102038;
+      Progressbar@1006 : Codeunit 11102044;
+    BEGIN
+      ExportTransport.AddTransportActions(TmpAction, TransportNo);
+      ActionMgt.FillExportOutStream(TmpAction, TmpActionField, OutStr, Progressbar);
+    END;
+
+    PROCEDURE ExportTransports@33(VAR Transport@1000 : Record 11102043);
+    VAR
+      Progressbar@1001 : Codeunit 11102044;
+      ctExportTransport@1002 : TextConst 'DEU=Export transports...;ENU=Export transports...;ESP=Export transports...;FRA=Export transports...;NLD=Transporten exporteren...;DEA=Export transports...';
+    BEGIN
+      GetAndLockSetup;
+
+      Progressbar.Open(ctExportTransport, 1);
+      Progressbar.BarSize := Transport.COUNT;
+
+      IF Transport.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+          Progressbar.Text1 := Transport.TABLECAPTION + ' ' + Transport."No.";
+          WriteTransport(Transport."No.", TransportPath, TransportFileName(Transport."No."));
+        UNTIL Transport.NEXT = 0;
+    END;
+
+    PROCEDURE ImportTransportSelection@34(VAR Transport@1000 : Record 11102043);
+    VAR
+      Progressbar@1001 : Codeunit 11102044;
+      DeleteAnswer@1002 : Integer;
+      ctImportTransports@1003 : TextConst 'DEU=Import transports...;ENU=Import transports...;ESP=Import transports...;FRA=Import transports...;NLD=Transporten importeren...;DEA=Import transports...';
+    BEGIN
+      GetAndLockSetup;
+
+      ReadTFS;
+
+      Progressbar.Open(ctImportTransports, 1);
+      Progressbar.BarSize := Transport.COUNT;
+      IF Transport.FINDSET THEN
+        REPEAT
+
+          Progressbar.AddToBar(1);
+          Progressbar.Text1 := Transport."No." + ' ' + Transport.Description;
+
+          ReadTransport(Transport."No.", DeleteAnswer, TRUE);
+        UNTIL Transport.NEXT = 0;
+
+      Progressbar.Close;
+    END;
+
+    PROCEDURE ImportAllTransports@35();
+    VAR
+      Transport@1000 : Record 11102043;
+      TmpFileRec@1001 : TEMPORARY Record 11102094;
+      Progressbar@1002 : Codeunit 11102044;
+      FileName@1003 : Text;
+      DeleteAnswer@1004 : Integer;
+      ctImportTransports@1005 : TextConst 'DEU=Import transports...;ENU=Import transports...;ESP=Import transports...;FRA=Import transports...;NLD=Transporten importeren...;DEA=Import transports...';
+    BEGIN
+      GetAndLockSetup;
+
+      ReadTFS;
+
+      FillFileRec(TmpFileRec, 'Transports\');
+      TmpFileRec.SETRANGE("Is a File", TRUE);
+      IF TmpFileRec.FINDSET THEN BEGIN
+
+        Progressbar.Open(ctImportTransports, 1);
+        Progressbar.BarSize := TmpFileRec.COUNT;
+
+        REPEAT
+
+          FileName := TmpFileRec.Name;
+          FileName := DELSTR(FileName, STRPOS(FileName, '.'));
+          IF EVALUATE(Transport."No.", COPYSTR(FileName, STRPOS(FileName, ' ') + 1)) THEN BEGIN
+
+            Progressbar.AddToBar(1);
+            Progressbar.Text1 := Transport.TABLECAPTION + ' ' + Transport."No.";
+
+            ReadTransport(Transport."No.", DeleteAnswer, TRUE);
+          END;
+
+        UNTIL TmpFileRec.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE ReadTransport@36(VAR TransportNo@1000 : Code[20];VAR DeleteAnswer@1001 : Integer;InRepeat@1002 : Boolean);
+    VAR
+      Transport@1003 : Record 11102043;
+      ActionMgt@1004 : Codeunit 11102038;
+      Progressbar@1005 : Codeunit 11102044;
+      oFile@1006 : File;
+      InStr@1007 : InStream;
+      FileName@1008 : Text;
+      Path@1009 : Text;
+    BEGIN
+      Path := TransportPath;
+      FileName := TransportFileName(TransportNo);
+
+      IF FileExists(Path, FileName) THEN BEGIN
+        FileOpen(oFile, Path, FileName);
+
+        IF oFile.LEN < 10 THEN BEGIN
+          IF AskDelete(Transport.TABLECAPTION, TransportNo, DeleteAnswer, InRepeat) THEN BEGIN
+            Transport.DELETE;
+            Transport.DeleteChildTables;
+          END;
+        END ELSE BEGIN
+          oFile.CREATEINSTREAM(InStr);
+
+          Progressbar.NextBar;
+          ActionMgt.ImportInstream(InStr, FALSE, Progressbar, 0);
+          Progressbar.PreviousBar;
+        END;
+
+        FileClose(oFile);
+      END;
+    END;
+
+    LOCAL PROCEDURE WriteTransport@37(VAR TransportNo@1000 : Code[20];Path@1001 : Text;FileName@1002 : Text);
+    VAR
+      oFile@1003 : File;
+      OutStr@1004 : OutStream;
+    BEGIN
+      FileCreate(oFile, Path, FileName);
+      oFile.CREATEOUTSTREAM(OutStr);
+      FillTransportOutstream(TransportNo, OutStr);
+      FileClose(oFile);
+    END;
+
+    LOCAL PROCEDURE TransportPath@38() ExitValue : Text;
+    BEGIN
+      CheckCreateDirectory('Transports\');
+      ExitValue := 'Transports\';
+    END;
+
+    LOCAL PROCEDURE TransportFileName@39(TransportNo@1000 : Code[20]) ExitValue : Text;
+    BEGIN
+      ExitValue := 'Transport ' + TransportNo + '.fab';
+    END;
+
+    LOCAL PROCEDURE TransportArchivePath@40(TransportNo@1000 : Code[20]) ExitValue : Text;
+    BEGIN
+      CheckCreateDirectory('Archive\Transports\Transport ' + TransportNo + '\');
+      ExitValue := 'Archive\Transports\Transport ' + TransportNo + '\';
+    END;
+
+    LOCAL PROCEDURE TransportArchiveFileName@41(TransportNo@1000 : Code[20]) ExitValue : Text;
+    BEGIN
+      ExitValue :=
+        'Transport ' + TransportNo + ' ' +
+        FORMAT(CURRENTDATETIME, 0, '<Year4>-<Month,2>-<Day,2> <Hours,2>.<Minutes,2>.<Seconds,2>') + '.fab';
+    END;
+
+    PROCEDURE ImportLocks@42();
+    VAR
+      ObjectLock@1000 : Record 11102054;
+      TmpDirectoryRec@1001 : TEMPORARY Record 11102094;
+      TmpFileRec@1002 : TEMPORARY Record 11102094;
+      Object@1003 : Record 2000000001;
+      Progressbar@1004 : Codeunit 11102044;
+      LockDate@1005 : Date;
+      LockTime@1006 : Time;
+      FileName@1007 : Text;
+      LockedBy@1008 : Text;
+      NoOfFiles@1009 : Integer;
+      ctSyncObjects@1010 : TextConst 'DEU=Synchronize objects...;ENU=Synchronize objects...;ESP=Synchronize objects...;FRA=Synchronize objects...;NLD=Objecten synchroniseren...;DEA=Synchronize objects...';
+    BEGIN
+      GetAndLockSetup;
+
+      ReadTFS;
+
+      FillFileRec(TmpDirectoryRec, 'Objects\');
+      TmpDirectoryRec.SETRANGE("Is a File", FALSE);
+      IF TmpDirectoryRec.FINDSET THEN
+        REPEAT
+          IF NOT (TmpDirectoryRec.Name IN [',', '..']) THEN BEGIN
+            FillFileRec(TmpFileRec, 'Objects\' + TmpDirectoryRec.Name);
+            TmpFileRec.SETRANGE("Is a File", TRUE);
+            TmpFileRec.SETFILTER(Name, '*.fob|*.FOB');
+            NoOfFiles += TmpFileRec.COUNT;
+          END;
+        UNTIL TmpDirectoryRec.NEXT = 0;
+
+      Progressbar.Open(ctSyncObjects, 1);
+      Progressbar.BarSize := NoOfFiles + ObjectLock.COUNT;
+
+      IF ObjectLock.FINDSET THEN
+        REPEAT
+          Object.Type := ObjectLock."Object Type";
+          Object.ID := ObjectLock."Object No.";
+          IF NOT FileIsLocked(ObjectPath(Object), ObjectFileName(Object)) THEN
+            ObjectLock.DeleteQuietly;
+        UNTIL ObjectLock.NEXT = 0;
+
+      IF TmpDirectoryRec.FINDSET THEN
+        REPEAT
+          IF NOT (TmpDirectoryRec.Name IN [',', '..']) THEN BEGIN
+
+            FillFileRec(TmpFileRec, 'Objects\' + TmpDirectoryRec.Name);
+            TmpFileRec.SETRANGE("Is a File", TRUE);
+            TmpFileRec.SETFILTER(Name, '*.fob|*.FOB');
+            IF TmpFileRec.FINDSET THEN
+              REPEAT
+                IF FileIsLocked('Objects\' + TmpDirectoryRec.Name + '\', TmpFileRec.Name) THEN BEGIN
+
+                  FileLockedBy('Objects\' + TmpDirectoryRec.Name + '\', TmpFileRec.Name, LockedBy, LockDate, LockTime);
+
+                  FileName := TmpFileRec.Name;
+                  FileName := DELSTR(FileName, STRPOS(FileName, '.'));
+                  IF EVALUATE(Object.Type, DELSTR(FileName, STRPOS(FileName, ' '))) THEN
+                    IF EVALUATE(Object.ID, COPYSTR(FileName, STRPOS(FileName, ' ') + 1)) THEN
+                      IF NOT ObjectLock.GET(Object.Type, Object.ID) THEN
+                        ObjectLock.InsertQuietly(Object.Type, Object.ID, LockedBy, LockDate, LockTime)
+                      ELSE
+                        IF ObjectLock."Locked By" <> LockedBy THEN BEGIN
+                          ObjectLock."Locked By" := LockedBy;
+                          ObjectLock.MODIFY;
+                        END;
+
+                END;
+              UNTIL TmpFileRec.NEXT = 0;
+          END;
+        UNTIL TmpDirectoryRec.NEXT = 0;
+
+      Progressbar.Close;
+    END;
+
+    PROCEDURE AddAction@43(VAR Actions@1000 : Record 11102048;VAR ActionField@1001 : Record 11102049);
+    VAR
+      RepositoryLog@1002 : Record 11102086;
+      Mgt@1003 : Codeunit 11102035;
+      ActionMgt@1004 : Codeunit 11102038;
+      Progressbar@1005 : Codeunit 11102044;
+      OutStr@1006 : OutStream;
+      TokenNo@1007 : Integer;
+    BEGIN
+      GetAndLockSetup;
+      IF NOT RepositorySetup."Use Repository" THEN
+        EXIT;
+
+      TokenNo := GetTokenNo;
+
+      RepositoryLog."Entry No." := TokenNo;
+      RepositoryLog."User Id" := Mgt.ShortUserId;
+      RepositoryLog."Log Date" := TODAY;
+      RepositoryLog."Log Time" := TIME;
+      RepositoryLog."Action Type" := RepositoryLog."Action Type"::Action;
+
+      RepositoryLog.BLOB.CREATEOUTSTREAM(OutStr);
+      ActionMgt.FillExportOutStream(Actions, ActionField, OutStr, Progressbar);
+
+      IF NOT RepositoryLog.INSERT THEN
+        RepositoryLog.MODIFY;
+
+      ExportRepository(RepositoryLog);
+    END;
+
+    LOCAL PROCEDURE AskDeleteObject@44(VAR Object@1000 : Record 2000000001;VAR PreviousAnswer@1001 : Integer;InRepeat@1002 : Boolean) : Boolean;
+    VAR
+      PossibleAnswers@1003 : Text;
+      ctDeleteObjectInstruction@1004 : TextConst 'DEU=Object %1 %2 %3 is deleted in the repository. \ \Delete object?;ENU=Object %1 %2 %3 is deleted in the repository. \ \Delete object?;ESP=Object %1 %2 %3 is deleted in the repository. \ \Delete object?;FRA=Object %1 %2 %3 is deleted in the repository. \ \Delete object?;NLD=Object %1 %2 %3 is verwijderd in de repository. \ \Object verwijderen?;DEA=Object %1 %2 %3 is deleted in the repository. \ \Delete object?';
+      ctPossibleAnswers@1005 : TextConst 'DEU=Yes,,No;ENU=Yes,,No;ESP=Yes,,No;FRA=Yes,,No;NLD=Ja,,Nee;DEA=Yes,,No';
+      ctPossibleAnswersInRepeat@1006 : TextConst 'DEU=Yes,Yes to all,No,No to all;ENU=Yes,Yes to all,No,No to all;ESP=Yes,Yes to all,No,No to all;FRA=Yes,Yes to all,No,No to all;NLD=Ja,Ja voor alles,Nee,Nee voor alles;DEA=Yes,Yes to all,No,No to all';
+    BEGIN
+      IF PreviousAnswer = 0 THEN
+        PreviousAnswer := 1;
+
+      IF PreviousAnswer IN [1, 3] THEN BEGIN
+        IF InRepeat THEN
+          PossibleAnswers := ctPossibleAnswersInRepeat
+        ELSE
+          PossibleAnswers := ctPossibleAnswers;
+
+        PreviousAnswer :=
+          STRMENU(PossibleAnswers, PreviousAnswer, STRSUBSTNO(ctDeleteObjectInstruction, Object.Type, Object.ID, Object.Name));
+      END;
+
+      IF PreviousAnswer = 0 THEN
+        ERROR('');
+
+      EXIT(PreviousAnswer IN [1, 2]);
+    END;
+
+    LOCAL PROCEDURE AskUpdateNewerObject@45(VAR Object@1000 : Record 2000000001;VAR PreviousAnswer@1001 : Integer;InRepeat@1002 : Boolean) : Boolean;
+    VAR
+      PossibleAnswers@1003 : Text;
+      ctPossibleAnswers@1004 : TextConst 'DEU=Yes,,No;ENU=Yes,,No;ESP=Yes,,No;FRA=Yes,,No;NLD=Ja,,Nee;DEA=Yes,,No';
+      ctPossibleAnswersInrepeat@1005 : TextConst 'DEU=Yes,Yes to all,No,No to all;ENU=Yes,Yes to all,No,No to all;ESP=Yes,Yes to all,No,No to all;FRA=Yes,Yes to all,No,No to all;NLD=Ja,Ja voor alles,Nee,Nee voor alles;DEA=Yes,Yes to all,No,No to all';
+      ctUpdateObjectInstruction@1006 : TextConst 'DEU=Object %1 %2 %3 is newer than the object in the repository. \ \Overwrite object?;ENU=Object %1 %2 %3 is newer than the object in the repository. \ \Overwrite object?;ESP=Object %1 %2 %3 is newer than the object in the repository. \ \Overwrite object?;FRA=Object %1 %2 %3 is newer than the object in the repository. \ \Overwrite object?;NLD=Object %1 %2 %3 is nieuwer dan het object in de repository. \ \Object overschrijven?;DEA=Object %1 %2 %3 is newer than the object in the repository. \ \Overwrite object?';
+    BEGIN
+      IF PreviousAnswer = 0 THEN
+        PreviousAnswer := 1;
+
+      IF PreviousAnswer IN [1, 3] THEN BEGIN
+        IF InRepeat THEN
+          PossibleAnswers := ctPossibleAnswersInrepeat
+        ELSE
+          PossibleAnswers := ctPossibleAnswers;
+
+        PreviousAnswer :=
+          STRMENU(PossibleAnswers, PreviousAnswer, STRSUBSTNO(ctUpdateObjectInstruction, Object.Type, Object.ID, Object.Name));
+      END;
+
+      IF PreviousAnswer = 0 THEN
+        ERROR('');
+
+      EXIT(PreviousAnswer IN [1, 2]);
+    END;
+
+    LOCAL PROCEDURE AskDelete@46(RecordName@1000 : Text;RecordNo@1001 : Code[20];VAR PreviousAnswer@1002 : Integer;InRepeat@1003 : Boolean) : Boolean;
+    VAR
+      PossibleAnswers@1004 : Text;
+      ctDeleteObjectInstruction@1005 : TextConst 'DEU=%1 %2 is deleted in the repository. \ \Delete %1?;ENU=%1 %2 is deleted in the repository. \ \Delete %1?;ESP=%1 %2 is deleted in the repository. \ \Delete %1?;FRA=%1 %2 is deleted in the repository. \ \Delete %1?;NLD=%1 %2 is verwijderd in de repository. \ \%1 verwijderen?;DEA=%1 %2 is deleted in the repository. \ \Delete %1?';
+      ctPossibleAnswers@1006 : TextConst 'DEU=Yes,,No;ENU=Yes,,No;ESP=Yes,,No;FRA=Yes,,No;NLD=Ja,,Nee;DEA=Yes,,No';
+      ctPossibleAnswersInrepeat@1007 : TextConst 'DEU=Yes,Yes to all,No,No to all;ENU=Yes,Yes to all,No,No to all;ESP=Yes,Yes to all,No,No to all;FRA=Yes,Yes to all,No,No to all;NLD=Ja,Ja voor alles,Nee,Nee voor alles;DEA=Yes,Yes to all,No,No to all';
+    BEGIN
+      IF PreviousAnswer = 0 THEN
+        PreviousAnswer := 1;
+
+      IF PreviousAnswer IN [1, 3] THEN BEGIN
+        IF InRepeat THEN
+          PossibleAnswers := ctPossibleAnswersInrepeat
+        ELSE
+          PossibleAnswers := ctPossibleAnswers;
+
+        PreviousAnswer := STRMENU(PossibleAnswers, PreviousAnswer, STRSUBSTNO(ctDeleteObjectInstruction, RecordName, RecordNo));
+      END;
+
+      IF PreviousAnswer = 0 THEN
+        ERROR('');
+
+      EXIT(PreviousAnswer IN [1, 2]);
+    END;
+
+    PROCEDURE LockRepository@47(SetLock@1000 : Boolean);
+    VAR
+      TmpFileRec@1001 : TEMPORARY Record 11102094;
+      Mgt@1002 : Codeunit 11102035;
+      oFile@1003 : File;
+      LockPresent@1004 : Boolean;
+      ctAlreadyLocked@1005 : TextConst 'DEU=Repository already locked.;ENU=Repository already locked.;ESP=Repository already locked.;FRA=Repository already locked.;NLD=Repository reeds vergrendeld.;DEA=Repository already locked.';
+      ctLocked@1006 : TextConst 'DEU=Repository locked.;ENU=Repository locked.;ESP=Repository locked.;FRA=Repository locked.;NLD=Repository vergrendeld.;DEA=Repository locked.';
+      ctNoLockPresent@1007 : TextConst 'DEU=Repository not locked.;ENU=Repository not locked.;ESP=Repository not locked.;FRA=Repository not locked.;NLD=Repository is niet vergrendeld.;DEA=Repository not locked.';
+      ctUnlocked@1008 : TextConst 'DEU=Repository unlocked.;ENU=Repository unlocked.;ESP=Repository unlocked.;FRA=Repository unlocked.;NLD=Repository ontgrendeld.;DEA=Repository unlocked.';
+    BEGIN
+      GetAndLockSetup;
+
+      FillFileRec(TmpFileRec, '');
+      TmpFileRec.SETFILTER(Name, 'LOCKED');
+      LockPresent := TmpFileRec.FINDFIRST;
+
+      IF SetLock AND LockPresent THEN
+        MESSAGE(ctAlreadyLocked);
+
+      IF NOT SetLock AND NOT LockPresent THEN
+        MESSAGE(ctNoLockPresent);
+
+      IF SetLock AND NOT LockPresent THEN BEGIN
+        FileCreate(oFile, '', 'LOCKED');
+        oFile.WRITE(Mgt.ShortUserId);
+        FileClose(oFile);
+        MESSAGE(ctLocked);
+      END;
+
+      IF NOT SetLock AND LockPresent THEN BEGIN
+        FileErase('', 'LOCKED');
+        MESSAGE(ctUnlocked);
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckCreateDirectory@48(DirectoryName@1000 : Text);
+    VAR
+      RepositoryFS@1001 : Codeunit 11102069;
+      RepositoryVSS@1002 : Codeunit 11102070;
+      RepositorySVN@1003 : Codeunit 11102072;
+    BEGIN
+      WITH RepositorySetup DO
+
+        CASE "Repository Type" OF
+
+          "Repository Type"::"File System" :
+            RepositoryFS.CheckCreateDirectory(DirectoryName);
+
+          "Repository Type"::"Visual SourceSafe" :
+            RepositoryVSS.CheckCreateDirectory(DirectoryName);
+
+          "Repository Type"::"Team Foundation Server" :
+            RepositoryFS.CheckCreateDirectory(DirectoryName);
+
+          "Repository Type"::SubVersion :
+            RepositorySVN.CheckCreateDirectory(DirectoryName);
+
+        END;
+    END;
+
+    LOCAL PROCEDURE ErrorIfLockedByOther@49(Path@1000 : Text;FileName@1001 : Text);
+    VAR
+      Mgt@1002 : Codeunit 11102035;
+      LockDate@1003 : Date;
+      LockTime@1004 : Time;
+      LockedBy@1005 : Text[1024];
+      ctFileLockedBy@1006 : TextConst 'DEU=This file is locked by %1.;ENU=This file is locked by %1.;ESP=This file is locked by %1.;FRA=This file is locked by %1.;NLD=Dit bestand is vergrendeld door %1.;DEA=This file is locked by %1.';
+    BEGIN
+      IF FileIsLocked(Path, FileName) THEN BEGIN
+        FileLockedBy(Path, FileName, LockedBy, LockDate, LockTime);
+        IF LockedBy <> Mgt.ShortUserId THEN
+          ERROR(ctFileLockedBy, LockedBy);
+      END;
+    END;
+
+    LOCAL PROCEDURE FileExists@50(Path@1000 : Text;FileName@1001 : Text) : Boolean;
+    VAR
+      RepositoryFS@1002 : Codeunit 11102069;
+      RepositoryVSS@1003 : Codeunit 11102070;
+      RepositorySVN@1004 : Codeunit 11102072;
+    BEGIN
+      WITH RepositorySetup DO
+
+        CASE "Repository Type" OF
+
+          "Repository Type"::"File System" :
+            EXIT(RepositoryFS.FileExists(Path, FileName));
+
+          "Repository Type"::"Visual SourceSafe" :
+            EXIT(RepositoryVSS.FileExists(Path, FileName));
+
+          "Repository Type"::"Team Foundation Server" :
+            EXIT(RepositoryFS.FileExists(Path, FileName));
+
+          "Repository Type"::SubVersion :
+            EXIT(RepositorySVN.FileExists(Path, FileName));
+
+        END;
+    END;
+
+    LOCAL PROCEDURE FileOpen@51(VAR oFile@1000 : File;Path@1001 : Text;FileName@1002 : Text);
+    VAR
+      RepositoryFS@1003 : Codeunit 11102069;
+      RepositoryVSS@1004 : Codeunit 11102070;
+      RepositorySVN@1005 : Codeunit 11102072;
+    BEGIN
+      WITH RepositorySetup DO
+
+        CASE "Repository Type" OF
+
+          "Repository Type"::"File System" :
+            RepositoryFS.FileOpen(oFile, Path, FileName);
+
+          "Repository Type"::"Visual SourceSafe" :
+            RepositoryVSS.FileOpen(oFile, Path, FileName);
+
+          "Repository Type"::"Team Foundation Server" :
+            RepositoryFS.FileOpen(oFile, Path, FileName);
+
+          "Repository Type"::SubVersion :
+            RepositorySVN.FileOpen(oFile, Path, FileName);
+
+        END;
+
+      PathToSave := '';
+      FileNameToSave := '';
+    END;
+
+    LOCAL PROCEDURE FileCreate@52(VAR oFile@1000 : File;Path@1001 : Text;ClientFileName@1002 : Text);
+    VAR
+      FileHandler@1003 : Codeunit 11102097;
+    BEGIN
+      ErrorIfLockedByOther(Path, ClientFileName);
+
+      IF EXISTS(FileHandler.TempDirectory + ClientFileName) THEN
+        ERASE(FileHandler.TempDirectory + ClientFileName);
+      oFile.CREATE(FileHandler.TempDirectory + ClientFileName);
+
+      PathToSave := Path;
+      FileNameToSave := ClientFileName;
+    END;
+
+    LOCAL PROCEDURE FileClose@53(VAR oFile@1000 : File);
+    VAR
+      RepositoryFS@1001 : Codeunit 11102069;
+      RepositoryVSS@1002 : Codeunit 11102070;
+      RepositoryTFS@1003 : Codeunit 11102071;
+      RepositorySVN@1004 : Codeunit 11102072;
+      FileHandler@1005 : Codeunit 11102097;
+      FromClientFileName@1006 : Text;
+      FromServerFileName@1007 : Text;
+    BEGIN
+      FromServerFileName := oFile.NAME;
+      oFile.CLOSE;
+
+      FromClientFileName := FileHandler.DownloadToClient(FromServerFileName, '', '');
+
+      IF FileNameToSave <> '' THEN
+        WITH RepositorySetup DO
+          CASE "Repository Type" OF
+
+            "Repository Type"::"File System" :
+              RepositoryFS.FileSave(FromClientFileName, PathToSave, FileNameToSave);
+
+            "Repository Type"::"Visual SourceSafe" :
+              RepositoryVSS.FileSave(FromClientFileName, PathToSave, FileNameToSave);
+
+            "Repository Type"::"Team Foundation Server" :
+              RepositoryTFS.FileSave(FromClientFileName, PathToSave, FileNameToSave);
+
+            "Repository Type"::SubVersion :
+              RepositorySVN.FileSave(FromClientFileName, PathToSave, FileNameToSave);
+
+          END;
+    END;
+
+    LOCAL PROCEDURE FileErase@54(Path@1000 : Text;FileName@1001 : Text);
+    VAR
+      RepositoryFS@1002 : Codeunit 11102069;
+      RepositoryVSS@1003 : Codeunit 11102070;
+      RepositoryTFS@1004 : Codeunit 11102071;
+      RepositorySVN@1005 : Codeunit 11102072;
+    BEGIN
+      ErrorIfLockedByOther(Path, FileName);
+
+      WITH RepositorySetup DO
+
+        CASE "Repository Type" OF
+
+          "Repository Type"::"File System" :
+            RepositoryFS.FileErase(Path, FileName);
+
+          "Repository Type"::"Visual SourceSafe" :
+            RepositoryVSS.FileErase(Path, FileName);
+
+          "Repository Type"::"Team Foundation Server" :
+            RepositoryTFS.DeleteFile(Path, FileName);
+
+          "Repository Type"::SubVersion :
+            RepositorySVN.FileErase(Path, FileName);
+
+        END;
+    END;
+
+    LOCAL PROCEDURE FileRename@55(FromPath@1000 : Text;FromName@1001 : Text;ToPath@1002 : Text;ToName@1003 : Text);
+    VAR
+      RepositoryFS@1004 : Codeunit 11102069;
+      RepositoryVSS@1005 : Codeunit 11102070;
+      RepositoryTFS@1006 : Codeunit 11102071;
+      RepositorySVN@1007 : Codeunit 11102072;
+    BEGIN
+      WITH RepositorySetup DO
+
+        CASE "Repository Type" OF
+
+          "Repository Type"::"File System" :
+            RepositoryFS.FileRename(FromPath, FromName, ToPath, ToName);
+
+          "Repository Type"::"Visual SourceSafe" :
+            RepositoryVSS.FileRename(FromPath, FromName, ToPath, ToName);
+
+          "Repository Type"::"Team Foundation Server" :
+            RepositoryTFS.RenameFile(FromPath, FromName, ToPath, ToName);
+
+          "Repository Type"::SubVersion :
+            RepositorySVN.FileRename(FromPath, FromName, ToPath, ToName);
+
+        END;
+    END;
+
+    LOCAL PROCEDURE FileLock@56(Path@1000 : Text;FileName@1001 : Text);
+    VAR
+      RepositoryFS@1002 : Codeunit 11102069;
+      RepositoryVSS@1003 : Codeunit 11102070;
+      RepositorySVN@1004 : Codeunit 11102072;
+    BEGIN
+      ErrorIfLockedByOther(Path, FileName);
+
+      WITH RepositorySetup DO
+
+        CASE "Repository Type" OF
+
+          "Repository Type"::"File System" :
+            RepositoryFS.FileLock(Path, FileName);
+
+          "Repository Type"::"Visual SourceSafe" :
+            RepositoryVSS.FileLock(Path, FileName);
+
+          "Repository Type"::"Team Foundation Server" :
+            RepositoryFS.FileLock(Path, FileName);
+
+          "Repository Type"::SubVersion :
+            RepositorySVN.FileLock(Path, FileName);
+
+        END;
+    END;
+
+    LOCAL PROCEDURE FileUnlock@57(Path@1000 : Text;FileName@1001 : Text);
+    VAR
+      RepositoryFS@1002 : Codeunit 11102069;
+      RepositoryVSS@1003 : Codeunit 11102070;
+      RepositoryTFS@1004 : Codeunit 11102071;
+      RepositorySVN@1005 : Codeunit 11102072;
+    BEGIN
+      WITH RepositorySetup DO
+
+        CASE "Repository Type" OF
+
+          "Repository Type"::"File System" :
+            RepositoryFS.FileUnlock(Path, FileName);
+
+          "Repository Type"::"Visual SourceSafe" :
+            RepositoryVSS.FileUnlock(Path, FileName);
+
+          "Repository Type"::"Team Foundation Server" :
+            RepositoryTFS.FileUnlock(Path, FileName);
+
+          "Repository Type"::SubVersion :
+            RepositorySVN.FileUnlock(Path, FileName);
+
+        END;
+    END;
+
+    LOCAL PROCEDURE FileIsLocked@58(Path@1000 : Text;FileName@1001 : Text) : Boolean;
+    VAR
+      RepositoryFS@1002 : Codeunit 11102069;
+      RepositoryVSS@1003 : Codeunit 11102070;
+      RepositorySVN@1004 : Codeunit 11102072;
+    BEGIN
+      WITH RepositorySetup DO
+
+        CASE "Repository Type" OF
+
+          "Repository Type"::"File System" :
+            EXIT(RepositoryFS.FileIsLocked(Path, FileName));
+
+          "Repository Type"::"Visual SourceSafe" :
+            EXIT(RepositoryVSS.FileIsLocked(Path, FileName));
+
+          "Repository Type"::"Team Foundation Server" :
+            EXIT(RepositoryFS.FileIsLocked(Path, FileName));
+
+          "Repository Type"::SubVersion :
+            EXIT(RepositorySVN.FileIsLocked(Path, FileName));
+
+        END;
+    END;
+
+    LOCAL PROCEDURE FileLockedBy@59(Path@1000 : Text;FileName@1001 : Text;VAR LockedBy@1002 : Text;VAR LockDate@1003 : Date;VAR LockTime@1004 : Time);
+    VAR
+      RepositoryFS@1005 : Codeunit 11102069;
+      RepositoryVSS@1006 : Codeunit 11102070;
+      RepositorySVN@1007 : Codeunit 11102072;
+    BEGIN
+      WITH RepositorySetup DO
+
+        CASE "Repository Type" OF
+
+          "Repository Type"::"File System" :
+            RepositoryFS.FileLockedBy(Path, FileName, LockedBy, LockDate, LockTime);
+
+          "Repository Type"::"Visual SourceSafe" :
+            RepositoryVSS.FileLockedBy(Path, FileName, LockedBy, LockDate, LockTime);
+
+          "Repository Type"::"Team Foundation Server" :
+            RepositoryFS.FileLockedBy(Path, FileName, LockedBy, LockDate, LockTime);
+
+          "Repository Type"::SubVersion :
+            RepositorySVN.FileLockedBy(Path, FileName, LockedBy, LockDate, LockTime);
+
+        END;
+    END;
+
+    LOCAL PROCEDURE FillFileRec@60(VAR TmpFileRec@1000 : TEMPORARY Record 11102094;Path@1001 : Text);
+    VAR
+      RepositoryFS@1002 : Codeunit 11102069;
+      RepositoryVSS@1003 : Codeunit 11102070;
+      RepositorySVN@1004 : Codeunit 11102072;
+    BEGIN
+      WITH RepositorySetup DO
+
+        CASE "Repository Type" OF
+
+          "Repository Type"::"File System" :
+            RepositoryFS.FillFileRec(TmpFileRec, Path);
+
+          "Repository Type"::"Visual SourceSafe" :
+            RepositoryVSS.FillFileRec(TmpFileRec, Path);
+
+          "Repository Type"::"Team Foundation Server" :
+            RepositoryFS.FillFileRec(TmpFileRec, Path);
+
+          "Repository Type"::SubVersion :
+            RepositorySVN.FillFileRec(TmpFileRec, Path);
+
+        END;
+    END;
+
+    LOCAL PROCEDURE ReadTFS@61();
+    VAR
+      RepositoryTFS@1000 : Codeunit 11102071;
+    BEGIN
+      IF RepositorySetup."Repository Type" = RepositorySetup."Repository Type"::"Team Foundation Server" THEN
+        RepositoryTFS.GetRecursive;
+    END;
+
+    LOCAL PROCEDURE WriteTFS@62();
+    VAR
+      RepositoryTFS@1000 : Codeunit 11102071;
+    BEGIN
+      IF RepositorySetup."Repository Type" = RepositorySetup."Repository Type"::"Team Foundation Server" THEN BEGIN
+        RepositoryTFS.AddRecursive;
+        RepositoryTFS.CheckInRecursive;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,1086 @@
+OBJECT Codeunit 11102087 OM - Import Transport
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            CommonDialog@1000 : Codeunit 11102059;
+            ClientFileName@1001 : Text;
+          BEGIN
+            IF gServerFileName = '' THEN BEGIN
+              CommonDialog.AddKnownExtension('fib');
+              CommonDialog.OpenFile(ClientFileName, gServerFileName);
+              IF gServerFileName <> '' THEN
+                ImportWithWizard(gServerFileName);
+            END ELSE
+              SilentImport(gServerFileName);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      gServerFileName@1000 : Text;
+
+    PROCEDURE SetServerFileName@1(NewServerFileName@1000 : Text);
+    BEGIN
+      gServerFileName := NewServerFileName;
+    END;
+
+    LOCAL PROCEDURE SilentImport@2(FileName@1000 : Text);
+    VAR
+      Transport@1001 : Record 11102043;
+      TmpObject@1002 : TEMPORARY Record 2000000001;
+      TmpSection@1003 : TEMPORARY Record 2000000001;
+      Progressbar@1004 : Codeunit 11102044;
+      StepDescription@1005 : ARRAY [10] OF Text[1024];
+      i@1006 : Integer;
+      NoOfSteps@1007 : Integer;
+      StepType@1008 : ARRAY [10] OF '0';
+      ctImporting@1009 : TextConst 'DEU=Importing transport...;ENU=Importing transport...;ESP=Importing transport...;FRA=Importing transport...;NLD=Transport importeren...;DEA=Importing transport...';
+    BEGIN
+      IF NOT GetContent(FileName, Transport, TmpSection, FALSE) THEN
+        EXIT;
+
+      GetImportSteps(Transport, NoOfSteps, StepType, StepDescription);
+      TestTextExportNeeded(Transport);
+      GetObjects(TmpSection, TmpObject);
+
+      Progressbar.Open(ctImporting, 1);
+      Progressbar.BarSize := NoOfSteps;
+      FOR i := 1 TO NoOfSteps DO BEGIN
+        Progressbar.AddToBar(1);
+        Progressbar.Text1 := StepDescription[i];
+        COMMIT;
+        ExecuteStep(StepType[i], Transport, TmpSection, TmpObject);
+      END;
+
+      Progressbar.Close;
+    END;
+
+    PROCEDURE ImportWithWizard@3(FileName@1000 : Text);
+    VAR
+      Transport@1001 : Record 11102043;
+      TmpObject@1002 : TEMPORARY Record 2000000001;
+      FileHandler@1003 : Codeunit 11102097;
+      ImportTransport@1004 : Page 11102078;
+      ImportTransportWeb@1005 : Page 11102084;
+    BEGIN
+      IF NOT GetContent(FileName, Transport, TmpObject, TRUE) THEN
+        EXIT;
+
+      IF FileHandler.IsWebClient THEN BEGIN
+        ImportTransportWeb.SetTransport(Transport);
+        ImportTransportWeb.SetSections(TmpObject);
+        ImportTransport.SetServerFileName(FileName);
+        COMMIT;
+        ImportTransportWeb.RUNMODAL;
+      END ELSE BEGIN
+        ImportTransport.SetTransport(Transport);
+        ImportTransport.SetSections(TmpObject);
+        ImportTransport.SetServerFileName(FileName);
+        ImportTransport.RUN;
+      END;
+    END;
+
+    PROCEDURE GetContent@4(FileName@1000 : Text;VAR Transport@1001 : Record 11102043;VAR TmpSection@1002 : TEMPORARY Record 2000000001;WithDialog@1003 : Boolean) : Boolean;
+    VAR
+      TransportNo@1004 : Code[20];
+    BEGIN
+      TransportNo := GetTransportNo(FileName);
+
+      IF WithDialog THEN
+        IF NOT ConfirmOverwriteExisting(TransportNo) THEN
+          EXIT;
+
+      ReadSections(FileName, TmpSection);
+
+      IF WithDialog THEN
+        IF NOT ConfirmChanges(TmpSection, FileName) THEN
+          EXIT;
+
+      ImportDefinition(TmpSection);
+
+      Transport.GET(TransportNo);
+
+      IF WithDialog THEN
+        CheckIfOldTransport(Transport);
+
+      UpdateRepository(Transport);
+
+      IF WithDialog THEN
+        CheckForUntransportedProjects(Transport);
+
+      BlockTransport(Transport);
+      BlockProjects(Transport);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetTransportNo@5(FileName@1000 : Text) TransportNo : Code[20];
+    VAR
+      oFile@1001 : File;
+      SplitLine@1002 : ARRAY [500] OF Text[250];
+      ReadChar@1003 : Char;
+      FieldCounter@1004 : Integer;
+      StopRepeat@1005 : Boolean;
+    BEGIN
+      oFile.OPEN(FileName);
+
+      FieldCounter := 1;
+
+      WHILE (oFile.READ(ReadChar) > 0) AND NOT StopRepeat DO
+        CASE ReadChar OF
+          9 :
+            FieldCounter += 1;
+          10 :
+            ;
+          13 :
+            BEGIN
+              IF SplitLine[1] = '' THEN BEGIN
+                TransportNo := SplitLine[2];
+                StopRepeat := TRUE;
+              END;
+
+              CLEAR(SplitLine);
+              FieldCounter := 1;
+            END;
+          ELSE
+            SplitLine[FieldCounter] += FORMAT(ReadChar);
+        END;
+
+      oFile.CLOSE;
+    END;
+
+    LOCAL PROCEDURE ConfirmOverwriteExisting@6(VAR TransportNo@1000 : Code[20]) : Boolean;
+    VAR
+      Project@1001 : Record 11102036;
+      Transport@1002 : Record 11102043;
+      ctExistingtransportDeleted@1003 : TextConst 'DEU=The existing transport definition will be deleted.\Are you sure?;ENU=The existing transport definition will be deleted.\Are you sure?;ESP=The existing transport definition will be deleted.\Are you sure?;FRA=The existing transport definition will be deleted.\Are you sure?;NLD=De bestaande transportedefinitie wordt verwijderd.\Weet u het zeker?;DEA=The existing transport definition will be deleted.\Are you sure?';
+    BEGIN
+      IF Transport.GET(TransportNo) THEN BEGIN
+        IF NOT CONFIRM(ctExistingtransportDeleted, TRUE) THEN
+          EXIT(FALSE);
+
+        Project.SETCURRENTKEY("Transport No.");
+        Project.SETRANGE("Transport No.", TransportNo);
+        Project.MODIFYALL("Transport No.", '');
+
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ReadSections@7(VAR FileName@1000 : Text;VAR TmpObject@1001 : TEMPORARY Record 2000000001);
+    VAR
+      ImExportMgt@1002 : Codeunit 11102043;
+      Progressbar@1003 : Codeunit 11102044;
+      oFile@1004 : File;
+      InStr@1005 : InStream;
+      OutStr@1006 : OutStream;
+      SectionHeader@1007 : Text;
+      SectionName@1008 : Text;
+      Char@1009 : Char;
+      SectionSize@1010 : Integer;
+      ctImporting@1011 : TextConst 'DEU=Importing transport...;ENU=Importing transport...;ESP=Importing transport...;FRA=Importing transport...;NLD=Transport importeren...;DEA=Importing transport...';
+    BEGIN
+      oFile.OPEN(FileName);
+
+      Progressbar.Open(ctImporting, 1);
+
+      Progressbar.BarSize := oFile.LEN;
+
+      oFile.CREATEINSTREAM(InStr);
+      ImExportMgt.CheckObjectManagerVersion(InStr, 'FIB');
+
+      InStr.READTEXT(SectionHeader, 42);
+
+      Progressbar.BarSize := 6;
+
+      WHILE SectionHeader <> '' DO BEGIN
+
+        Progressbar.AddToBar(1);
+
+        SectionName := DELCHR(DELSTR(SectionHeader, 21), '>');
+        Progressbar.Text1 := DELSTR(SectionHeader, 21);
+        EVALUATE(SectionSize, COPYSTR(SectionHeader, 21, 20));
+
+        TmpObject.Type += 1;
+        TmpObject."Company Name" := SectionName;
+        CLEAR(TmpObject."BLOB Reference");
+        TmpObject."BLOB Reference".CREATEOUTSTREAM(OutStr);
+
+        Progressbar.NextBar;
+        ImExportMgt.InOutStream(InStr, OutStr, SectionSize);
+        Progressbar.PreviousBar;
+
+        InStr.READ(Char, 1);
+
+        TmpObject."BLOB Size" := SectionSize;
+        TmpObject.INSERT;
+
+        InStr.READTEXT(SectionHeader, 42);
+
+      END;
+
+      Progressbar.Close;
+    END;
+
+    LOCAL PROCEDURE ConfirmChanges@8(VAR TmpObject@1000 : TEMPORARY Record 2000000001;FileName@1001 : Text) : Boolean;
+    VAR
+      Setup@1002 : Record 11102035;
+      ObjectCompareSheet@1003 : Page 11102097;
+      ctOpenConfirmSheet@1004 : TextConst 'DEU=Objects are changed since the last transport.\Please confirm the changes in the Object Compare Sheet.;ENU=Objects are changed since the last transport.\Please confirm the changes in the Object Compare Sheet.;ESP=Objects are changed since the last transport.\Please confirm the changes in the Object Compare Sheet.;FRA=Objects are changed since the last transport.\Please confirm the changes in the Object Compare Sheet.;NLD=Er zijn objecten veranderd sinds het laatste transport.\Bevestig de wijzigingen in de objectenvergelijksheet.;DEA=Objects are changed since the last transport.\Please confirm the changes in the Object Compare Sheet.';
+    BEGIN
+      Setup.CustomGet;
+
+      IF Setup."Confirm Changes at Imp. Tr." THEN
+        IF NOT CALHistoryUpToDate THEN BEGIN
+          MESSAGE(ctOpenConfirmSheet);
+          ObjectCompareSheet.SetNewCALCode(TmpObject);
+          ObjectCompareSheet.SetTransportFile(FileName);
+          ObjectCompareSheet.LOOKUPMODE := TRUE;
+          COMMIT;
+          IF ObjectCompareSheet.RUNMODAL = ACTION::LookupOK THEN
+            EXIT(CALHistoryUpToDate)
+          ELSE
+            EXIT(FALSE);
+        END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ImportDefinition@9(VAR TmpObject@1000 : TEMPORARY Record 2000000001);
+    VAR
+      ActionMgt@1001 : Codeunit 11102038;
+      Progressbar@1002 : Codeunit 11102044;
+      InStr@1003 : InStream;
+      ctImportingTransport@1004 : TextConst 'DEU=Importing transport...;ENU=Importing transport...;ESP=Importing transport...;FRA=Importing transport...;NLD=Transport importeren...;DEA=Importing transport...';
+    BEGIN
+      Progressbar.Open(ctImportingTransport, 1);
+
+      TmpObject.SETRANGE("Company Name", 'TRANSPORT DEFINITION');
+      TmpObject.FINDFIRST;
+      TmpObject.CALCFIELDS("BLOB Reference");
+      TmpObject."BLOB Reference".CREATEINSTREAM(InStr);
+      ActionMgt.ImportInstream(InStr, FALSE, Progressbar, TmpObject."BLOB Size");
+      TmpObject.DELETE;
+      TmpObject.SETRANGE("Company Name");
+
+      Progressbar.Close;
+    END;
+
+    LOCAL PROCEDURE CheckIfOldTransport@10(VAR Transport@1000 : Record 11102043);
+    VAR
+      Transport2@1001 : Record 11102043;
+      OldTransport@1002 : Boolean;
+      ctOldTransport@1003 : TextConst 'DEU=Transport %1 is already imported and newer than the current transport.\Do you want to continue?;ENU=Transport %1 is already imported and newer than the current transport.\Do you want to continue?;ESP=Transport %1 is already imported and newer than the current transport.\Do you want to continue?;FRA=Transport %1 is already imported and newer than the current transport.\Do you want to continue?;NLD=Transport %1 is al ge‹mporteerd en nieuwer dan het huidige transport.\Wilt u doorgaan?;DEA=Transport %1 is already imported and newer than the current transport.\Do you want to continue?';
+    BEGIN
+      Transport2.SETCURRENTKEY("Transport Date", "Transport Time");
+      Transport2.SETFILTER("Transport Date", '>=%1', Transport."Transport Date");
+      Transport2.SETFILTER("No.", '<>%1', Transport."No.");
+      IF Transport2.FINDSET THEN
+        REPEAT
+          OldTransport :=
+            (Transport2."Transport Date" > Transport."Transport Date") OR
+            (Transport2."Transport Time" > Transport."Transport Time");
+
+          IF OldTransport THEN
+            IF NOT CONFIRM(ctOldTransport, TRUE, Transport2."No.") THEN
+              ERROR('');
+
+        UNTIL (Transport2.NEXT = 0) OR OldTransport;
+    END;
+
+    LOCAL PROCEDURE UpdateRepository@11(VAR Transport@1000 : Record 11102043);
+    VAR
+      Project@1001 : Record 11102036;
+      RepositorySetup@1002 : Record 11102085;
+    BEGIN
+      IF RepositorySetup.GET THEN
+        IF RepositorySetup."Use Repository" THEN BEGIN
+          Transport.UpdateRepository(0);
+          Project.SETCURRENTKEY("Transport No.");
+          Project.SETRANGE("Transport No.", Transport."No.");
+          IF Project.FINDSET THEN
+            REPEAT
+              Project.UpdateRepository(0);
+            UNTIL Project.NEXT = 0;
+        END;
+    END;
+
+    LOCAL PROCEDURE CheckForUntransportedProjects@12(VAR Transport@1000 : Record 11102043);
+    VAR
+      Setup@1001 : Record 11102035;
+      Project@1002 : Record 11102036;
+      Project2@1003 : Record 11102036;
+      ProjectObject@1004 : Record 11102037;
+      ProjectObject2@1005 : Record 11102037;
+      ctSomeObjectsInProjects@1006 : TextConst 'DEU=This transport contains objects that are also present in existing (not transported) projects.\Do you want to continue?;ENU=This transport contains objects that are also present in existing (not transported) projects.\Do you want to continue?;ESP=This transport contains objects that are also present in existing (not transported) projects.\Do you want to continue?;FRA=This transport contains objects that are also present in existing (not transported) projects.\Do you want to continue?;NLD=Dit transport bevat objecten die ook aanwezig zijn in bestaande (niet getransporteerde) projecten.\Wilt u doorgaan?;DEA=This transport contains objects that are also present in existing (not transported) projects.\Do you want to continue?';
+    BEGIN
+      Setup.CustomGet;
+
+      IF NOT Setup."Ch. for Untr. Pr. at Imp. Tr." THEN
+        EXIT;
+
+      Project.SETCURRENTKEY("Transport No.");
+      Project.SETRANGE("Transport No.", Transport."No.");
+      IF Project.FINDSET THEN
+        REPEAT
+          ProjectObject.SETRANGE("Project No.", Project."No.");
+          IF ProjectObject.FINDSET THEN
+            REPEAT
+              ProjectObject2.SETCURRENTKEY("Object Type", "Object No.");
+              ProjectObject2.SETRANGE("Object Type", ProjectObject."Object Type");
+              ProjectObject2.SETRANGE("Object No.", ProjectObject."Object No.");
+              IF ProjectObject2.FINDSET THEN
+                REPEAT
+                  IF Project2.GET(ProjectObject2."Project No.") THEN
+                    IF NOT Project2.Transported THEN BEGIN
+                      IF NOT CONFIRM(ctSomeObjectsInProjects, TRUE) THEN
+                        ERROR('');
+                      EXIT;
+                    END;
+                UNTIL ProjectObject2.NEXT = 0;
+            UNTIL ProjectObject.NEXT = 0;
+        UNTIL Project.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE BlockTransport@13(VAR Transport@1000 : Record 11102043);
+    VAR
+      Setup@1001 : Record 11102035;
+    BEGIN
+      Setup.CustomGet;
+
+      Transport.Transported := FALSE;
+
+      CASE Setup."Block Transport at Imp. Trans." OF
+        Setup."Block Transport at Imp. Trans."::No :
+          Transport.Blocked := FALSE;
+        Setup."Block Transport at Imp. Trans."::Yes :
+          Transport.Blocked := TRUE;
+      END;
+
+      Transport.MODIFY;
+    END;
+
+    LOCAL PROCEDURE BlockProjects@14(VAR Transport@1000 : Record 11102043);
+    VAR
+      Setup@1001 : Record 11102035;
+      Project@1002 : Record 11102036;
+    BEGIN
+      Setup.CustomGet;
+
+      Project.SETCURRENTKEY("Transport No.");
+      Project.SETRANGE("Transport No.", Transport."No.");
+      IF Project.FINDSET THEN
+        REPEAT
+          Project.Transported := FALSE;
+
+          CASE Setup."Block Project at Imp. Trans." OF
+            Setup."Block Project at Imp. Trans."::No :
+              Project.Blocked := FALSE;
+            Setup."Block Project at Imp. Trans."::Yes :
+              Project.Blocked := TRUE;
+          END;
+
+          Project.MODIFY;
+        UNTIL Project.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CALHistoryUpToDate@15() : Boolean;
+    VAR
+      KnownObjectExportError@1000 : Record 11102073;
+      Object@1001 : Record 2000000001;
+      Progressbar@1002 : Codeunit 11102044;
+      SourceControl@1003 : Codeunit 11102050;
+      ctCheckingCALHistory@1004 : TextConst 'DEU=Checking C/AL history...;ENU=Checking C/AL history...;ESP=Checking C/AL history...;FRA=Checking C/AL history...;NLD=C/AL Historie controleren...;DEA=Checking C/AL history...';
+    BEGIN
+      Progressbar.Open(ctCheckingCALHistory, 0);
+      Object.SETFILTER(Type, '<>%1', Object.Type::TableData);
+      Object.SETRANGE("Company Name", '');
+      Progressbar.BarSize := Object.COUNT;
+
+      IF Object.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+
+          IF SourceControl.ObjectChangedSinceTransport(Object) THEN
+            IF NOT KnownObjectExportError.GET(Object.Type, Object.ID) THEN
+              EXIT(FALSE);
+        UNTIL Object.NEXT = 0;
+
+      Progressbar.Close;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetImportSteps@16(VAR Transport@1000 : Record 11102043;VAR NoOfSteps@1001 : Integer;VAR StepType@1002 : ARRAY [10] OF 'Backup Original Objects,Merge Objects,Import Objects Part 1,Fab before,Import Objects Part 2,Import Objects,Fab after,Permissions,Backup New Objects,Reset Project Status,Compile Objects';VAR StepDescription@1003 : ARRAY [10] OF Text[1024]);
+    VAR
+      Setup@1004 : Record 11102035;
+      Project@1005 : Record 11102036;
+      ProjectObject@1006 : Record 11102037;
+      Actions@1007 : Record 11102048;
+      ProjectPermissions@1008 : Record 11102050;
+      TmpObject@1009 : TEMPORARY Record 2000000001;
+      TmpObjectsBefore@1010 : TEMPORARY Record 2000000001;
+      DoAfterFab@1011 : Boolean;
+      DoBeforeFab@1012 : Boolean;
+      HasPermissions@1013 : Boolean;
+      ctBackupNewObjects@1014 : TextConst 'DEU=Backup new objects;ENU=Backup new objects;ESP=Backup new objects;FRA=Backup new objects;NLD=Nieuwe objecten opslaan;DEA=Backup new objects';
+      ctBackupOriginalObjects@1015 : TextConst 'DEU=Backup original objects;ENU=Backup original objects;ESP=Backup original objects;FRA=Backup original objects;NLD=Originele objecten opslaan;DEA=Backup original objects';
+      ctCompileObjects@1016 : TextConst 'DEU=Compile objects;ENU=Compile objects;ESP=Compile objects;FRA=Compile objects;NLD=Objecten compileren;DEA=Compile objects';
+      ctImportFab@1017 : TextConst 'DEU=Execute actions;ENU=Execute actions;ESP=Execute actions;FRA=Execute actions;NLD=Acties uitvoeren;DEA=Execute actions';
+      ctImportPermissions@1018 : TextConst 'DEU=Import permissions;ENU=Import permissions;ESP=Import permissions;FRA=Import permissions;NLD=Toegangsrechten importeren;DEA=Import permissions';
+      ctMergeObjects@1019 : TextConst 'DEU=Merge objects;ENU=Merge objects;ESP=Merge objects;FRA=Merge objects;NLD=Objecten mergen;DEA=Merge objects';
+      ctResetProjectStatus@1020 : TextConst 'DEU=Reset project status;ENU=Reset project status;ESP=Reset project status;FRA=Reset project status;NLD=Projectstatus resetten;DEA=Reset project status';
+      ctResetProjectTransportStatus@1021 : TextConst 'DEU=Reset project and transport status;ENU=Reset project and transport status;ESP=Reset project and transport status;FRA=Reset project and transport status;NLD=Project- en transportstatus resetten;DEA=Reset project and transport status';
+      ctResetTransportStatus@1022 : TextConst 'DEU=Reset transport status;ENU=Reset transport status;ESP=Reset transport status;FRA=Reset transport status;NLD=Transportstatus resetten;DEA=Reset transport status';
+      ctTransporting@1023 : TextConst 'DEU=Importing objects;ENU=Importing objects;ESP=Importing objects;FRA=Importing objects;NLD=Objecten importeren;DEA=Importing objects';
+      ctTransportingPart1@1024 : TextConst 'DEU=Importing first part of objects;ENU=Importing first part of objects;ESP=Importing first part of objects;FRA=Importing first part of objects;NLD=Eerste deel van objecten importeren;DEA=Importing first part of objects';
+      ctTransportingPart2@1025 : TextConst 'DEU=Importing last part of objects;ENU=Importing last part of objects;ESP=Importing last part of objects;FRA=Importing last part of objects;NLD=Tweede deel van objecten importeren;DEA=Importing last part of objects';
+    BEGIN
+      Setup.CustomGet;
+      IF Setup."Save C/AL before Import Tr." <> Setup."Save C/AL before Import Tr."::No THEN BEGIN
+        NoOfSteps += 1;
+        StepType[NoOfSteps] := StepType[NoOfSteps]::"Backup Original Objects";
+        StepDescription[NoOfSteps] := ctBackupOriginalObjects;
+      END;
+
+      ProjectObject.SETCURRENTKEY("Transport No.");
+      ProjectObject.SETRANGE("Transport No.", Transport."No.");
+
+      IF ProjectObject.FINDSET THEN
+        REPEAT
+          TmpObject.Type := ProjectObject."Object Type";
+          TmpObject.ID := ProjectObject."Object No.";
+          IF TmpObject.INSERT THEN
+            ;
+        UNTIL ProjectObject.NEXT = 0;
+
+      IF NOT TmpObject.ISEMPTY AND (Transport."Object Import Mode" <> Transport."Object Import Mode"::Compiled) THEN BEGIN
+        NoOfSteps += 1;
+        StepType[NoOfSteps] := StepType[NoOfSteps]::"Merge Objects";
+        StepDescription[NoOfSteps] := ctMergeObjects;
+      END;
+
+      ProjectObject.SETRANGE("Used in Action Before", TRUE);
+      IF ProjectObject.FINDSET THEN
+        REPEAT
+          TmpObjectsBefore.Type := ProjectObject."Object Type";
+          TmpObjectsBefore.ID := ProjectObject."Object No.";
+          IF TmpObjectsBefore.INSERT THEN
+            ;
+        UNTIL ProjectObject.NEXT = 0;
+      ProjectObject.SETRANGE("Used in Action Before");
+
+      Project.SETCURRENTKEY("Transport No.");
+      Project.SETRANGE("Transport No.", Transport."No.");
+      IF Project.FINDSET THEN
+        REPEAT
+
+          Actions.RESET;
+          Actions.SETRANGE(Type, Actions.Type::Project);
+          Actions.SETRANGE("No.", Project."No.");
+          Actions.SETRANGE("Sub Type", Actions."Sub Type"::Before);
+          Actions.SETFILTER("Action Type", '%1|%2|%3',
+            Actions."Action Type"::"Run Report",
+            Actions."Action Type"::"Run Codeunit",
+            Actions."Action Type"::"6");
+
+          IF Actions.FINDSET THEN
+            REPEAT
+              CASE Actions."Action Type" OF
+
+                Actions."Action Type"::"Run Report" :
+                  TmpObjectsBefore.Type := TmpObjectsBefore.Type::Report;
+
+                Actions."Action Type"::"Run Codeunit" :
+                  TmpObjectsBefore.Type := TmpObjectsBefore.Type::Codeunit;
+
+                Actions."Action Type"::"6" :
+                  TmpObjectsBefore.Type := TmpObjectsBefore.Type::"4";
+
+              END;
+              TmpObjectsBefore.ID := Actions."Object No.";
+              IF TmpObjectsBefore.INSERT THEN
+                ;
+            UNTIL Actions.NEXT = 0;
+        UNTIL Project.NEXT = 0;
+
+      IF TmpObjectsBefore.FINDSET THEN
+        REPEAT
+          IF NOT TmpObject.GET(TmpObjectsBefore.Type, '', TmpObjectsBefore.ID) THEN
+            TmpObjectsBefore.DELETE;
+        UNTIL TmpObjectsBefore.NEXT = 0;
+
+      IF NOT TmpObjectsBefore.ISEMPTY THEN
+        IF TmpObject.COUNT <> TmpObjectsBefore.COUNT THEN BEGIN
+          NoOfSteps += 1;
+          StepType[NoOfSteps] := StepType[NoOfSteps]::"Import Objects Part 1";
+          StepDescription[NoOfSteps] := ctTransportingPart1;
+        END ELSE BEGIN
+          NoOfSteps += 1;
+          StepType[NoOfSteps] := StepType[NoOfSteps]::"Import Objects";
+          StepDescription[NoOfSteps] := ctTransporting;
+        END;
+
+      IF Project.FINDSET THEN
+        REPEAT
+          Actions.RESET;
+          Actions.SETRANGE(Type, Actions.Type::Project);
+          Actions.SETRANGE("No.", Project."No.");
+          Actions.SETRANGE("Sub Type", Actions."Sub Type"::Before);
+          IF NOT Actions.ISEMPTY THEN
+            DoBeforeFab := TRUE;
+        UNTIL (Project.NEXT = 0) OR DoBeforeFab;
+
+      IF DoBeforeFab THEN BEGIN
+        NoOfSteps += 1;
+        StepType[NoOfSteps] := StepType[NoOfSteps]::"Fab before";
+        StepDescription[NoOfSteps] := ctImportFab;
+      END;
+
+      IF NOT TmpObject.ISEMPTY AND (TmpObject.COUNT <> TmpObjectsBefore.COUNT) THEN
+        IF NOT TmpObjectsBefore.ISEMPTY THEN BEGIN
+          NoOfSteps += 1;
+          StepType[NoOfSteps] := StepType[NoOfSteps]::"Import Objects Part 2";
+          StepDescription[NoOfSteps] := ctTransportingPart2;
+        END ELSE BEGIN
+          NoOfSteps += 1;
+          StepType[NoOfSteps] := StepType[NoOfSteps]::"Import Objects";
+          StepDescription[NoOfSteps] := ctTransporting;
+        END;
+
+      IF Project.FINDSET THEN
+        REPEAT
+          Actions.RESET;
+          Actions.SETRANGE(Type, Actions.Type::Project);
+          Actions.SETRANGE("No.", Project."No.");
+          Actions.SETRANGE("Sub Type", Actions."Sub Type"::After);
+          IF NOT Actions.ISEMPTY THEN
+            DoAfterFab := TRUE;
+        UNTIL (Project.NEXT = 0) OR DoAfterFab;
+
+      IF DoAfterFab THEN BEGIN
+        NoOfSteps += 1;
+        StepType[NoOfSteps] := StepType[NoOfSteps]::"Fab after";
+        StepDescription[NoOfSteps] := ctImportFab;
+      END;
+
+      Project.SETCURRENTKEY("Transport No.");
+      Project.SETRANGE("Transport No.", Transport."No.");
+      IF Project.FINDSET THEN
+        REPEAT
+          ProjectPermissions.SETRANGE("Project No.", Project."No.");
+          IF NOT ProjectPermissions.ISEMPTY THEN
+            HasPermissions := TRUE;
+        UNTIL (Project.NEXT = 0) OR HasPermissions;
+
+      IF HasPermissions THEN BEGIN
+        NoOfSteps += 1;
+        StepType[NoOfSteps] := StepType[NoOfSteps]::Permissions;
+        StepDescription[NoOfSteps] := ctImportPermissions;
+      END;
+
+      IF Setup."Save C/AL after Import Tr." <> Setup."Save C/AL after Import Tr."::No THEN BEGIN
+        NoOfSteps += 1;
+        StepType[NoOfSteps] := StepType[NoOfSteps]::"Backup New Objects";
+        StepDescription[NoOfSteps] := ctBackupNewObjects;
+      END;
+
+      CASE TRUE OF
+        Setup."Reset Project Status at Import" AND Setup."Reset Tr. Status at Imp. Tr." :
+          BEGIN
+            NoOfSteps += 1;
+            StepType[NoOfSteps] := StepType[NoOfSteps]::"Reset Project Status";
+            StepDescription[NoOfSteps] := ctResetProjectTransportStatus;
+          END;
+
+        Setup."Reset Project Status at Import" :
+          BEGIN
+            NoOfSteps += 1;
+            StepType[NoOfSteps] := StepType[NoOfSteps]::"Reset Project Status";
+            StepDescription[NoOfSteps] := ctResetProjectStatus;
+          END;
+
+        Setup."Reset Tr. Status at Imp. Tr." :
+          BEGIN
+            NoOfSteps += 1;
+            StepType[NoOfSteps] := StepType[NoOfSteps]::"Reset Project Status";
+            StepDescription[NoOfSteps] := ctResetTransportStatus;
+          END;
+
+      END;
+
+      IF Setup."Compile Objects after Imp. Tr." THEN BEGIN
+        NoOfSteps += 1;
+        StepType[NoOfSteps] := StepType[NoOfSteps]::"Compile Objects";
+        StepDescription[NoOfSteps] := ctCompileObjects;
+      END;
+    END;
+
+    PROCEDURE BackupOriginalObjects@17(VAR TmpObject@1000 : TEMPORARY Record 2000000001);
+    VAR
+      Setup@1001 : Record 11102035;
+      CALHistoryObject@1002 : Record 11102052;
+      Object@1003 : Record 2000000001;
+      TmpObject2@1004 : TEMPORARY Record 2000000001;
+      SourceControl@1005 : Codeunit 11102050;
+    BEGIN
+      Setup.CustomGet;
+      IF Setup."Save C/AL before Import Tr." <> Setup."Save C/AL before Import Tr."::No THEN BEGIN
+        IF TmpObject.FINDSET THEN
+          REPEAT
+            IF Object.GET(TmpObject.Type, '', TmpObject.ID) THEN BEGIN
+              TmpObject2 := Object;
+              TmpObject2.INSERT;
+            END;
+          UNTIL TmpObject.NEXT = 0;
+
+        SourceControl.AddObjects(
+          TmpObject2,
+          CALHistoryObject."Action Type"::"Before Imp. Transport",
+          Setup."Save C/AL before Import Tr." = Setup."Save C/AL before Import Tr."::"If Changed", FALSE, 0, TRUE);
+      END;
+    END;
+
+    PROCEDURE TransportPermissions@18(VAR Transport@1000 : Record 11102043);
+    VAR
+      Project@1001 : Record 11102036;
+      ProjectPermissions@1002 : Record 11102050;
+      UserRole@1003 : Record 2000000004;
+      Permission@1004 : Record 2000000005;
+    BEGIN
+      Project.SETCURRENTKEY("Transport No.");
+      Project.SETRANGE("Transport No.", Transport."No.");
+      IF Project.FINDSET THEN
+        REPEAT
+          ProjectPermissions.SETRANGE("Project No.", Project."No.");
+          IF ProjectPermissions.FINDSET THEN
+            REPEAT
+              IF NOT UserRole.GET(ProjectPermissions."Role Id") THEN BEGIN
+                UserRole."Role ID" := ProjectPermissions."Role Id";
+                UserRole.Name := ProjectPermissions."Role Name";
+                UserRole.INSERT;
+              END ELSE
+                IF UserRole.Name <> ProjectPermissions."Role Name" THEN BEGIN
+                  UserRole.Name := ProjectPermissions."Role Name";
+                  UserRole.MODIFY;
+                END;
+
+              Permission."Role ID" := ProjectPermissions."Role Id";
+              Permission."Object Type" := ProjectPermissions."Object Type";
+              Permission."Object ID" := ProjectPermissions."Object No.";
+              Permission."Read Permission" := ProjectPermissions."Read Permission";
+              Permission."Insert Permission" := ProjectPermissions."Insert Permission";
+              Permission."Modify Permission" := ProjectPermissions."Modify Permission";
+              Permission."Delete Permission" := ProjectPermissions."Delete Permission";
+              Permission."Execute Permission" := ProjectPermissions."Execute Permission";
+              Permission."Security Filter" := ProjectPermissions."Security Filter";
+              IF NOT Permission.INSERT THEN
+                Permission.MODIFY;
+
+            UNTIL ProjectPermissions.NEXT = 0;
+
+        UNTIL Project.NEXT = 0;
+    END;
+
+    PROCEDURE BackupNewObjects@19(VAR TmpObject@1000 : TEMPORARY Record 2000000001);
+    VAR
+      Setup@1001 : Record 11102035;
+      CALHistoryObject@1002 : Record 11102052;
+      Object@1003 : Record 2000000001;
+      TmpObject2@1004 : TEMPORARY Record 2000000001;
+      SourceControl@1005 : Codeunit 11102050;
+    BEGIN
+      Setup.CustomGet;
+      IF Setup."Save C/AL after Import Tr." <> Setup."Save C/AL after Import Tr."::No THEN BEGIN
+        IF TmpObject.FINDSET THEN
+          REPEAT
+            IF Object.GET(TmpObject.Type, '', TmpObject.ID) THEN BEGIN
+              TmpObject2 := Object;
+              TmpObject2.INSERT;
+            END;
+          UNTIL TmpObject.NEXT = 0;
+
+        SourceControl.AddObjects(
+          TmpObject2,
+          CALHistoryObject."Action Type"::"After Imp. Transport",
+          Setup."Save C/AL after Import Tr." = Setup."Save C/AL after Import Tr."::"If Changed", FALSE, 0, TRUE);
+      END;
+    END;
+
+    PROCEDURE ResetProjectStatus@20(VAR Transport@1000 : Record 11102043);
+    VAR
+      Setup@1001 : Record 11102035;
+      Project@1002 : Record 11102036;
+      Project2@1003 : Record 11102036;
+      Flow@1004 : Record 11102040;
+      ProjectType@1005 : Record 11102097;
+      TransportType@1006 : Record 11102098;
+    BEGIN
+      Setup.CustomGet;
+
+      IF Setup."Reset Project Status at Import" THEN BEGIN
+        Project.SETCURRENTKEY("Transport No.");
+        Project.SETRANGE("Transport No.", Transport."No.");
+        IF Project.FINDSET THEN
+          REPEAT
+
+            Project2 := Project;
+            Project2."Transport No." := '';
+            Project2.Transported := FALSE;
+
+            IF ProjectType.GET(Project."Project Type Code") THEN
+              IF ProjectType."Project Flow Code" <> '' THEN
+                Project2.VALIDATE("Project Flow Code", ProjectType."Project Flow Code");
+
+            IF Flow.GET(Flow."Table Name"::Project, Project2."Project Flow Code") THEN
+              Project2.VALIDATE("Status Code", Flow.DefaultStatus);
+
+            Project2.SetSkipCheckBlocked(TRUE);
+            Project2.MODIFY(TRUE);
+
+          UNTIL Project.NEXT = 0;
+      END;
+
+      IF Setup."Reset Tr. Status at Imp. Tr." THEN BEGIN
+
+        IF TransportType.GET(Transport."Transport Type Code") THEN
+          IF TransportType."Transport Flow Code" <> '' THEN
+            Transport.VALIDATE("Transport Flow Code", TransportType."Transport Flow Code");
+
+        IF Flow.GET(Flow."Table Name"::Transport, Transport."Transport Flow Code") THEN
+          Transport.VALIDATE("Status Code", Flow.DefaultStatus);
+
+        Transport.SetSkipCheckBlocked(TRUE);
+        Transport.MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE ExecuteStep@21(StepType@1000 : 'Back Up Original Objects,Merge Objects,Import Objects Part 1,Fab before,Import Objects Part 2,Import Objects,Fab after,Permissions,Back Up New Objects,Reset Project Status,Compile Objects';VAR Transport@1001 : Record 11102043;VAR TmpSection@1002 : TEMPORARY Record 2000000001;VAR TmpObject@1003 : TEMPORARY Record 2000000001) : Boolean;
+    VAR
+      ActionMgt@1004 : Codeunit 11102038;
+      ImExportMgt@1005 : Codeunit 11102043;
+      Progressbar@1006 : Codeunit 11102044;
+      ObjectMgt@1007 : Codeunit 11102046;
+      ImportTransport@1008 : Codeunit 11102087;
+      FileHandler@1009 : Codeunit 11102097;
+      TmpFile@1010 : File;
+      InStr@1011 : InStream;
+      OutStr@1012 : OutStream;
+      ServerTempFileName@1013 : Text;
+      ctFabAfter@1014 : TextConst 'DEU=Importing FAB after...;ENU=Importing FAB after...;ESP=Importing FAB after...;FRA=Importing FAB after...;NLD=FAB achteraf importeren...;DEA=Importing FAB after...';
+      ctFabBefore@1015 : TextConst 'DEU=Importing FAB before...;ENU=Importing FAB before...;ESP=Importing FAB before...;FRA=Importing FAB before...;NLD=FAB vooraf importeren...;DEA=Importing FAB before...';
+    BEGIN
+      CASE StepType OF
+
+        StepType::"Back Up Original Objects" :
+          ImportTransport.BackupOriginalObjects(TmpObject);
+
+        StepType::"Merge Objects" :
+          EXIT(Merge(Transport, TmpSection, TmpObject));
+
+        StepType::"Import Objects Part 1" :
+          BEGIN
+            TmpSection.SETRANGE("Company Name", 'FOB BEFORE');
+            TmpSection.FINDFIRST;
+            TmpSection.CALCFIELDS("BLOB Reference");
+            TmpSection."BLOB Reference".CREATEINSTREAM(InStr);
+            ImportObjects2(Transport, InStr);
+          END;
+
+        StepType::"Fab before" :
+          BEGIN
+            TmpSection.SETRANGE("Company Name", 'FAB BEFORE');
+            TmpSection.FINDFIRST;
+            TmpSection.CALCFIELDS("BLOB Reference");
+            TmpSection."BLOB Reference".CREATEINSTREAM(InStr);
+
+            Progressbar.Open(ctFabBefore, 2);
+            Progressbar.BarSize := TmpSection."BLOB Size";
+            ActionMgt.ImportInstream(InStr, FALSE, Progressbar, TmpSection."BLOB Size");
+            Progressbar.Close;
+          END;
+
+        StepType::"Import Objects Part 2", StepType::"Import Objects" :
+          IF Transport."Object Import Mode" = Transport."Object Import Mode"::Compiled THEN BEGIN
+            TmpSection.SETRANGE("Company Name", 'FOB');
+            TmpSection.FINDFIRST;
+            TmpSection.CALCFIELDS("BLOB Reference");
+            TmpSection."BLOB Reference".CREATEINSTREAM(InStr);
+            ImportObjects2(Transport, InStr);
+          END ELSE BEGIN
+            TmpSection.SETRANGE("Company Name", 'TXTOBJECTS MERGED');
+            TmpSection.FINDFIRST;
+            TmpSection.CALCFIELDS("BLOB Reference");
+            TmpSection."BLOB Reference".CREATEINSTREAM(InStr);
+
+            ServerTempFileName := FileHandler.CreateServerTempFileName('txt');
+            TmpFile.CREATE(ServerTempFileName);
+            TmpFile.CREATEOUTSTREAM(OutStr);
+            COPYSTREAM(OutStr, InStr);
+            TmpFile.CLOSE;
+
+            ObjectMgt.ImportObject(ServerTempFileName);
+            ImExportMgt.CompileObjects(TmpObject);
+
+          END;
+
+        StepType::"Fab after" :
+          BEGIN
+            TmpSection.SETRANGE("Company Name", 'FAB AFTER');
+            TmpSection.FINDFIRST;
+            TmpSection.CALCFIELDS("BLOB Reference");
+            TmpSection."BLOB Reference".CREATEINSTREAM(InStr);
+
+            Progressbar.Open(ctFabAfter, 2);
+            Progressbar.BarSize := TmpSection."BLOB Size";
+            ActionMgt.ImportInstream(InStr, FALSE, Progressbar, TmpSection."BLOB Size");
+            Progressbar.Close;
+          END;
+
+        StepType::Permissions :
+          ImportTransport.TransportPermissions(Transport);
+
+        StepType::"Back Up New Objects" :
+          ImportTransport.BackupNewObjects(TmpObject);
+
+        StepType::"Reset Project Status" :
+          ImportTransport.ResetProjectStatus(Transport);
+
+        StepType::"Compile Objects" :
+          ImExportMgt.CompileObjects(TmpObject);
+
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetObjects@22(VAR TmpSection@1000 : TEMPORARY Record 2000000001;VAR TmpObject@1001 : TEMPORARY Record 2000000001);
+    VAR
+      ImExportMgt@1002 : Codeunit 11102043;
+      InStr@1003 : InStream;
+    BEGIN
+      TmpSection.SETRANGE("Company Name", 'FOB');
+      IF TmpSection.FINDFIRST THEN BEGIN
+        TmpSection.CALCFIELDS("BLOB Reference");
+        TmpSection."BLOB Reference".CREATEINSTREAM(InStr);
+        ImExportMgt.GetObjectHeadersFromFob(InStr, TmpObject);
+      END;
+    END;
+
+    LOCAL PROCEDURE ImportObjects2@23(VAR Transport@1000 : Record 11102043;VAR InStr@1001 : InStream);
+    VAR
+      ProjectObject@1002 : Record 11102037;
+      Modification@1003 : Record 11102042;
+      AssignModificationsMgt@1004 : Codeunit 11102036;
+      ImExportMgt@1005 : Codeunit 11102043;
+      LastEntryNo@1006 : Integer;
+    BEGIN
+      IF Modification.FINDLAST THEN
+        LastEntryNo := Modification."Entry No.";
+
+      ImExportMgt.ImportFobFromStream(InStr);
+
+      Modification.SETFILTER("Entry No.", '>%1', LastEntryNo);
+      IF Modification.FINDSET THEN
+        REPEAT
+          ProjectObject.SETRANGE("Transport No.", Transport."No.");
+          ProjectObject.SETRANGE("Object Type", Modification."Object Type");
+          ProjectObject.SETRANGE("Object No.", Modification."Object No.");
+          IF ProjectObject.FINDFIRST THEN
+            IF Modification.Status = Modification.Status::Inserted THEN
+              AssignModificationsMgt.AssignModificationToProject(Modification, ProjectObject."Project No.");
+        UNTIL Modification.NEXT = 0;
+    END;
+
+    PROCEDURE TestTextExportNeeded@24(VAR Transport@1000 : Record 11102043);
+    VAR
+      Project@1001 : Record 11102036;
+      Actions@1002 : Record 11102048;
+      ExportNeeded@1003 : Boolean;
+    BEGIN
+      Project.SETCURRENTKEY("Transport No.");
+      Project.SETRANGE("Transport No.", Transport."No.");
+      IF Project.FINDSET THEN
+        REPEAT
+          Actions.RESET;
+          Actions.SETRANGE(Type, Actions.Type::Project);
+          Actions.SETRANGE("No.", Project."No.");
+          Actions.SETRANGE("Action Type", Actions."Action Type"::"Renumber Field");
+          IF NOT Actions.ISEMPTY THEN
+            ExportNeeded := TRUE;
+        UNTIL Project.NEXT = 0;
+
+      IF ExportNeeded THEN BEGIN
+        TestPermission(1320);
+        TestPermission(1340);
+      END;
+    END;
+
+    LOCAL PROCEDURE TestPermission@25(PermissionNo@1000 : Integer);
+    VAR
+      AllObj@1001 : Record 2000000038;
+      LicensePermission@1002 : Record 2000000043;
+      ctNoExport@1003 : TextConst 'DEU=This transport contains a field renumber action.\This is not possible with the active license.\Please use a developer license.\\Missing permission: %1;ENU=This transport contains a field renumber action.\This is not possible with the active license.\Please use a developer license.\\Missing permission: %1;ESP=This transport contains a field renumber action.\This is not possible with the active license.\Please use a developer license.\\Missing permission: %1;FRA=This transport contains a field renumber action.\This is not possible with the active license.\Please use a developer license.\\Missing permission: %1;NLD=In dit tranport zit een veldomnummeraction.\Dit is niet mogelijk met de actieve licentie.\Gebruik een ontwikkellicentie.\\Ontbrekende permissie: %1;DEA=This transport contains a field renumber action.\This is not possible with the active license.\Please use a developer license.\\Missing permission: %1';
+    BEGIN
+      LicensePermission.GET(LicensePermission."Object Type"::System, PermissionNo);
+      IF LicensePermission."Execute Permission" <> LicensePermission."Execute Permission"::Yes THEN BEGIN
+        AllObj.GET(AllObj."Object Type"::System, PermissionNo);
+        ERROR(ctNoExport, AllObj."Object Name");
+      END;
+    END;
+
+    LOCAL PROCEDURE Merge@26(VAR Transport@1000 : Record 11102043;VAR TmpSection@1001 : TEMPORARY Record 2000000001;VAR TmpObject@1002 : TEMPORARY Record 2000000001) : Boolean;
+    VAR
+      Setup@1003 : Record 11102035;
+      ImExportMgt@1004 : Codeunit 11102043;
+      ObjectMgt@1005 : Codeunit 11102046;
+      SourceControl@1006 : Codeunit 11102050;
+      CommonDialog@1007 : Codeunit 11102059;
+      FileHandler@1008 : Codeunit 11102097;
+      TmpFile@1009 : File;
+      InStr@1010 : InStream;
+      OutStr@1011 : OutStream;
+      ClientModifiedFileName@1012 : Text;
+      ClientOriginalFileName@1013 : Text;
+      ClientResultFileName@1014 : Text;
+      ClientTargetFileName@1015 : Text;
+      DirectoryName@1016 : Text;
+      MergeDirectoryName@1017 : Text;
+      ServerModifiedFileName@1018 : Text;
+      ServerOriginalFileName@1019 : Text;
+      ServerResultFileName@1020 : Text;
+      ServerTargetFileName@1021 : Text;
+      i@1022 : Integer;
+      ctConfirmReady@1023 : TextConst 'DEU=Press ''Yes'' when merging is ready.;ENU=Press ''Yes'' when merging is ready.;ESP=Press ''Yes'' when merging is ready.;FRA=Press ''Yes'' when merging is ready.;NLD=Druk op ''Ja'' als het mergen voltooid is.;DEA=Press ''Yes'' when merging is ready.';
+      ctMergeFileNotFound@1024 : TextConst 'DEU=Merge file not found.;ENU=Merge file not found.;ESP=Merge file not found.;FRA=Merge file not found.;NLD=Merge-bestand niet gevonden.;DEA=Merge file not found.';
+    BEGIN
+      Setup.CustomGet;
+      Setup.TESTFIELD("Three Way Merge Compare Tool");
+
+      IF NOT CommonDialog.SelectDirectory(DirectoryName) THEN
+        EXIT(FALSE);
+
+      FileHandler.AddBackSlash(DirectoryName);
+      MergeDirectoryName := DirectoryName + 'merge' + '\';
+      IF FileHandler.ClientDirectoryExists(MergeDirectoryName) THEN
+        REPEAT
+          i += 1;
+          MergeDirectoryName := DirectoryName + 'merge' + FORMAT(i) + '\';
+        UNTIL NOT FileHandler.ClientDirectoryExists(MergeDirectoryName);
+
+      CASE Transport."Object Import Mode" OF
+        Transport."Object Import Mode"::"Text Merge" :
+          BEGIN
+            ClientModifiedFileName := MergeDirectoryName + 'Modified.txt';
+            ClientResultFileName := MergeDirectoryName + 'Result.txt';
+
+            ServerModifiedFileName := FileHandler.CreateServerTempFileName('txt');
+            ServerResultFileName := FileHandler.CreateServerTempFileName('txt');
+
+            TmpSection.SETRANGE("Company Name", 'TXTOBJECTS');
+            TmpSection.FINDFIRST;
+            TmpSection.CALCFIELDS("BLOB Reference");
+            TmpSection."BLOB Reference".CREATEINSTREAM(InStr);
+            ImExportMgt.CheckObjectManagerVersion(InStr, 'TXT');
+
+            TmpFile.CREATE(ServerModifiedFileName);
+            TmpFile.CREATEOUTSTREAM(OutStr);
+            COPYSTREAM(OutStr, InStr);
+            TmpFile.CLOSE;
+
+            ObjectMgt.ExportRangeTxt(TmpObject, ServerResultFileName);
+
+            FileHandler.CheckCreateClientDirectory(MergeDirectoryName);
+
+            FileHandler.DownloadToClient(ServerModifiedFileName, ClientModifiedFileName, '');
+            FileHandler.DownloadToClient(ServerResultFileName, ClientResultFileName, '');
+
+            SourceControl.StartCompareToolFile(ClientModifiedFileName, ClientResultFileName);
+
+          END;
+
+        Transport."Object Import Mode"::"Three Way Text Merge" :
+          BEGIN
+            ClientOriginalFileName := MergeDirectoryName + 'Original.txt';
+            ClientModifiedFileName := MergeDirectoryName + 'Modified.txt';
+            ClientTargetFileName := MergeDirectoryName + 'Target.txt';
+            ClientResultFileName := MergeDirectoryName + 'Result.txt';
+
+            ServerOriginalFileName := FileHandler.CreateServerTempFileName('txt');
+            ServerModifiedFileName := FileHandler.CreateServerTempFileName('txt');
+            ServerTargetFileName := FileHandler.CreateServerTempFileName('txt');
+
+            TmpSection.SETRANGE("Company Name", 'TXTOBJECTS BEFORE');
+            TmpSection.FINDFIRST;
+            TmpSection.CALCFIELDS("BLOB Reference");
+            TmpSection."BLOB Reference".CREATEINSTREAM(InStr);
+            ImExportMgt.CheckObjectManagerVersion(InStr, 'TXT');
+
+            TmpFile.CREATE(ServerOriginalFileName);
+            TmpFile.CREATEOUTSTREAM(OutStr);
+            COPYSTREAM(OutStr, InStr);
+            TmpFile.CLOSE;
+
+            TmpSection.SETRANGE("Company Name", 'TXTOBJECTS');
+            TmpSection.FINDFIRST;
+            TmpSection.CALCFIELDS("BLOB Reference");
+            TmpSection."BLOB Reference".CREATEINSTREAM(InStr);
+            ImExportMgt.CheckObjectManagerVersion(InStr, 'TXT');
+
+            TmpFile.CREATE(ServerModifiedFileName);
+            TmpFile.CREATEOUTSTREAM(OutStr);
+            COPYSTREAM(OutStr, InStr);
+            TmpFile.CLOSE;
+
+            ObjectMgt.ExportRangeTxt(TmpObject, ServerTargetFileName);
+
+            FileHandler.CheckCreateClientDirectory(MergeDirectoryName);
+
+            FileHandler.DownloadToClient(ServerOriginalFileName, ClientOriginalFileName, '');
+            FileHandler.DownloadToClient(ServerModifiedFileName, ClientModifiedFileName, '');
+            FileHandler.DownloadToClient(ServerTargetFileName, ClientTargetFileName, '');
+
+            SourceControl.StartThreeWayCompareToolFile(ClientOriginalFileName, ClientModifiedFileName, ClientTargetFileName, ClientResultFileName);
+
+          END;
+
+      END;
+
+      REPEAT
+        IF NOT CONFIRM(ctConfirmReady, TRUE) THEN
+          EXIT(FALSE);
+
+        IF FileHandler.ClientFileNameExists(ClientResultFileName) THEN BEGIN
+          ServerResultFileName := FileHandler.UploadToServer(ClientResultFileName, '');
+          TmpSection."Company Name" := 'TXTOBJECTS MERGED';
+          TmpSection."BLOB Reference".CREATEOUTSTREAM(OutStr);
+
+          TmpFile.OPEN(ServerResultFileName);
+          TmpFile.CREATEINSTREAM(InStr);
+          COPYSTREAM(OutStr, InStr);
+          TmpFile.CLOSE;
+
+          IF NOT TmpSection.INSERT THEN
+            TmpSection.MODIFY;
+
+          EXIT(TRUE);
+        END;
+
+        MESSAGE(ctMergeFileNotFound);
+      UNTIL FALSE;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

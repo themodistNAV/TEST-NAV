@@ -1,0 +1,507 @@
+OBJECT Codeunit 50010 Product Catalogue Export XML
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/10/18;
+    Time=[ 6:02:41 PM];
+    Modified=Yes;
+    Version List=OP9031,OP10933;
+  }
+  PROPERTIES
+  {
+    TableNo=9062734;
+    OnRun=VAR
+            AutoNAVToolkit@1000000000 : Codeunit 9062602;
+          BEGIN
+            ClearLastErrors;
+            IF NOT ExportXML(Filename) THEN BEGIN
+              LogError(GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ExportXML'),GETLASTERRORCODE,Filename);
+              AutoNAVToolkit.AddEntryForTask(Rec,GETLASTERRORTEXT,2);//DOC OP10933 CB 19/06/2017 -+
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ERRLOCATION@1000000000 : TextConst 'ENU=%1\Codeunit 50010;ENG=%1\Codeunit 50010';
+      Filename@1000000001 : Text;
+
+    [TryFunction]
+    LOCAL PROCEDURE ExportXML@1000000001(VAR pFileName@1000000019 : Text);
+    VAR
+      XMLDoc@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLWriter@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlWriter";
+      ModistSetup@1000000002 : Record 50000;
+      Style@1000000003 : Record 9087012;
+      Item@1000000004 : Record 27;
+      WebIntegrationManagement@1000000005 : Codeunit 50100;
+      FileAttachment@1000000006 : Record 9062272;
+      Vendor@1000000007 : Record 23;
+      Colour@1000000009 : Record 9087003;
+      Size@1000000008 : Record 9087002;
+      ItemColours@1000000010 : Record 27;
+      ItemVariant@1000000011 : Record 5401;
+      GeneralLookup@1000000012 : Record 9062232;
+      ItemXRef@1000000013 : Record 5717;
+      BrandName@1000000016 : Text;
+      IntegrationProcessingGroup@1000000014 : Record 50007;
+      FileName@1000000015 : Text;
+      NumSizes@1000000017 : Integer;
+      IntegrationFunctions@1000000018 : Codeunit 50008;
+    BEGIN
+      ModistSetup.GET;
+
+      IntegrationProcessingGroup.GET(ModistSetup."Demandware Integration Type",ModistSetup."Demandware Catalogue Group");
+
+      FileName := WebIntegrationManagement.CatalogFileName;
+      pFileName := FileName;
+
+      XMLWriter := XMLWriter.Create(FileName);
+
+      XMLWriter.WriteStartElement('catalog','http://www.demandware.com/xml/impex/catalog/2006-10-31');
+      XMLWriter.WriteAttributeString('catalog-id',IntegrationProcessingGroup."Primary Element ID");
+
+      //Header
+      XMLWriter.WriteStartElement('header');
+        XMLWriter.WriteStartElement('image-settings');
+          XMLWriter.WriteStartElement('internal-location');
+          XMLWriter.WriteAttributeString('base-path','/images');
+          XMLWriter.WriteEndElement; // </internal-location>
+          XMLWriter.WriteStartElement('view-types');
+            XMLWriter.WriteElementString('view-type','large');
+            XMLWriter.WriteElementString('view-type','model');
+            XMLWriter.WriteElementString('view-type','swatch');
+          XMLWriter.WriteEndElement; // </view-types>
+          XMLWriter.WriteElementString('variation-attribute-id','color');
+          XMLWriter.WriteElementString('alt-pattern','${productname}, ${variationvalue}, ${viewtype}');
+          XMLWriter.WriteElementString('title-pattern','${productname}, ${variationvalue}');
+        XMLWriter.WriteEndElement; // </image-settings>
+      XMLWriter.WriteEndElement; // </header>
+
+      //Style.SETRANGE("No.",'11940');
+      //Style.SETFILTER("No.",'00017|00018');
+      Style.FINDSET;
+      REPEAT
+        BrandName := GetBrandName(Style."Brand Code");
+        IF NOT Vendor.GET(Style."Vendor No.") THEN
+          CLEAR(Vendor);
+
+        CLEAR(Item);
+        Item.SETRANGE("Style No.",Style."No.");
+        IF Item.FINDSET THEN BEGIN
+          REPEAT
+            XMLWriter.WriteStartElement('product');
+            XMLWriter.WriteAttributeString('product-id',Item."No.");
+              ItemXRef.RESET; //barcodes (EAN & UPC)
+              ItemXRef.SETRANGE("Item No.",Item."No.");
+              ItemXRef.SETRANGE("Cross-Reference Type",ItemXRef."Cross-Reference Type"::"Bar Code");
+              IF ItemXRef.FINDSET THEN BEGIN
+                REPEAT
+                  XMLWriter.WriteElementString(LOWERCASE(ItemXRef."Cross-Reference Type No."),ItemXRef."Cross-Reference No.");
+                UNTIL ItemXRef.NEXT = 0;
+              END ELSE BEGIN
+                XMLWriter.WriteElementString('ean','');
+                XMLWriter.WriteElementString('upc','');
+              END;
+              XMLWriter.WriteElementString('unit','');
+              XMLWriter.WriteElementString('min-order-quantity',FORMAT(1, 0, 1));
+              XMLWriter.WriteElementString('step-quantity',FORMAT(1, 0, 1));
+              //LF -
+              //XMLWriter.WriteStartElement('display-name');                 //display-name
+              //XMLWriter.WriteAttributeString('xml','lang','','x-default'); //display-name
+              //XMLWriter.WriteString(Style.Description);                     //display-name
+              //XMLWriter.WriteEndElement;  // </display-name>                //display-name
+              //LF +
+              //XMLWriter.WriteElementString('online-flag','true');
+              XMLWriter.WriteElementString('available-flag','true');
+              XMLWriter.WriteElementString('searchable-flag','true');
+
+              //XMLWriter.WriteStartElement('images');
+
+              //LF Removed 04/11/2016 -
+              {
+              FileAttachment.RESET();
+              FileAttachment.SETRANGE("Table ID", DATABASE::Item);
+              FileAttachment.SETRANGE("Primary Key Value 1", Item."No.");
+              FileAttachment.SETFILTER(Extension, 'bmp|gif|jpg|tif|png');
+              IF FileAttachment.FINDSET THEN BEGIN
+                REPEAT
+                  CLEAR(GeneralLookup);
+                  GeneralLookup.SETRANGE(Type,'FILEATTACHMENT');
+                  GeneralLookup.SETRANGE(Code,FileAttachment.Type);
+                  IF GeneralLookup.FINDFIRST THEN BEGIN
+                    XMLWriter.WriteStartElement('image-group');
+                    XMLWriter.WriteAttributeString('view-type',GeneralLookup.Description);
+                      XMLWriter.WriteElementString('image-path',FileAttachment.FileName);
+                    XMLWriter.WriteEndElement; // </image-group>
+                  END;
+                UNTIL FileAttachment.NEXT = 0;
+              END;
+              }
+              //LF Removed 04/11/2016 -
+
+              //XMLWriter.WriteEndElement; // </images>
+              XMLWriter.WriteElementString('tax-class-id','standard');
+              XMLWriter.WriteElementString('brand',BrandName);
+              XMLWriter.WriteElementString('manufacturer-name',BrandName);
+              XMLWriter.WriteElementString('manufacturer-sku',Style."Vendor Style No.");
+              XMLWriter.WriteElementString('sitemap-included-flag','true');
+              XMLWriter.WriteElementString('sitemap-changefrequency','daily');
+              XMLWriter.WriteElementString('sitemap-priority','1.0');
+
+              XMLWriter.WriteStartElement('custom-attributes');
+
+                XMLWriter.WriteStartElement('custom-attribute');
+                XMLWriter.WriteAttributeString('attribute-id','internalProductName');
+                    XMLWriter.WriteElementString('value',Style.Description);
+                XMLWriter.WriteEndElement; // </custom-attribute>
+
+                XMLWriter.WriteStartElement('custom-attribute');
+                XMLWriter.WriteAttributeString('attribute-id','brandCategoryId');
+                    XMLWriter.WriteElementString('value',Style."Brand Code");
+                XMLWriter.WriteEndElement; // </custom-attribute>
+
+                XMLWriter.WriteStartElement('custom-attribute');
+                XMLWriter.WriteAttributeString('attribute-id','season');
+                    XMLWriter.WriteElementString('value',Style."Season Code");
+                XMLWriter.WriteEndElement; // </custom-attribute>
+
+                XMLWriter.WriteStartElement('custom-attribute');
+                XMLWriter.WriteAttributeString('attribute-id','subSeason');
+                    XMLWriter.WriteElementString('value',Style."Season Code");
+                XMLWriter.WriteEndElement; // </custom-attribute>
+
+                XMLWriter.WriteStartElement('custom-attribute');
+                XMLWriter.WriteAttributeString('attribute-id','buyingCategory');
+                    XMLWriter.WriteElementString('value',Style."Group Code");
+                XMLWriter.WriteEndElement; // </custom-attribute>
+
+                XMLWriter.WriteStartElement('custom-attribute');
+                XMLWriter.WriteAttributeString('attribute-id','countryOfOrigin');
+                    XMLWriter.WriteElementString('value',Style."Country of Origin");
+                XMLWriter.WriteEndElement; // </custom-attribute>
+
+                //if there is only a single variant of One Size
+                Item.CALCFIELDS(Item."No. Of Variants");
+                IF Item."No. Of Variants" IN [0,1] THEN BEGIN
+                  //refinementColor
+                  XMLWriter.WriteStartElement('custom-attribute');
+                    XMLWriter.WriteAttributeString('attribute-id','refinementColor');
+                    XMLWriter.WriteElementString('value',GetMasterColour(Item."Colour Code"));
+                  XMLWriter.WriteEndElement; // </custom-attribute>
+                  //Colour
+                  XMLWriter.WriteStartElement('custom-attribute');
+                    XMLWriter.WriteAttributeString('attribute-id','color');
+                    XMLWriter.WriteElementString('value',Item."Colour Code");
+                  XMLWriter.WriteEndElement; // </custom-attribute>
+                  //Size
+                  XMLWriter.WriteStartElement('custom-attribute');
+                    XMLWriter.WriteAttributeString('attribute-id','size');
+                    XMLWriter.WriteElementString('value',Item."Size Group Code");
+                  XMLWriter.WriteEndElement; // </custom-attribute>
+                  //sizeRefinement
+                  XMLWriter.WriteStartElement('custom-attribute');
+                    XMLWriter.WriteAttributeString('attribute-id','sizeRefinement');
+                    XMLWriter.WriteElementString('value',GetSizeGroupName(Item."Size Group Code"));
+                  XMLWriter.WriteEndElement; // </custom-attribute>
+                END;
+
+              XMLWriter.WriteEndElement; // </custom-attributes>
+
+              IF (NumVariants(Item."No.") >= 1)  AND (Item."Size Group Code" <> ModistSetup."One Size Code") THEN BEGIN
+                XMLWriter.WriteStartElement('variations');
+                  XMLWriter.WriteStartElement('attributes');
+                    //colours
+                    XMLWriter.WriteStartElement('variation-attribute');
+                    XMLWriter.WriteAttributeString('attribute-id','color');
+                    XMLWriter.WriteAttributeString('slicing-attribute','false');
+                    XMLWriter.WriteAttributeString('variation-attribute-id','color');
+                      XMLWriter.WriteStartElement('display-name');                 //display-name
+                      XMLWriter.WriteAttributeString('xml','lang','','x-default'); //display-name
+                      XMLWriter.WriteString('color');                             //display-name
+                      XMLWriter.WriteEndElement; // </display-name>                //display-name
+                      ItemColours.RESET();
+                      ItemColours.SETRANGE("Style No.", Style."No.");
+                      IF ItemColours.FINDSET THEN BEGIN
+                        XMLWriter.WriteStartElement('variation-attribute-values');
+                        REPEAT
+                          Colour.GET(ItemColours."Colour Code");
+                            XMLWriter.WriteStartElement('variation-attribute-value');
+                              XMLWriter.WriteAttributeString('value',Colour."No.");
+                                XMLWriter.WriteStartElement('display-value');                   //display-value
+                                XMLWriter.WriteAttributeString('xml','lang','','x-default');    //display-value
+                                XMLWriter.WriteString(Colour.Name);                             //display-value
+                                XMLWriter.WriteEndElement; // </display-value>                  //display-value
+                            XMLWriter.WriteEndElement; // </variation-attribute-value>
+                        UNTIL ItemColours.NEXT = 0;
+                        XMLWriter.WriteEndElement; // </variation-attribute-values>
+                      END;
+                    XMLWriter.WriteEndElement; // </variation-attribute>
+                    //sizes
+                    XMLWriter.WriteStartElement('variation-attribute');
+                    XMLWriter.WriteAttributeString('attribute-id','size');
+                    XMLWriter.WriteAttributeString('slicing-attribute','false');
+                    XMLWriter.WriteAttributeString('variation-attribute-id','size');
+                      XMLWriter.WriteStartElement('display-name');                 //display-name
+                      XMLWriter.WriteAttributeString('xml','lang','','x-default'); //display-name
+                      XMLWriter.WriteString('size');                               //display-name
+                      XMLWriter.WriteEndElement; // </display-name>                //display-name
+                      ItemVariant.RESET;
+                      ItemVariant.SETCURRENTKEY("Item No.",Sequence,Code);
+                      ItemVariant.SETRANGE("Item No.",Item."No.");
+                      IF ItemVariant.FINDSET THEN BEGIN
+                        XMLWriter.WriteStartElement('variation-attribute-values');
+                        REPEAT
+                            XMLWriter.WriteStartElement('variation-attribute-value');
+                              XMLWriter.WriteAttributeString('value',ItemVariant."Size Code");  //PCM
+                                XMLWriter.WriteStartElement('display-value');                   //display-value
+                                XMLWriter.WriteAttributeString('xml','lang','','x-default');    //display-value
+                                XMLWriter.WriteString(GetSizeName(ItemVariant."Size Group Code",ItemVariant."Size Code"));  //display-value
+                                XMLWriter.WriteEndElement; // </display-value>                  //display-value
+                            XMLWriter.WriteEndElement; // </variation-attribute-value>
+                        UNTIL ItemVariant.NEXT = 0;
+                        XMLWriter.WriteEndElement; // </variation-attribute-values>
+                      END;
+                    XMLWriter.WriteEndElement; // </variation-attribute>
+                  XMLWriter.WriteEndElement; // </attributes>
+                  XMLWriter.WriteStartElement('variants');
+                  ItemVariant.RESET;
+                  ItemVariant.SETCURRENTKEY("Item No.",Sequence,Code);
+                  ItemVariant.SETRANGE("Item No.",Item."No.");
+                  IF ItemVariant.FINDSET THEN BEGIN
+                    REPEAT
+                      IF (ItemVariant."Size Code" <> ModistSetup."One Size Code") THEN BEGIN
+                        XMLWriter.WriteStartElement('variant');
+                        XMLWriter.WriteAttributeString('product-id',ItemVariant."Item No." + '-' + ItemVariant.Code);
+                        XMLWriter.WriteEndElement; // </variant>
+                      END;
+                    UNTIL ItemVariant.NEXT = 0;
+                  END ELSE BEGIN
+                    XMLWriter.WriteStartElement('variant');
+                    XMLWriter.WriteAttributeString('product-id','');
+                    XMLWriter.WriteEndElement; // </variant>
+                  END;
+                  XMLWriter.WriteEndElement; // </variants>
+                XMLWriter.WriteEndElement; // </variations>
+              END; //NumVariants > 1
+              XMLWriter.WriteElementString('pinterest-enabled-flag','true');
+              XMLWriter.WriteElementString('facebook-enabled-flag','true');
+            XMLWriter.WriteEndElement; // </product>
+
+            //re iterate through variants
+            ItemVariant.RESET;
+            ItemVariant.SETCURRENTKEY("Item No.",Sequence,Code);
+            ItemVariant.SETRANGE("Item No.",Item."No.");
+            IF ItemVariant.FINDSET THEN BEGIN
+              REPEAT
+                //## Maybe change below condition to state IF NumVariants >1 ..
+                //IF (ItemVariant."Size Code" <> ModistSetup."One Size Code") THEN BEGIN //ignore one size variant
+                IF (NumVariants(Item."No.") >= 1)  AND (ItemVariant."Size Code"<> ModistSetup."One Size Code") THEN BEGIN
+                  XMLWriter.WriteStartElement('product');
+                  XMLWriter.WriteAttributeString('product-id',ItemVariant."Item No." + '-' + ItemVariant.Code);
+                    ItemXRef.RESET; //barcodes (EAN & UPC)
+                    ItemXRef.SETRANGE("Item No.",Item."No.");
+                    //ItemXRef.SETRANGE("Variant Code",ItemXRef."Variant Code");  //PCM
+                    ItemXRef.SETRANGE("Variant Code",ItemVariant.Code);           //PCM
+                    ItemXRef.SETRANGE("Cross-Reference Type",ItemXRef."Cross-Reference Type"::"Bar Code");
+                    IF ItemXRef.FINDSET THEN BEGIN
+                      REPEAT
+                        XMLWriter.WriteElementString(LOWERCASE(ItemXRef."Cross-Reference Type No."),ItemXRef."Cross-Reference No.");
+                      UNTIL ItemXRef.NEXT = 0;
+                    END ELSE BEGIN
+                      XMLWriter.WriteElementString('ean','');
+                      XMLWriter.WriteElementString('upc','');
+                    END;
+                    XMLWriter.WriteElementString('min-order-quantity',FORMAT(1, 0, 1));
+                    XMLWriter.WriteElementString('step-quantity',FORMAT(1, 0, 1));
+                    XMLWriter.WriteElementString('online-flag','true');
+                    XMLWriter.WriteElementString('available-flag','true');
+                    XMLWriter.WriteElementString('searchable-flag','true');
+                    XMLWriter.WriteStartElement('custom-attributes');
+                      //refinementColor
+                      XMLWriter.WriteStartElement('custom-attribute');
+                        XMLWriter.WriteAttributeString('attribute-id','refinementColor');
+                        XMLWriter.WriteElementString('value',GetMasterColour(ItemVariant."Colour Code"));
+                      XMLWriter.WriteEndElement; // </custom-attribute>
+                      //Colour
+                      XMLWriter.WriteStartElement('custom-attribute');
+                        XMLWriter.WriteAttributeString('attribute-id','color');
+                        XMLWriter.WriteElementString('value',ItemVariant."Colour Code");
+                      XMLWriter.WriteEndElement; // </custom-attribute>
+                      //Size
+                      XMLWriter.WriteStartElement('custom-attribute');
+                        XMLWriter.WriteAttributeString('attribute-id','size');
+                        XMLWriter.WriteElementString('value',ItemVariant."Size Code");
+                      XMLWriter.WriteEndElement; // </custom-attribute>
+                      //OP9031 LF 06/12/2016 -
+                      XMLWriter.WriteStartElement('custom-attribute');
+                        XMLWriter.WriteAttributeString('attribute-id','sizeRefinement');
+                        XMLWriter.WriteElementString('value',GetStandardSizeName(ItemVariant."Size Group Code",ItemVariant."Size Code"));
+                      XMLWriter.WriteEndElement; // </custom-attribute>
+                      //OP9031 LF 06/12/2016 -
+                    XMLWriter.WriteEndElement; // </custom-attributes>
+                  XMLWriter.WriteEndElement; // </product>
+                END;
+              UNTIL ItemVariant.NEXT = 0;
+            END;
+          UNTIL Item.NEXT= 0;
+        END;
+      UNTIL Style.NEXT = 0;
+
+      XMLWriter.WriteEndElement; // </catalog>
+      XMLWriter.Flush;
+      XMLWriter.Close;
+
+      IF IntegrationProcessingGroup."Enable SFTP Connect" THEN BEGIN //if we are ready to connect to sftp
+        WebIntegrationManagement.TransferFTPfiles(IntegrationProcessingGroup."Working Location",IntegrationProcessingGroup."Archive Location",'.xml',ModistSetup."FTP temporary file extension",
+                                                ModistSetup."Demandware Export SFTP Server",IntegrationProcessingGroup."FTP Folder",IntegrationProcessingGroup."FTP Archive Folder",TRUE);
+      END;
+
+      //Log integration
+      IntegrationFunctions.LogDMWCatalogueUpload(FileName,'');
+    END;
+
+    LOCAL PROCEDURE GetMasterColour@1000000007(ColourCode@1000000000 : Code[10]) : Text;
+    VAR
+      lColour@1000000001 : Record 9087003;
+      MasterColour@1000000002 : Record 9087050;
+    BEGIN
+      //DOC OP9031 LF 19/10/2016 -
+      //This function derives the Master Colour associated with a colour and returns the Master Colour description
+      IF lColour.GET(ColourCode) THEN
+        IF MasterColour.GET(lColour."Master Colour Code") THEN
+          EXIT(MasterColour.Description);
+      //DOC OP9031 LF 19/10/2016 +
+    END;
+
+    LOCAL PROCEDURE GetBrandName@1000000002(BrandCode@1000000000 : Code[10]) : Text;
+    VAR
+      Brand@1000000001 : Record 9087006;
+    BEGIN
+      //DOC OP9031 LF 19/10/2016 -
+      //This function derives the Brand Name
+      IF Brand.GET(BrandCode) THEN
+        EXIT(Brand.Name);
+      //DOC OP9031 LF 19/10/2016 +
+    END;
+
+    LOCAL PROCEDURE GetSizeName@1000000003(SizeGroupCode@1000000000 : Code[20];SizeCode@1000000002 : Code[20]) : Text;
+    VAR
+      Size@1000000001 : Record 9087002;
+    BEGIN
+      //DOC OP9031 LF 20/10/2016 -
+      //This function derives the Size Name
+      IF Size.GET(SizeGroupCode,SizeCode) THEN
+        EXIT(Size.Name);
+      //DOC OP9031 LF 20/10/2016 +
+    END;
+
+    LOCAL PROCEDURE GetStandardSizeCode@1000000000(SizeGroupCode@1000000000 : Code[20];SizeCode@1000000002 : Code[20]) : Text;
+    VAR
+      Size@1000000001 : Record 9087002;
+      SizeCodeTemp@1000000003 : Code[10];
+    BEGIN
+      //DOC OP9031 LF 06/12/2016 -
+      //This function derives the standard size code
+      SizeCodeTemp:='';
+      IF Size.GET(SizeGroupCode,SizeCode) THEN BEGIN
+        IF Size."Standard Size Code" <> '' THEN
+          EXIT(Size."Standard Size Code")
+        ELSE
+          EXIT(SizeCode);
+      END;
+      //DOC OP9031 LF 06/12/2016 +
+    END;
+
+    LOCAL PROCEDURE GetSizeGroupName@1000000004(SizeGroupCode@1000000000 : Code[20]) : Text;
+    VAR
+      SizeGroup@1000000001 : Record 9087001;
+    BEGIN
+      //DOC OP9031 LF 22/12/2016 -
+      //This function derives the Size Group Namee
+      IF SizeGroup.GET(SizeGroupCode) THEN BEGIN
+          EXIT(SizeGroup.Name)
+      END;
+      //DOC OP9031 LF 22/12/2016 +
+    END;
+
+    LOCAL PROCEDURE GetStandardSizeName@1000000006(SizeGroupCode@1000000000 : Code[20];SizeCode@1000000002 : Code[20]) : Text;
+    VAR
+      Size@1000000001 : Record 9087002;
+      SizeCodeTemp@1000000003 : Code[10];
+      TempName@1000000004 : Text;
+    BEGIN
+      //DOC OP9031 LF 06/12/2016 -
+      //This function derives the standard size code
+      SizeCodeTemp:='';
+      IF Size.GET(SizeGroupCode,SizeCode) THEN BEGIN
+        IF Size."Standard Size Code" <> '' THEN BEGIN
+          TempName := GetStandardSizeName(Size."Standard Size Group Code",Size."Standard Size Code");
+          IF TempName = '' THEN
+            TempName := Size.Name;
+        END ELSE
+          TempName := Size.Name;
+      END;
+      EXIT(TempName);
+      //DOC OP9031 LF 06/12/2016 +
+    END;
+
+    LOCAL PROCEDURE NumVariants@1000000005(ItemNo@1000000000 : Code[20]) : Integer;
+    VAR
+      ItemVariant@1000000001 : Record 5401;
+    BEGIN
+      //DOC OP9031 LF 28/12/2016 -
+      //This function returns the number of variants for an item
+      ItemVariant.RESET;
+      ItemVariant.SETRANGE("Item No.",ItemNo);
+      EXIT(ItemVariant.COUNT);
+      //DOC OP9031 LF 28/12/2016 +
+    END;
+
+    LOCAL PROCEDURE LogError@1000000015(ErrMessage@1000000002 : Text;ErrorLocation@1000000004 : Text;ErrCode@1000000005 : Text;FileName@1000000001 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+    BEGIN
+      //This function facilitates the logging of an error in the error log table by deriving the default values
+      //and applying the variable values
+      ModistSetup.GET;
+      ErrorHandler.LogError(ModistSetup."Demandware Integration Type",
+                            ModistSetup."Demandware Inventory Group",
+                            '',
+                            0,
+                            '',
+                            0,
+                            ErrMessage,
+                            ErrorLocation,
+                            0,
+                            ErrCode,
+                            FileName);
+    END;
+
+    LOCAL PROCEDURE ClearLastErrors@1000000008();
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+      IntegrationErrorLog@1000000001 : Record 50011;
+    BEGIN
+      //This function deletes all previous errors for the integration type and group
+      ModistSetup.GET;
+      IntegrationErrorLog.SETRANGE("Integration Type",ModistSetup."Demandware Integration Type");
+      IntegrationErrorLog.SETRANGE("Integration Process Group",ModistSetup."Demandware Inventory Group");
+      IF IntegrationErrorLog.FINDSET THEN
+        IntegrationErrorLog.DELETEALL;
+
+      CLEARLASTERROR;
+    END;
+
+    BEGIN
+    {
+      //DOC OP9031 LF 06/12/2016 - Added the custom attribute for Standard Size code to the variants
+      //DOC OP10933 CB 19/06/2017 - Error handling to send emails with autonav
+    }
+    END.
+  }
+}
+

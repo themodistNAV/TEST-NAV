@@ -1,0 +1,379 @@
+OBJECT Codeunit 11102057 OM - Compress C/AL History
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/10/13;
+    Time=12:00:00 PM;
+    Version List=OMA9.01;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE Compress@1(VAR KeepArray@1000 : ARRAY [10] OF Boolean;VAR DateFilter@1001 : Text;VAR ClearBlob@1002 : Boolean);
+    VAR
+      CALHistoryObject@1003 : Record 11102052;
+      CALHistoryCompiled@1004 : Record 11102077;
+      Object@1005 : Record 2000000001;
+      Window@1006 : Dialog;
+      NoOfCALRecords@1007 : Integer;
+      NoOfCALRecordsDeleted@1008 : Integer;
+      NoOfRecords@1009 : Integer;
+      RecordCount@1010 : Integer;
+      RecordCounter@1011 : Integer;
+      ctCompressing@1012 : TextConst 'DEU=Compressing C/AL History...;ENU=Compressing C/AL History...;ESP=Compressing C/AL History...;FRA=Compressing C/AL History...;NLD=C/AL Historie comprimeren...;DEA=Compressing C/AL History...';
+      ctRecordsDeleted@1013 : TextConst 'DEU=%1 records deleted.;ENU=%1 records deleted.;ESP=%1 records deleted.;FRA=%1 records deleted.;NLD=%1 records verwijderd.;DEA=%1 records deleted.';
+      ctRecordsDeletedPerc@1014 : TextConst 'DEU=%1 records deleted. (%2%);ENU=%1 records deleted. (%2%);ESP=%1 records deleted. (%2%);FRA=%1 records deleted. (%2%);NLD=%1 records verwijderd. (%2%);DEA=%1 records deleted. (%2%)';
+    BEGIN
+      WITH Object DO BEGIN
+
+        Window.OPEN('#1#####################\#2#####################\@3@@@@@@@@@@@@@@@@@@@@@\#4#####################');
+        NoOfRecords += COUNT;
+
+        Window.UPDATE(1, ctCompressing);
+
+        SETFILTER(Type, '<>%1', Type::TableData);
+        IF FINDSET THEN
+          REPEAT
+
+            RecordCounter += 1;
+
+            Window.UPDATE(2, STRSUBSTNO('%1 %2 %3', Type, ID, Name));
+            Window.UPDATE(3, ROUND(RecordCounter / NoOfRecords * 10000, 1));
+
+            CALHistoryObject.SETCURRENTKEY("Object Type", "Object No.", "Object Date", "Object Time");
+            CALHistoryObject.SETRANGE("Object Type", Type);
+            CALHistoryObject.SETRANGE("Object No.", ID);
+
+            IF DateFilter <> '' THEN
+              CALHistoryObject.SETFILTER("Object Date", DateFilter);
+
+            RecordCount := CALHistoryObject.COUNT;
+            NoOfCALRecords += RecordCount;
+
+            IF RecordCount > 2 THEN
+              CompressObject(Object, KeepArray, NoOfCALRecordsDeleted, DateFilter);
+
+            IF ClearBlob THEN BEGIN
+              CALHistoryCompiled.DELETEALL;
+              CALHistoryObject.MODIFYALL("BLOB Reference Present", FALSE);
+            END;
+
+            IF NoOfCALRecords <> 0 THEN
+              Window.UPDATE(
+                4, STRSUBSTNO(ctRecordsDeletedPerc, NoOfCALRecordsDeleted, ROUND(NoOfCALRecordsDeleted / NoOfCALRecords * 100, 1)));
+
+          UNTIL NEXT = 0;
+      END;
+
+      MESSAGE(STRSUBSTNO(ctRecordsDeleted, NoOfCALRecordsDeleted));
+    END;
+
+    LOCAL PROCEDURE CompressObject@2(VAR Object@1000 : Record 2000000001;VAR KeepArray@1001 : ARRAY [10] OF Boolean;VAR NoOfCALRecordsDeleted@1002 : Integer;VAR DateFilter@1003 : Text);
+    VAR
+      CALHistoryObject@1004 : Record 11102052;
+      TmpKeepCALHistoryObject@1005 : TEMPORARY Record 11102052;
+      LastEntryNo@1006 : Integer;
+      KeepOptions@1007 : ' ,First,Last,Last Each Day,Last Each Week,Last Each Month,First Each Project,Last Each Project,First Each Transport,Last Each Transport';
+    BEGIN
+      IF DateFilter <> '' THEN BEGIN
+        CALHistoryObject.FILTERGROUP(2);
+        CALHistoryObject.SETFILTER("Object Date", DateFilter);
+        CALHistoryObject.FILTERGROUP(0);
+      END;
+
+      CALHistoryObject.SETRANGE("Object Type", Object.Type);
+      CALHistoryObject.SETRANGE("Object No.", Object.ID);
+      CALHistoryObject.SETRANGE("C/AL Code Present", TRUE);
+      CALHistoryObject.FINDLAST;
+      LastEntryNo := CALHistoryObject."Entry No.";
+
+      CALHistoryObject.SETCURRENTKEY("Object Type", "Object No.", "Object Date", "Object Time");
+      CALHistoryObject.FINDFIRST;
+      CALHistoryObject.AddToTempRecord(TmpKeepCALHistoryObject);
+
+      CALHistoryObject.FINDLAST;
+      CALHistoryObject.AddToTempRecord(TmpKeepCALHistoryObject);
+
+      IF KeepArray[KeepOptions::"Last Each Day"] THEN
+        MarkLastEachDay(CALHistoryObject, TmpKeepCALHistoryObject)
+      ELSE BEGIN
+
+        IF KeepArray[KeepOptions::"Last Each Week"] THEN
+          MarkLastEachWeek(CALHistoryObject, TmpKeepCALHistoryObject);
+
+        IF KeepArray[KeepOptions::"Last Each Month"] THEN
+          MarkLastEachMonth(CALHistoryObject, TmpKeepCALHistoryObject);
+
+      END;
+
+      IF KeepArray[KeepOptions::"First Each Project"] THEN
+        MarkFirstEachProject(CALHistoryObject, TmpKeepCALHistoryObject)
+      ELSE
+        IF KeepArray[KeepOptions::"First Each Transport"] THEN
+          MarkFirstEachTransport(CALHistoryObject, TmpKeepCALHistoryObject);
+
+      IF KeepArray[KeepOptions::"Last Each Project"] THEN
+        MarkLastEachProject(CALHistoryObject, TmpKeepCALHistoryObject)
+      ELSE
+        IF KeepArray[KeepOptions::"Last Each Transport"] THEN
+          MarkLastEachTransport(CALHistoryObject, TmpKeepCALHistoryObject);
+
+      MarkUsedInWhereUsed(CALHistoryObject, TmpKeepCALHistoryObject);
+      CALHistoryObject.SETFILTER("Entry No.", '<%1', LastEntryNo);
+      IF CALHistoryObject.FINDSET THEN
+        REPEAT
+          IF NOT TmpKeepCALHistoryObject.GET(CALHistoryObject."Entry No.") AND
+             (CALHistoryObject."Branch No." = '')
+          THEN BEGIN
+            CALHistoryObject.DELETE(TRUE);
+            NoOfCALRecordsDeleted += 1;
+          END;
+        UNTIL CALHistoryObject.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE MarkLastEachDay@3(VAR CALHistoryObject@1000 : Record 11102052;VAR TmpKeepCALHistoryObject@1001 : TEMPORARY Record 11102052);
+    BEGIN
+      WITH CALHistoryObject DO BEGIN
+        FINDLAST;
+
+        REPEAT
+          AddToTempRecord(TmpKeepCALHistoryObject);
+          SETFILTER("Object Date", '<%1', "Object Date");
+        UNTIL NOT FINDLAST;
+
+        SETRANGE("Object Date");
+
+      END;
+    END;
+
+    LOCAL PROCEDURE MarkLastEachWeek@4(VAR CALHistoryObject@1000 : Record 11102052;VAR TmpKeepCALHistoryObject@1001 : TEMPORARY Record 11102052);
+    BEGIN
+      WITH CALHistoryObject DO BEGIN
+        FINDLAST;
+
+        REPEAT
+          AddToTempRecord(TmpKeepCALHistoryObject);
+          SETFILTER("Object Date", '<%1', CALCDATE('<CW>', "Object Date") - 6);
+        UNTIL NOT FINDLAST;
+
+        SETRANGE("Object Date");
+
+      END;
+    END;
+
+    LOCAL PROCEDURE MarkLastEachMonth@5(VAR CALHistoryObject@1000 : Record 11102052;VAR TmpKeepCALHistoryObject@1001 : TEMPORARY Record 11102052);
+    VAR
+      Month@1002 : Integer;
+      Year@1003 : Integer;
+    BEGIN
+      WITH CALHistoryObject DO BEGIN
+        FINDLAST;
+
+        REPEAT
+          AddToTempRecord(TmpKeepCALHistoryObject);
+          Month := DATE2DMY("Object Date", 2);
+          Year := DATE2DMY("Object Date", 3);
+          SETFILTER("Object Date", '<%1', DMY2DATE(1, Month, Year));
+        UNTIL NOT FINDLAST;
+
+        SETRANGE("Object Date");
+
+      END;
+    END;
+
+    LOCAL PROCEDURE MarkFirstEachProject@6(VAR CALHistoryObject@1000 : Record 11102052;VAR TmpKeepCALHistoryObject@1001 : TEMPORARY Record 11102052);
+    VAR
+      ProjectObject@1002 : Record 11102037;
+      Modification@1003 : Record 11102042;
+    BEGIN
+      WITH CALHistoryObject DO BEGIN
+
+        ProjectObject.SETCURRENTKEY("Object Type", "Object No.");
+        ProjectObject.SETRANGE("Object Type", "Object Type");
+        ProjectObject.SETRANGE("Object No.", "Object No.");
+        IF ProjectObject.FINDSET THEN
+          REPEAT
+            Modification.SETCURRENTKEY("Assigned to Project No.", "Object Type", "Object No.", "Object Date", "Object Time");
+            Modification.SETRANGE("Assigned to Project No.", ProjectObject."Project No.");
+            Modification.SETRANGE("Object Type", ProjectObject."Object Type");
+            Modification.SETRANGE("Object No.", ProjectObject."Object No.");
+            IF Modification.FINDFIRST THEN BEGIN
+
+              SETFILTER("Object Date", '<%1', Modification."Object Date");
+              SETRANGE("Object Time");
+              IF FINDLAST THEN BEGIN
+                SETRANGE("Object Date", Modification."Object Date");
+                SETFILTER("Object Time", '<=%1', Modification."Object Time");
+                IF FINDLAST THEN
+                  ;
+                AddToTempRecord(TmpKeepCALHistoryObject);
+              END;
+
+            END;
+          UNTIL ProjectObject.NEXT = 0;
+
+        SETRANGE("Object Date");
+        SETRANGE("Object Time");
+
+      END;
+    END;
+
+    LOCAL PROCEDURE MarkLastEachProject@7(VAR CALHistoryObject@1000 : Record 11102052;VAR TmpKeepCALHistoryObject@1001 : TEMPORARY Record 11102052);
+    VAR
+      ProjectObject@1002 : Record 11102037;
+      Modification@1003 : Record 11102042;
+    BEGIN
+      WITH CALHistoryObject DO BEGIN
+
+        ProjectObject.SETCURRENTKEY("Object Type", "Object No.");
+        ProjectObject.SETRANGE("Object Type", "Object Type");
+        ProjectObject.SETRANGE("Object No.", "Object No.");
+        IF ProjectObject.FINDSET THEN
+          REPEAT
+            Modification.SETCURRENTKEY("Assigned to Project No.", "Object Type", "Object No.", "Object Date", "Object Time");
+            Modification.SETRANGE("Assigned to Project No.", ProjectObject."Project No.");
+            Modification.SETRANGE("Object Type", ProjectObject."Object Type");
+            Modification.SETRANGE("Object No.", ProjectObject."Object No.");
+
+            IF Modification.FINDLAST THEN BEGIN
+
+              SETFILTER("Object Date", '>=%1', Modification."Object Date");
+              SETRANGE("Object Time");
+              IF FINDFIRST THEN BEGIN
+                SETRANGE("Object Date", Modification."Object Date");
+                SETFILTER("Object Time", '>=%1', Modification."Object Time");
+                IF FINDFIRST THEN
+                  ;
+                AddToTempRecord(TmpKeepCALHistoryObject);
+              END;
+
+            END;
+          UNTIL ProjectObject.NEXT = 0;
+
+        SETRANGE("Object Date");
+        SETRANGE("Object Time");
+
+      END;
+    END;
+
+    LOCAL PROCEDURE MarkFirstEachTransport@8(VAR CALHistoryObject@1000 : Record 11102052;VAR TmpKeepCALHistoryObject@1001 : TEMPORARY Record 11102052);
+    VAR
+      ProjectObject@1002 : Record 11102037;
+      Modification@1003 : Record 11102042;
+      TmpTransport@1004 : TEMPORARY Record 11102043;
+      Transport@1005 : Record 11102043;
+    BEGIN
+      WITH CALHistoryObject DO BEGIN
+
+        ProjectObject.SETCURRENTKEY("Object Type", "Object No.");
+        ProjectObject.SETRANGE("Object Type", "Object Type");
+        ProjectObject.SETRANGE("Object No.", "Object No.");
+        ProjectObject.SETFILTER("Transport No.", '<>%1', '');
+        IF ProjectObject.FINDSET THEN
+          REPEAT
+            IF NOT TmpTransport.GET(ProjectObject."Transport No.") THEN
+              IF Transport.GET(ProjectObject."Transport No.") THEN BEGIN
+                TmpTransport := Transport;
+                TmpTransport.INSERT;
+              END;
+          UNTIL ProjectObject.NEXT = 0;
+
+        IF TmpTransport.FINDSET THEN
+          REPEAT
+            Modification.SETCURRENTKEY("Transport No.", "Object Type", "Object No.", "Object Date", "Object Time");
+            Modification.SETRANGE("Transport No.", TmpTransport."No.");
+            Modification.SETRANGE("Object Type", "Object Type");
+            Modification.SETRANGE("Object No.", "Object No.");
+            IF Modification.FINDFIRST THEN BEGIN
+
+              SETFILTER("Object Date", '<%1', Modification."Object Date");
+              SETRANGE("Object Time");
+              IF FINDLAST THEN BEGIN
+                SETRANGE("Object Date", Modification."Object Date");
+                SETFILTER("Object Time", '<=%1', Modification."Object Time");
+                IF FINDLAST THEN
+                  ;
+                AddToTempRecord(TmpKeepCALHistoryObject);
+              END;
+
+            END;
+
+          UNTIL TmpTransport.NEXT = 0;
+
+        SETRANGE("Object Date");
+        SETRANGE("Object Time");
+
+      END;
+    END;
+
+    LOCAL PROCEDURE MarkLastEachTransport@9(VAR CALHistoryObject@1000 : Record 11102052;VAR TmpKeepCALHistoryObject@1001 : TEMPORARY Record 11102052);
+    VAR
+      ProjectObject@1002 : Record 11102037;
+      Modification@1003 : Record 11102042;
+      TmpTransport@1004 : TEMPORARY Record 11102043;
+      Transport@1005 : Record 11102043;
+    BEGIN
+      WITH CALHistoryObject DO BEGIN
+
+        ProjectObject.SETCURRENTKEY("Object Type", "Object No.");
+        ProjectObject.SETRANGE("Object Type", "Object Type");
+        ProjectObject.SETRANGE("Object No.", "Object No.");
+        ProjectObject.SETFILTER("Transport No.", '<>%1', '');
+        IF ProjectObject.FINDSET THEN
+          REPEAT
+            IF NOT TmpTransport.GET(ProjectObject."Transport No.") THEN
+              IF Transport.GET(ProjectObject."Transport No.") THEN BEGIN
+                TmpTransport := Transport;
+                TmpTransport.INSERT;
+              END;
+          UNTIL ProjectObject.NEXT = 0;
+
+        IF TmpTransport.FINDSET THEN
+          REPEAT
+            Modification.SETCURRENTKEY("Transport No.", "Object Type", "Object No.", "Object Date", "Object Time");
+            Modification.SETRANGE("Transport No.", TmpTransport."No.");
+            Modification.SETRANGE("Object Type", "Object Type");
+            Modification.SETRANGE("Object No.", "Object No.");
+            IF Modification.FINDLAST THEN BEGIN
+
+              SETFILTER("Object Date", '>=%1', Modification."Object Date");
+              SETRANGE("Object Time");
+              IF FINDFIRST THEN BEGIN
+                SETRANGE("Object Date", Modification."Object Date");
+                SETFILTER("Object Time", '>=%1', Modification."Object Time");
+                IF FINDFIRST THEN
+                  ;
+                AddToTempRecord(TmpKeepCALHistoryObject);
+              END;
+
+            END;
+
+          UNTIL TmpTransport.NEXT = 0;
+
+        SETRANGE("Object Date");
+        SETRANGE("Object Time");
+
+      END;
+    END;
+
+    LOCAL PROCEDURE MarkUsedInWhereUsed@10(VAR CALHistoryObject@1000 : Record 11102052;VAR TmpKeepCALHistoryObject@1001 : TEMPORARY Record 11102052);
+    VAR
+      WhereUsedObject@1002 : Record 11102057;
+    BEGIN
+      WITH CALHistoryObject DO
+        IF WhereUsedObject.GET("Object Type", "Object No.") THEN
+          IF GET(WhereUsedObject."C/AL Code Entry No.") THEN
+            AddToTempRecord(TmpKeepCALHistoryObject);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

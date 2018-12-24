@@ -1,0 +1,415 @@
+OBJECT Codeunit 9062327 Migration Import
+{
+  OBJECT-PROPERTIES
+  {
+    Date=16/02/16;
+    Time=[ 2:23:14 PM];
+    Version List=NA2016.14;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      MigrationParameters@1000000004 : Record 9062376;
+      MigrationXmlFile@1000000003 : TEMPORARY Record 9062377;
+      FileSystem@1000000002 : Codeunit 9062264;
+      MigrationExportImportTools@1000000000 : Codeunit 9062325;
+      MigrationToolkit@1000000007 : Codeunit 9062484;
+      CompressionToolkit@1000000008 : Codeunit 9062664;
+      MigrationDirectoryPath@1000000001 : Text;
+      MigrationXmlFileId@1000000005 : Integer;
+      tDialogTitle@1000000006 : TextConst 'ENU=Importing...;ENG=Importing...';
+
+    LOCAL PROCEDURE "--- General ---"@1000000003();
+    BEGIN
+    END;
+
+    [TryFunction]
+    PROCEDURE ImportPackageFromContentServer@1000000010(PackageName@1000000000 : Text;PackageFileName@1000000002 : Text);
+    VAR
+      EnablementSetup@1000000001 : Record 9062229;
+    BEGIN
+      //DOC NA2016.14 - Importing data package from content server
+      IF (NOT(EnablementSetup.GET())) THEN
+        EnablementSetup.INIT();
+
+      IF (PackageFileName = '') THEN
+        PackageFileName := 'data.zip';
+
+      ImportFromUrl(STRSUBSTNO(
+        '/data/%1/%2/initialization/%3/%4',
+        EnablementSetup.GetEnablementVersionNo(),
+        EnablementSetup.GetEnablementVersionGuid(),
+        PackageName,
+        PackageFileName));
+    END;
+
+    PROCEDURE ImportFromUrl@1000000008(Url@1000000000 : Text);
+    VAR
+      HttpFileDownloadMgt@1000000001 : Codeunit 9062687;
+      TempFileName@1000000002 : Text;
+    BEGIN
+      //DOC NA2016.14 - Importing data from URL
+
+      HttpFileDownloadMgt.DownloadToFile(Url, TempFileName);
+      IF (EXISTS(TempFileName)) THEN BEGIN
+        ImportFromFile(TempFileName);
+        IF (EXISTS(TempFileName)) THEN
+          ERASE(TempFileName);
+      END;
+    END;
+
+    PROCEDURE ImportFromFile@1000000009(FilePath@1000000000 : Text);
+    BEGIN
+      //DOC NA2016.14 - Importing data from ZIP file
+
+      CLEAR(MigrationParameters);
+      MigrationParameters.INIT();
+      MigrationParameters."Data Format" := MigrationParameters."Data Format"::"ZIP File";
+      MigrationParameters.Path := FilePath;
+      MigrationParameters."Log Level" := MigrationParameters."Log Level"::Full;
+      MigrationParameters."Open Log" := MigrationParameters."Open Log"::"Only if Errors Detected";
+
+      Import(FALSE);
+    END;
+
+    PROCEDURE Import@1000000000(pInteraction@1000000000 : Boolean) : Boolean;
+    VAR
+      eMigrationsImportStarted@1000000001 : TextConst 'ENU=Migrations import started;ENG=Migrations import started';
+      eMigrationsImportFinished@1000000003 : TextConst 'ENU=Migrations import finished;ENG=Migrations import finished';
+      lErrorMessage@1000000004 : Text;
+      lClient@1000000002 : Boolean;
+    BEGIN
+      //DOC NA2016.11 - Importing (migration)
+      //  -> pInteraction: Interaction flag
+      //  <- TRUE = Imported, FALSE = Cancelled
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+      IF (pInteraction) THEN
+        IF ( NOT (GetImportParameters())) THEN
+          EXIT(FALSE);
+
+      MigrationExportImportTools.InitialiseLog(MigrationParameters."Log Level", MigrationParameters."Open Log");
+      MigrationExportImportTools.LogMessage(eMigrationsImportStarted, 0);
+
+      MigrationExportImportTools.InitialiseDialog(pInteraction, TRUE);
+      MigrationExportImportTools.OpenDialog(tDialogTitle);
+      MigrationExportImportTools.SetDialogStageCount(4);
+
+      CLEAR(lErrorMessage);
+
+      //DOC NA2016.14 >>
+      lClient := (pInteraction) AND (FileSystem.Client());
+      //DOC NA2016.14 <<
+
+      IF ( NOT (TryToImport(lClient))) THEN
+        lErrorMessage := GETLASTERRORTEXT();
+
+      MigrationExportImportTools.CloseDialog();
+
+      IF (lErrorMessage <> '') THEN
+        ERROR(lErrorMessage);
+
+      MigrationExportImportTools.LogMessage(eMigrationsImportFinished, 0);
+      MigrationExportImportTools.ShowLog();
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Internal ---"@1000000001();
+    BEGIN
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryToImport@1000000006(pClient@1000000000 : Boolean);
+    BEGIN
+      //DOC NA2016.11 - Trying to import (with error catching)
+
+      ImportTheMigration(pClient);
+      CollectXmlFiles();
+      VerifyXmlFiles();
+      ImportXmlFiles();
+
+      FileSystem.DeleteFolder(FALSE, MigrationExportImportTools.GetMigrationsFolderPath(), TRUE);
+    END;
+
+    LOCAL PROCEDURE GetImportParameters@1000000002() : Boolean;
+    VAR
+      lImportMigration@1000000000 : Report 9062344;
+      eEmptyDataFormat@1000000001 : TextConst 'ENU=Data format of migration export can''t be empty.;ENG=Data format of migration export can''t be empty.';
+      eEmptyPath@1000000002 : TextConst 'ENU=Path can''t be empty.;ENG=Path can''t be empty.';
+    BEGIN
+      //DOC NA2016.11 - Getting import parameters from user (using a report)
+      //  <- TRUE = Parameters collected, FALSE = Cancelled
+
+      lImportMigration.RUNMODAL();
+      IF ( NOT (lImportMigration.GetOk())) THEN
+        EXIT(FALSE);
+
+      lImportMigration.GetParameters(MigrationParameters);
+
+      IF (MigrationParameters."Data Format" = MigrationParameters."Data Format"::" ") THEN
+        ERROR(eEmptyDataFormat);
+      IF (MigrationParameters.Path = '') THEN
+        ERROR(eEmptyPath);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ImportTheMigration@1000000005(pClient@1000000003 : Boolean);
+    VAR
+      eStage@1000000000 : TextConst 'ENU=Importing Migration;ENG=Importing Migration';
+      eSourceFolder@1000000001 : TextConst 'ENU=Source folder: %1;ENG=Source folder: %1';
+      FilePath@1000000002 : Text;
+    BEGIN
+      //DOC NA2016.11 - Importing the migration (to the server)
+
+      MigrationExportImportTools.UpdateDialogBeforeStage(eStage);
+
+      MigrationExportImportTools.PrepareMigrationsFolder();
+      FileSystem.DeleteFolderIfExists(FALSE, MigrationExportImportTools.GetMigrationsFolderPath(), TRUE);
+
+      //DOC NA2016.14 >>
+      CASE (MigrationParameters."Data Format") OF
+        MigrationParameters."Data Format"::Folder:
+          FileSystem.UploadFolder(pClient, MigrationParameters.Path,
+            MigrationExportImportTools.GetMigrationsFolderPath());
+        MigrationParameters."Data Format"::"ZIP File":
+          BEGIN
+            IF (pClient) THEN BEGIN
+              FilePath := FileSystem.GetTempFileName(FALSE);
+              FileSystem.UploadSilent(TRUE, MigrationParameters.Path, FilePath);
+            END ELSE
+              FilePath := MigrationParameters.Path;
+
+            CompressionToolkit.DecompressZip(FALSE, MigrationParameters.Path,
+              MigrationExportImportTools.GetMigrationsFolderPath());
+
+            IF (pClient) AND (EXISTS(FilePath)) THEN
+              ERASE(FilePath);
+          END;
+      END;
+      //DOC NA2016.14 <<
+
+      MigrationExportImportTools.UpdateDialogAfterStage();
+
+      MigrationExportImportTools.LogMessage(STRSUBSTNO(eSourceFolder, MigrationExportImportTools.GetMigrationsFolderPath()), 0);
+    END;
+
+    LOCAL PROCEDURE CollectXmlFiles@1000000004();
+    VAR
+      eStage@1000000001 : TextConst 'ENU=Collecting XML Files;ENG=Collecting XML Files';
+      eNoXmlFiles@1000000000 : TextConst 'ENU=There are no XML files in "%1".;ENG=There are no XML files in "%1".';
+    BEGIN
+      //DOC NA2016.11 - Collecting XMLports
+
+      MigrationExportImportTools.UpdateDialogBeforeStage(eStage);
+
+      MigrationXmlFile.RESET();
+      MigrationXmlFile.DELETEALL();
+      CLEAR(MigrationXmlFileId);
+
+      CollectXmlFilesFromFolder(MigrationExportImportTools.GetMigrationsFolderPath());
+
+      MigrationXmlFile.RESET();
+      IF (MigrationXmlFile.ISEMPTY()) THEN
+        ERROR(eNoXmlFiles, MigrationParameters.Path);
+
+      MigrationExportImportTools.UpdateDialogAfterStage();
+    END;
+
+    LOCAL PROCEDURE CollectXmlFilesFromFolder@1000000020(pRootFolderPath@1000000000 : Text);
+    VAR
+      lFolderBuffer@1000000002 : TEMPORARY Record 9062386;
+      lFileBuffer@1000000003 : TEMPORARY Record 9062386;
+      lFileSystemCount@1000000001 : Integer;
+      eXmlFileFound@1000000004 : TextConst 'ENU=XML file found: %1;ENG=XML file found: %1';
+    BEGIN
+      //DOC NA2016.11 - Collecting XMLports from given folder
+      //  -> pRootFolderPath: Root folder path
+
+      MigrationExportImportTools.UpdateDialogBeforeStep(pRootFolderPath);
+
+      FileSystem.GetFiles(FALSE, pRootFolderPath, '*.xml', lFileBuffer);
+      IF (lFileBuffer.FINDSET()) THEN
+      REPEAT
+        MigrationXmlFile.RESET();
+        MigrationXmlFile.SETCURRENTKEY(Path);
+        MigrationXmlFile.SETRANGE(Path, lFileBuffer.Path);
+        IF (MigrationXmlFile.ISEMPTY()) THEN
+        BEGIN
+          MigrationXmlFileId += 1;
+          CLEAR(MigrationXmlFile);
+          MigrationXmlFile.INIT();
+          MigrationXmlFile.ID := MigrationXmlFileId;
+          MigrationXmlFile.SetPath(lFileBuffer.GetPath());
+          MigrationXmlFile.SetName(lFileBuffer.GetName());
+          MigrationXmlFile.INSERT();
+          MigrationExportImportTools.LogMessage(STRSUBSTNO(eXmlFileFound, MigrationXmlFile.Name), 0);
+        END;
+      UNTIL (lFileBuffer.NEXT() = 0);
+
+      FileSystem.GetFolders(FALSE, pRootFolderPath, '*', lFolderBuffer);
+      IF (lFolderBuffer.FINDSET()) THEN
+      REPEAT
+        CollectXmlFilesFromFolder(lFolderBuffer.GetPath());
+      UNTIL (lFolderBuffer.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE VerifyXmlFiles@1000000007();
+    VAR
+      eStage@1000000001 : TextConst 'ENU=Verifying XML Files;ENG=Verifying XML Files';
+      eNoXmlFiles@1000000000 : TextConst 'ENU=There are no XML to be imported left after verification (see errors in the log).;ENG=There are no XML to be imported left after verification (see errors in the log).';
+      lAllObj@1000000012 : Record 2000000038;
+      lXmlFileIdsToRemove@1000000002 : TEMPORARY Record 2000000026;
+      lXmlFileCorrect@1000000005 : Boolean;
+      lXmlFileErrorMessage@1000000008 : Text;
+      lXmlDocument@1000000003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      lXmlHeaderElement@1000000004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlElement";
+      lXmlPortIdAttribute@1000000006 : Text;
+      lXmlPortId@1000000007 : Integer;
+      eCantFindHeader@1000000009 : TextConst 'ENU=Can''t find header in XML file "%1";ENG=Can''t find header in XML file "%1"';
+      eXmlPortIdAttributeEmpty@1000000010 : TextConst 'ENU=XMLport ID attribute doesn''t exist or is empty in XML file "%1";ENG=XMLport ID attribute doesn''t exist or is empty in XML file "%1"';
+      eXmlPortIdAttributeIncorrect@1000000011 : TextConst 'ENU=XMLport ID attribute has wrong format (it should be a number) in XML file "%1";ENG=XMLport ID attribute has wrong format (it should be a number) in XML file "%1"';
+      eXmlPortDoesntExist@1000000013 : TextConst 'ENU="XMLport with ID = %1 doesn''t exist (XML file %2)";ENG="XMLport with ID = %1 doesn''t exist (XML file %2)"';
+    BEGIN
+      //DOC NA2016.11 - Verifying XML files (whether XMLport can be found for each of them)
+
+      MigrationExportImportTools.UpdateDialogBeforeStage(eStage);
+
+      MigrationXmlFile.RESET();
+      MigrationExportImportTools.SetDialogStepCount(MigrationXmlFile.COUNT());
+      IF (MigrationXmlFile.FINDSET(TRUE)) THEN
+      REPEAT
+        MigrationExportImportTools.UpdateDialogBeforeStep(MigrationXmlFile.Name);
+
+        CLEAR(lXmlFileCorrect);
+        CLEAR(lXmlFileErrorMessage);
+
+        lXmlDocument := lXmlDocument.XmlDocument();
+        lXmlDocument.Load(MigrationXmlFile.Path);
+        lXmlHeaderElement := lXmlDocument.SelectSingleNode('/Root/Header');
+        IF ( NOT (ISNULL(lXmlHeaderElement))) THEN
+        BEGIN
+          lXmlPortIdAttribute := lXmlHeaderElement.GetAttribute('XmlPortID');
+          IF (lXmlPortIdAttribute <> '') THEN
+          BEGIN
+            IF (EVALUATE(lXmlPortId, lXmlPortIdAttribute)) THEN
+            BEGIN
+              IF (lAllObj.GET(lAllObj."Object Type"::XMLport, lXmlPortId)) THEN
+              BEGIN
+                MigrationXmlFile."XMLport ID" := lXmlPortId;
+                MigrationXmlFile.MODIFY();
+                lXmlFileCorrect := TRUE;
+              END
+              ELSE
+                lXmlFileErrorMessage := STRSUBSTNO(eXmlPortDoesntExist, lXmlPortId, MigrationXmlFile.Name);
+            END
+            ELSE
+              lXmlFileErrorMessage := STRSUBSTNO(eXmlPortIdAttributeIncorrect, MigrationXmlFile.Name);
+          END
+          ELSE
+            lXmlFileErrorMessage := STRSUBSTNO(eXmlPortIdAttributeEmpty, MigrationXmlFile.Name);
+        END
+        ELSE
+          lXmlFileErrorMessage := STRSUBSTNO(eCantFindHeader, MigrationXmlFile.Name);
+        IF ( NOT (lXmlFileCorrect)) THEN
+        BEGIN
+          IF ( NOT (lXmlFileIdsToRemove.GET(MigrationXmlFile.ID))) THEN
+          BEGIN
+            lXmlFileIdsToRemove.Number := MigrationXmlFile.ID;
+            lXmlFileIdsToRemove.INSERT();
+          END;
+          MigrationExportImportTools.LogError(lXmlFileErrorMessage, 0);
+        END;
+        MigrationExportImportTools.UpdateDialogAfterStep();
+      UNTIL (MigrationXmlFile.NEXT() = 0);
+
+      lXmlFileIdsToRemove.RESET();
+      IF (lXmlFileIdsToRemove.FINDSET()) THEN
+      REPEAT
+        MigrationXmlFile.GET(lXmlFileIdsToRemove.Number);
+        MigrationXmlFile.DELETE();
+      UNTIL (lXmlFileIdsToRemove.NEXT() = 0);
+
+      MigrationXmlFile.RESET();
+      IF (MigrationXmlFile.ISEMPTY()) THEN
+        ERROR(eNoXmlFiles);
+
+      MigrationExportImportTools.UpdateDialogAfterStage();
+    END;
+
+    LOCAL PROCEDURE ImportXmlFiles@1000000012();
+    VAR
+      eStage@1000000000 : TextConst 'ENU=Importing XML Files;ENG=Importing XML Files';
+      eCantFindFile@1000000001 : TextConst 'ENU=Can''t find XML file: %1;ENG=Can''t find XML file: %1';
+      lPath@1000000002 : Text;
+      lXmlFile@1000000004 : File;
+      lXmlFileInStream@1000000003 : InStream;
+      eXmlPortIdZero@1000000005 : TextConst 'ENU=XMLport ID is zero for XML "%1";ENG=XMLport ID is zero for XML "%1"';
+      eImportSucceeded@1000000007 : TextConst 'ENU=Import of "%1" succeeded;ENG=Import of "%1" succeeded';
+      eImportError@1000000006 : TextConst 'ENU=Import error: %1;ENG=Import error: %1';
+      lResult@1000000008 : Boolean;
+      lErrorMessage@1000000009 : Text;
+    BEGIN
+      //DOC NA2016.11 - Importing XML files
+
+      MigrationExportImportTools.UpdateDialogBeforeStage(eStage);
+
+      MigrationXmlFile.RESET();
+      MigrationExportImportTools.SetDialogStepCount(MigrationXmlFile.COUNT());
+      IF (MigrationXmlFile.FINDSET()) THEN
+      REPEAT
+        MigrationExportImportTools.UpdateDialogBeforeStep(MigrationXmlFile.Name);
+        lPath := MigrationXmlFile.GetPath();
+        IF (FILE.EXISTS(lPath)) THEN
+        BEGIN
+          IF (MigrationXmlFile."XMLport ID" <> 0) THEN
+          BEGIN
+            lXmlFile.OPEN(lPath);
+            lXmlFile.CREATEINSTREAM(lXmlFileInStream);
+            MigrationToolkit.SetSilentMode(TRUE);
+            lResult := TryToImportXmlFile(MigrationXmlFile."XMLport ID", lXmlFileInStream);
+            lErrorMessage := GETLASTERRORTEXT();
+            IF (lResult) THEN
+              MigrationExportImportTools.LogMessage(STRSUBSTNO(eImportSucceeded, MigrationXmlFile.Name), MigrationXmlFile."XMLport ID")
+            ELSE
+              MigrationExportImportTools.LogError(STRSUBSTNO(eImportError, lErrorMessage), MigrationXmlFile."XMLport ID");
+            MigrationToolkit.SetSilentMode(FALSE);
+            lXmlFile.CLOSE();
+          END
+          ELSE
+            MigrationExportImportTools.LogError(STRSUBSTNO(eXmlPortIdZero, MigrationXmlFile.Name), MigrationXmlFile."XMLport ID");
+        END
+        ELSE
+          MigrationExportImportTools.LogError(STRSUBSTNO(eCantFindFile, lPath), MigrationXmlFile."XMLport ID");
+        MigrationExportImportTools.UpdateDialogAfterStep();
+      UNTIL (MigrationXmlFile.NEXT() = 0);
+
+      MigrationExportImportTools.UpdateDialogAfterStage();
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryToImportXmlFile@1000000015(pXmlPortId@1000000000 : Integer;VAR pXmlFileInStream@1000000001 : InStream);
+    BEGIN
+      //DOC NA2016.11 - Trying to import one XML file
+      //  -> pXmlPortId: XMLport ID
+      //  <> pXmlFileInStream: XML file in stream
+
+      XMLPORT.IMPORT(pXmlPortId, pXmlFileInStream);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.11 JH 25/11/2015 - Created
+      //DOC NA2016.14 AZ 15/02/2016 - New functions to import data from file and content server, import from ZIP file added
+    }
+    END.
+  }
+}
+

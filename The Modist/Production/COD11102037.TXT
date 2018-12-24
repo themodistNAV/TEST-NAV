@@ -1,0 +1,1946 @@
+OBJECT Codeunit 11102037 OM - Export Transport
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    TableNo=11102043;
+    OnRun=VAR
+            Setup@1000 : Record 11102035;
+            Project@1001 : Record 11102036;
+            ProjectObject@1002 : Record 11102037;
+            TmpProjectOverlappingObject@1003 : TEMPORARY Record 11102037;
+            Flow@1004 : Record 11102040;
+            Modification@1005 : Record 11102042;
+            CALHistoryObject@1006 : Record 11102052;
+            ObjectLock@1007 : Record 11102054;
+            TransportProjectHistory@1008 : Record 11102066;
+            TransportType@1009 : Record 11102098;
+            Object@1010 : Record 2000000001;
+            TmpObject@1011 : TEMPORARY Record 2000000001;
+            Progressbar@1012 : Codeunit 11102044;
+            SourceControl@1013 : Codeunit 11102050;
+            ProjectMgt@1014 : Codeunit 11102052;
+            CurrentDate@1015 : Date;
+            CurrentTime@1016 : Time;
+            RemoveLockQuestionAsked@1017 : Boolean;
+            ctConfirmAlreadyTransported@1018 : TextConst 'DEU=This transport has already been transported.\Are you sure?;ENU=This transport has already been transported.\Are you sure?;ESP=This transport has already been transported.\Are you sure?;FRA=This transport has already been transported.\Are you sure?;NLD=Dit transport is al getransporteerd.\Weet u het zeker?;DEA=This transport has already been transported.\Are you sure?';
+            ctConfirmOverlap@1019 : TextConst 'DEU=There are overlapping projects.\Are you sure?;ENU=There are overlapping projects.\Are you sure?;ESP=There are overlapping projects.\Are you sure?;FRA=There are overlapping projects.\Are you sure?;NLD=Er zijn overlappende projecten.\Weet u het zeker?;DEA=There are overlapping projects.\Are you sure?';
+            ctConfirmPendingModifications@1020 : TextConst 'DEU=There are pending modifications.\Are you sure?;ENU=There are pending modifications.\Are you sure?;ESP=There are pending modifications.\Are you sure?;FRA=There are pending modifications.\Are you sure?;NLD=Er zijn niet toegewezen wijzigingen.\Weet u het zeker?;DEA=There are pending modifications.\Are you sure?';
+            ctLocksWillBeRemoved@1021 : TextConst 'DEU=Existing locks will be removed.\Are you sure?;ENU=Existing locks will be removed.\Are you sure?;ESP=Existing locks will be removed.\Are you sure?;FRA=Existing locks will be removed.\Are you sure?;NLD=Objecten zullen worden ontgrendeld.\Weet u het zeker?;DEA=Existing locks will be removed.\Are you sure?';
+            ctOverlappingProjects@1022 : TextConst 'DEU=There are overlapping projects.;ENU=There are overlapping projects.;ESP=There are overlapping projects.;FRA=There are overlapping projects.;NLD=Er zijn overlappende projecten.;DEA=There are overlapping projects.';
+            ctPendingModifications@1023 : TextConst 'DEU=There are pending modifications.\Please assign them first.;ENU=There are pending modifications.\Please assign them first.;ESP=There are pending modifications.\Please assign them first.;FRA=There are pending modifications.\Please assign them first.;NLD=Er zijn nog niet toegewezen wijzigingen.\Deze moeten eerst worden toegewezen.;DEA=There are pending modifications.\Please assign them first.';
+            ctTransporting@1024 : TextConst 'DEU=Transporting...;ENU=Transporting...;ESP=Transporting...;FRA=Transporting...;NLD=Transporteren...;DEA=Transporting...';
+            ctVersionListNotUpdated@1025 : TextConst 'DEU=The Version List of %1 %2 cannot be updated.;ENU=The Version List of %1 %2 cannot be updated.;ESP=The Version List of %1 %2 cannot be updated.;FRA=The Version List of %1 %2 cannot be updated.;NLD=De versielijst van %1 %2 kan niet worden bijgewerkt.;DEA=The Version List of %1 %2 cannot be updated.';
+          BEGIN
+            Setup.CustomGet;
+
+            IF TransportType.GET("Transport Type Code") THEN
+              ;
+
+            TESTFIELD(Blocked, FALSE);
+
+            IF NOT ("Status Type" = "Status Type"::Ready) THEN BEGIN
+              IF Flow.GET(Flow."Table Name"::Transport, "Transport Flow Code") THEN
+                IF Flow."Transport Status" <> '' THEN
+                  VALIDATE("Status Code", Flow."Transport Status");
+
+              TESTFIELD("Status Type", "Status Type"::Ready);
+            END;
+
+            CheckTests(Rec);
+
+            IF "Check Guidelines" <> "Check Guidelines"::" " THEN
+              CheckGuidelines(Rec);
+
+            IF "Update Version List" THEN BEGIN
+              TESTFIELD("Version List Id");
+              TESTFIELD("Version No.");
+            END;
+
+            IF "New Timestamp" = "New Timestamp"::Define THEN BEGIN
+              TESTFIELD("Timestamp Date");
+              TESTFIELD("Timestamp Time");
+            END;
+
+            CheckAllCommentsPresent;
+
+            Modification.SETCURRENTKEY(Status);
+            Modification.SETRANGE(Status, Modification.Status::Inserted);
+            IF NOT Modification.ISEMPTY THEN
+              IF "Check Pending Modifications" THEN BEGIN
+                MESSAGE(ctPendingModifications);
+                PAGE.RUN(PAGE::"OM - Assign Modifications");
+                EXIT;
+              END ELSE
+                IF NOT CONFIRM(ctConfirmPendingModifications, TRUE) THEN
+                  EXIT;
+
+            IF Transported THEN
+              IF NOT CONFIRM(ctConfirmAlreadyTransported, TRUE) THEN
+                ERROR('');
+
+            ProjectMgt.GetOverlappingProjects(Rec, TmpProjectOverlappingObject);
+            IF TmpProjectOverlappingObject.COUNT > 0 THEN BEGIN
+              IF "Check Overlap" THEN
+                ERROR(ctOverlappingProjects);
+              IF NOT CONFIRM(ctConfirmOverlap, TRUE) THEN
+                ERROR('');
+            END;
+
+            IF NOT CheckGuidelinesComments(Rec) THEN
+              EXIT;
+
+            IF TransportType."Compile Obj. before Transport" THEN
+              IF NOT CompileObjects(Rec) THEN
+                EXIT;
+
+            Progressbar.NoOfBars := 2;
+            Progressbar.Open(ctTransporting, 2);
+
+            IF (TransportType."Export Path" = '') AND ("Export Path" = '') THEN
+              Progressbar.BarSize := 4
+            ELSE
+              Progressbar.BarSize := 4 + NoOfTransportFiles(Rec, FALSE);
+
+            Progressbar.AddToBar(1);
+
+            Project.SETCURRENTKEY("Transport No.");
+            Project.SETRANGE("Transport No.", "No.");
+            Project.FINDSET;
+            REPEAT
+              IF NOT TransportProjectHistory.GET("No.", Project."No.") THEN BEGIN
+                TransportProjectHistory."Transport No." := "No.";
+                TransportProjectHistory."Project No." := Project."No.";
+                TransportProjectHistory."First Transport Date" := TODAY;
+                TransportProjectHistory."First Transport Time" := TIME;
+                TransportProjectHistory.INSERT;
+              END;
+            UNTIL Project.NEXT = 0;
+
+            Progressbar.AddToBar(1);
+
+            Project.FINDSET;
+            REPEAT
+              Project.CheckAllCommentsPresent;
+
+              Project.VALIDATE(Transported, TRUE);
+              Project.SetSkipCheckBlocked(TRUE);
+              Project.MODIFY(TRUE);
+
+              ProjectObject.SETRANGE("Project No.", Project."No.");
+              IF ProjectObject.FINDSET THEN
+                REPEAT
+                  IF ProjectObject."Transport No." <> "No." THEN BEGIN
+                    ProjectObject.VALIDATE("Transport No.", "No.");
+                    ProjectObject.MODIFY(TRUE);
+                  END;
+                UNTIL ProjectObject.NEXT = 0;
+
+            UNTIL Project.NEXT = 0;
+
+            CurrentDate := TODAY;
+            CurrentTime := TIME;
+
+            Progressbar.AddToBar(1);
+            GetObjects(Rec, TmpObject, FALSE);
+
+            IF TmpObject.FINDSET THEN
+              REPEAT
+
+                IF (TmpObject.Type = TmpObject.Type::Table) AND
+                   ((TmpObject.ID = DATABASE::"OM - Transport") OR
+                    (TmpObject.ID = DATABASE::"OM - Project"))
+                THEN
+                  MESSAGE(ctVersionListNotUpdated, Object.Type, Object.Name)
+                ELSE BEGIN
+
+                  IF ObjectLock.GET(TmpObject.Type, TmpObject.ID) THEN BEGIN
+                    IF NOT RemoveLockQuestionAsked THEN
+                      IF NOT CONFIRM(ctLocksWillBeRemoved, TRUE) THEN
+                        ERROR('');
+                    RemoveLockQuestionAsked := TRUE;
+                    ObjectLock.DELETE(TRUE);
+                  END;
+
+                  SELECTLATESTVERSION;
+
+                  IF Object.GET(TmpObject.Type, '', TmpObject.ID) THEN
+                    UpdateObject(Object, Rec, CurrentDate, CurrentTime);
+
+                END;
+
+                ProjectObject.SETCURRENTKEY("Transport No.");
+                ProjectObject.SETRANGE("Transport No.", "No.");
+                ProjectObject.SETRANGE("Include in Transport", TRUE);
+                ProjectObject.SETRANGE("Object Type", TmpObject.Type);
+                ProjectObject.SETRANGE("Object No.", TmpObject.ID);
+                IF ProjectObject.FINDSET THEN
+                  REPEAT
+                    ProjectObject.SetRollbackDateTime;
+                    ProjectObject.MODIFY;
+
+                  UNTIL ProjectObject.NEXT = 0;
+
+              UNTIL TmpObject.NEXT = 0;
+
+            SetSkipConfirmModify(TRUE);
+            VALIDATE(Transported, TRUE);
+
+            Progressbar.AddToBar(1);
+
+            IF TransportType."Export Path" <> '' THEN
+              IF "Export Path" = '' THEN BEGIN
+                "Export Path" := DELCHR(TransportType."Export Path", '>', '\');
+                IF TransportType."Subfolder for Each Transport" THEN BEGIN
+                  TransportType.TESTFIELD("Subfolder Name");
+                  "Export Path" := "Export Path" + '\' + CreateFileName(Rec, TransportType."Subfolder Name") + '\';
+                END ELSE
+                  "Export Path" := "Export Path" + '\';
+              END;
+
+            SetSkipCheckBlocked(TRUE);
+            MODIFY(TRUE);
+
+            IF "Export Path" <> '' THEN
+              CreateTransportFiles(Rec, FALSE, Progressbar);
+
+            Progressbar.Close;
+
+            IF Setup."Save C/AL after Transporting" <> Setup."Save C/AL after Transporting"::No THEN BEGIN
+              GetObjects(Rec, TmpObject, FALSE);
+              SourceControl.AddObjects(
+                TmpObject,
+                CALHistoryObject."Action Type"::"After Transporting",
+                Setup."Save C/AL after Transporting" = Setup."Save C/AL after Transporting"::"If Changed", TRUE, 2, FALSE);
+            END;
+          END;
+
+  }
+  CODE
+  {
+
+    LOCAL PROCEDURE UpdateObject@29(VAR Object@1000 : Record 2000000001;VAR Transport@1001 : Record 11102043;CurrentDate@1002 : Date;CurrentTime@1003 : Time);
+    VAR
+      TransportType@1004 : Record 11102098;
+      Mgt@1005 : Codeunit 11102035;
+      VersionControl@1006 : Codeunit 11102040;
+      ObjectMgt@1007 : Codeunit 11102046;
+      ModifyObject@1008 : Boolean;
+    BEGIN
+      ModifyObject := FALSE;
+
+      WITH Transport DO BEGIN
+
+        IF TransportType.GET("Transport Type Code") THEN
+          ;
+
+        IF "Update Version List" THEN BEGIN
+          VersionControl.RemoveVersionListId(Object, "Version List Id", '');
+          VersionControl.AddVersionListId(Object, "Version List Id", "Version No.");
+          ModifyObject := TRUE;
+        END;
+
+        IF TransportType."Remove Modify Flag at Transp." THEN
+          IF Object.Modified THEN BEGIN
+            Object.Modified := FALSE;
+            ModifyObject := TRUE;
+          END;
+
+        CASE "New Timestamp" OF
+          "New Timestamp"::"Moment of Transport" :
+            BEGIN
+              Object.Date := CurrentDate;
+              Object.Time := CurrentTime;
+              ModifyObject := TRUE;
+            END;
+
+          "New Timestamp"::Define :
+            BEGIN
+              Object.Date := "Timestamp Date";
+              Object.Time := "Timestamp Time";
+              ModifyObject := TRUE;
+            END;
+
+          "New Timestamp"::"Date of Transport" :
+            BEGIN
+              Object.Date := CurrentDate;
+              Object.Time := 120000T;
+              ModifyObject := TRUE;
+            END;
+        END;
+
+        IF ModifyObject THEN BEGIN
+          Mgt.DisableTraceModification;
+          ObjectMgt.UpdateObject(Object, FALSE);
+          Mgt.EnableTraceModification;
+        END;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckTests@1(VAR Transport@1000 : Record 11102043);
+    VAR
+      Test@1001 : Record 11102089;
+      TestMgt@1002 : Codeunit 11102076;
+    BEGIN
+      Test.SETCURRENTKEY("Transport No.");
+      Test.SETRANGE("Transport No.", Transport."No.");
+      Test.SETRANGE("Run Frequency", Test."Run Frequency"::"Before Transport");
+      IF Test.FINDSET THEN
+        REPEAT
+          TestMgt.ExecuteTest(Test);
+          COMMIT;
+          Test.TESTFIELD("Last Test Succeeded", TRUE);
+        UNTIL Test.NEXT = 0;
+
+      Test.SETCURRENTKEY("Transport No.");
+      Test.SETRANGE("Transport No.", '');
+      Test.SETRANGE("Run Frequency", Test."Run Frequency"::"Before Every Tansport");
+      IF Test.FINDSET THEN
+        REPEAT
+          TestMgt.ExecuteTest(Test);
+          COMMIT;
+          Test.TESTFIELD("Last Test Succeeded", TRUE);
+        UNTIL Test.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CheckGuidelines@2(VAR Transport@1000 : Record 11102043);
+    VAR
+      Project@1001 : Record 11102036;
+      ProjectObject@1002 : Record 11102037;
+      TmpObject@1003 : TEMPORARY Record 2000000001;
+      CheckGuidelinesMgt@1004 : Codeunit 11102060;
+    BEGIN
+      IF GetObjects(Transport, TmpObject, FALSE) THEN BEGIN
+        Project.SETCURRENTKEY("Transport No.");
+        Project.SETRANGE("Transport No.", Transport."No.");
+        IF Project.FINDSET THEN
+          REPEAT
+            ProjectObject.SETRANGE("Project No.", Project."No.");
+            CheckGuidelinesMgt.SetProjectObjects(ProjectObject);
+          UNTIL Project.NEXT = 0;
+
+        CheckGuidelinesMgt.AddObjectsToSheet(TmpObject);
+        CheckGuidelinesMgt.SetObjectRange(TmpObject);
+        CheckGuidelinesMgt.RUN;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckGuidelinesComments@3(VAR Transport@1000 : Record 11102043) : Boolean;
+    VAR
+      Project@1001 : Record 11102036;
+      ProjectObject@1002 : Record 11102037;
+      TmpCheckGuidelinesObject@1003 : TEMPORARY Record 11102080;
+      CheckGuidelinesComment@1004 : Record 11102081;
+      CommentType@1005 : Text;
+      CommentsPresent@1006 : Boolean;
+      ctComments@1007 : TextConst 'DEU=guidelines comments;ENU=guidelines comments;ESP=guidelines comments;FRA=guidelines comments;NLD=richtlijnopmerkingen;DEA=guidelines comments';
+      ctConfirmUnknownComments@1008 : TextConst 'DEU=There are unknown %1.\Are you sure?;ENU=There are unknown %1.\Are you sure?;ESP=There are unknown %1.\Are you sure?;FRA=There are unknown %1.\Are you sure?;NLD=Er zijn onbekende %1.\Weet u het zeker?;DEA=There are unknown %1.\Are you sure?';
+      ctTransportComments@1009 : TextConst 'DEU=transport guidelines comments;ENU=transport guidelines comments;ESP=transport guidelines comments;FRA=transport guidelines comments;NLD=transport richtlijncontroles;DEA=transport guidelines comments';
+      ctUnknownComments@1010 : TextConst 'DEU=There are unknown %1.\Please correct them first.;ENU=There are unknown %1.\Please correct them first.;ESP=There are unknown %1.\Please correct them first.;FRA=There are unknown %1.\Please correct them first.;NLD=Er zijn onbekende %1.\Deze moeten eerst worden gecorrigeerd.;DEA=There are unknown %1.\Please correct them first.';
+    BEGIN
+      IF Transport."Check Guidelines" = Transport."Check Guidelines"::"Transport Checks" THEN BEGIN
+        CheckGuidelinesComment.SETRANGE(Type, CheckGuidelinesComment.Type::Transport);
+        CommentType := ctTransportComments;
+      END ELSE
+        CommentType := ctComments;
+
+      Project.SETCURRENTKEY("Transport No.");
+      Project.SETRANGE("Transport No.", Transport."No.");
+      IF Project.FINDSET THEN
+        REPEAT
+          ProjectObject.SETRANGE("Project No.", Project."No.");
+          IF ProjectObject.FINDSET THEN
+            REPEAT
+
+              CheckGuidelinesComment.SETRANGE("Object Type", ProjectObject."Object Type");
+              CheckGuidelinesComment.SETRANGE("Object No.", ProjectObject."Object No.");
+              CheckGuidelinesComment.SETRANGE("Known Comment", FALSE);
+              IF NOT CheckGuidelinesComment.ISEMPTY THEN BEGIN
+                CommentsPresent := TRUE;
+
+                IF NOT TmpCheckGuidelinesObject.GET(ProjectObject."Object Type", ProjectObject."Object No.") THEN BEGIN
+                  TmpCheckGuidelinesObject."Object Type" := ProjectObject."Object Type";
+                  TmpCheckGuidelinesObject."Object No." := ProjectObject."Object No.";
+                  TmpCheckGuidelinesObject.INSERT;
+                END;
+
+              END;
+
+            UNTIL ProjectObject.NEXT = 0;
+        UNTIL Project.NEXT = 0;
+
+      IF CommentsPresent THEN
+        IF Transport."Check Guidelines" <> Transport."Check Guidelines"::" " THEN BEGIN
+          IF TmpCheckGuidelinesObject.FINDFIRST THEN
+            ;
+          MESSAGE(ctUnknownComments, CommentType);
+          PAGE.RUN(PAGE::"OM - Check Guidelines", TmpCheckGuidelinesObject);
+          EXIT;
+        END ELSE
+          EXIT(CONFIRM(ctConfirmUnknownComments, TRUE, CommentType));
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateTransportFiles@4(VAR Transport@1000 : Record 11102043;All@1001 : Boolean;VAR Progressbar@1002 : Codeunit 11102044);
+    VAR
+      TransportType@1003 : Record 11102098;
+      ctCreatingFile@1004 : TextConst 'DEU=Creating %1 file...;ENU=Creating %1 file...;ESP=Creating %1 file...;FRA=Creating %1 file...;NLD=%1-bestand aanmaken...;DEA=Creating %1 file...';
+    BEGIN
+      WITH Transport DO BEGIN
+
+        IF TransportType.GET("Transport Type Code") THEN
+          ;
+
+        TESTFIELD("Export Path");
+
+        IF "Export Path"[STRLEN("Export Path")] <> '\' THEN
+          "Export Path" := "Export Path" + '\';
+
+        IF TransportType."Create PDF File" OR All THEN BEGIN
+          Progressbar.Text1 := STRSUBSTNO(ctCreatingFile, 'PDF');
+          CreateFilePDF(Transport);
+        END;
+
+        IF TransportType."Create FIB File" OR All THEN BEGIN
+          Progressbar.Text1 := STRSUBSTNO(ctCreatingFile, 'FIB');
+          Progressbar.AddToBar(1);
+          Progressbar.NextBar;
+          Progressbar.SetFreezeTitle(TRUE);
+          CreateFileFIB(Transport, Progressbar);
+          Progressbar.SetFreezeTitle(FALSE);
+          Progressbar.PreviousBar;
+        END;
+
+        IF TransportType."Create FOB File" OR All THEN BEGIN
+          Progressbar.Text1 := STRSUBSTNO(ctCreatingFile, 'FOB');
+          Progressbar.AddToBar(1);
+          Progressbar.NextBar;
+          CreateFileFOB(Transport, Progressbar);
+          Progressbar.PreviousBar;
+        END;
+
+        IF TransportType."Create TXT File" OR All THEN BEGIN
+          Progressbar.Text1 := STRSUBSTNO(ctCreatingFile, 'TXT');
+          Progressbar.AddToBar(1);
+          Progressbar.NextBar;
+          CreateFileTXT(Transport, Progressbar);
+          Progressbar.PreviousBar;
+        END;
+
+        IF TransportType."Create FAB Files" OR All THEN BEGIN
+          Progressbar.Text1 := STRSUBSTNO(ctCreatingFile, 'FAB');
+          Progressbar.AddToBar(1);
+          Progressbar.NextBar;
+          CreateFileFABDefinition(Transport, Progressbar);
+          Progressbar.PreviousBar;
+        END;
+
+        IF TransportType."Create FAB Files" OR All THEN BEGIN
+          Progressbar.Text1 := STRSUBSTNO(ctCreatingFile, 'FAB');
+          Progressbar.AddToBar(1);
+          Progressbar.NextBar;
+          CreateFileFABBefore(Transport, Progressbar);
+          Progressbar.PreviousBar;
+        END;
+
+        IF TransportType."Create FAB Files" OR All THEN BEGIN
+          Progressbar.Text1 := STRSUBSTNO(ctCreatingFile, 'FAB');
+          Progressbar.AddToBar(1);
+          Progressbar.NextBar;
+          CreateFileFABAfter(Transport, Progressbar);
+          Progressbar.PreviousBar;
+        END;
+
+        Progressbar.AddToBar(1);
+        Progressbar.NextBar;
+        CreateAttachments(Transport, Progressbar);
+        Progressbar.PreviousBar;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE NoOfTransportFiles@5(Transport@1000 : Record 11102043;All@1001 : Boolean) ReturnValue : Integer;
+    VAR
+      TransportType@1002 : Record 11102098;
+    BEGIN
+      IF TransportType.GET(Transport."Transport Type Code") THEN
+        ;
+
+      IF TransportType."Create PDF File" OR All THEN
+        ReturnValue += 1;
+
+      IF TransportType."Create FIB File" OR All THEN
+        ReturnValue += 1;
+
+      IF TransportType."Create FOB File" OR All THEN
+        ReturnValue += 1;
+
+      IF TransportType."Create TXT File" OR All THEN
+        ReturnValue += 1;
+
+      IF TransportType."Create FAB Files" OR All THEN
+        ReturnValue += 3;
+
+      ReturnValue += 1;
+    END;
+
+    LOCAL PROCEDURE CreateFilePDF@6(VAR Transport@1000 : Record 11102043);
+    VAR
+      Transport2@1001 : Record 11102043;
+      TransportType@1002 : Record 11102098;
+      FileHandler@1003 : Codeunit 11102097;
+      ClientFileName@1004 : Text;
+      FileName@1005 : Text;
+      ServerFileName@1006 : Text;
+    BEGIN
+      WITH Transport DO BEGIN
+        TESTFIELD("Export Path");
+
+        IF TransportType.GET("Transport Type Code") THEN
+          ;
+
+        FileHandler.CheckCreateClientDirectory("Export Path");
+        TransportType.TESTFIELD("File Name PDF File");
+
+        FileName := CreateFileName(Transport, TransportType."File Name PDF File");
+        ClientFileName := "Export Path" + FileName;
+        ServerFileName := FileHandler.CreateServerFileName(ClientFileName, FileName);
+
+        Transport2 := Transport;
+        Transport2.SETRECFILTER;
+        REPORT.SAVEASPDF(REPORT::"OM - Transport", ServerFileName, Transport2);
+
+        FileHandler.DownloadToClient(ServerFileName, ClientFileName, FileName);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateFileFIB@7(VAR Transport@1000 : Record 11102043;VAR Progressbar@1001 : Codeunit 11102044);
+    VAR
+      Project@1002 : Record 11102036;
+      TmpModification@1003 : TEMPORARY Record 11102042;
+      TmpAction@1004 : TEMPORARY Record 11102048;
+      TmpActionField@1005 : TEMPORARY Record 11102049;
+      TmpCALHistoryObject@1006 : TEMPORARY Record 11102052;
+      TransportType@1007 : Record 11102098;
+      TmpObject@1008 : TEMPORARY Record 2000000001;
+      TmpObjectBefore@1009 : TEMPORARY Record 2000000001;
+      ActionMgt@1010 : Codeunit 11102038;
+      ImExportMgt@1011 : Codeunit 11102043;
+      SourceControl@1012 : Codeunit 11102050;
+      ProjectMgt@1013 : Codeunit 11102052;
+      FileHandler@1014 : Codeunit 11102097;
+      oFile@1015 : File;
+      TmpFile@1016 : File;
+      FileOutStr@1017 : OutStream;
+      OutStr@1018 : OutStream;
+      ClientFileName@1019 : Text;
+      FileName@1020 : Text;
+      ServerFileName@1021 : Text;
+      TmpFileName@1022 : Text;
+    BEGIN
+      WITH Transport DO BEGIN
+        TESTFIELD("Export Path");
+
+        IF TransportType.GET("Transport Type Code") THEN
+          ;
+
+        Progressbar.BarSize := 9;
+        Progressbar.AddToBar(1);
+
+        FileHandler.CheckCreateClientDirectory("Export Path");
+        TransportType.TESTFIELD("File Name FIB File");
+
+        FileName := CreateFileName(Transport, TransportType."File Name FIB File");
+        ClientFileName := "Export Path" + FileName;
+        ServerFileName := FileHandler.CreateServerFileName(ClientFileName, FileName);
+
+        oFile.WRITEMODE(TRUE);
+        oFile.CREATE(ServerFileName);
+        oFile.CREATEOUTSTREAM(FileOutStr);
+        ImExportMgt.WriteObjectManagerVersion(FileOutStr, 'FIB');
+
+        Progressbar.AddToBar(1);
+
+        IF GetFABDefinitionActions(Transport, TmpAction, TmpActionField) THEN BEGIN
+          ImExportMgt.CreateTempFile(TmpFile, TmpFileName);
+          TmpFile.CREATEOUTSTREAM(OutStr);
+
+          Progressbar.NextBar;
+          ActionMgt.FillExportOutStream(TmpAction, TmpActionField, OutStr, Progressbar);
+          Progressbar.PreviousBar;
+
+          Progressbar.AddToBar(1);
+
+          Progressbar.NextBar;
+          ImExportMgt.AddFileSection(TmpFile, FileOutStr, 'TRANSPORT DEFINITION');
+          Progressbar.PreviousBar;
+
+          TmpFile.CLOSE;
+          ERASE(TmpFileName);
+        END;
+
+        Progressbar.AddToBar(1);
+
+        IF GetFABActions(Transport, TmpAction, TmpActionField, TmpAction."Sub Type"::Before) THEN BEGIN
+
+          ImExportMgt.CreateTempFile(TmpFile, TmpFileName);
+          TmpFile.CREATEOUTSTREAM(OutStr);
+
+          Progressbar.NextBar;
+          ActionMgt.FillExportOutStream(TmpAction, TmpActionField, OutStr, Progressbar);
+          Progressbar.PreviousBar;
+
+          Progressbar.AddToBar(1);
+
+          Progressbar.NextBar;
+          ImExportMgt.AddFileSection(TmpFile, FileOutStr, 'FAB BEFORE');
+          Progressbar.PreviousBar;
+
+          TmpFile.CLOSE;
+          ERASE(TmpFileName);
+        END;
+
+        Progressbar.AddToBar(1);
+
+        IF GetFABActions(Transport, TmpAction, TmpActionField, TmpAction."Sub Type"::After) THEN BEGIN
+          ImExportMgt.CreateTempFile(TmpFile, TmpFileName);
+          TmpFile.CREATEOUTSTREAM(OutStr);
+
+          Progressbar.NextBar;
+          ActionMgt.FillExportOutStream(TmpAction, TmpActionField, OutStr, Progressbar);
+          Progressbar.PreviousBar;
+
+          Progressbar.AddToBar(1);
+
+          Progressbar.NextBar;
+          ImExportMgt.AddFileSection(TmpFile, FileOutStr, 'FAB AFTER');
+          Progressbar.PreviousBar;
+
+          TmpFile.CLOSE;
+          ERASE(TmpFileName);
+        END;
+
+        Progressbar.AddToBar(1);
+
+        IF GetObjects(Transport, TmpObject, TRUE) THEN BEGIN
+
+          IF GetObjectsBefore(Transport, TmpObject, TmpObjectBefore) THEN BEGIN
+            ImExportMgt.CreateTempFile(TmpFile, TmpFileName);
+            TmpFile.CREATEOUTSTREAM(OutStr);
+
+            Progressbar.NextBar;
+            ImExportMgt.FillOutstreamFob(OutStr, TmpObjectBefore, Progressbar);
+            Progressbar.PreviousBar;
+
+            Progressbar.NextBar;
+            ImExportMgt.AddFileSection(TmpFile, FileOutStr, 'FOB BEFORE');
+            Progressbar.PreviousBar;
+
+            TmpFile.CLOSE;
+            ERASE(TmpFileName);
+          END;
+
+          ImExportMgt.CreateTempFile(TmpFile, TmpFileName);
+          TmpFile.CREATEOUTSTREAM(OutStr);
+
+          Progressbar.NextBar;
+          ImExportMgt.FillOutstreamFob(OutStr, TmpObject, Progressbar);
+          Progressbar.PreviousBar;
+
+          Progressbar.AddToBar(1);
+
+          Progressbar.NextBar;
+          ImExportMgt.AddFileSection(TmpFile, FileOutStr, 'FOB');
+          Progressbar.PreviousBar;
+
+          TmpFile.CLOSE;
+          ERASE(TmpFileName);
+        END;
+
+        IF TransportType."Include TXT-Objects in Tr." OR ("Object Import Mode" <> "Object Import Mode"::Compiled) THEN
+          IF NOT TmpObject.ISEMPTY THEN BEGIN
+
+            IF TmpObject.FINDSET THEN
+              REPEAT
+                IF SourceControl.ObjectHeaderIsOutdated(TmpObject, TRUE) THEN
+                  SourceControl.AddObject(TmpObject, 0, TRUE, FALSE, 1, FALSE);
+              UNTIL TmpObject.NEXT = 0;
+
+            ImExportMgt.CreateTempFile(TmpFile, TmpFileName);
+            TmpFile.CREATEOUTSTREAM(OutStr);
+
+            Progressbar.NextBar;
+            ImExportMgt.FillOutstreamTxt(OutStr, TmpObject);
+            Progressbar.PreviousBar;
+
+            Progressbar.AddToBar(1);
+
+            Progressbar.NextBar;
+            ImExportMgt.AddFileSection(TmpFile, FileOutStr, 'TXTOBJECTS');
+            Progressbar.PreviousBar;
+
+            TmpFile.CLOSE;
+            ERASE(TmpFileName);
+
+          END;
+
+        IF "Object Import Mode" <> "Object Import Mode"::Compiled THEN
+          IF NOT TmpObject.ISEMPTY THEN BEGIN
+
+            ImExportMgt.CreateTempFile(TmpFile, TmpFileName);
+            TmpFile.CREATEOUTSTREAM(OutStr);
+            ImExportMgt.WriteObjectManagerVersion(OutStr, 'TXT');
+
+            Progressbar.NextBar;
+
+            Project.SETCURRENTKEY("Transport No.");
+            Project.SETRANGE("Transport No.", "No.");
+            IF Project.FINDSET THEN
+              REPEAT
+                ProjectMgt.GetModificationsBefore(Project, TmpModification);
+              UNTIL Project.NEXT = 0;
+
+            ProjectMgt.GetHistoryObjectsBefore(TmpModification, TmpCALHistoryObject, TRUE);
+
+            TmpCALHistoryObject.SETCURRENTKEY("Object Type", "Object No.");
+            TmpCALHistoryObject.SETRANGE("C/AL Code Present", TRUE);
+            Progressbar.BarSize := TmpCALHistoryObject.COUNT;
+            IF TmpCALHistoryObject.FINDSET THEN
+              REPEAT
+                Progressbar.AddToBar(1);
+                SourceControl.AppendObjectToStream(OutStr, TmpCALHistoryObject."Entry No.");
+              UNTIL TmpCALHistoryObject.NEXT = 0;
+
+            Progressbar.PreviousBar;
+
+            Progressbar.AddToBar(1);
+
+            Progressbar.NextBar;
+            ImExportMgt.AddFileSection(TmpFile, FileOutStr, 'TXTOBJECTS BEFORE');
+            Progressbar.PreviousBar;
+
+            TmpFile.CLOSE;
+            ERASE(TmpFileName);
+
+          END;
+
+        oFile.CLOSE;
+
+        FileHandler.DownloadToClient(ServerFileName, ClientFileName, FileName);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateFileFOB@8(VAR Transport@1000 : Record 11102043;VAR Progressbar@1001 : Codeunit 11102044);
+    VAR
+      TransportType@1002 : Record 11102098;
+      TmpObject@1003 : TEMPORARY Record 2000000001;
+      TmpObjectBefore@1004 : TEMPORARY Record 2000000001;
+      ImExportMgt@1005 : Codeunit 11102043;
+      FileHandler@1006 : Codeunit 11102097;
+      oFile@1007 : File;
+      OutStr@1008 : OutStream;
+      ClientFileName@1009 : Text;
+      FileName@1010 : Text;
+      ServerFileName@1011 : Text;
+    BEGIN
+      WITH Transport DO
+        IF GetObjects(Transport, TmpObject, TRUE) THEN BEGIN
+
+          TESTFIELD("Export Path");
+          FileHandler.CheckCreateClientDirectory("Export Path");
+          IF TransportType.GET("Transport Type Code") THEN
+            ;
+          TransportType.TESTFIELD("File Name FOB File");
+
+          IF GetObjectsBefore(Transport, TmpObject, TmpObjectBefore) THEN BEGIN
+
+            FileName := CreateFileName(Transport, TransportType."File Name FOB File");
+            FileName := FileHandler.InsertBeforeExtension(FileName, '-before');
+
+            ClientFileName := "Export Path" + FileName;
+            ServerFileName := FileHandler.CreateServerFileName(ClientFileName, FileName);
+
+            oFile.WRITEMODE(TRUE);
+            oFile.CREATE(ServerFileName);
+            oFile.CREATEOUTSTREAM(OutStr);
+
+            ImExportMgt.FillOutstreamFob(OutStr, TmpObjectBefore, Progressbar);
+            oFile.CLOSE;
+
+            FileHandler.DownloadToClient(ServerFileName, ClientFileName, FileName);
+
+          END;
+
+          FileName := CreateFileName(Transport, TransportType."File Name FOB File");
+          ClientFileName := "Export Path" + FileName;
+          ServerFileName := FileHandler.CreateServerFileName(ClientFileName, FileName);
+
+          oFile.WRITEMODE(TRUE);
+          oFile.CREATE(ServerFileName);
+          oFile.CREATEOUTSTREAM(OutStr);
+
+          ImExportMgt.FillOutstreamFob(OutStr, TmpObject, Progressbar);
+          oFile.CLOSE;
+
+          FileHandler.DownloadToClient(ServerFileName, ClientFileName, FileName);
+
+        END;
+    END;
+
+    LOCAL PROCEDURE CreateFileTXT@9(VAR Transport@1000 : Record 11102043;VAR Progressbar@1001 : Codeunit 11102044);
+    VAR
+      CALHistoryObject@1002 : Record 11102052;
+      TmpCALHistoryObject@1003 : TEMPORARY Record 11102052;
+      TransportType@1004 : Record 11102098;
+      TmpObject@1005 : TEMPORARY Record 2000000001;
+      SourceControl@1006 : Codeunit 11102050;
+      FileHandler@1007 : Codeunit 11102097;
+      oFile@1008 : File;
+      ClientFileName@1009 : Text;
+      FileName@1010 : Text;
+      ServerFileName@1011 : Text;
+      IsOutdated@1012 : Boolean;
+      ctTXTFileNotCreated@1013 : TextConst 'DEU=The TXT file has not been created because not all objects are actual.;ENU=The TXT file has not been created because not all objects are actual.;ESP=The TXT file has not been created because not all objects are actual.;FRA=The TXT file has not been created because not all objects are actual.;NLD=Het TXT bestand is niet aangemaat omdat niet alle object bijgewerkt zijn.;DEA=The TXT file has not been created because not all objects are actual.';
+    BEGIN
+      WITH Transport DO BEGIN
+
+        TESTFIELD("Export Path");
+        FileHandler.CheckCreateClientDirectory("Export Path");
+
+        GetObjects(Transport, TmpObject, TRUE);
+
+        IF TmpObject.FINDSET THEN
+          REPEAT
+            CALHistoryObject.SETCURRENTKEY("Object Type", "Object No.");
+            CALHistoryObject.SETRANGE("Object Type", TmpObject.Type);
+            CALHistoryObject.SETRANGE("Object No.", TmpObject.ID);
+            CALHistoryObject.SETRANGE("C/AL Code Present", TRUE);
+            IsOutdated :=
+              NOT CALHistoryObject.FINDLAST OR
+              (CREATEDATETIME(TmpObject.Date, TmpObject.Time) - CALHistoryObject."Object Date Time" > 1000);
+
+            IF NOT IsOutdated THEN
+              CALHistoryObject.AddToTempRecord(TmpCALHistoryObject);
+
+          UNTIL (TmpObject.NEXT = 0) OR IsOutdated;
+
+        IF IsOutdated THEN
+          MESSAGE(ctTXTFileNotCreated)
+        ELSE BEGIN
+
+          Progressbar.BarSize := TmpCALHistoryObject.COUNT;
+
+          IF TmpCALHistoryObject.FINDSET THEN BEGIN
+
+            IF TransportType.GET("Transport Type Code") THEN
+              ;
+
+            TransportType.TESTFIELD("File Name TXT File");
+
+            FileName := CreateFileName(Transport, TransportType."File Name TXT File");
+            ClientFileName := "Export Path" + FileName;
+            ServerFileName := FileHandler.CreateServerFileName(ClientFileName, FileName);
+
+            oFile.TEXTMODE(TRUE);
+            oFile.WRITEMODE(TRUE);
+            oFile.CREATE(ServerFileName);
+            REPEAT
+              Progressbar.AddToBar(1);
+              SourceControl.AppendHistoryObjectToFile(oFile, TmpCALHistoryObject."Entry No.");
+            UNTIL TmpCALHistoryObject.NEXT = 0;
+            oFile.CLOSE;
+
+            FileHandler.DownloadToClient(ServerFileName, ClientFileName, FileName);
+
+          END;
+        END;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateFileFABDefinition@10(VAR Transport@1000 : Record 11102043;VAR Progressbar@1001 : Codeunit 11102044);
+    VAR
+      TmpAction@1002 : TEMPORARY Record 11102048;
+      TmpActionField@1003 : TEMPORARY Record 11102049;
+      TransportType@1004 : Record 11102098;
+      ActionMgt@1005 : Codeunit 11102038;
+      FileHandler@1006 : Codeunit 11102097;
+      ClientFileName@1007 : Text;
+      FileName@1008 : Text;
+      ServerFileName@1009 : Text;
+    BEGIN
+      WITH Transport DO BEGIN
+        TESTFIELD("Export Path");
+        FileHandler.CheckCreateClientDirectory("Export Path");
+
+        GetFABDefinitionActions(Transport, TmpAction, TmpActionField);
+
+        IF TransportType.GET("Transport Type Code") THEN
+          ;
+
+        TransportType.TESTFIELD("File Name FAB Definition File");
+
+        FileName := CreateFileName(Transport, TransportType."File Name FAB Definition File");
+        ClientFileName := "Export Path" + FileName;
+        ServerFileName := FileHandler.CreateServerFileName(ClientFileName, FileName);
+
+        ActionMgt.ExportFile(TmpAction, TmpActionField, ServerFileName, Progressbar);
+
+        FileHandler.DownloadToClient(ServerFileName, ClientFileName, FileName);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE GetFABDefinitionActions@11(VAR Transport@1000 : Record 11102043;VAR TmpAction@1001 : TEMPORARY Record 11102048;VAR TmpActionField@1002 : TEMPORARY Record 11102049) : Boolean;
+    VAR
+      Project@1003 : Record 11102036;
+      ProjectObject@1004 : Record 11102037;
+      DocumentLine@1005 : Record 11102046;
+      Actions@1006 : Record 11102048;
+      ActionField@1007 : Record 11102049;
+      ProjectPermissions@1008 : Record 11102050;
+      TransportProjectHistory@1009 : Record 11102066;
+      Test@1010 : Record 11102089;
+      TestParameter@1011 : Record 11102090;
+      Comment2@1012 : Record 11102095;
+      CommentLine@1013 : Record 11102096;
+      Object@1014 : Record 2000000001;
+      RecRef@1015 : RecordRef;
+    BEGIN
+      WITH Transport DO BEGIN
+
+        TmpAction.RESET;
+        TmpAction.DELETEALL;
+        TmpActionField.RESET;
+        TmpActionField.DELETEALL;
+
+        TmpAction.Type := TmpAction.Type::"Temporary";
+
+        TmpAction."Line No." += 10000;
+        TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+        TmpAction.VALIDATE("Object No.", DATABASE::"OM - Transport");
+        TmpAction."DELETEALL;" := TRUE;
+        TmpAction.Evaluate1FieldFilter(FIELDNO("No."), "No.");
+        TmpAction.INSERT;
+
+        TmpAction."Line No." += 10000;
+        TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+        TmpAction.VALIDATE("Object No.", DATABASE::"OM - Document Line");
+        TmpAction.Evaluate3FieldsFilter(
+          DocumentLine.FIELDNO("Table Name"), FORMAT(DocumentLine."Table Name"::Transport),
+          DocumentLine.FIELDNO("No."), "No.",
+          DocumentLine.FIELDNO("Attach to Transport"), FORMAT(DocumentLine."Attach to Transport"::"In FIB"));
+        TmpAction."DELETEALL;" := TRUE;
+        TmpAction.INSERT;
+
+        TmpAction."Line No." += 10000;
+        TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+        TmpAction.VALIDATE("Object No.", DATABASE::"OM - Document Line");
+        TmpAction.Evaluate3FieldsFilter(
+          DocumentLine.FIELDNO("Table Name"), FORMAT(DocumentLine."Table Name"::Transport),
+          DocumentLine.FIELDNO("No."), "No.",
+          DocumentLine.FIELDNO("Attach to Transport"), FORMAT(DocumentLine."Attach to Transport"::"In FIB"));
+        TmpAction."DELETEALL;" := TRUE;
+        TmpAction.INSERT;
+
+        TmpAction."Line No." += 10000;
+        TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+        TmpAction.VALIDATE("Object No.", DATABASE::"OM - Comment");
+        TmpAction."Key Index" := 2;
+
+        TmpAction.Evaluate3FieldsFilter(
+          Comment2.FIELDNO("Table Name"), FORMAT(Comment2."Table Name"::Transport),
+          Comment2.FIELDNO("No."), "No.",
+          Comment2.FIELDNO(Transport), '1');
+        TmpAction."DELETEALL;" := TRUE;
+        TmpAction.INSERT;
+        TmpAction."Key Index" := 0;
+
+        Comment2.SETCURRENTKEY("Table Name", "No.");
+        Comment2.SETRANGE("Table Name", DocumentLine."Table Name"::Transport);
+        Comment2.SETRANGE("No.", "No.");
+        Comment2.SETRANGE(Transport, TRUE);
+        IF Comment2.FINDSET THEN
+          REPEAT
+            TmpAction."Line No." += 10000;
+            TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+            TmpAction.VALIDATE("Object No.", DATABASE::"OM - Comment Line");
+            TmpAction."DELETEALL;" := TRUE;
+            TmpAction.Evaluate1FieldFilter(CommentLine.FIELDNO("Comment Entry No."), FORMAT(Comment2."Entry No."));
+            TmpAction.INSERT;
+          UNTIL Comment2.NEXT = 0;
+
+        Project.SETCURRENTKEY("Transport No.");
+        Project.SETRANGE("Transport No.", "No.");
+        IF Project.FINDSET THEN
+          REPEAT
+
+            TmpAction."Line No." += 10000;
+            TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+            TmpAction.VALIDATE("Object No.", DATABASE::"OM - Project");
+            TmpAction.Evaluate1FieldFilter(Project.FIELDNO("No."), Project."No.");
+            TmpAction."DELETEALL;" := TRUE;
+            TmpAction.INSERT;
+
+            TmpAction."Line No." += 10000;
+            TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+            TmpAction.VALIDATE("Object No.", DATABASE::"OM - Project Object");
+            TmpAction.Evaluate1FieldFilter(ProjectObject.FIELDNO("Project No."), Project."No.");
+            TmpAction."DELETEALL;" := TRUE;
+            TmpAction.INSERT;
+
+            TmpAction."Line No." += 10000;
+            TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+            TmpAction.VALIDATE("Object No.", DATABASE::"OM - Action");
+            TmpAction.Evaluate2FieldsFilter(
+              Actions.FIELDNO(Type), FORMAT(Actions.Type::Project),
+              Actions.FIELDNO("No."), Project."No.");
+            TmpAction."DELETEALL;" := TRUE;
+            TmpAction.INSERT;
+
+            TmpAction."Line No." += 10000;
+            TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+            TmpAction.VALIDATE("Object No.", DATABASE::"OM - Action Field");
+            TmpAction.Evaluate2FieldsFilter(
+              ActionField.FIELDNO(Type), FORMAT(ActionField.Type::Project),
+              ActionField.FIELDNO("No."), Project."No.");
+            TmpAction."DELETEALL;" := TRUE;
+            TmpAction.INSERT;
+
+            TmpAction."Line No." += 10000;
+            TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+            TmpAction.VALIDATE("Object No.", DATABASE::"OM - Document Line");
+            TmpAction.Evaluate3FieldsFilter(
+              DocumentLine.FIELDNO("Table Name"), FORMAT(DocumentLine."Table Name"::Project),
+              DocumentLine.FIELDNO("No."), Project."No.",
+              DocumentLine.FIELDNO("Attach to Transport"), FORMAT(DocumentLine."Attach to Transport"::"In FIB"));
+            TmpAction."DELETEALL;" := TRUE;
+            TmpAction.INSERT;
+
+            TmpAction."Line No." += 10000;
+            TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+            TmpAction.VALIDATE("Object No.", DATABASE::"OM - Project Permissions");
+            TmpAction.Evaluate1FieldFilter(ProjectPermissions.FIELDNO("Project No."), Project."No.");
+            TmpAction."DELETEALL;" := TRUE;
+            TmpAction.INSERT;
+
+            TmpAction."Line No." += 10000;
+            TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+            TmpAction.VALIDATE("Object No.", DATABASE::"OM - Test");
+            TmpAction.Evaluate2FieldsFilter(Test.FIELDNO(Type), FORMAT(Test.Type::Project), Test.FIELDNO("No."), Project."No.");
+            TmpAction."DELETEALL;" := TRUE;
+            TmpAction.INSERT;
+
+            TmpAction."Line No." += 10000;
+            TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+            TmpAction.VALIDATE("Object No.", DATABASE::"OM - Test Parameter");
+            TmpAction.Evaluate2FieldsFilter(
+              TestParameter.FIELDNO("Test Type"), FORMAT(TestParameter."Test Type"::Project),
+              TestParameter.FIELDNO("Test No."), Project."No.");
+            TmpAction."DELETEALL;" := TRUE;
+            TmpAction.INSERT;
+
+            TmpAction."Line No." += 10000;
+            TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+            TmpAction.VALIDATE("Object No.", DATABASE::"OM - Comment");
+            TmpAction."Key Index" := 2;
+            TmpAction.Evaluate3FieldsFilter(
+              Comment2.FIELDNO("Table Name"), FORMAT(Comment2."Table Name"::Project),
+              Comment2.FIELDNO("No."), Project."No.",
+              Comment2.FIELDNO(Transport), '1');
+            TmpAction."DELETEALL;" := TRUE;
+            TmpAction.INSERT;
+            TmpAction."Key Index" := 0;
+
+            Comment2.SETCURRENTKEY("Table Name", "No.");
+            Comment2.SETRANGE("Table Name", DocumentLine."Table Name"::Project);
+            Comment2.SETRANGE("No.", Project."No.");
+            Comment2.SETRANGE(Transport, TRUE);
+            IF Comment2.FINDSET THEN
+              REPEAT
+                TmpAction."Line No." += 10000;
+                TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+                TmpAction.VALIDATE("Object No.", DATABASE::"OM - Comment Line");
+                TmpAction."DELETEALL;" := TRUE;
+                TmpAction.Evaluate1FieldFilter(CommentLine.FIELDNO("Comment Entry No."), FORMAT(Comment2."Entry No."));
+                TmpAction.INSERT;
+              UNTIL Comment2.NEXT = 0;
+
+            IF Object.GET(Object.Type::Table, '', DATABASE::"Record Link") THEN BEGIN
+              TmpAction."Line No." += 10000;
+              TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+              TmpAction.VALIDATE("Object No.", DATABASE::"Record Link");
+              TmpAction."Key Index" := 2;
+              RecRef.GETTABLE(Project);
+              TmpAction.Evaluate1FieldFilter(2, FORMAT(RecRef.RECORDID));
+              TmpAction."DELETEALL;" := TRUE;
+              TmpAction.INSERT;
+              TmpAction."Key Index" := 0;
+            END;
+
+          UNTIL Project.NEXT = 0;
+
+        TmpAction."DELETEALL;" := FALSE;
+
+        TmpAction."Line No." += 10000;
+        TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+        TmpAction.VALIDATE("Object No.", DATABASE::"OM - Transport Project History");
+        TmpAction.Evaluate1FieldFilter(TransportProjectHistory.FIELDNO("Transport No."), "No.");
+        TmpAction."DELETEALL;" := TRUE;
+        TmpAction.INSERT;
+
+        IF Object.GET(Object.Type::Table, '', DATABASE::"Record Link") THEN BEGIN
+          TmpAction."Line No." += 10000;
+          TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+          TmpAction.VALIDATE("Object No.", DATABASE::"Record Link");
+          TmpAction."Key Index" := 2;
+          RecRef.GETTABLE(Transport);
+          TmpAction.Evaluate1FieldFilter(2, FORMAT(RecRef.RECORDID));
+          TmpAction."DELETEALL;" := TRUE;
+          TmpAction.INSERT;
+          TmpAction."Key Index" := 0;
+        END;
+
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateFileFABBefore@12(VAR Transport@1000 : Record 11102043;VAR Progressbar@1001 : Codeunit 11102044);
+    VAR
+      TmpAction@1002 : TEMPORARY Record 11102048;
+      TmpActionField@1003 : TEMPORARY Record 11102049;
+      TransportType@1004 : Record 11102098;
+      ActionMgt@1005 : Codeunit 11102038;
+      FileHandler@1006 : Codeunit 11102097;
+      ClientFileName@1007 : Text;
+      FileName@1008 : Text;
+      ServerFileName@1009 : Text;
+    BEGIN
+      WITH Transport DO BEGIN
+        TESTFIELD("Export Path");
+        FileHandler.CheckCreateClientDirectory("Export Path");
+
+        GetFABActions(Transport, TmpAction, TmpActionField, TmpAction."Sub Type"::Before);
+
+        IF NOT TmpAction.ISEMPTY THEN BEGIN
+
+          IF TransportType.GET("Transport Type Code") THEN
+            ;
+
+          TransportType.TESTFIELD("File Name FAB Before File");
+
+          FileName := CreateFileName(Transport, TransportType."File Name FAB Before File");
+          ClientFileName := "Export Path" + FileName;
+          ServerFileName := FileHandler.CreateServerFileName(ClientFileName, FileName);
+
+          ActionMgt.ExportFile(TmpAction, TmpActionField, ServerFileName, Progressbar);
+
+          FileHandler.DownloadToClient(ServerFileName, ClientFileName, FileName);
+
+        END;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE GetFABActions@13(VAR Transport@1000 : Record 11102043;VAR TmpAction@1001 : TEMPORARY Record 11102048;VAR TmpActionField@1002 : TEMPORARY Record 11102049;SubType@1003 : Option) : Boolean;
+    VAR
+      Project@1004 : Record 11102036;
+      Actions@1005 : Record 11102048;
+      ActionField@1006 : Record 11102049;
+      LineCounter@1007 : Integer;
+    BEGIN
+      WITH Transport DO BEGIN
+
+        TmpAction.RESET;
+        TmpAction.DELETEALL;
+        TmpActionField.RESET;
+        TmpActionField.DELETEALL;
+
+        Project.SETCURRENTKEY("Transport No.");
+        Project.SETRANGE("Transport No.", "No.");
+        IF Project.FINDSET THEN
+          REPEAT
+            Actions.SETRANGE(Type, Actions.Type::Project);
+            Actions.SETRANGE("No.", Project."No.");
+            Actions.SETRANGE("Sub Type", SubType);
+            IF Actions.FINDSET THEN
+              REPEAT
+                LineCounter += 10000;
+                TmpAction := Actions;
+                TmpAction."Line No." := LineCounter;
+                TmpAction.INSERT;
+                ActionField.SETRANGE(Type, Actions.Type);
+                ActionField.SETRANGE("No.", Actions."No.");
+                ActionField.SETRANGE("Sub Type", Actions."Sub Type");
+                ActionField.SETRANGE("Line No.", Actions."Line No.");
+                IF ActionField.FINDSET THEN
+                  REPEAT
+                    TmpActionField := ActionField;
+                    TmpActionField."Line No." := LineCounter;
+                    TmpActionField.INSERT;
+                  UNTIL ActionField.NEXT = 0;
+              UNTIL Actions.NEXT = 0;
+          UNTIL Project.NEXT = 0;
+      END;
+
+      EXIT(NOT TmpAction.ISEMPTY);
+    END;
+
+    LOCAL PROCEDURE CreateFileFABAfter@14(VAR Transport@1000 : Record 11102043;VAR Progressbar@1001 : Codeunit 11102044);
+    VAR
+      TmpAction@1002 : TEMPORARY Record 11102048;
+      TmpActionField@1003 : TEMPORARY Record 11102049;
+      TransportType@1004 : Record 11102098;
+      ActionMgt@1005 : Codeunit 11102038;
+      FileHandler@1006 : Codeunit 11102097;
+      ClientFileName@1007 : Text;
+      FileName@1008 : Text;
+      ServerFileName@1009 : Text;
+    BEGIN
+      WITH Transport DO BEGIN
+        TESTFIELD("Export Path");
+
+        FileHandler.CheckCreateClientDirectory("Export Path");
+
+        GetFABActions(Transport, TmpAction, TmpActionField, TmpAction."Sub Type"::After);
+
+        IF NOT TmpAction.ISEMPTY THEN BEGIN
+
+          IF TransportType.GET("Transport Type Code") THEN
+            ;
+
+          TransportType.TESTFIELD("File Name FAB After File");
+
+          FileName := CreateFileName(Transport, TransportType."File Name FAB After File");
+          ClientFileName := "Export Path" + FileName;
+          ServerFileName := FileHandler.CreateServerFileName(ClientFileName, FileName);
+
+          ActionMgt.ExportFile(TmpAction, TmpActionField, ServerFileName, Progressbar);
+
+          FileHandler.DownloadToClient(ServerFileName, ClientFileName, FileName);
+
+        END;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateAttachments@15(VAR Transport@1000 : Record 11102043;VAR Progressbar@1001 : Codeunit 11102044);
+    VAR
+      Project@1002 : Record 11102036;
+      DocumentLine@1003 : Record 11102046;
+      FileHandler@1004 : Codeunit 11102097;
+      oFile@1005 : File;
+      InStr@1006 : InStream;
+      OutStr@1007 : OutStream;
+      ClientFileName@1008 : Text;
+      FileName@1009 : Text;
+      ServerFileName@1010 : Text;
+    BEGIN
+      WITH Transport DO BEGIN
+        TESTFIELD("Export Path");
+
+        FileHandler.CheckCreateClientDirectory("Export Path");
+
+        Progressbar.BarSize := 2;
+        Progressbar.AddToBar(1);
+
+        DocumentLine.SETRANGE("Table Name", DocumentLine."Table Name"::Transport);
+        DocumentLine.SETRANGE("No.", "No.");
+        DocumentLine.SETRANGE("Attach to Transport", DocumentLine."Attach to Transport"::"As File");
+        IF DocumentLine.FINDSET THEN
+          REPEAT
+            DocumentLine.CALCFIELDS(Document);
+            IF DocumentLine.Document.HASVALUE THEN BEGIN
+
+              ClientFileName := "Export Path" + DocumentLine."File Name";
+              ServerFileName := FileHandler.CreateServerFileName(ClientFileName, DocumentLine."File Name");
+
+              oFile.CREATE(ServerFileName);
+              oFile.CREATEOUTSTREAM(OutStr);
+
+              DocumentLine.Document.CREATEINSTREAM(InStr);
+              COPYSTREAM(OutStr, InStr);
+
+              oFile.CLOSE;
+
+              FileHandler.DownloadToClient(ServerFileName, ClientFileName, FileName);
+
+            END;
+
+          UNTIL DocumentLine.NEXT = 0;
+
+        Progressbar.AddToBar(1);
+
+        Project.SETCURRENTKEY("Transport No.");
+        Project.SETRANGE("Transport No.", "No.");
+
+        IF Project.FINDSET THEN
+          REPEAT
+
+            DocumentLine.SETRANGE("Table Name", DocumentLine."Table Name"::Project);
+            DocumentLine.SETRANGE("No.", Project."No.");
+            DocumentLine.SETRANGE("Attach to Transport", DocumentLine."Attach to Transport"::"As File");
+            IF DocumentLine.FINDSET THEN
+              REPEAT
+                DocumentLine.CALCFIELDS(Document);
+                IF DocumentLine.Document.HASVALUE THEN BEGIN
+
+                  ClientFileName := "Export Path" + DocumentLine."File Name";
+                  ServerFileName := FileHandler.CreateServerFileName(ClientFileName, DocumentLine."File Name");
+
+                  oFile.CREATE(ServerFileName);
+                  oFile.CREATEOUTSTREAM(OutStr);
+
+                  DocumentLine.Document.CREATEINSTREAM(InStr);
+                  COPYSTREAM(OutStr, InStr);
+
+                  oFile.CLOSE;
+
+                  FileHandler.DownloadToClient(ServerFileName, ClientFileName, FileName);
+
+                END;
+              UNTIL DocumentLine.NEXT = 0;
+          UNTIL Project.NEXT = 0;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateFileName@16(VAR Transport@1000 : Record 11102043;FileNameFormat@1001 : Text) ReturnValue : Text;
+    VAR
+      CheckFileName@1002 : Text;
+      i@1003 : Integer;
+      ctWrongFileName@1004 : TextConst 'DEU="The calculated file name is empty.\Please check the settings on the Transport Type card.\\Format: ''%1''=''%2''.";ENU="The calculated file name is empty.\Please check the settings on the Transport Type card.\\Format: ''%1''=''%2''.";ESP="The calculated file name is empty.\Please check the settings on the Transport Type card.\\Format: ''%1''=''%2''.";FRA="The calculated file name is empty.\Please check the settings on the Transport Type card.\\Format: ''%1''=''%2''.";NLD="De berekende bestandsnaam is leeg.\Controleer de instellingen op de transportsoortkaart.\\Formaat: ''%1''=''%2''.";DEA="The calculated file name is empty.\Please check the settings on the Transport Type card.\\Format: ''%1''=''%2''."';
+    BEGIN
+      ReturnValue :=
+        STRSUBSTNO(
+          FileNameFormat, Transport."No.", Transport."Version List Id", Transport."Version No.", Transport."Transport Type Code");
+
+      ReturnValue := FORMAT(CURRENTDATETIME, 0, ReturnValue);
+
+      ReturnValue := DELCHR(ReturnValue, '<>');
+      WHILE STRPOS(ReturnValue, ' .') > 0 DO
+        ReturnValue := DELSTR(ReturnValue, STRPOS(ReturnValue, ' .'), 1);
+
+      WHILE STRPOS(ReturnValue, '  ') > 0 DO
+        ReturnValue := DELSTR(ReturnValue, STRPOS(ReturnValue, '  '), 1);
+
+      CheckFileName := ReturnValue;
+      FOR i := 1 TO STRLEN(ReturnValue) DO
+        IF ReturnValue[i] = '.' THEN
+          CheckFileName := DELSTR(ReturnValue, i);
+
+      IF CheckFileName = '' THEN
+        ERROR(ctWrongFileName, FileNameFormat, ReturnValue);
+    END;
+
+    LOCAL PROCEDURE CompileObjects@17(VAR Transport@1000 : Record 11102043) : Boolean;
+    VAR
+      TmpObject@1001 : TEMPORARY Record 2000000001;
+      ObjectMgt@1002 : Codeunit 11102046;
+      ctCompileError@1003 : TextConst 'DEU=Compilation of %1 %2 %3 failed.;ENU=Compilation of %1 %2 %3 failed.;ESP=Compilation of %1 %2 %3 failed.;FRA=Compilation of %1 %2 %3 failed.;NLD=Compileren van %1 %2 %3 mislukt.;DEA=Compilation of %1 %2 %3 failed.';
+    BEGIN
+      GetObjects(Transport, TmpObject, TRUE);
+
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          ObjectMgt.SetErrorHandling(TRUE);
+          ObjectMgt.CompileObject(TmpObject);
+          IF ObjectMgt.GetErrorOccured THEN BEGIN
+            MESSAGE(ctCompileError, TmpObject.Type, TmpObject.ID, TmpObject.Name);
+            EXIT;
+          END;
+
+        UNTIL TmpObject.NEXT = 0;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetObjects@18(VAR Transport@1000 : Record 11102043;VAR TmpObject@1001 : TEMPORARY Record 2000000001;IncludeIncludeVersionList@1002 : Boolean) : Boolean;
+    VAR
+      Project@1003 : Record 11102036;
+      ProjectObject@1004 : Record 11102037;
+      Object@1005 : Record 2000000001;
+    BEGIN
+      Project.SETCURRENTKEY("Transport No.");
+      Project.SETRANGE("Transport No.", Transport."No.");
+      IF Project.FINDSET THEN
+        REPEAT
+          ProjectObject.SETRANGE("Project No.", Project."No.");
+          ProjectObject.SETRANGE("Include in Transport", TRUE);
+          IF ProjectObject.FINDSET THEN
+            REPEAT
+              IF Object.GET(ProjectObject."Object Type", '', ProjectObject."Object No.") THEN
+                IF NOT TmpObject.GET(ProjectObject."Object Type", '', ProjectObject."Object No.") THEN BEGIN
+                  TmpObject := Object;
+                  TmpObject.INSERT;
+                END;
+            UNTIL ProjectObject.NEXT = 0;
+        UNTIL Project.NEXT = 0;
+
+      IF IncludeIncludeVersionList THEN
+        IF Transport."Include Version List" <> '' THEN BEGIN
+          Object.SETFILTER(Type, '<>%1', Object.Type::TableData);
+          Object.SETFILTER("Version List", '*' + Transport."Include Version List" + '*');
+          IF Object.FINDSET THEN
+            REPEAT
+              IF NOT TmpObject.GET(Object.Type, '', Object.ID) THEN BEGIN
+                TmpObject := Object;
+                TmpObject.INSERT;
+              END;
+            UNTIL Object.NEXT = 0;
+        END;
+
+      EXIT(NOT TmpObject.ISEMPTY);
+    END;
+
+    LOCAL PROCEDURE GetObjectsBefore@19(VAR Transport@1000 : Record 11102043;VAR TmpObject@1001 : TEMPORARY Record 2000000001;VAR TmpObjectBefore@1002 : TEMPORARY Record 2000000001) : Boolean;
+    VAR
+      Project@1003 : Record 11102036;
+      Actions@1004 : Record 11102048;
+      ProjectObject@1005 : Record 11102037;
+    BEGIN
+      Project.SETCURRENTKEY("Transport No.");
+      Project.SETRANGE("Transport No.", Transport."No.");
+      IF Project.FINDSET THEN
+        REPEAT
+
+          Actions.RESET;
+          Actions.SETRANGE(Type, Actions.Type::Project);
+          Actions.SETRANGE("No.", Project."No.");
+          Actions.SETRANGE("Sub Type", Actions."Sub Type"::Before);
+          Actions.SETFILTER("Action Type", '%1|%2|%3',
+            Actions."Action Type"::"Run Report",
+            Actions."Action Type"::"Run Codeunit",
+            Actions."Action Type"::"6");
+
+          IF Actions.FINDSET THEN
+            REPEAT
+              CASE Actions."Action Type" OF
+
+                Actions."Action Type"::"Run Report" :
+                  TmpObjectBefore.Type := TmpObjectBefore.Type::Report;
+
+                Actions."Action Type"::"Run Codeunit" :
+                  TmpObjectBefore.Type := TmpObjectBefore.Type::Codeunit;
+
+                Actions."Action Type"::"6" :
+                  TmpObjectBefore.Type := TmpObjectBefore.Type::"4";
+
+              END;
+              TmpObjectBefore.ID := Actions."Object No.";
+              IF TmpObjectBefore.INSERT THEN
+                ;
+            UNTIL Actions.NEXT = 0;
+
+          ProjectObject.SETRANGE("Project No.", Project."No.");
+          ProjectObject.SETRANGE("Used in Action Before", TRUE);
+          IF ProjectObject.FINDSET THEN
+            REPEAT
+              TmpObjectBefore.Type := ProjectObject."Object Type";
+              TmpObjectBefore.ID := ProjectObject."Object No.";
+              IF TmpObjectBefore.INSERT THEN
+                ;
+            UNTIL ProjectObject.NEXT = 0;
+
+        UNTIL Project.NEXT = 0;
+
+      IF TmpObjectBefore.FINDSET THEN
+        REPEAT
+          IF NOT TmpObject.GET(TmpObjectBefore.Type, '', TmpObjectBefore.ID) THEN
+            TmpObjectBefore.DELETE;
+        UNTIL TmpObjectBefore.NEXT = 0;
+
+      EXIT(NOT TmpObjectBefore.ISEMPTY);
+    END;
+
+    PROCEDURE AddTransportActions@23(VAR TmpAction@1000 : TEMPORARY Record 11102048;VAR TransportNo@1001 : Code[20]);
+    VAR
+      Transport@1002 : Record 11102043;
+      DocumentLine@1003 : Record 11102046;
+      TransportProjectHistory@1004 : Record 11102066;
+      Comment@1005 : Record 11102095;
+      CommentLine@1006 : Record 11102096;
+    BEGIN
+      TmpAction.Type := TmpAction.Type::"Temporary";
+
+      TmpAction."Line No." += 10000;
+      TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+      TmpAction.VALIDATE("Object No.", DATABASE::"OM - Transport");
+      TmpAction."DELETEALL;" := TRUE;
+      TmpAction.Evaluate1FieldFilter(Transport.FIELDNO("No."), TransportNo);
+      TmpAction.INSERT;
+
+      TmpAction."Line No." += 10000;
+      TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+      TmpAction.VALIDATE("Object No.", DATABASE::"OM - Document Line");
+      TmpAction."DELETEALL;" := TRUE;
+      TmpAction.Evaluate2FieldsFilter(
+        DocumentLine.FIELDNO("Table Name"), FORMAT(DocumentLine."Table Name"::Transport),
+        DocumentLine.FIELDNO("No."), TransportNo);
+      TmpAction.INSERT;
+
+      TmpAction."Line No." += 10000;
+      TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+      TmpAction.VALIDATE("Object No.", DATABASE::"OM - Transport Project History");
+      TmpAction."DELETEALL;" := TRUE;
+      TmpAction.Evaluate1FieldFilter(TransportProjectHistory.FIELDNO("Transport No."), TransportNo);
+      TmpAction.INSERT;
+
+      TmpAction."Line No." += 10000;
+      TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+      TmpAction.VALIDATE("Object No.", DATABASE::"OM - Comment");
+      TmpAction."Key Index" := 2;
+      TmpAction.Evaluate2FieldsFilter(
+        Comment.FIELDNO("Table Name"), FORMAT(Comment."Table Name"::Transport),
+        Comment.FIELDNO("No."), TransportNo);
+      TmpAction."DELETEALL;" := TRUE;
+      TmpAction.INSERT;
+      TmpAction."Key Index" := 0;
+
+      Comment.SETCURRENTKEY("Table Name", "No.");
+      Comment.SETRANGE("Table Name", DocumentLine."Table Name"::Transport);
+      Comment.SETRANGE("No.", TransportNo);
+      IF Comment.FINDSET THEN
+        REPEAT
+          TmpAction."Line No." += 10000;
+          TmpAction.VALIDATE("Action Type", TmpAction."Action Type"::"Transfer Data");
+          TmpAction.VALIDATE("Object No.", DATABASE::"OM - Comment Line");
+          TmpAction."DELETEALL;" := TRUE;
+          TmpAction.Evaluate1FieldFilter(CommentLine.FIELDNO("Comment Entry No."), FORMAT(Comment."Entry No."));
+          TmpAction.INSERT;
+        UNTIL Comment.NEXT = 0;
+    END;
+
+    PROCEDURE ExportAsFob@20(VAR Transport@1000 : Record 11102043);
+    VAR
+      Project@1001 : Record 11102036;
+      TmpObject@1002 : TEMPORARY Record 2000000001;
+      ObjectMgt@1003 : Codeunit 11102046;
+      ProjectMgt@1004 : Codeunit 11102052;
+      CommonDialog@1005 : Codeunit 11102059;
+      FileHandler@1006 : Codeunit 11102097;
+      ClientFileName@1007 : Text;
+      DefaultFileName@1008 : Text;
+      ServerFileName@1009 : Text;
+      ctDefaultFilename@1010 : TextConst 'DEU=Transport %1.fob;ENU=Transport %1.fob;ESP=Transport %1.fob;FRA=Transport %1.fob;NLD=Transport %1.fob;DEA=Transport %1.fob';
+    BEGIN
+      Transport.FINDSET;
+
+      CommonDialog.AddKnownExtension('fob');
+      DefaultFileName := STRSUBSTNO(ctDefaultFilename, Transport."No.");
+      ClientFileName := DefaultFileName;
+      IF NOT CommonDialog.SaveFile(ClientFileName, ServerFileName, DefaultFileName) THEN
+        EXIT;
+
+      REPEAT
+        Project.SETCURRENTKEY("Transport No.");
+        Project.SETRANGE("Transport No.", Transport."No.");
+        IF Project.FINDSET THEN
+          REPEAT
+            ProjectMgt.GetObjects(Project, TmpObject);
+          UNTIL Project.NEXT = 0;
+      UNTIL Transport.NEXT = 0;
+
+      ObjectMgt.ExportFob(TmpObject, ServerFileName);
+
+      FileHandler.DownloadToClient(ServerFileName, ClientFileName, DefaultFileName);
+    END;
+
+    PROCEDURE ExportAsSplitFob@32(VAR Transport@1000 : Record 11102043);
+    VAR
+      Project@1001 : Record 11102036;
+      TmpObject@1002 : TEMPORARY Record 2000000001;
+      ImExportMgt@1003 : Codeunit 11102043;
+      Progressbar@1004 : Codeunit 11102044;
+      ProjectMgt@1005 : Codeunit 11102052;
+      CommonDialog@1006 : Codeunit 11102059;
+      ClientPathToExport@1007 : Text;
+      ctExportingObjects@1008 : TextConst 'DEU=Exporting objects...;ENU=Exporting objects...;ESP=Exporting objects...;FRA=Exporting objects...;NLD=Objecten exporteren...;DEA=Exporting objects...';
+    BEGIN
+      Transport.FINDSET;
+
+      CommonDialog.SelectDirectory(ClientPathToExport);
+      IF ClientPathToExport = '' THEN
+        EXIT;
+
+      REPEAT
+        Project.SETCURRENTKEY("Transport No.");
+        Project.SETRANGE("Transport No.", Transport."No.");
+        IF Project.FINDSET THEN
+          REPEAT
+            ProjectMgt.GetObjects(Project, TmpObject);
+          UNTIL Project.NEXT = 0;
+      UNTIL Transport.NEXT = 0;
+
+      Progressbar.Open(ctExportingObjects, 1);
+      ImExportMgt.ExportSplitFobFiles(TmpObject, ClientPathToExport, Progressbar);
+      Progressbar.Close;
+    END;
+
+    PROCEDURE ExportAsSplitFobBefore@31(VAR Transport@1000 : Record 11102043);
+    VAR
+      Project@1001 : Record 11102036;
+      TmpModification@1002 : TEMPORARY Record 11102042;
+      TmpCALHistoryObject@1003 : TEMPORARY Record 11102052;
+      ImExportMgt@1004 : Codeunit 11102043;
+      Progressbar@1005 : Codeunit 11102044;
+      ProjectMgt@1006 : Codeunit 11102052;
+      CommonDialog@1007 : Codeunit 11102059;
+      ClientPathToExport@1008 : Text;
+      ctExportingObjects@1009 : TextConst 'DEU=Exporting objects...;ENU=Exporting objects...;ESP=Exporting objects...;FRA=Exporting objects...;NLD=Objecten exporteren...;DEA=Exporting objects...';
+    BEGIN
+      Transport.FINDSET;
+
+      CommonDialog.SelectDirectory(ClientPathToExport);
+      IF ClientPathToExport = '' THEN
+        EXIT;
+
+      REPEAT
+        Project.SETCURRENTKEY("Transport No.");
+        Project.SETRANGE("Transport No.", Transport."No.");
+        IF Project.FINDSET THEN
+          REPEAT
+            ProjectMgt.GetModificationsBefore(Project, TmpModification);
+          UNTIL Project.NEXT = 0;
+      UNTIL Transport.NEXT = 0;
+
+      ProjectMgt.GetHistoryObjectsBefore(TmpModification, TmpCALHistoryObject, FALSE);
+
+      Progressbar.Open(ctExportingObjects, 1);
+      ImExportMgt.ExportSplitHistoryFobFiles(TmpCALHistoryObject, ClientPathToExport, Progressbar);
+      Progressbar.Close;
+    END;
+
+    PROCEDURE ExportAsSplitFobAfter@30(VAR Transport@1000 : Record 11102043);
+    VAR
+      Project@1001 : Record 11102036;
+      TmpModification@1002 : TEMPORARY Record 11102042;
+      TmpCALHistoryObject@1003 : TEMPORARY Record 11102052;
+      ImExportMgt@1004 : Codeunit 11102043;
+      Progressbar@1005 : Codeunit 11102044;
+      ProjectMgt@1006 : Codeunit 11102052;
+      CommonDialog@1007 : Codeunit 11102059;
+      ClientPathToExport@1008 : Text;
+      ctExportingObjects@1009 : TextConst 'DEU=Exporting objects...;ENU=Exporting objects...;ESP=Exporting objects...;FRA=Exporting objects...;NLD=Objecten exporteren...;DEA=Exporting objects...';
+    BEGIN
+      Transport.FINDSET;
+
+      CommonDialog.SelectDirectory(ClientPathToExport);
+      IF ClientPathToExport = '' THEN
+        EXIT;
+
+      REPEAT
+        Project.SETCURRENTKEY("Transport No.");
+        Project.SETRANGE("Transport No.", Transport."No.");
+        IF Project.FINDSET THEN
+          REPEAT
+            ProjectMgt.GetModificationsAfter(Project, TmpModification);
+          UNTIL Project.NEXT = 0;
+      UNTIL Transport.NEXT = 0;
+
+      ProjectMgt.GetHistoryObjectsAfter(TmpModification, TmpCALHistoryObject, FALSE);
+
+      Progressbar.Open(ctExportingObjects, 1);
+      ImExportMgt.ExportSplitHistoryFobFiles(TmpCALHistoryObject, ClientPathToExport, Progressbar);
+      Progressbar.Close;
+    END;
+
+    PROCEDURE ExportAsText@21(VAR Transport@1000 : Record 11102043);
+    VAR
+      Project@1001 : Record 11102036;
+      TmpObject@1002 : TEMPORARY Record 2000000001;
+      ObjectMgt@1003 : Codeunit 11102046;
+      ProjectMgt@1004 : Codeunit 11102052;
+      CommonDialog@1005 : Codeunit 11102059;
+      FileHandler@1006 : Codeunit 11102097;
+      ClientFileName@1007 : Text;
+      DefaultFileName@1008 : Text;
+      ServerFileName@1009 : Text;
+      ctDefaultFilename@1010 : TextConst 'DEU=Transport %1.txt;ENU=Transport %1.txt;ESP=Transport %1.txt;FRA=Transport %1.txt;NLD=Transport %1.txt;DEA=Transport %1.txt';
+    BEGIN
+      Transport.FINDSET;
+
+      CommonDialog.AddKnownExtension('txt-o');
+      DefaultFileName := STRSUBSTNO(ctDefaultFilename, Transport."No.");
+      ClientFileName := DefaultFileName;
+      IF NOT CommonDialog.SaveFile(ClientFileName, ServerFileName, DefaultFileName) THEN
+        EXIT;
+
+      REPEAT
+        Project.SETCURRENTKEY("Transport No.");
+        Project.SETRANGE("Transport No.", Transport."No.");
+        IF Project.FINDSET THEN
+          REPEAT
+            ProjectMgt.GetObjects(Project, TmpObject);
+          UNTIL Project.NEXT = 0;
+      UNTIL Transport.NEXT = 0;
+
+      ObjectMgt.ExportRangeTxt(TmpObject, ServerFileName);
+
+      FileHandler.DownloadToClient(ServerFileName, ClientFileName, DefaultFileName);
+    END;
+
+    PROCEDURE ExportAsTextBefore@28(VAR Transport@1000 : Record 11102043);
+    VAR
+      Project@1001 : Record 11102036;
+      TmpModification@1002 : TEMPORARY Record 11102042;
+      TmpCALHistoryObject@1003 : TEMPORARY Record 11102052;
+      ImExportMgt@1004 : Codeunit 11102043;
+      ProjectMgt@1005 : Codeunit 11102052;
+      CommonDialog@1006 : Codeunit 11102059;
+      FileHandler@1007 : Codeunit 11102097;
+      ClientFileName@1008 : Text;
+      DefaultFileName@1009 : Text;
+      ServerFileName@1010 : Text;
+      ctDefaultFilename@1011 : TextConst 'DEU=Transport %1.txt;ENU=Transport %1.txt;ESP=Transport %1.txt;FRA=Transport %1.txt;NLD=Transport %1.txt;DEA=Transport %1.txt';
+    BEGIN
+      Transport.FINDSET;
+
+      CommonDialog.AddKnownExtension('txt-o');
+      DefaultFileName := STRSUBSTNO(ctDefaultFilename, Transport."No.");
+      ClientFileName := DefaultFileName;
+      IF NOT CommonDialog.SaveFile(ClientFileName, ServerFileName, DefaultFileName) THEN
+        EXIT;
+
+      REPEAT
+        Project.SETCURRENTKEY("Transport No.");
+        Project.SETRANGE("Transport No.", Transport."No.");
+        IF Project.FINDSET THEN
+          REPEAT
+            ProjectMgt.GetModificationsBefore(Project, TmpModification);
+          UNTIL Project.NEXT = 0;
+      UNTIL Transport.NEXT = 0;
+
+      ProjectMgt.GetHistoryObjectsBefore(TmpModification, TmpCALHistoryObject, TRUE);
+      ImExportMgt.ExportHistoryTextFile(TmpCALHistoryObject, ServerFileName);
+
+      FileHandler.DownloadToClient(ServerFileName, ClientFileName, DefaultFileName);
+    END;
+
+    PROCEDURE ExportAsTextAfter@27(VAR Transport@1000 : Record 11102043);
+    VAR
+      Project@1001 : Record 11102036;
+      TmpModification@1002 : TEMPORARY Record 11102042;
+      TmpCALHistoryObject@1003 : TEMPORARY Record 11102052;
+      ImExportMgt@1004 : Codeunit 11102043;
+      ProjectMgt@1005 : Codeunit 11102052;
+      CommonDialog@1006 : Codeunit 11102059;
+      FileHandler@1007 : Codeunit 11102097;
+      ClientFileName@1008 : Text;
+      DefaultFileName@1009 : Text;
+      ServerFileName@1010 : Text;
+      ctDefaultFilename@1011 : TextConst 'DEU=Transport %1.txt;ENU=Transport %1.txt;ESP=Transport %1.txt;FRA=Transport %1.txt;NLD=Transport %1.txt;DEA=Transport %1.txt';
+    BEGIN
+      Transport.FINDSET;
+
+      CommonDialog.AddKnownExtension('txt-o');
+      DefaultFileName := STRSUBSTNO(ctDefaultFilename, Transport."No.");
+      ClientFileName := DefaultFileName;
+      IF NOT CommonDialog.SaveFile(ClientFileName, ServerFileName, DefaultFileName) THEN
+        EXIT;
+
+      REPEAT
+        Project.SETCURRENTKEY("Transport No.");
+        Project.SETRANGE("Transport No.", Transport."No.");
+        IF Project.FINDSET THEN
+          REPEAT
+            ProjectMgt.GetModificationsAfter(Project, TmpModification);
+          UNTIL Project.NEXT = 0;
+      UNTIL Transport.NEXT = 0;
+
+      ProjectMgt.GetHistoryObjectsAfter(TmpModification, TmpCALHistoryObject, TRUE);
+      ImExportMgt.ExportHistoryTextFile(TmpCALHistoryObject, ServerFileName);
+
+      FileHandler.DownloadToClient(ServerFileName, ClientFileName, DefaultFileName);
+    END;
+
+    PROCEDURE ExportAsSplitText@26(VAR Transport@1000 : Record 11102043);
+    VAR
+      Project@1001 : Record 11102036;
+      TmpObject@1002 : TEMPORARY Record 2000000001;
+      ImExportMgt@1003 : Codeunit 11102043;
+      Progressbar@1004 : Codeunit 11102044;
+      ProjectMgt@1005 : Codeunit 11102052;
+      CommonDialog@1006 : Codeunit 11102059;
+      ClientPathToExport@1007 : Text;
+      ctExportingObjects@1008 : TextConst 'DEU=Exporting objects...;ENU=Exporting objects...;ESP=Exporting objects...;FRA=Exporting objects...;NLD=Objecten exporteren...;DEA=Exporting objects...';
+    BEGIN
+      Transport.FINDSET;
+
+      CommonDialog.SelectDirectory(ClientPathToExport);
+      IF ClientPathToExport = '' THEN
+        EXIT;
+
+      REPEAT
+        Project.SETCURRENTKEY("Transport No.");
+        Project.SETRANGE("Transport No.", Transport."No.");
+        IF Project.FINDSET THEN
+          REPEAT
+            ProjectMgt.GetObjects(Project, TmpObject);
+          UNTIL Project.NEXT = 0;
+      UNTIL Transport.NEXT = 0;
+
+      Progressbar.Open(ctExportingObjects, 1);
+      ImExportMgt.ExportSplitTextFiles(TmpObject, ClientPathToExport, Progressbar);
+      Progressbar.Close;
+    END;
+
+    PROCEDURE ExportAsSplitTextBefore@25(VAR Transport@1000 : Record 11102043);
+    VAR
+      Project@1001 : Record 11102036;
+      TmpModification@1002 : TEMPORARY Record 11102042;
+      TmpCALHistoryObject@1003 : TEMPORARY Record 11102052;
+      ImExportMgt@1004 : Codeunit 11102043;
+      Progressbar@1005 : Codeunit 11102044;
+      ProjectMgt@1006 : Codeunit 11102052;
+      CommonDialog@1007 : Codeunit 11102059;
+      ClientPathToExport@1008 : Text;
+      ctExportingObjects@1009 : TextConst 'DEU=Exporting objects...;ENU=Exporting objects...;ESP=Exporting objects...;FRA=Exporting objects...;NLD=Objecten exporteren...;DEA=Exporting objects...';
+    BEGIN
+      Transport.FINDSET;
+
+      CommonDialog.SelectDirectory(ClientPathToExport);
+      IF ClientPathToExport = '' THEN
+        EXIT;
+
+      REPEAT
+        Project.SETCURRENTKEY("Transport No.");
+        Project.SETRANGE("Transport No.", Transport."No.");
+        IF Project.FINDSET THEN
+          REPEAT
+            ProjectMgt.GetModificationsBefore(Project, TmpModification);
+          UNTIL Project.NEXT = 0;
+      UNTIL Transport.NEXT = 0;
+
+      ProjectMgt.GetHistoryObjectsBefore(TmpModification, TmpCALHistoryObject, TRUE);
+
+      Progressbar.Open(ctExportingObjects, 1);
+      ImExportMgt.ExportSplitHistoryTextFiles(TmpCALHistoryObject, ClientPathToExport, Progressbar);
+      Progressbar.Close;
+    END;
+
+    PROCEDURE ExportAsSplitTextAfter@24(VAR Transport@1000 : Record 11102043);
+    VAR
+      Project@1001 : Record 11102036;
+      TmpModification@1002 : TEMPORARY Record 11102042;
+      TmpCALHistoryObject@1003 : TEMPORARY Record 11102052;
+      ImExportMgt@1004 : Codeunit 11102043;
+      Progressbar@1005 : Codeunit 11102044;
+      ProjectMgt@1006 : Codeunit 11102052;
+      CommonDialog@1007 : Codeunit 11102059;
+      ClientPathToExport@1008 : Text;
+      ctExportingObjects@1009 : TextConst 'DEU=Exporting objects...;ENU=Exporting objects...;ESP=Exporting objects...;FRA=Exporting objects...;NLD=Objecten exporteren...;DEA=Exporting objects...';
+    BEGIN
+      Transport.FINDSET;
+
+      CommonDialog.SelectDirectory(ClientPathToExport);
+      IF ClientPathToExport = '' THEN
+        EXIT;
+
+      REPEAT
+        Project.SETCURRENTKEY("Transport No.");
+        Project.SETRANGE("Transport No.", Transport."No.");
+        IF Project.FINDSET THEN
+          REPEAT
+            ProjectMgt.GetModificationsAfter(Project, TmpModification);
+          UNTIL Project.NEXT = 0;
+      UNTIL Transport.NEXT = 0;
+
+      ProjectMgt.GetHistoryObjectsAfter(TmpModification, TmpCALHistoryObject, TRUE);
+
+      Progressbar.Open(ctExportingObjects, 1);
+      ImExportMgt.ExportSplitHistoryTextFiles(TmpCALHistoryObject, ClientPathToExport, Progressbar);
+      Progressbar.Close;
+    END;
+
+    PROCEDURE ExportAsFab@22(VAR Transport@1000 : Record 11102043);
+    VAR
+      Project@1001 : Record 11102036;
+      TmpAction@1002 : TEMPORARY Record 11102048;
+      TmpActionField@1003 : TEMPORARY Record 11102049;
+      ActionMgt@1004 : Codeunit 11102038;
+      Progressbar@1005 : Codeunit 11102044;
+      ProjectMgt@1006 : Codeunit 11102052;
+      CommonDialog@1007 : Codeunit 11102059;
+      FileHandler@1008 : Codeunit 11102097;
+      oFile@1009 : File;
+      OutStr@1010 : OutStream;
+      ClientFileName@1011 : Text;
+      DefaultFileName@1012 : Text;
+      ServerFileName@1013 : Text;
+      ctDefaultFilename@1014 : TextConst 'DEU=Transport %1.fab;ENU=Transport %1.fab;ESP=Transport %1.fab;FRA=Transport %1.fab;NLD=Transport %1.fab;DEA=Transport %1.fab';
+      ctExportingFab@1015 : TextConst 'DEU=Exporting FAB file...;ENU=Exporting FAB file...;ESP=Exporting FAB file...;FRA=Exporting FAB file...;NLD=FAB-bestand exporteren...;DEA=Exporting FAB file...';
+    BEGIN
+      Transport.FINDSET;
+
+      CommonDialog.AddKnownExtension('fab');
+      DefaultFileName := STRSUBSTNO(ctDefaultFilename, Transport."No.");
+      ClientFileName := DefaultFileName;
+      IF NOT CommonDialog.SaveFile(ClientFileName, ServerFileName, DefaultFileName) THEN
+        EXIT;
+
+      REPEAT
+        AddTransportActions(TmpAction, Transport."No.");
+        Project.SETCURRENTKEY("Transport No.");
+        Project.SETRANGE("Transport No.", Transport."No.");
+        IF Project.FINDSET THEN
+          REPEAT
+            ProjectMgt.AddProjectActions(TmpAction, Project."No.");
+          UNTIL Project.NEXT = 0;
+      UNTIL Transport.NEXT = 0;
+
+      IF EXISTS(ServerFileName) THEN
+        ERASE(ServerFileName);
+
+      oFile.CREATE(ServerFileName);
+      oFile.CREATEOUTSTREAM(OutStr);
+
+      Progressbar.Open(ctExportingFab, 1);
+      ActionMgt.FillExportOutStream(TmpAction, TmpActionField, OutStr, Progressbar);
+      Progressbar.Close;
+
+      FileHandler.DownloadToClient(ServerFileName, ClientFileName, DefaultFileName);
+    END;
+
+    PROCEDURE SetNextStatus@34(VAR Transport@1000 : Record 11102043);
+    VAR
+      Status@1001 : Record 11102039;
+    BEGIN
+      WITH Transport DO
+        IF FINDSET THEN BEGIN
+          GetNextStatus(Status);
+          IF SelectStatus(Status) THEN
+            REPEAT
+              SetStatus(Status);
+            UNTIL NEXT = 0;
+        END;
+    END;
+
+    PROCEDURE SetPreviousStatus@33(VAR Transport@1000 : Record 11102043);
+    VAR
+      Status@1001 : Record 11102039;
+    BEGIN
+      WITH Transport DO
+        IF FINDSET THEN BEGIN
+          GetPreviousStatus(Status);
+          IF SelectStatus(Status) THEN
+            REPEAT
+              SetStatus(Status);
+            UNTIL NEXT = 0;
+        END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

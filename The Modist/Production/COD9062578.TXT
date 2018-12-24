@@ -1,0 +1,287 @@
+OBJECT Codeunit 9062578 Quest. Action Processing
+{
+  OBJECT-PROPERTIES
+  {
+    Date=28/01/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.12;
+  }
+  PROPERTIES
+  {
+    TableNo=9062704;
+    OnRun=BEGIN
+            ProcessQuestionnaire(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      RecRef@1000000000 : RecordRef;
+      SmartFilterManagement@1000000006 : Codeunit 9062231;
+      ValueProcessing@1000000001 : Codeunit 9062475;
+      VariableManagement@1000000002 : Codeunit 9062478;
+      SaveRecord@1000000003 : Boolean;
+      RecordPosition@1000000004 : Text;
+      RecordTableNo@1000000005 : Integer;
+
+    LOCAL PROCEDURE ProcessQuestionnaire@1000000000(VAR QuestionnaireHeader@1000000000 : Record 9062704);
+    VAR
+      QuestionnaireActionHeader@1000000001 : Record 9062724;
+    BEGIN
+      VariableManagement.Clear();
+      QuestionnaireActionHeader.RESET();
+      QuestionnaireActionHeader.SETCURRENTKEY("Questionnaire Template Code", "Question Block No.", "Question Block Instance No.", Id);
+      QuestionnaireActionHeader.SETRANGE("Questionnaire No.", QuestionnaireHeader."Questionnaire No.");
+      IF (QuestionnaireActionHeader.FINDSET()) THEN BEGIN
+        REPEAT
+          ProcessAction(QuestionnaireHeader, QuestionnaireActionHeader);
+        UNTIL (QuestionnaireActionHeader.NEXT() = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE ProcessAction@1000000001(VAR QuestionnaireHeader@1000000003 : Record 9062704;VAR QuestionnaireActionHeader@1000000000 : Record 9062724);
+    VAR
+      QuestionnaireActionLine@1000000001 : Record 9062725;
+      QuestCriteriaLine@1000000002 : Record 9062708;
+      TNPToolkit@1000000004 : Codeunit 9062230;
+    BEGIN
+      //check questionnaire action criteria
+
+      QuestCriteriaLine.RESET();
+      QuestCriteriaLine.SETRANGE("Questionnaire No.", QuestionnaireActionHeader."Questionnaire No.");
+      QuestCriteriaLine.SETRANGE("Source Entry No.", QuestionnaireActionHeader.Id);
+      QuestCriteriaLine.SETRANGE("Line Type", QuestCriteriaLine."Line Type"::"Questionnaire Action");
+      QuestCriteriaLine.SETRANGE(Processed, FALSE);
+      IF (QuestCriteriaLine.FINDSET(TRUE, TRUE)) THEN BEGIN
+        REPEAT
+          QuestCriteriaLine.Process();
+          QuestCriteriaLine.MODIFY();
+        UNTIL (QuestCriteriaLine.NEXT() = 0);
+      END;
+
+      QuestCriteriaLine.RESET();
+      QuestCriteriaLine.SETRANGE("Questionnaire No.", QuestionnaireActionHeader."Questionnaire No.");
+      QuestCriteriaLine.SETRANGE("Source Entry No.", QuestionnaireActionHeader.Id);
+      QuestCriteriaLine.SETRANGE("Line Type", QuestCriteriaLine."Line Type"::"Questionnaire Action");
+      QuestCriteriaLine.SETRANGE(Result, FALSE);
+      QuestCriteriaLine.SETRANGE(Processed, TRUE);
+      IF (QuestCriteriaLine.ISEMPTY) THEN BEGIN
+        QuestionnaireActionLine.RESET();
+        QuestionnaireActionLine.SETRANGE("Questionnaire No.", QuestionnaireActionHeader."Questionnaire No.");
+        QuestionnaireActionLine.SETRANGE("Questionnaire Action Id", QuestionnaireActionHeader.Id);
+        IF (QuestionnaireActionLine.FINDSET()) THEN BEGIN
+          OpenTable(QuestionnaireActionHeader."Table Id");
+          REPEAT
+            ProcessActionLine(QuestionnaireHeader, QuestionnaireActionLine);
+          UNTIL (QuestionnaireActionLine.NEXT() = 0);
+          CloseTable();
+
+          IF (SaveRecord) THEN BEGIN
+            QuestionnaireActionHeader."Related Table No." := QuestionnaireActionHeader."Table Id";
+            QuestionnaireActionHeader.VALIDATE("Related Record Position", RecordPosition);
+            QuestionnaireActionHeader.MODIFY();
+
+            IF (QuestionnaireActionHeader."Questionnaire Related Record") THEN BEGIN
+              QuestionnaireHeader."Related Table No." := RecordTableNo;
+              QuestionnaireHeader.VALIDATE("Related Record Position", RecordPosition);
+              QuestionnaireHeader.MODIFY();
+            END;
+          END;
+
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ProcessActionLine@1000000002(VAR QuestionnaireHeader@1000000001 : Record 9062704;VAR QuestionnaireActionLine@1000000000 : Record 9062725);
+    BEGIN
+      CASE (QuestionnaireActionLine."Action Type") OF
+        QuestionnaireActionLine."Action Type"::"Set Field":
+          SetField(QuestionnaireActionLine);
+        QuestionnaireActionLine."Action Type"::"Set Filter":
+          SetFilter(QuestionnaireActionLine);
+        QuestionnaireActionLine."Action Type"::Init:
+          RecRef.INIT();
+        QuestionnaireActionLine."Action Type"::"Find or Error":
+          FindRecord(FALSE);
+        QuestionnaireActionLine."Action Type"::Insert:
+          RecRef.INSERT(QuestionnaireActionLine."Run with Validation");
+        QuestionnaireActionLine."Action Type"::"Find or Insert":
+          FindRecord(TRUE);
+        QuestionnaireActionLine."Action Type"::Modify:
+          RecRef.MODIFY(QuestionnaireActionLine."Run with Validation");
+        QuestionnaireActionLine."Action Type"::"Get from Variable":
+          GetFromVariable(QuestionnaireActionLine."Text Value");
+        //DOC NA2016.10 >>
+        QuestionnaireActionLine."Action Type"::"Get from Questionnaire":
+          GetFromQuestionnaire(QuestionnaireHeader);
+        //DOC NA2016.10 <<
+      END;
+
+      IF (QuestionnaireActionLine."Action Type" IN [QuestionnaireActionLine."Action Type"::"Find or Error",
+        QuestionnaireActionLine."Action Type"::Insert, QuestionnaireActionLine."Action Type"::"Find or Insert",
+        QuestionnaireActionLine."Action Type"::Modify, QuestionnaireActionLine."Action Type"::"Get from Variable"])
+      THEN BEGIN
+        SaveRecord := TRUE;
+        RecordPosition := RecRef.GETPOSITION();
+        RecordTableNo := RecRef.NUMBER;
+      END;
+
+      IF (QuestionnaireActionLine."Store In Variable Name" <> '') THEN
+        VariableManagement.SetRecRefValue(QuestionnaireActionLine."Store In Variable Name", RecRef);
+    END;
+
+    LOCAL PROCEDURE OpenTable@1000000004(TableNo@1000000000 : Integer);
+    BEGIN
+      RecRef.OPEN(TableNo);
+      RecRef.INIT();
+      SaveRecord := FALSE;
+      RecordPosition := '';
+      RecordTableNo := 0;
+    END;
+
+    LOCAL PROCEDURE CloseTable@1000000005();
+    BEGIN
+      RecRef.CLOSE();
+    END;
+
+    LOCAL PROCEDURE SetField@1000000003(VAR QuestionnaireActionLine@1000000000 : Record 9062725);
+    VAR
+      FieldValue@1000000001 : Variant;
+      FieldRef@1000000002 : FieldRef;
+    BEGIN
+      IF (GetValue(QuestionnaireActionLine, FieldValue)) THEN BEGIN
+        FieldRef := RecRef.FIELD(QuestionnaireActionLine."Field Id");
+        IF (QuestionnaireActionLine."Run with Validation") THEN
+          FieldRef.VALIDATE(FieldValue)
+        ELSE
+          FieldRef.VALUE := FieldValue;
+      END;
+    END;
+
+    LOCAL PROCEDURE SetFilter@1000000006(VAR QuestionnaireActionLine@1000000000 : Record 9062725);
+    VAR
+      FieldValue@1000000001 : Variant;
+      FieldRef@1000000002 : FieldRef;
+    BEGIN
+      GetValue(QuestionnaireActionLine, FieldValue);
+      FieldRef := RecRef.FIELD(QuestionnaireActionLine."Field Id");
+      //IF (QuestionnaireActionLine."Value Calculation" = QuestionnaireActionLine."Value Calculation"::Const) THEN
+      //  FieldRef.SETFILTER(FieldValue)
+      //ELSE
+      FieldRef.SETRANGE(FieldValue);
+    END;
+
+    LOCAL PROCEDURE FindRecord@1000000007(InsertIfNotFound@1000000000 : Boolean);
+    BEGIN
+      IF (InsertIfNotFound) THEN BEGIN
+        IF (NOT(RecRef.FINDFIRST())) THEN
+          RecRef.INSERT();
+      END ELSE
+        RecRef.FINDFIRST();
+    END;
+
+    LOCAL PROCEDURE GetFromVariable@1000000011(VariableName@1000000000 : Text);
+    BEGIN
+      VariableManagement.GetRecRefValue(VariableName, RecRef);
+    END;
+
+    LOCAL PROCEDURE SetVariable@1000000008(VariableName@1000000000 : Text;VAR RecRef@1000000001 : RecordRef);
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE GetVariableField@1000000009(VariableName@1000000000 : Text;VAR RecRef@1000000001 : RecordRef);
+    BEGIN
+    END;
+
+    PROCEDURE GetValue@1000000010(VAR QuestionnaireActionLine@1000000003 : Record 9062725;VAR Value@1000000000 : Variant) : Boolean;
+    VAR
+      QuestionnaireLine@1000000002 : Record 9062705;
+      ValueProcessing@1000000001 : Codeunit 9062475;
+    BEGIN
+      CLEAR(Value);
+
+      CASE (QuestionnaireActionLine."Value Calculation") OF
+        QuestionnaireActionLine."Value Calculation"::Answer:
+          BEGIN
+            QuestionnaireLine.GET(QuestionnaireActionLine."Questionnaire No.", QuestionnaireActionLine."Quest. Line No.");
+            IF (NOT(QuestionnaireLine.Answered)) THEN
+              EXIT(FALSE);
+            IF (QuestionnaireLine.Skip) AND (QuestionnaireActionLine."Answer must be Visible") THEN
+              EXIT(FALSE);
+            QuestionnaireLine.GetAnswerValue(Value);
+          END;
+        QuestionnaireActionLine."Value Calculation"::Const:
+          BEGIN
+            ValueProcessing.SetParameters(QuestionnaireActionLine."Value Type", QuestionnaireActionLine."Table Id", QuestionnaireActionLine."Field Id");
+            ValueProcessing.GetSingleValue(Value, QuestionnaireActionLine."Text Value", QuestionnaireActionLine."Date Value",
+              QuestionnaireActionLine."Time Value", QuestionnaireActionLine."DateTime Value", QuestionnaireActionLine."DateFormula Value",
+              QuestionnaireActionLine."Decimal Value", QuestionnaireActionLine."Boolean Value", QuestionnaireActionLine."Integer Value",
+              QuestionnaireActionLine."BigInteger Value", QuestionnaireActionLine."Duration Value", QuestionnaireActionLine."GUID Value");
+          END;
+        QuestionnaireActionLine."Value Calculation"::"Record Variable":
+          GetRecordVariableValue(QuestionnaireActionLine, Value);
+        QuestionnaireActionLine."Value Calculation"::"No.Series":
+          GetNoSeriesValue(QuestionnaireActionLine, Value);
+        QuestionnaireActionLine."Value Calculation"::"Smart Value":
+          GetSmartFieldValue(QuestionnaireActionLine, Value);
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetNoSeriesValue@1000000023(VAR QuestionnaireActionLine@1000000003 : Record 9062725;VAR CalculatedValue@1000000000 : Variant);
+    VAR
+      NoSeries@1000000001 : Record 308;
+      NoSeriesMgt@1000000002 : Codeunit 396;
+    BEGIN
+      QuestionnaireActionLine.TESTFIELD("Text Value");
+      CalculatedValue := NoSeriesMgt.GetNextNo(QuestionnaireActionLine."Text Value", TODAY, TRUE);
+    END;
+
+    LOCAL PROCEDURE GetSmartFieldValue@1000000022(VAR QuestionnaireActionLine@1000000004 : Record 9062725;VAR CalculatedValue@1000000000 : Variant);
+    VAR
+      TNPUtils@1000000002 : Codeunit 9062229;
+      ValueProcessing@1000000003 : Codeunit 9062475;
+      TextValue@1000000001 : Text;
+    BEGIN
+      TextValue := QuestionnaireActionLine."Text Value";
+      TextValue := SmartFilterManagement.ApplySmartFilters(TextValue);
+      ValueProcessing.SetParameters(QuestionnaireActionLine."Value Type", QuestionnaireActionLine."Table Id", QuestionnaireActionLine."Field Id");
+      ValueProcessing.GetFormulaValue(CalculatedValue, TextValue);
+    END;
+
+    LOCAL PROCEDURE GetRecordVariableValue@1000000013(VAR QuestionnaireActionLine@1000000001 : Record 9062725;VAR CalculatedValue@1000000000 : Variant);
+    VAR
+      VariableRecRef@1000000002 : RecordRef;
+      VariableFieldRef@1000000003 : FieldRef;
+    BEGIN
+      VariableRecRef.OPEN(QuestionnaireActionLine."Value Source Table Id");
+      VariableManagement.GetRecRefValue(QuestionnaireActionLine."Text Value", VariableRecRef);
+      VariableFieldRef := VariableRecRef.FIELD(QuestionnaireActionLine."Value Source Field Id");
+      CalculatedValue := VariableFieldRef.VALUE;
+      VariableRecRef.CLOSE();
+    END;
+
+    LOCAL PROCEDURE GetFromQuestionnaire@1000000012(VAR QuestionnaireHeader@1000000000 : Record 9062704) : Boolean;
+    BEGIN
+      //DOC NA2016.10
+      IF (QuestionnaireHeader."Related Table No." <> 0) AND (QuestionnaireHeader."Related Record Position" <> '') THEN BEGIN
+        RecRef.SETPOSITION(QuestionnaireHeader."Related Record Position");
+        EXIT(RecRef.FIND('='));
+      END;
+      EXIT(FALSE);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.9  AZ 05/08/2015 - Created
+      //DOC NA2015.9  AZ 18/08/2015 - Question groups and loops
+      //DOC NA2016.9  JH 28/08/2015 - Upgraded to 2016
+      //DOC NA2016.10 AZ 13/10/2015 - Get From Questionnaire action type added
+      //DOC NA2016.12 JH 28/01/2016 - Smart filters
+    }
+    END.
+  }
+}
+

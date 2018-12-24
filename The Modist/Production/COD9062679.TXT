@@ -1,0 +1,767 @@
+OBJECT Codeunit 9062679 Enhanced View Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=24/05/16;
+    Time=11:46:52 AM;
+    Version List=NH2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EnhView@1000000000 : Record 9062804;
+      EnhViewFieldLineNo@1000000002 : ARRAY [10] OF Integer;
+      errNoFieldsDefined@1000000001 : TextConst 'ENU=There are no fields defined for view %1.;ENG=There are no fields defined for view %1.';
+      errTooManyRecords@1000000003 : TextConst 'ENU=Table %1 contains too many records.;ENG=Table %1 contains too many records.';
+      String@1000000004 : Codeunit 9062236;
+
+    LOCAL PROCEDURE "--- Enhanced View Management ---"@1000000005();
+    BEGIN
+    END;
+
+    PROCEDURE CreateDefaultView@1000000022(ViewCode@1000000004 : Code[20];TableId@1000000000 : Integer;PageId@1000000002 : Integer;ExitIfViewExists@1000000005 : Boolean) : Code[20];
+    VAR
+      TableMetadata@1000000001 : Record 2000000136;
+      PageMetadata@1000000003 : Record 2000000138;
+      EnhViewField@1000000009 : Record 9062807;
+      ViewExists@1000000008 : Boolean;
+      ViewIndex@1000000006 : Integer;
+      NewViewCode@1000000007 : Code[20];
+    BEGIN
+      //create default view for a table or page
+      IF (ViewCode = '') THEN BEGIN
+        IF (PageId <> 0) THEN
+          ViewCode := 'PAGE' + FORMAT(PageId, 0, 9)
+        ELSE
+          ViewCode := 'TABLE' + FORMAT(TableId, 0, 9);
+      END;
+
+      //check if view already exists
+      IF (EnhView.GET(ViewCode)) THEN BEGIN
+        IF (ExitIfViewExists) THEN
+          EXIT(ViewCode);
+        ViewIndex := 0;
+        REPEAT
+          ViewIndex += 1;
+          NewViewCode := ViewCode + '_' + FORMAT(ViewIndex, 0, 9);
+          ViewExists := EnhView.GET(NewViewCode);
+        UNTIL ((NOT(ViewExists)) OR (ViewIndex >= 99));
+        ViewCode := NewViewCode;
+        IF (ViewExists) THEN
+          EXIT(ViewCode);
+      END;
+
+      //create new default view
+      EnhView.INIT();
+      EnhView.Code := ViewCode;
+      IF (PageId <> 0) THEN BEGIN
+        PageMetadata.GET(PageId);
+        IF (EnhView.Code = '') THEN
+          EnhView.Code := 'PAGE' + FORMAT(PageId, 0, 9);
+        EnhView.Description := PageMetadata.Caption;
+        TableId := PageMetadata.SourceTable;
+      END ELSE BEGIN
+        TableMetadata.GET(TableId);
+        IF (EnhView.Code = '') THEN
+          EnhView.Code := 'TABLE' + FORMAT(TableId, 0, 9);
+        EnhView.Description := TableMetadata.Caption;
+      END;
+      EnhView.INSERT(TRUE);
+      EnhView.VALIDATE("Source Table No.", TableId);
+      EnhView.VALIDATE("View Mode", EnhView."View Mode"::Grid);
+      EnhView.MODIFY(TRUE);
+
+      //create default fields
+      AddPageFields(EnhView, PageId, TRUE);
+      EXIT(EnhView.Code);
+    END;
+
+    PROCEDURE CreateUpdateDefaultFields@1000000000(DestEnhView@1000000000 : Record 9062804);
+    VAR
+      EnhViewField@1000000001 : Record 9062807;
+    BEGIN
+      InternalCreateUpdateDefaultFields(DestEnhView, EnhViewField);
+    END;
+
+    LOCAL PROCEDURE InternalCreateUpdateDefaultFields@1000000011(DestEnhView@1000000000 : Record 9062804;VAR DestEnhViewField@1000000002 : Record 9062807);
+    VAR
+      EnhViewField@1000000001 : Record 9062807;
+    BEGIN
+      SetEnhView(DestEnhView);
+
+      //Default details fields
+      CreateUpdateField(DestEnhViewField, 'No', EnhViewField.Type::Cell, 'No.,Code,Entry No.');
+      CreateUpdateField(DestEnhViewField, 'Caption', EnhViewField.Type::Cell, 'Name,Caption,Description');
+      CreateUpdateField(DestEnhViewField, 'Description', EnhViewField.Type::Cell, 'Comment*');
+    END;
+
+    LOCAL PROCEDURE CreateUpdateField@1000000001(VAR DestEnhViewField@1000000009 : Record 9062807;FieldName@1000000001 : Text;FieldType@1000000002 : Integer;DefaultFieldNames@1000000000 : Text);
+    VAR
+      Field@1000000007 : Record 2000000041;
+      NoOfNames@1000000003 : Integer;
+      DefaultFieldNo@1000000004 : Integer;
+      DefaultFieldName@1000000006 : Text;
+      FieldFound@1000000005 : Boolean;
+    BEGIN
+      DestEnhViewField.RESET();
+      DestEnhViewField.SETRANGE("View Code", EnhView.Code);
+      DestEnhViewField.SETRANGE(Type, FieldType);
+      DestEnhViewField.SETRANGE(Name, FieldName);
+      IF (NOT(DestEnhViewField.FINDFIRST())) THEN BEGIN
+        DestEnhViewField.INIT();
+        DestEnhViewField."View Code" := EnhView.Code;
+        DestEnhViewField.Type := FieldType;
+        DestEnhViewField."Line No." := GetNextFieldLineNo(FieldType);
+        DestEnhViewField.Name := FieldName;
+        DestEnhViewField.VALIDATE("Table No.", EnhView."Source Table No.");
+        DestEnhViewField.INSERT();
+      END;
+
+      //suggest fields
+      IF (EnhView."Source Table No." <> 0) THEN BEGIN
+        NoOfNames := String.CountOptions(DefaultFieldNames);
+        DefaultFieldNo := 0;
+        FieldFound := FALSE;
+        WHILE (DefaultFieldNo < NoOfNames) AND (NOT(FieldFound)) DO BEGIN
+          DefaultFieldNo += 1;
+          DefaultFieldName := SELECTSTR(DefaultFieldNo, DefaultFieldNames);
+          Field.RESET();
+          Field.SETRANGE(TableNo, EnhView."Source Table No.");
+          Field.SETFILTER(Field.Type, '%1|%2|%3|%4|%5|%6|%7|%8|%9|%10',
+            Field.Type::Code, Field.Type::Date, Field.Type::DateTime,
+            Field.Type::Decimal, Field.Type::Integer, Field.Type::OemCode,
+            Field.Type::OemText, Field.Type::Option, Field.Type::Text, Field.Type::Time);
+          Field.SETFILTER(FieldName, DefaultFieldName);
+          FieldFound := Field.FINDFIRST();
+          IF (FieldFound) THEN BEGIN
+            DestEnhViewField.VALIDATE("Field Type", DestEnhViewField."Field Type"::Field);
+            DestEnhViewField.VALIDATE("Field No.", Field."No.");
+            DestEnhViewField.MODIFY();
+          END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE AddField@1000000019(FieldEntryType@1000000004 : Option;FieldType@1000000000 : Option;FieldNo@1000000001 : Integer);
+    VAR
+      EnhViewField@1000000002 : Record 9062807;
+    BEGIN
+      AddFieldToRec(EnhViewField, FieldEntryType, FieldType, FieldNo);
+    END;
+
+    LOCAL PROCEDURE SetEnhView@1000000002(NewEnhView@1000000000 : Record 9062804);
+    BEGIN
+      EnhView := NewEnhView;
+      CLEAR(EnhViewFieldLineNo);
+    END;
+
+    LOCAL PROCEDURE GetNextFieldLineNo@1000000003(FieldType@1000000000 : Integer) : Integer;
+    VAR
+      SrcEnhViewField@1000000001 : Record 9062807;
+    BEGIN
+      IF (EnhViewFieldLineNo[FieldType] = 0) THEN BEGIN
+        SrcEnhViewField.RESET();
+        SrcEnhViewField.SETRANGE("View Code", EnhView.Code);
+        SrcEnhViewField.SETRANGE(Type, FieldType);
+        IF (SrcEnhViewField.FINDLAST()) THEN
+          EnhViewFieldLineNo[FieldType] := SrcEnhViewField."Line No.";
+      END;
+
+      EnhViewFieldLineNo[FieldType] += 10000;
+      EXIT(EnhViewFieldLineNo[FieldType]);
+    END;
+
+    LOCAL PROCEDURE "--- Fields ---"@1000000015();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CreateDefaultGridFields@1000000004(VAR ForEnhView@1000000001 : Record 9062804;VAR EnhViewField@1000000000 : Record 9062807);
+    VAR
+      SrcEnhViewField@1000000002 : Record 9062807;
+    BEGIN
+      SetEnhView(ForEnhView);
+      DeleteGridFields(ForEnhView, EnhViewField);
+
+      IF (ForEnhView."Group By Field No." <> 0) OR (ForEnhView."Totals Field No." <> 0) THEN BEGIN
+        //add cell fields
+        SrcEnhViewField.RESET();
+        SrcEnhViewField.SETRANGE("View Code", ForEnhView.Code);
+        SrcEnhViewField.SETRANGE(Type, SrcEnhViewField.Type::Cell);
+        SrcEnhViewField.SETFILTER("Field No.", '<>%1', 0);
+        SrcEnhViewField.SETFILTER("Field Type", '<>%1', SrcEnhViewField."Field Type"::Text);
+        IF (SrcEnhViewField.FINDSET()) THEN BEGIN
+          REPEAT
+            AddFieldToRec(EnhViewField, EnhViewField.Type::"Grid Column", SrcEnhViewField."Field Type", SrcEnhViewField."Field No.");
+          UNTIL (SrcEnhViewField.NEXT() = 0);
+        END;
+
+        //add group by field
+        IF (ForEnhView."Group By Field No." <> 0) THEN BEGIN
+          AddFieldToRec(EnhViewField, EnhViewField.Type::"Grid Column", ForEnhView."Group By Field Type", ForEnhView."Group By Field No.");
+          EnhViewField."Default Group" := TRUE;
+          EnhViewField."Fast Select" := TRUE;
+          EnhViewField.MODIFY();
+        END;
+
+        //add totals field
+        IF (ForEnhView."Totals Field No." <> 0) THEN BEGIN
+          AddFieldToRec(EnhViewField, EnhViewField.Type::"Grid Column", ForEnhView."Totals Field Type", ForEnhView."Totals Field No.");
+          EnhViewField."Default Totals" := TRUE;
+          EnhViewField.MODIFY();
+        END;
+      END ELSE
+        InternalAddPageFields(ForEnhView, EnhViewField, 0, FALSE)
+    END;
+
+    LOCAL PROCEDURE ApplyFieldFilter@1000000035(VAR ForEnhView@1000000000 : Record 9062804;VAR EnhViewField@1000000001 : Record 9062807;GridFieldType@1000000002 : 'All,Group,Totals');
+    BEGIN
+      EnhViewField.RESET();
+      EnhViewField.SETRANGE("View Code", ForEnhView.Code);
+      EnhViewField.SETRANGE(Type, EnhViewField.Type::"Grid Column");
+      CASE (GridFieldType) OF
+        GridFieldType::Group:
+          EnhViewField.SETRANGE(Groupable, TRUE);
+        GridFieldType::Totals:
+          EnhViewField.SETRANGE("Number Field", TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE DeleteGridFields@1000000032(VAR ForEnhView@1000000001 : Record 9062804;VAR EnhViewField@1000000000 : Record 9062807);
+    BEGIN
+      EnhViewField.RESET();
+      EnhViewField.SETRANGE("View Code", ForEnhView.Code);
+      EnhViewField.SETRANGE(Type, EnhViewField.Type::"Grid Column");
+      EnhViewField.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE AddPageFields@1000000020(VAR ForEnhView@1000000001 : Record 9062804;PageId@1000000000 : Integer;ReplaceFields@1000000008 : Boolean);
+    VAR
+      EnhViewField@1000000007 : Record 9062807;
+      EnhPageControl@1000000002 : Record 9062848;
+      PageMetadata@1000000005 : Record 2000000138;
+      TableFieldBuffer@1000000004 : TEMPORARY Record 9062231;
+      TableMgt@1000000006 : Codeunit 9062585;
+      EnhPageMetadataMgt@1000000003 : Codeunit 9062727;
+    BEGIN
+      InternalAddPageFields(ForEnhView, EnhViewField, PageId, ReplaceFields);
+    END;
+
+    LOCAL PROCEDURE InternalAddPageFields@1000000014(VAR ForEnhView@1000000001 : Record 9062804;VAR EnhViewField@1000000009 : Record 9062807;PageId@1000000000 : Integer;ReplaceFields@1000000008 : Boolean);
+    VAR
+      EnhPageControl@1000000002 : Record 9062848;
+      PageMetadata@1000000005 : Record 2000000138;
+      TableFieldBuffer@1000000004 : TEMPORARY Record 9062231;
+      TableMgt@1000000006 : Codeunit 9062585;
+      EnhPageMetadataMgt@1000000003 : Codeunit 9062727;
+    BEGIN
+      SetEnhView(ForEnhView);
+      //find default page id
+      IF (ForEnhView."Source Table No." = 0) THEN
+        EXIT;
+      IF (PageId = 0) THEN
+        PageId := TableMgt.GetListPageId(ForEnhView."Source Table No.", '');
+      IF (PageId = 0) THEN
+        EXIT;
+
+      //delete existing fields
+      IF (ReplaceFields) THEN
+        DeleteGridFields(ForEnhView, EnhViewField);
+
+      //add fields
+      EnhPageMetadataMgt.ProcessPageById(PageId, FALSE);
+      EnhPageControl.RESET();
+      EnhPageControl.SETRANGE("Page Id", PageId);
+      EnhPageControl.SETRANGE(Type, EnhPageControl.Type::Field);
+      EnhPageControl.SETRANGE("Source Type", EnhPageControl."Source Type"::Field);
+      EnhPageControl.SETRANGE(Visible, EnhPageControl.Visible::Visible);
+      EnhPageControl.SETFILTER("Source Field Id", '<>%1', 0);
+      IF (EnhPageControl.FINDSET()) THEN BEGIN
+        REPEAT
+          AddFieldToRec(EnhViewField, EnhViewField.Type::"Grid Column", TableFieldBuffer."Field Type"::Field, EnhPageControl."Source Field Id");
+        UNTIL (EnhPageControl.NEXT() = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE InternalAddTableFields@1000000030(VAR ForEnhView@1000000003 : Record 9062804;VAR EnhViewField@1000000002 : Record 9062807;ReplaceFields@1000000000 : Boolean);
+    VAR
+      Field@1000000001 : Record 2000000041;
+      EnhancedField@1000000004 : Record 9062327;
+    BEGIN
+      SetEnhView(ForEnhView);
+
+      //delete existing fields
+      IF (ReplaceFields) THEN
+        DeleteGridFields(ForEnhView, EnhViewField);
+
+      //add fields
+      Field.RESET();
+      Field.SETRANGE(TableNo, ForEnhView."Source Table No.");
+      Field.SETFILTER(Field.Class, '%1|%2', Field.Class::Normal, Field.Class::FlowField);
+      IF (Field.FINDSET()) THEN BEGIN
+        REPEAT
+          AddFieldToRec(EnhViewField, EnhViewField.Type::"Grid Column", EnhViewField."Field Type"::Field, Field."No.");
+        UNTIL (Field.NEXT() = 0);
+      END;
+
+      //add enhanced fields
+      EnhancedField.RESET();
+      EnhancedField.SETRANGE("Table No.", ForEnhView."Source Table No.");
+      IF (EnhancedField.FINDSET()) THEN BEGIN
+        REPEAT
+          AddFieldToRec(EnhViewField, EnhViewField.Type::"Grid Column", EnhViewField."Field Type"::"Enhanced Field", EnhancedField."Enhanced Field No.");
+        UNTIL (EnhancedField.NEXT() = 0);
+      END;
+    END;
+
+    PROCEDURE AddViewFields@1000000013(VAR ForEnhView@1000000000 : Record 9062804);
+    VAR
+      TableFieldBuffer@1000000002 : TEMPORARY Record 9062231;
+      EnhViewField@1000000003 : Record 9062807;
+      ObjectFieldToolkit@1000000001 : Codeunit 9062343;
+    BEGIN
+      SetEnhView(ForEnhView);
+      IF (ObjectFieldToolkit.SelectFieldsAdv(EnhView."Source Table No.", 0, 0, TableFieldBuffer)) THEN BEGIN
+        IF (TableFieldBuffer.FINDSET()) THEN BEGIN
+          REPEAT
+            AddField(EnhViewField.Type::"Grid Column", TableFieldBuffer."Field Type", TableFieldBuffer."Field ID");
+          UNTIL (TableFieldBuffer.NEXT() = 0);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Field Functions ---"@1000000010();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE AddFieldToRec@1000000042(VAR EnhViewField@1000000003 : Record 9062807;FieldEntryType@1000000002 : Option;FieldType@1000000001 : Option;FieldNo@1000000000 : Integer);
+    VAR
+      Field@1000000004 : Record 2000000041;
+    BEGIN
+      EnhViewField.INIT();
+      EnhViewField."View Code" := EnhView.Code;
+      EnhViewField.Type := FieldEntryType;
+      EnhViewField."Line No." := GetNextFieldLineNo(FieldEntryType);
+      EnhViewField.VALIDATE("Table No.", EnhView."Source Table No.");
+      EnhViewField."Field Type" := FieldType;
+      EnhViewField.VALIDATE("Field No.", FieldNo);
+      EnhViewField.INSERT();
+    END;
+
+    LOCAL PROCEDURE CopyFields@1000000047(VAR DestEnhViewField@1000000000 : Record 9062807;VAR SrcEnhViewField@1000000001 : Record 9062807);
+    BEGIN
+      //copy fields to a temporary table
+      IF (NOT(DestEnhViewField.ISTEMPORARY)) THEN
+        EXIT;
+
+      DestEnhViewField.RESET();
+      DestEnhViewField.DELETEALL();
+      IF (SrcEnhViewField.FINDSET()) THEN BEGIN
+        REPEAT
+          DestEnhViewField.TRANSFERFIELDS(SrcEnhViewField);
+          DestEnhViewField.INSERT();
+        UNTIL (SrcEnhViewField.NEXT() = 0);
+      END;
+    END;
+
+    PROCEDURE GetCellFields@1000000040(VAR ForEnhView@1000000000 : Record 9062804;VAR SrcEnhViewField@1000000001 : Record 9062807;VAR EnhViewField@1000000002 : Record 9062807);
+    BEGIN
+      //Copy all enhanced view cell fields to a temporary table
+      SrcEnhViewField.RESET();
+      SrcEnhViewField.SETRANGE("View Code", ForEnhView.Code);
+      SrcEnhViewField.SETRANGE(Type, EnhViewField.Type::Cell);
+      IF (SrcEnhViewField.ISEMPTY) THEN
+        InternalCreateUpdateDefaultFields(ForEnhView, EnhViewField)
+      ELSE
+        CopyFields(EnhViewField, SrcEnhViewField)
+    END;
+
+    PROCEDURE GetGridFields@1000000039(VAR ForEnhView@1000000000 : Record 9062804;VAR SrcEnhViewField@1000000001 : Record 9062807;VAR EnhViewField@1000000002 : Record 9062807);
+    BEGIN
+      //Copy all enhanced view grid fields to a temporary table
+      //If list of grid fields is empty, default list is created
+      SrcEnhViewField.RESET();
+      SrcEnhViewField.SETRANGE("View Code", ForEnhView.Code);
+      SrcEnhViewField.SETRANGE(Type, EnhViewField.Type::"Grid Column");
+      IF (SrcEnhViewField.ISEMPTY) THEN BEGIN
+        CreateDefaultGridFields(ForEnhView, EnhViewField)
+      END ELSE
+        CopyFields(EnhViewField, SrcEnhViewField)
+    END;
+
+    LOCAL PROCEDURE GetAvailableFields@1000000029(VAR ForEnhView@1000000000 : Record 9062804;VAR EnhViewField@1000000001 : Record 9062807;GridFieldType@1000000003 : 'All,Group,Totals');
+    VAR
+      SrcEnhViewField@1000000002 : Record 9062807;
+    BEGIN
+      //Copy all enhanced view grid fields to a temporary table
+      //If list of grid fields is empty, all table fields and enhanced fields are used
+      //This is internal function used by field lookups
+
+      SrcEnhViewField.RESET();
+      SrcEnhViewField.SETRANGE("View Code", ForEnhView.Code);
+      SrcEnhViewField.SETRANGE(Type, EnhViewField.Type::"Grid Column");
+      IF (SrcEnhViewField.ISEMPTY) THEN BEGIN
+        InternalAddTableFields(ForEnhView, EnhViewField, TRUE)
+      END ELSE
+        CopyFields(EnhViewField, SrcEnhViewField);
+      ApplyFieldFilter(ForEnhView, EnhViewField, GridFieldType);
+    END;
+
+    LOCAL PROCEDURE "--- Lookups ---"@1000000008();
+    BEGIN
+    END;
+
+    PROCEDURE ValidateFieldName@1000000012(VAR ForEnhView@1000000000 : Record 9062804;VAR EnhViewFieldType@1000000001 : Option;VAR EnhViewFieldNo@1000000002 : Integer;VAR EnhViewFieldName@1000000003 : Text;GridFieldType@1000000005 : 'All,Group,Totals');
+    VAR
+      EnhViewField@1000000004 : TEMPORARY Record 9062807;
+    BEGIN
+      //validate field name
+
+      IF (EnhViewFieldName = '') THEN
+        EnhViewField.INIT()
+      ELSE BEGIN
+        GetAvailableFields(ForEnhView, EnhViewField, GridFieldType);
+        EnhViewField.SETRANGE("Field Name", EnhViewFieldName);
+        IF (NOT(EnhViewField.FINDFIRST())) THEN BEGIN
+          EnhViewField.SETFILTER("Field Name", '@' + EnhViewFieldName + '*');
+          EnhViewField.FINDFIRST();
+        END;
+      END;
+
+      EnhViewFieldType := EnhViewField."Field Type";
+      EnhViewFieldNo := EnhViewField."Field No.";
+      EnhViewFieldName := EnhViewField."Field Name";
+    END;
+
+    PROCEDURE ValidateFieldNo@1000000016(VAR ForEnhView@1000000004 : Record 9062804;VAR EnhViewFieldType@1000000003 : Option;VAR EnhViewFieldNo@1000000002 : Integer;VAR EnhViewFieldName@1000000001 : Text;GridFieldType@1000000005 : 'All,Group,Totals');
+    VAR
+      EnhViewField@1000000000 : TEMPORARY Record 9062807;
+    BEGIN
+      //validate field no.
+      IF (EnhViewFieldNo = 0) THEN
+        EnhViewField.INIT()
+      ELSE BEGIN
+        GetAvailableFields(ForEnhView, EnhViewField, GridFieldType);
+        IF (EnhViewFieldType <> EnhViewField."Field Type"::Text) THEN
+          EnhViewField.SETRANGE("Field Type", EnhViewFieldType);
+        EnhViewField.SETRANGE("Field No.", EnhViewFieldNo);
+        EnhViewField.FINDFIRST();
+      END;
+
+      EnhViewFieldType := EnhViewField."Field Type";
+      EnhViewFieldNo := EnhViewField."Field No.";
+      EnhViewFieldName := EnhViewField."Field Name";
+    END;
+
+    PROCEDURE LookupField@1000000027(VAR ForEnhView@1000000003 : Record 9062804;VAR EnhViewFieldType@1000000002 : Option;VAR EnhViewFieldNo@1000000001 : Integer;VAR EnhViewFieldName@1000000000 : Text;GridFieldType@1000000005 : 'All,Group,Totals') : Boolean;
+    VAR
+      EnhViewField@1000000004 : TEMPORARY Record 9062807;
+    BEGIN
+      //lookup field
+      GetAvailableFields(ForEnhView, EnhViewField, GridFieldType);
+      IF (EnhViewFieldNo <> 0) THEN BEGIN
+        EnhViewField.SETRANGE("Field Type", EnhViewFieldType);
+        EnhViewField.SETRANGE("Field No.", EnhViewFieldNo);
+        IF (EnhViewField.FINDFIRST()) THEN ;
+        EnhViewField.SETRANGE("Field Type");
+        EnhViewField.SETRANGE("Field No.");
+      END;
+
+      IF (PAGE.RUNMODAL(PAGE::"Enhanced View Fields", EnhViewField) = ACTION::LookupOK) THEN BEGIN
+        EnhViewFieldType := EnhViewField."Field Type";
+        EnhViewFieldNo := EnhViewField."Field No.";
+        EnhViewFieldName := EnhViewField."Field Name";
+        EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE GetFieldName@1000000028(VAR ForEnhView@1000000003 : Record 9062804;VAR EnhViewFieldType@1000000002 : Option;VAR EnhViewFieldNo@1000000001 : Integer) : Text;
+    BEGIN
+    END;
+
+    PROCEDURE FieldLookup@1000000009(VAR EnhViewField@1000000000 : Record 9062807) : Boolean;
+    BEGIN
+      EXIT(PAGE.RUNMODAL(PAGE::"Enhanced View Fields", EnhViewField) = ACTION::LookupOK);
+    END;
+
+    PROCEDURE ChartTypeLookup@1000000031(VAR ChartType@1000000000 : Text) : Boolean;
+    VAR
+      NameValueBuffer@1000000001 : TEMPORARY Record 9062730;
+    BEGIN
+      GetChartList(NameValueBuffer);
+
+      IF (ChartType <> '') THEN BEGIN
+        NameValueBuffer.SETRANGE(Value, ChartType);
+        IF (NameValueBuffer.FINDFIRST()) THEN ;
+        NameValueBuffer.SETRANGE(Value);
+      END;
+
+      IF (PAGE.RUNMODAL(PAGE::"Name/Value Lookup", NameValueBuffer) = ACTION::LookupOK) THEN BEGIN
+        ChartType := NameValueBuffer.Value;
+        EXIT(TRUE);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE "--- Lists of options ---"@1000000033();
+    BEGIN
+    END;
+
+    PROCEDURE GetChartList@1000000034(VAR NameValueBuffer@1000000000 : TEMPORARY Record 9062730);
+    VAR
+      txtAreaChart@1000000001 : TextConst 'ENU=Area;ENG=Area';
+      txtBarChart@1000000002 : TextConst 'ENU=Bar;ENG=Bar';
+      txtColumnChart@1000000003 : TextConst 'ENU=Column;ENG=Column';
+      txtDonutChart@1000000004 : TextConst 'ENU=Donut;ENG=Donut';
+      txtFunnelChart@1000000005 : TextConst 'ENU=Funnel;ENG=Funnel';
+      txtLineChart@1000000006 : TextConst 'ENU=Line;ENG=Line';
+      txtPieChart@1000000007 : TextConst 'ENU=Pie;ENG=Pie';
+      txtRadarAreaChart@1000000008 : TextConst 'ENU=Radar Area;ENG=Radar Area';
+      txtRadarColumnChart@1000000009 : TextConst 'ENU=Radar Column;ENG=Radar Column';
+      txtRadarLineChart@1000000010 : TextConst 'ENU=Radar Line;ENG=Radar Line';
+      txtVerticalAreaChart@1000000011 : TextConst 'ENU=Vertical Area;ENG=Vertical Area';
+      txtVerticalLineChart@1000000012 : TextConst 'ENU=Vertical Line;ENG=Vertical Line';
+      NameValueToolkit@1000000013 : Codeunit 9062587;
+    BEGIN
+      NameValueBuffer.RESET();
+      NameValueBuffer.DELETEALL();
+      NameValueToolkit.AddToNameValueBufferV(NameValueBuffer, 1, txtAreaChart, 'area');
+      NameValueToolkit.AddToNameValueBufferV(NameValueBuffer, 2, txtBarChart, 'bar');
+      NameValueToolkit.AddToNameValueBufferV(NameValueBuffer, 3, txtColumnChart, 'column');
+      NameValueToolkit.AddToNameValueBufferV(NameValueBuffer, 4, txtDonutChart, 'donut');
+      NameValueToolkit.AddToNameValueBufferV(NameValueBuffer, 5, txtFunnelChart, 'funnel');
+      NameValueToolkit.AddToNameValueBufferV(NameValueBuffer, 6, txtLineChart, 'line');
+      NameValueToolkit.AddToNameValueBufferV(NameValueBuffer, 7, txtPieChart, 'pie');
+      NameValueToolkit.AddToNameValueBufferV(NameValueBuffer, 8, txtRadarAreaChart, 'radarArea');
+      NameValueToolkit.AddToNameValueBufferV(NameValueBuffer, 9, txtRadarColumnChart, 'radarColumn');
+      NameValueToolkit.AddToNameValueBufferV(NameValueBuffer, 10, txtRadarLineChart, 'radarLine');
+      NameValueToolkit.AddToNameValueBufferV(NameValueBuffer, 11, txtVerticalAreaChart, 'verticalArea');
+      NameValueToolkit.AddToNameValueBufferV(NameValueBuffer, 12, txtVerticalLineChart, 'verticalLine');
+    END;
+
+    PROCEDURE GetDateFunctionList@1000000037(VAR NameValueBuffer@1000000000 : Record 9062730;SelectedOptionNo@1000000002 : Integer);
+    VAR
+      GroupByField@1000000001 : Record 9062807;
+      txtDFDay@1000000008 : TextConst 'ENU=D;ENG=D';
+      txtDFWeek@1000000007 : TextConst 'ENU=W;ENG=W';
+      txtDFMonth@1000000006 : TextConst 'ENU=M;ENG=M';
+      txtDFQuater@1000000005 : TextConst 'ENU=Q;ENG=Q';
+      txtDFHYear@1000000004 : TextConst 'ENU=H;ENG=H';
+      txtDFYear@1000000003 : TextConst 'ENU=Y;ENG=Y';
+    BEGIN
+      NameValueBuffer.RESET();
+      NameValueBuffer.DELETEALL();
+      AddDateFunction(NameValueBuffer, GroupByField."Group By Date Function"::Day, txtDFDay, SelectedOptionNo);
+      AddDateFunction(NameValueBuffer, GroupByField."Group By Date Function"::"Year Week", txtDFWeek, SelectedOptionNo);
+      AddDateFunction(NameValueBuffer, GroupByField."Group By Date Function"::"Year Month", txtDFMonth, SelectedOptionNo);
+      AddDateFunction(NameValueBuffer, GroupByField."Group By Date Function"::"Year Quarter", txtDFQuater, SelectedOptionNo);
+      AddDateFunction(NameValueBuffer, GroupByField."Group By Date Function"::"Year Half", txtDFHYear, SelectedOptionNo);
+      AddDateFunction(NameValueBuffer, GroupByField."Group By Date Function"::Year, txtDFYear, SelectedOptionNo);
+    END;
+
+    LOCAL PROCEDURE AddDateFunction@1000000038(VAR NameValueBuffer@1000000001 : Record 9062730;OptionNo@1000000002 : Integer;Caption@1000000003 : Text;SelectedOptionNo@1000000000 : Integer);
+    VAR
+      NameValueToolkit@1000000004 : Codeunit 9062587;
+    BEGIN
+      NameValueToolkit.AddToNameValueBufferF(NameValueBuffer, OptionNo, Caption, FORMAT(OptionNo, 0, 9), OptionNo = SelectedOptionNo);
+    END;
+
+    LOCAL PROCEDURE "--- Styles ---"@1000000006();
+    BEGIN
+    END;
+
+    PROCEDURE InvalidateStyleCache@1000000007(EnhViewCode@1000000000 : Code[20];CacheType@1000000001 : Integer);
+    VAR
+      EnhViewStyleCache@1000000002 : Record 9062812;
+    BEGIN
+      EnhViewStyleCache.RESET();
+      EnhViewStyleCache.SETRANGE("View Code", EnhViewCode);
+      IF (CacheType >= 0) THEN
+        EnhViewStyleCache.SETRANGE(Type, CacheType);
+      EnhViewStyleCache.DELETEALL();
+    END;
+
+    LOCAL PROCEDURE AddStyleLine@1000000021(VAR EnhView@1000000000 : Record 9062804;Type@1000000007 : Option;TargetType@1000000008 : Integer;VAR LineId@1000000004 : Integer;VAR SequenceNo@1000000006 : Integer;DescriptionText@1000000001 : Text;FilterText@1000000002 : Text;WithCheck@1000000005 : Boolean);
+    VAR
+      EnhViewStyle@1000000003 : Record 9062808;
+    BEGIN
+      IF (WithCheck) THEN BEGIN
+        EnhViewStyle.RESET();
+        EnhViewStyle.SETRANGE("View Code", EnhView.Code);
+        EnhViewStyle.SETRANGE(Type, Type);
+        EnhViewStyle.SETRANGE("Target Type", TargetType);
+        EnhViewStyle.SETRANGE(Filter, FilterText);
+        IF (NOT(EnhViewStyle.ISEMPTY)) THEN
+          EXIT;
+      END;
+
+      //get next line id and sequence no.
+      //if 0, INSERT(TRUE) will calculate them inside style line record
+      IF (LineId <> 0) THEN
+        LineId += 1;
+      IF (SequenceNo <> 0) THEN
+        SequenceNo += 1;
+
+      EnhViewStyle.INIT();
+      EnhViewStyle."View Code" := EnhView.Code;
+      EnhViewStyle.Type := Type;
+      EnhViewStyle."Target Type" := TargetType;
+      EnhViewStyle.ID := LineId;
+      EnhViewStyle.Sequence := SequenceNo;
+      EnhViewStyle.Filter := FilterText;
+      EnhViewStyle.Description := DescriptionText;
+      EnhViewStyle.INSERT(TRUE);
+
+      LineId := EnhViewStyle.ID;
+      SequenceNo := EnhViewStyle.Sequence;
+    END;
+
+    LOCAL PROCEDURE AddCellStyleLine@1000000023(VAR EnhView@1000000007 : Record 9062804;VAR LineId@1000000004 : Integer;VAR SequenceNo@1000000003 : Integer;DescriptionText@1000000002 : Text;FilterText@1000000001 : Text;WithCheck@1000000000 : Boolean);
+    VAR
+      EnhViewStyle@1000000008 : Record 9062808;
+    BEGIN
+      AddStyleLine(EnhView, EnhViewStyle.Type::Cell, 0, LineId, SequenceNo, DescriptionText, FilterText, WithCheck);
+    END;
+
+    PROCEDURE AddAllStyleValues@1000000017(VAR EnhView@1000000000 : Record 9062804);
+    VAR
+      Field@1000000001 : Record 2000000041;
+      cnfCreateAllStyleValues@1000000002 : TextConst 'ENU=Do you want to create styles for all possible values of field %1?;ENG=Do you want to create styles for all possible values of field %1?';
+    BEGIN
+      IF (EnhView."Cell Style Field Type" = EnhView."Cell Style Field Type"::Field) AND (EnhView."Cell Style Field No." <> 0) THEN BEGIN
+        Field.GET(EnhView."Source Table No.", EnhView."Cell Style Field No.");
+
+        IF (NOT(CONFIRM(STRSUBSTNO(cnfCreateAllStyleValues, Field."Field Caption")))) THEN
+          EXIT;
+
+        IF (Field.RelationTableNo <> 0) THEN
+          AddAllRelatedRecordStyleValues(EnhView, Field)
+        ELSE BEGIN
+          CASE (Field.Type) OF
+            Field.Type::Option: AddAllOptionStyleValues(EnhView, Field);
+            Field.Type::Boolean: AddAllBooleanStyleValues(EnhView, Field);
+          END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE AddAllRelatedRecordStyleValues@1000000024(VAR EnhView@1000000000 : Record 9062804;VAR Field@1000000001 : Record 2000000041);
+    VAR
+      RecRef@1000000002 : RecordRef;
+      KeyRef@1000000003 : KeyRef;
+      FldRef@1000000004 : FieldRef;
+      TableCaption@1000000005 : Text;
+      StyleLineId@1000000006 : Integer;
+      StyleLineSequence@1000000007 : Integer;
+    BEGIN
+      RecRef.OPEN(Field.RelationTableNo);
+      IF (Field.RelationFieldNo = 0) THEN BEGIN
+        KeyRef := RecRef.KEYINDEX(1);
+        FldRef := KeyRef.FIELDINDEX(1);
+      END ELSE
+        FldRef := RecRef.FIELDINDEX(Field.RelationFieldNo);
+
+      IF (RecRef.COUNT = 1000) THEN BEGIN
+        TableCaption := RecRef.CAPTION;
+        RecRef.CLOSE();
+        ERROR(errTooManyRecords, TableCaption);
+      END;
+
+      StyleLineId := 0;
+      StyleLineSequence := 0;
+      IF (RecRef.FINDSET()) THEN BEGIN
+        REPEAT
+          AddCellStyleLine(EnhView, StyleLineId, StyleLineSequence, FORMAT(FldRef.VALUE,0,1), FORMAT(FldRef.VALUE,0,1), TRUE);
+        UNTIL (RecRef.NEXT() = 0);
+      END;
+
+      RecRef.CLOSE();
+    END;
+
+    LOCAL PROCEDURE AddAllOptionStyleValues@1000000026(VAR EnhView@1000000000 : Record 9062804;VAR Field@1000000001 : Record 2000000041);
+    VAR
+      OptionValueBuffer@1000000003 : TEMPORARY Record 9062730;
+      String@1000000002 : Codeunit 9062236;
+      StyleLineId@1000000004 : Integer;
+      StyleSequenceNo@1000000005 : Integer;
+    BEGIN
+      StyleLineId := 0;
+      StyleSequenceNo := 0;
+      String.SplitAdvanced(Field.OptionString, ',', TRUE, TRUE, OptionValueBuffer);
+      OptionValueBuffer.RESET();
+      IF (OptionValueBuffer.FINDSET()) THEN BEGIN
+        REPEAT
+          AddCellStyleLine(EnhView, StyleLineId, StyleSequenceNo, OptionValueBuffer.Value, OptionValueBuffer.Value, TRUE);
+        UNTIL (OptionValueBuffer.NEXT() = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE AddAllBooleanStyleValues@1000000025(VAR EnhView@1000000000 : Record 9062804;VAR Field@1000000001 : Record 2000000041);
+    VAR
+      StyleLineId@1000000002 : Integer;
+      StyleSequenceNo@1000000003 : Integer;
+    BEGIN
+      StyleLineId := 0;
+      StyleSequenceNo := 0;
+      AddCellStyleLine(EnhView, StyleLineId, StyleSequenceNo, FORMAT(TRUE), FORMAT(TRUE), TRUE);
+    END;
+
+    PROCEDURE ApplyStylesPalette@1000000018(VAR EnhView@1000000000 : Record 9062804);
+    VAR
+      EnhViewStyle@1000000008 : Record 9062808;
+      ApplySystemPalette@1000000006 : Report 9062231;
+      SystemPalette@1000000005 : Record 9062430;
+      PaletteCode@1000000004 : Code[20];
+      ColourOrder@1000000003 : Integer;
+      Result@1000000002 : Boolean;
+      SystemPaletteManagement@1000000001 : Codeunit 9062399;
+      eCantFindPalette@1000000009 : TextConst 'ENU=Can''t find system palette "%1".;ENG=Can''t find system palette "%1".';
+      eConfirmation@1000000007 : TextConst 'ENU=Do you want to apply "%1" palette to the styles?;ENG=Do you want to apply "%1" palette to the styles?';
+    BEGIN
+      ApplySystemPalette.RUNMODAL();
+      IF ( NOT (ApplySystemPalette.GetOk())) THEN
+        EXIT;
+      PaletteCode := ApplySystemPalette.GetPaletteCode();
+      ColourOrder := ApplySystemPalette.GetColourOrder();
+
+      IF ( NOT (SystemPalette.GET(PaletteCode))) THEN
+        ERROR(eCantFindPalette, PaletteCode);
+
+      IF ( NOT (CONFIRM(eConfirmation, TRUE, SystemPalette.Code))) THEN
+        EXIT;
+
+      SystemPaletteManagement.StartColouring(PaletteCode, ColourOrder);
+
+      EnhViewStyle.RESET();
+      EnhViewStyle.SETCURRENTKEY("View Code", Type, "Target Type", Sequence);
+
+      EnhViewStyle.SETRANGE("View Code", EnhView.Code);
+      EnhViewStyle.SETRANGE(Type, EnhViewStyle.Type::Cell);
+      EnhViewStyle.SETRANGE("Target Type", 0);
+      IF (EnhViewStyle.FINDSET(TRUE)) THEN BEGIN
+        REPEAT
+          EnhViewStyle.VALIDATE("Background Colour Code", SystemPaletteManagement.NextColour());
+          EnhViewStyle.MODIFY(TRUE);
+        UNTIL (EnhViewStyle.NEXT() = 0);
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.12 AZ 21/01/2016 - Created
+      //DOC NA2016.14 AZ 26/02/2016 - Grid View added, bugfixes
+      //DOC NA2016.14 AZ 14/03/2016 - Create default view for a table or page
+      //DOC NA2016.15 AZ 12/04/2016 - Midifications and bugfixes
+      //DOC NA2016.16 AZ 24/05/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

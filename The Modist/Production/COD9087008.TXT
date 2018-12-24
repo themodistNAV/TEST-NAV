@@ -1,0 +1,217 @@
+OBJECT Codeunit 9087008 Buying Sheet Consignment Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/10/16;
+    Time=12:14:31 PM;
+    Version List=NS2016.16;
+  }
+  PROPERTIES
+  {
+    TableNo=9087020;
+    OnRun=BEGIN
+            BuyingSheetHeader := Rec;
+            Code();
+            Rec := BuyingSheetHeader;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ConsignmentsMgt@1000001000 : Codeunit 9062357;
+      ConsignmentHeader@1000000002 : Record 9062447;
+      ConsignmentHeaderTmp@1000000016 : TEMPORARY Record 9062447;
+      ConsignmentLine@1000000009 : Record 9062448;
+      nSembleSetup@1000000007 : Record 9087000;
+      PurchaseHeader@1000000008 : Record 38;
+      PurchaseLine@1000000017 : Record 39;
+      BuyingSheetHeader@1000000003 : Record 9087020;
+      BuyingSheetLine@1000000001 : Record 9087022;
+      Vendor@1000000006 : Record 23;
+      VendorTmp@1000000004 : TEMPORARY Record 23;
+      DialogManagement@1000000010 : Codeunit 9062249;
+      DialogIndex@1000000011 : ',Collecting,Processing';
+      DialogCount@1000000012 : Integer;
+      Counter@1000000014 : ARRAY [2] OF Integer;
+      CounterIndex@1000000015 : ',Header,Line';
+
+    LOCAL PROCEDURE Code@1000000001();
+    BEGIN
+      Initialise();
+      CollectVendors();
+      CreateConsignments();
+      Finalise();
+    END;
+
+    LOCAL PROCEDURE Initialise@1000000004();
+    VAR
+      eConfirmation@1000000004 : TextConst 'ENU=Do you want to create consignment for buying sheet "%1"?;ENG=Do you want to create consignment for buying sheet "%1"?';
+      eDlgCaption@1000000003 : TextConst 'ENU=Creating Consignments...;ENG=Creating Consignments...';
+      eDlgCollecting@1000000002 : TextConst 'ENU=Collecting;ENG=Collecting';
+      eDlgProcessing@1000000001 : TextConst 'ENU=Processing;ENG=Processing';
+    BEGIN
+      nSembleSetup.GET();
+
+      Check();
+
+      IF (GUIALLOWED) THEN
+        IF ( NOT (CONFIRM(eConfirmation, TRUE, BuyingSheetHeader."No."))) THEN
+          ERROR('');
+
+      ConsignmentHeaderTmp.RESET();
+      ConsignmentHeaderTmp.DELETEALL();
+
+      CLEAR(Counter);
+
+      DialogManagement.Add(eDlgCollecting, 20, DialogIndex::Collecting, 20, TRUE, TRUE);
+      DialogManagement.Add(eDlgProcessing, 20, DialogIndex::Processing, 20, TRUE, TRUE);
+      DialogManagement.Open(eDlgCaption);
+    END;
+
+    LOCAL PROCEDURE Finalise@1000000000();
+    VAR
+      eConsignmentsCreated@1000000000 : TextConst 'ENU=Created:\- %1 Consignment(s),\- %2 Consignment Line(s).\\Do you want to see the consignment(s) created?;ENG=Created:\- %1 Consignment(s),\- %2 Consignment Line(s).\\Do you want to see the consignment(s) created?';
+      eNoConsignmentsCreated@1000000001 : TextConst 'ENU=No consignments have been created.;ENG=No consignments have been created.';
+    BEGIN
+      DialogManagement.Close();
+      IF (GUIALLOWED) THEN
+        IF (Counter[CounterIndex::Header] > 0) THEN
+        BEGIN
+          IF (CONFIRM(eConsignmentsCreated, TRUE, Counter[CounterIndex::Header], Counter[CounterIndex::Line])) THEN
+            ShowConsignmentsCreated();
+        END
+        ELSE
+          MESSAGE(eNoConsignmentsCreated);
+    END;
+
+    PROCEDURE Check@1000000006();
+    VAR
+      eNoLines@1000000000 : TextConst 'ENU=Buying sheet "%1" doesn''t have lines requiring consignments.;ENG=Buying sheet "%1" doesn''t have lines requiring consignments.';
+    BEGIN
+      BuyingSheetHeader.TESTFIELD("No.");
+      BuyingSheetHeader.CheckStatusReleased();
+
+      FilterBuyingSheetLines();
+      IF (BuyingSheetLine.ISEMPTY) THEN
+        ERROR(eNoLines, BuyingSheetHeader."No.");
+    END;
+
+    LOCAL PROCEDURE CollectVendors@1000000008();
+    BEGIN
+      FilterBuyingSheetLines();
+      DialogCount := BuyingSheetLine.COUNT;
+      DialogManagement.SetCounterCount(DialogIndex::Collecting, DialogCount);
+      IF (BuyingSheetLine.FINDSET()) THEN
+      REPEAT
+        DialogManagement.StepCounter(DialogIndex::Collecting);
+        IF ( NOT (VendorTmp.GET(BuyingSheetLine."Vendor No."))) THEN
+        BEGIN
+          VendorTmp."No." := BuyingSheetLine."Vendor No.";
+          VendorTmp.INSERT();
+        END;
+      UNTIL (BuyingSheetLine.NEXT() <> 0);
+    END;
+
+    LOCAL PROCEDURE CreateConsignments@1000000003();
+    VAR
+      lHeaderCreated@1000000000 : Boolean;
+      lLineCreated@1000000001 : Boolean;
+    BEGIN
+      DialogManagement.SetCounterCount(DialogIndex::Processing, DialogCount);
+      VendorTmp.RESET();
+      IF (VendorTmp.FINDSET()) THEN
+      REPEAT
+
+        FilterBuyingSheetLines();
+        BuyingSheetLine.SETRANGE("Vendor No.", VendorTmp."No.");
+        IF (BuyingSheetLine.FINDSET(TRUE)) THEN BEGIN
+
+          ConsignmentsMgt.NewConsignment(ConsignmentHeader, lHeaderCreated);
+
+          CLEAR(PurchaseHeader);
+          CLEAR(PurchaseLine);
+
+          REPEAT
+            DialogManagement.StepCounter(DialogIndex::Processing);
+
+            IF ((PurchaseHeader."Document Type" <> PurchaseHeader."Document Type"::Order) {^^^OR (PurchaseHeader."No." <> BuyingSheetHeader."Purch. Ord. No.")}) THEN
+              PurchaseHeader.GET(PurchaseHeader."Document Type"::Order, BuyingSheetLine."Purchase Order No.");
+            PurchaseLine.GET(PurchaseLine."Document Type"::Order, BuyingSheetLine."Purchase Order No.",
+              BuyingSheetLine."Purchase Order Line No.");
+
+            ConsignmentsMgt.AddPurchaseLine(ConsignmentHeader, ConsignmentLine, PurchaseHeader, PurchaseLine,
+              lHeaderCreated, lLineCreated);
+
+            IF (lHeaderCreated) THEN
+            BEGIN
+              ConsignmentHeader.VALIDATE("Vendor No.", BuyingSheetLine."Vendor No.");
+              ConsignmentHeader.VALIDATE(Description, BuyingSheetLine.Description);
+              ConsignmentHeader.VALIDATE("Freight Amount", BuyingSheetHeader."Freight Amount (LCY)");
+              ConsignmentHeader.VALIDATE("Duty Amount", BuyingSheetHeader."Duty Amount (LCY)");
+              ConsignmentHeader.VALIDATE("Location Code", BuyingSheetLine."Location Code");
+              ConsignmentHeader.VALIDATE("Buying Sheet No.", BuyingSheetHeader."No.");
+              ConsignmentHeader.MODIFY();
+
+              Counter[CounterIndex::Header] += 1;
+              ConsignmentHeaderTmp := ConsignmentHeader;
+              ConsignmentHeaderTmp.INSERT();
+            END;
+
+            IF (lLineCreated) THEN
+              Counter[CounterIndex::Line] += 1;
+          UNTIL (BuyingSheetLine.NEXT() = 0);
+
+          ConsignmentsMgt.FinalizeConsignmentCreation(ConsignmentHeader);
+        END;
+
+      UNTIL (VendorTmp.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE FilterBuyingSheetLines@1000000010();
+    BEGIN
+      BuyingSheetLine.RESET();
+      BuyingSheetLine.SETRANGE("Buying Sheet No.", BuyingSheetHeader."No.");
+      BuyingSheetLine.SETFILTER("Vendor No.", '<>''''');
+      BuyingSheetLine.SETFILTER("Purchase Order No.", '<>''''');
+      BuyingSheetLine.SETFILTER("Purchase Order Line No.", '<>0');
+    END;
+
+    LOCAL PROCEDURE ShowConsignmentsCreated@1000000007();
+    VAR
+      lFilter@1000000000 : Text[1024];
+    BEGIN
+      ConsignmentHeaderTmp.RESET();
+      IF (ConsignmentHeaderTmp.COUNT > 1) THEN
+      BEGIN
+        IF (ConsignmentHeaderTmp.FINDSET()) THEN
+        REPEAT
+          IF (lFilter <> '') THEN
+            lFilter := lFilter + '|';
+          lFilter := lFilter + ConsignmentHeaderTmp."No.";
+        UNTIL (ConsignmentHeaderTmp.NEXT() = 0);
+        IF (lFilter <> '') THEN
+        BEGIN
+          ConsignmentHeader.RESET();
+          ConsignmentHeader.SETFILTER("No.", lFilter);
+          PAGE.RUN(PAGE::"Consignment List", ConsignmentHeader);
+        END;
+      END
+      ELSE
+      BEGIN
+        ConsignmentHeader.RESET();
+        ConsignmentHeader.GET(ConsignmentHeaderTmp."No.");
+        PAGE.RUN(PAGE::"Consignment Card", ConsignmentHeader);
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NS2015.1  AZ 23/01/2014 - Created
+      //DOC NS2015.1  JH 14/03/2014 - Fixes
+      //DOC NS2016.16 JH 07/09/2016 - nSemble 2016
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,221 @@
+OBJECT Codeunit 9062464 Uploaded File Processing
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.14;
+  }
+  PROPERTIES
+  {
+    TableNo=9062630;
+    OnRun=BEGIN
+            ProcessFile(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      errNoSheetSelected@1000000001 : TextConst 'ENU=No sheet selected;ENG=No sheet selected';
+      FileSystem@1000000003 : Codeunit 9062264;
+      TNPToolkit@1000000005 : Codeunit 9062230;
+      TNPUtils@1000000002 : Codeunit 9062229;
+      FileAction@1000000000 : 'None,ImportExcel,ProcessnForm,InvoiceMatchingDocument';
+      HideDialogs@1000000004 : Boolean;
+      FileProcessingMgt@1000000006 : Codeunit 9062600;
+
+    PROCEDURE ProcessFile@1000000000(VAR File@1000000000 : Record 9062630);
+    BEGIN
+      FileAction := DetectAction(File);
+
+      CASE (FileAction) OF
+        FileAction::ImportExcel:
+          ImportFileFromExcel(File);
+        FileAction::ProcessnForm:
+          ProcessnForm(File);
+        FileAction::InvoiceMatchingDocument:
+          ProcessInvoiceMatchingDocument(File); //DOC NA2015.8
+      END;
+    END;
+
+    PROCEDURE DetectAction@1000000001(File@1000000000 : Record 9062630) : Integer;
+    VAR
+      lFileAction@1000000004 : Integer;
+      lFileName@1000000001 : Text;
+      lDocumentType@1000000005 : Record 9062268;
+      lDocumentTypeCode@1000000002 : Code[20];
+      lIndex@1000000003 : Integer;
+      SystemBehaviour@9062230 : Record 9062230;
+      SupportedExtensions@9062231 : Text;
+      FileExtension@9062232 : Text;
+      KeyWords@9062233 : Text;
+    BEGIN
+      //DOC NA2015.4 - Detecting action to perform on the file
+      //  -> File: The file
+      //  <- Action detected ("Import File" as default with "Process nForm" possible)
+
+      lFileAction := FileAction::ImportExcel;
+
+      lFileName := DELCHR(FileSystem.GetFileNameWithoutExtension(FALSE, File."Source File Name"), '<>', ' ');
+      lIndex := STRPOS(lFileName, ' ');
+      IF (lIndex > 0) THEN
+      BEGIN
+        lIndex := TNPToolkit.MinInteger(lIndex, MAXSTRLEN(lDocumentTypeCode));
+        lDocumentTypeCode := COPYSTR(lFileName, 1, lIndex - 1);
+        IF (lDocumentType.GET(lDocumentTypeCode)) THEN
+          lFileAction := FileAction::ProcessnForm;
+      END;
+
+      SupportedExtensions := SystemBehaviour.GetText('PROCESS_DOC_EXT');
+      IF SupportedExtensions = '' THEN
+        SupportedExtensions := '.pdf;.png;.jpg;.bmp;.tif';
+
+      SupportedExtensions := LOWERCASE(SupportedExtensions);
+      FileExtension := LOWERCASE(FileSystem.GetExtension(FALSE,File."Source File Name"));
+
+      IF STRPOS(SupportedExtensions,FileExtension) > 0 THEN
+        lFileAction := FileAction::InvoiceMatchingDocument;
+
+      KeyWords := SystemBehaviour.GetText('PROCESS_DOC_NAMES');
+      IF KeyWords = '' THEN
+        KeyWords := 'Invoice';
+      KeyWords := LOWERCASE(KeyWords);
+
+      IF STRPOS(KeyWords,LOWERCASE(File."Source File Name")) > 0 THEN
+        lFileAction := FileAction::InvoiceMatchingDocument;
+
+      EXIT(lFileAction);
+    END;
+
+    LOCAL PROCEDURE ImportFileFromExcel@1000000002(VAR File@1000000002 : Record 9062630);
+    VAR
+      ExcelImportExport@1000000006 : Codeunit 9062296;
+      ValidateData@1000000005 : Boolean;
+      StopOnError@1000000004 : Boolean;
+      ExcelBuf@1000000003 : Record 9062715;
+      SheetName@1000000001 : Text[250];
+      FilePath@1000000000 : Text[1024];
+      cnfValidateData@1000000008 : TextConst 'ENU=Would you like to Validate the data as it is imported?\\IMPORTANT: Importing data without Validation can cause serious problems. Only choose this option if you know what you are doing.;ENG=Would you like to Validate the data as it is imported?\\IMPORTANT: Importing data without Validation can cause serious problems. Only choose this option if you know what you are doing.';
+      cnfStopOnError@1000000007 : TextConst 'ENU=Would you like to Stop the import if there''s an error?\\If you choose not to stop when there''s an error, you will be given an copy of the import file with error information once the import completes.;ENG=Would you like to Stop the import if there''s an error?\\If you choose not to stop when there''s an error, you will be given an copy of the import file with error information once the import completes.';
+    BEGIN
+      SheetName := ExcelBuf.SelectSheetsName(File."Temp File Name");
+      IF SheetName = '' THEN
+          ERROR(errNoSheetSelected);
+      ValidateData := TRUE;
+      StopOnError := FALSE;
+
+      ExcelImportExport.ImportDataFromExcelAdv(File."Temp File Name",TRUE,SheetName,ValidateData,StopOnError,FALSE,File);
+    END;
+
+    LOCAL PROCEDURE ProcessnForm@1000000004(VAR File@1000000000 : Record 9062630) OK : Boolean;
+    VAR
+      FAQ@1000000001 : Record 9062270;
+      FAQEntry@1000000003 : Record 9062271;
+      EntryNo@1000000002 : Integer;
+      FileSystem@1000000004 : Codeunit 9062264;
+      eDocumentProcessed@1000000005 : TextConst 'ENU=Your nForm has been processed successfully against the Record "%1";ENG=Your nForm has been processed successfully against the Record "%1"';
+      eDocumentProcessedNoRec@1000000006 : TextConst 'ENU=Your nForm has been processed successfully;ENG=Your nForm has been processed successfully';
+      UniV@1000000007 : Codeunit 9062232;
+      destTableNo@1000000008 : Integer;
+      RecName@1000000009 : Text;
+      ResultMessage@1000000010 : Text;
+    BEGIN
+      FAQ.GET(FAQ.GetUserDefaultQueue(USERID));
+      EntryNo := FAQ.AddEntry(File."Temp File Name",File."Source File Name",File."Source File Name",USERID,FAQ.Code,TRUE,TRUE);
+
+      IF EntryNo > 0 THEN BEGIN
+        FAQEntry.GET(EntryNo);
+        IF (FAQEntry.AutoProcessEntry(FALSE)) THEN BEGIN //DOC NA2015.9 PC
+            IF (UniV.GetIntegerVar('NFORM_DEST_TABLE') <> 0) AND (UniV.GetTextVar('NFORM_DEST_POS') <> '') THEN BEGIN
+              IF EVALUATE(destTableNo, FORMAT(UniV.GetIntegerVar('NFORM_DEST_TABLE'))) THEN BEGIN
+                RecName := TNPUtils.GetRecordDescription(destTableNo,UniV.GetTextVar('NFORM_DEST_POS'));
+              END;
+            END;
+            IF RecName <> '' THEN BEGIN
+              ResultMessage := STRSUBSTNO(eDocumentProcessed, RecName);
+              TNPUtils.RunCardPage(destTableNo,UniV.GetTextVar('NFORM_DEST_POS'),FALSE);
+            END ELSE
+              ResultMessage := STRSUBSTNO(eDocumentProcessedNoRec);
+
+            MESSAGE(ResultMessage);
+            EXIT(TRUE);
+        END ELSE
+        BEGIN
+          FAQEntry.GET(EntryNo);
+          IF FAQEntry."Document Type" = 'UNIDENTIFIED' THEN BEGIN
+            FileSystem.DeleteFileIfExists(FALSE,FAQEntry.FilePath);
+            FAQEntry.DELETE;
+            EXIT(FALSE);
+          END ELSE ERROR(FAQEntry."AutoProcess Error Message");
+        END;
+      END ELSE BEGIN
+        EXIT(FALSE);
+      END;
+    END;
+
+    PROCEDURE SetHideDialogs@1000000003(newValue@1000000000 : Boolean);
+    BEGIN
+      //DOC NA2015.5
+      HideDialogs := TRUE;
+    END;
+
+    LOCAL PROCEDURE ShowGUI@1000000005() : Boolean;
+    BEGIN
+      //DOC NA2015.5
+      EXIT((NOT(HideDialogs)) AND (GUIALLOWED));
+    END;
+
+    LOCAL PROCEDURE ProcessInvoiceMatchingDocument@1000000008(VAR File@1000000000 : Record 9062630);
+    VAR
+      lAllObj@1000000001 : Record 2000000038;
+    BEGIN
+      //Running CODEUNIT::"Inv. Matching File Processing" if it is there
+      IF (lAllObj.GET(lAllObj."Object Type"::Codeunit, CODEUNIT::"Inv. Matching File Processing")) THEN
+        CODEUNIT.RUN(CODEUNIT::"Inv. Matching File Processing", File);
+    END;
+
+    [EventSubscriber(Codeunit,9062296,TriggerAfterInit)]
+    LOCAL PROCEDURE ImportFileFromExcelOnAfterInit@1000000006(VAR pRecordRef@1000000000 : RecordRef;VAR pUploadedFile@1000000010 : Record 9062630);
+    VAR
+      lFilterFieldIds@1000000001 : ARRAY [6] OF Integer;
+      lFilterValues@1000000002 : ARRAY [6] OF Text;
+      lFilterIdx@1000000003 : Integer;
+      lFieldRef@1000000004 : FieldRef;
+      lTableFieldBuffer@1000000005 : Record 9062231;
+      lTableFieldManagement@1000000011 : Codeunit 9062248;
+      lFieldDataType@1000000006 : Integer;
+      lConvert@1000000008 : Codeunit 9062683;
+      lFilterValue@1000000009 : Variant;
+    BEGIN
+      pUploadedFile.GetFilters(lFilterFieldIds, lFilterValues);
+      FOR lFilterIdx := 1 TO ARRAYLEN(lFilterFieldIds) DO
+        IF ((lFilterFieldIds[lFilterIdx] <> 0) AND (lFilterValues[lFilterIdx] <> '')) THEN
+          IF (pRecordRef.FIELDEXIST(lFilterFieldIds[lFilterIdx])) THEN
+          BEGIN
+            lFieldRef := pRecordRef.FIELD(lFilterFieldIds[lFilterIdx]);
+            lFieldDataType := lTableFieldManagement.FieldRefTypeToDataType(lFieldRef);
+            IF (lConvert.TryToParse(lFilterValues[lFilterIdx], lFieldDataType, lFilterValue)) THEN
+              lFieldRef.VALIDATE(lFilterValue);
+          END;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.4  PC 23/10/2014 - Added Test Only mode
+      //DOC NA2015.4  JH 19/11/2014 - Merged code from NOD & master, fixes & amendments
+      //DOC NA2015.5  AZ 27/03/2015 - "HideDialogs" functionality added
+      //DOC NA2015.8  AP 06/07/2015 - Added  ProcessInvoiceMatchingDocument() function;
+      //DOC NA2015.9  PC 17/09/2015 - Added extra params to "FAQEntry.AutoProcessEntry()" call
+      //DOC NA2016.9  AZ 09/10/2015 - Upgraded to 2016, code changes to support new file upload processing
+      //DOC NA2016.10 AP 23/10/2015 - Added incoming documents support
+      //DOC NA2016.11 JH 17/11/2015 - New version
+      //DOC NA2016.12 JH 04/01/2016 - New version
+      //DOC NA2016.12 JH 04/02/2016 - Invoice matching extracted to C9062463
+      //DOC NA2016.14 JH 14/03/2016 - Fixes
+      //DOC NA2016.15 JH 09/05/2016 - CfMD modifications
+    }
+    END.
+  }
+}
+

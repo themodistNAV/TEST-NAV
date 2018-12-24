@@ -1,0 +1,897 @@
+OBJECT Codeunit 9062270 Auto Message Email Processing
+{
+  OBJECT-PROPERTIES
+  {
+    Date=29/09/16;
+    Time=[ 3:17:51 PM];
+    Version List=NA2016.16.3;
+  }
+  PROPERTIES
+  {
+    TableNo=9062734;
+    OnRun=VAR
+            xFinalMessage@1000000000 : TextConst 'ENU=All done.;ENG=All done.';
+          BEGIN
+            ProcessEMails();
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      mNAblementSetup@1000000000 : Record 9062229;
+      TmpFileLocation@1000000003 : TextConst 'ENU=c:\temp\emailscannertmp.txt;ENG=c:\temp\emailscannertmp.txt';
+      Text00001@1000000002 : TextConst 'ENU=This folder already contains messages, are you sure you wish to use?;ENG=This folder already contains messages, are you sure you wish to use?';
+      mEMailTmp@1000000009 : TEMPORARY Record 9062281;
+      mEMailLineTmp@1000000017 : TEMPORARY Record 9062282;
+      mEMailAttachmentTmp@1000000025 : TEMPORARY Record 9062283;
+      mExchangeIntegration@1000000015 : Codeunit 9062279;
+      mImapIntegration@1000000011 : Codeunit 9062280;
+      CRLF@1000000004 : Text[2];
+      MsgMgmt@1000000005 : Codeunit 9062271;
+      mail@1000000001 : Codeunit 397;
+      countertest@1000000006 : Integer;
+      AlertNotMgmt@1000000008 : Codeunit 9062261;
+      TNLUtils@1000000010 : Codeunit 9062229;
+      Logger@1000000012 : Record 9062280;
+      SysB@1000000013 : Record 9062230;
+      EmailNot@1000000014 : Codeunit 9062261;
+      tUnknownEngine@1000000018 : TextConst 'ENU=Unknown engine: %1.;ENG=Unknown engine: %1.';
+      tEMailEngines@1000000020 : TextConst 'ENU=,Outlook,Exchange,SMTP;ENG=,Outlook,Exchange,SMTP';
+      tEMailEngineInitialised@1000000007 : TextConst 'ENU="""%1"" e-mail engine has been initialised.";ENG="""%1"" e-mail engine has been initialised."';
+      tEMailProcessed@1000000024 : TextConst 'ENU=E-mail from "%1" with subject "%2" has been processed.;ENG=E-mail from "%1" with subject "%2" has been processed.';
+      tEMailMoved@1000000019 : TextConst 'ENU=E-mail from "%1" with subject "%2" has been moved to %3.;ENG=E-mail from "%1" with subject "%2" has been moved to %3.';
+      tArchiveFolder@1000000021 : TextConst 'ENU=archive folder;ENG=archive folder';
+      tErrorFolder@1000000022 : TextConst 'ENU=error folder;ENG=error folder';
+      tEMailSaved@1000000023 : TextConst 'ENU=E-mail from "%1" with subject "%2" has been saved to "%3".;ENG=E-mail from "%1" with subject "%2" has been saved to "%3".';
+      eAUTONAV_USER@1000000027 : TextConst 'ENU=The System Behaviour "AUTONAV_USER" has not been set. This is causing a problem when the E-Mails are being processed as a File Attachments;ENG=The System Behaviour "AUTONAV_USER" has not been set. This is causing a problem when the E-Mails are being processed as a File Attachments';
+      FileSystem@1000000016 : Codeunit 9062264;
+
+    PROCEDURE "--- Main Functions ---"@1000000011();
+    BEGIN
+    END;
+
+    PROCEDURE ProcessEMails@1000000003();
+    VAR
+      TxtNotChecking@1000000000 : TextConst 'ENU=ot checking for AutoNAV e-mails as task EMAILPROCESS is not for user %1;ENG=ot checking for AutoNAV e-mails as task EMAILPROCESS is not for user %1';
+      TxtChecking@1000000001 : TextConst 'ENU=Checking for AutoNAV emails to process;ENG=Checking for AutoNAV emails to process';
+    BEGIN
+      //DOC NA2015.1 - Processing e-mails
+
+      Logger.Log('AUTOEMAIL', Logger.Type::Debug, TxtChecking, USERID);
+      COMMIT;
+      ProcessEMailsLoop();
+    END;
+
+    LOCAL PROCEDURE ProcessEMailsLoop@1000000008();
+    VAR
+      xDlgInitialising@1000000000 : TextConst 'ENU=Initialising %1 enginge...;ENG=Initialising %1 enginge...';
+      xDlgInitialised@1000000001 : TextConst 'ENU=Done. Reading e-mails...;ENG=Done. Reading e-mails...';
+      xDlgEMail@1000000006 : TextConst 'ENU=Processing e-mail no. %1...;ENG=Processing e-mail no. %1...';
+      xDlgFinished@1000000002 : TextConst 'ENU=Finished.;ENG=Finished.';
+      xFinalMessage@1000000007 : TextConst 'ENU=%1 items have been processed:\  - %2 successfully,\  - %3 with errors,\  - %4 not e-mail items.;ENG=%1 items have been processed:\  - %2 successfully,\  - %3 with errors,\  - %4 not e-mail items.';
+      lCounter@1000000003 : ARRAY [4] OF Integer;
+      lSuccess@1000000012 : Boolean;
+      lEMailItem@1000000004 : Boolean;
+      lProcessingFailedBody@1000000010 : Text[1024];
+      lIgnore@1000000005 : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Processing e-mails loop
+
+      InitialiseEngine();
+
+      CLEAR(lCounter);
+
+      WHILE (ReadItem(lCounter[1], lEMailItem, lIgnore)) DO
+      BEGIN
+        IF NOT lIgnore THEN BEGIN
+          IF (lEMailItem) THEN
+          BEGIN
+            lSuccess := ProcessEMail();
+            IF (lSuccess) THEN
+              lCounter[2] += 1
+            ELSE
+              lCounter[3] += 1;
+          END
+          ELSE
+          BEGIN
+            lSuccess := TRUE;
+            lCounter[4] += 1;
+          END;
+          MoveItem(lSuccess);
+          Logger.Log('AUTOEMAIL', Logger.Type::Information, STRSUBSTNO(tEMailProcessed, mEMailTmp."Sender E-Mail",
+            mEMailTmp.Subject), USERID());
+        END;
+      END;
+
+      FinaliseEngine();
+    END;
+
+    PROCEDURE "--- Engine-Related Functions ---"@1000000012();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE InitialiseEngine@1000000015();
+    BEGIN
+      //DOC NA2015.1 - Initialising the e-mail engine
+
+      mNAblementSetup.GET();
+      mNAblementSetup.TESTFIELD("E-Mail Engine");
+
+      CASE (mNAblementSetup."E-Mail Engine") OF
+        mNAblementSetup."E-Mail Engine"::Exchange:
+          BEGIN
+            CLEAR(mExchangeIntegration);
+            mExchangeIntegration.Initialise();
+            mExchangeIntegration.InitialiseReadingEMails();
+          END;
+        mNAblementSetup."E-Mail Engine"::IMAP:
+          BEGIN
+            CLEAR(mImapIntegration);
+            mImapIntegration.Initialise();
+            mImapIntegration.InitialiseReadingEMails();
+          END;
+        ELSE
+          ERROR(tUnknownEngine, FORMAT(mNAblementSetup."E-Mail Engine"));
+      END;
+
+      Logger.Log('AUTOEMAIL', Logger.Type::Debug, STRSUBSTNO(tEMailEngineInitialised, FORMAT(mNAblementSetup."E-Mail Engine")),
+        USERID());
+    END;
+
+    LOCAL PROCEDURE ReadItem@1000000018(VAR pItemCounter@1000000002 : Integer;VAR pEMailItem@1000000000 : Boolean;VAR pIgnore@1000000003 : Boolean) : Boolean;
+    VAR
+      lResult@1000000001 : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Reading an item from engine
+      //  <> pItemCounter: Target item counter
+      //  <> pEMailItem: TRUE = it is e-mail item, FALSE = something else
+      //  <> pIgnore: Item is not for this user, so ignore
+
+      mEMailTmp.RESET();
+      mEMailTmp.DELETEALL();
+      mEMailLineTmp.RESET();
+      mEMailLineTmp.DELETEALL();
+      mEMailAttachmentTmp.RESET();
+      mEMailAttachmentTmp.DELETEALL();
+
+      CASE (mNAblementSetup."E-Mail Engine") OF
+        mNAblementSetup."E-Mail Engine"::Exchange:
+          lResult := mExchangeIntegration.ReadItem(TRUE, TRUE, pItemCounter, pEMailItem, mEMailTmp,
+            mEMailLineTmp, mEMailAttachmentTmp, pIgnore);
+        mNAblementSetup."E-Mail Engine"::IMAP:
+          lResult := mImapIntegration.ReadItem(TRUE, TRUE, pItemCounter, pEMailItem, mEMailTmp,
+            mEMailLineTmp, mEMailAttachmentTmp);
+        ELSE
+          ERROR(tUnknownEngine, FORMAT(mNAblementSetup."E-Mail Engine"));
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE MoveItem@1000000023(pSuccess@1000000000 : Boolean);
+    VAR
+      lTargetFolder@1000000001 : Text[50];
+    BEGIN
+      //DOC NA2015.1 - Moving an item with engine
+      //  -> pSuccess: TRUE = success, FALSE = failure
+
+      CASE (mNAblementSetup."E-Mail Engine") OF
+        mNAblementSetup."E-Mail Engine"::Exchange:
+          mExchangeIntegration.MoveItem(pSuccess);
+        mNAblementSetup."E-Mail Engine"::IMAP:
+          mImapIntegration.MoveItem(pSuccess);
+        ELSE
+          ERROR(tUnknownEngine, FORMAT(mNAblementSetup."E-Mail Engine"));
+      END;
+
+      IF (pSuccess) THEN
+        lTargetFolder := tArchiveFolder
+      ELSE
+        lTargetFolder := tErrorFolder;
+      Logger.Log('AUTOEMAIL', Logger.Type::Debug, STRSUBSTNO(tEMailMoved, mEMailTmp."Sender E-Mail",
+        mEMailTmp.Subject, lTargetFolder), USERID());
+    END;
+
+    PROCEDURE SaveItem@1000000020(pPath@1000000001 : Text[1024]);
+    VAR
+      lFilePath@1000000000 : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Saving item
+      //  -> pPath: Path to save to
+
+      CASE (mNAblementSetup."E-Mail Engine") OF
+        mNAblementSetup."E-Mail Engine"::Exchange:
+          mExchangeIntegration.SaveItem(pPath);
+        mNAblementSetup."E-Mail Engine"::IMAP:
+          mImapIntegration.SaveItem(pPath);
+        ELSE
+          ERROR(tUnknownEngine, FORMAT(mNAblementSetup."E-Mail Engine"));
+      END;
+
+      Logger.Log('AUTOEMAIL', Logger.Type::Debug, STRSUBSTNO(tEMailSaved, mEMailTmp."Sender E-Mail",
+        mEMailTmp.Subject, lFilePath), USERID());
+    END;
+
+    PROCEDURE SaveItemAttachments@1000000014();
+    VAR
+      lFilePath@1000000000 : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Saving item attachments
+
+      mNAblementSetup.GET();
+      mNAblementSetup.TESTFIELD("Attachments Folder");
+
+      CASE (mNAblementSetup."E-Mail Engine") OF
+        mNAblementSetup."E-Mail Engine"::Exchange:
+          mExchangeIntegration.SaveItemAttachments(mNAblementSetup."Attachments Folder");
+        mNAblementSetup."E-Mail Engine"::IMAP:
+          mImapIntegration.SaveItemAttachments(mNAblementSetup."Attachments Folder");
+        ELSE
+          ERROR(tUnknownEngine, FORMAT(mNAblementSetup."E-Mail Engine"));
+      END;
+    END;
+
+    LOCAL PROCEDURE FinaliseEngine@1000000016();
+    BEGIN
+      //DOC NA2015.1 - Finalising the e-mail engine
+
+      CASE (mNAblementSetup."E-Mail Engine") OF
+        mNAblementSetup."E-Mail Engine"::Exchange:
+          BEGIN
+            mExchangeIntegration.FinaliseReadingEMails();
+            mExchangeIntegration.Finalise();
+            CLEAR(mExchangeIntegration);
+          END;
+        mNAblementSetup."E-Mail Engine"::IMAP:
+          BEGIN
+            mImapIntegration.FinaliseReadingEMails();
+            mImapIntegration.Finalise();
+            CLEAR(mImapIntegration);
+          END;
+        ELSE
+          ERROR(tUnknownEngine, FORMAT(mNAblementSetup."E-Mail Engine"));
+      END;
+    END;
+
+    PROCEDURE GetEMailFromBlob@1000000019(pTempBlob@1000000005 : Record 99008535;VAR pEMailTmp@1000000002 : Record 9062281;VAR pEMailLineTmp@1000000001 : Record 9062282;VAR pEMailAttachmentTmp@1000000000 : Record 9062283);
+    BEGIN
+      //DOC NA2015.1 - Getting e-mail from BLOB
+      //  -> pTempBlob: The BLOB
+      //  <> pEMailTmp: Target e-mail temporary recordset
+      //  <> pEMailLineTmp: Target e-mail line temporary recordset
+      //  <> pEMailAttachmentTmp: Target e-mail attachment temporary recordset
+
+      InitialiseEngine();
+
+      CASE (mNAblementSetup."E-Mail Engine") OF
+        mNAblementSetup."E-Mail Engine"::Exchange:
+          mExchangeIntegration.GetEMailFromBlob(pTempBlob, TRUE, FALSE, pEMailTmp, pEMailLineTmp, pEMailAttachmentTmp);
+        mNAblementSetup."E-Mail Engine"::IMAP:
+          mImapIntegration.GetEMailFromBlob(pTempBlob, TRUE, FALSE, pEMailTmp, pEMailLineTmp, pEMailAttachmentTmp);
+        ELSE
+          ERROR(tUnknownEngine, FORMAT(mNAblementSetup."E-Mail Engine"));
+      END;
+
+      FinaliseEngine();
+    END;
+
+    PROCEDURE StoreItem@1000000021() : Integer;
+    VAR
+      lEMail@1000000000 : Record 9062281;
+      lEMailLine@1000000001 : Record 9062282;
+      lEMailAttachment@1000000002 : Record 9062283;
+      lEMailEntryNo@1000000003 : Integer;
+      TxtStoredEMail@1000000004 : TextConst 'ENU=Stored Email in Entry No. %1;ENG=Stored Email in Entry No. %1';
+    BEGIN
+      //DOC NA2015.1 - Storing item (in the database)
+      //  <- Item entry no.
+
+      lEMail.RESET();
+      IF (lEMail.FINDLAST()) THEN
+        lEMailEntryNo := lEMail."Entry No." + 1
+      ELSE
+        lEMailEntryNo := 1;
+
+      CLEAR(lEMail);
+      lEMail := mEMailTmp;
+      lEMail."Entry No." := lEMailEntryNo;
+      lEMail.INSERT(TRUE);
+
+      mEMailLineTmp.RESET();
+      IF (mEMailLineTmp.FINDSET()) THEN
+      REPEAT
+        CLEAR(lEMailLine);
+        lEMailLine := mEMailLineTmp;
+        lEMailLine."E-Mail Entry No." := lEMail."Entry No.";
+        lEMailLine.INSERT(TRUE);
+      UNTIL (mEMailLineTmp.NEXT() = 0);
+
+      mEMailAttachmentTmp.RESET();
+      IF (mEMailAttachmentTmp.FINDSET()) THEN
+      REPEAT
+        CLEAR(lEMailAttachment);
+        mEMailAttachmentTmp.CALCFIELDS("Content BLOB");//DOC PC 230113
+        lEMailAttachment := mEMailAttachmentTmp;
+        lEMailAttachment."E-Mail Entry No." := lEMail."Entry No.";
+        lEMailAttachment.INSERT(TRUE);
+      UNTIL (mEMailAttachmentTmp.NEXT() = 0);
+
+      COMMIT;
+      Logger.Log('AUTOEMAIL', Logger.Type::Debug, STRSUBSTNO(TxtStoredEMail, lEMail."Entry No."), USERID);
+      EXIT(lEMail."Entry No.");
+    END;
+
+    PROCEDURE "--- Logic ---"@1000000013();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ProcessEMail@1000000000() OK : Boolean;
+    VAR
+      MsgSubject@1000000001 : Text[1024];
+      MsgType@1000000002 : Record 9062274;
+      MsgEntry@1000000003 : Record 9062278;
+      found@1000000004 : Boolean;
+      lOutlookAttachments@1000000000 : DotNet "'Microsoft.Office.Interop.Outlook, Version=14.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c'.Microsoft.Office.Interop.Outlook.Attachments";
+      lOutlookAttachment@1000000029 : DotNet "'Microsoft.Office.Interop.Outlook, Version=14.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c'.Microsoft.Office.Interop.Outlook.Attachment";
+      CustNo@1000000007 : Code[20];
+      FileAttachment@1000000008 : Record 9062272;
+      TmpFileName@1000000009 : Text[200];
+      ContNo@1000000010 : Code[20];
+      DOCS@1000000011 : Record 9062253;
+      docsFound@1000000012 : Boolean;
+      i@1000000013 : Integer;
+      RecRef@1000000014 : RecordRef;
+      FieldRef@1000000015 : FieldRef;
+      Interaction@1000000018 : Record 5065;
+      EmailAdd@1000000019 : Text[80];
+      Cont@1000000020 : Record 5050;
+      IntEntNo@1000000021 : Integer;
+      Att@1000000022 : Record 5062;
+      FAQEntry@1000000023 : Record 9062271;
+      EntryNo@1000000024 : Integer;
+      FAQ@1000000025 : Record 9062270;
+      CurrLine@1000000026 : Text[1024];
+      JetRepReq@1000000027 : Codeunit 9062287;
+      lEMailEntryNo@1000000005 : Integer;
+      mEMail@1000000017 : Record 9062281;
+      mEMailLine@1000000016 : Record 9062282;
+      mEMailAttachment@1000000006 : Record 9062283;
+      EmailEntryNo@1000000028 : Integer;
+      FAQIdentification@1000000030 : Codeunit 9062268;
+      TxtProcessingEMail@1000000031 : TextConst 'ENU=Processing e-mail "%1";ENG=Processing e-mail "%1"';
+      TxtLogEMailReceived@1000000032 : TextConst 'ENU=Log e-mail received;ENG=Log e-mail received';
+      TxtEnquiryProcessing@1000000033 : TextConst 'ENU=Gave e-mail entry %1 to Enquiry Processing Engine;ENG=Gave e-mail entry %1 to Enquiry Processing Engine';
+      TxtProcessingErrored@1000000034 : TextConst 'ENU=Jet Report processing errored for "%1": "%2";ENG=Jet Report processing errored for "%1": "%2"';
+      TxtProcessingEMailType@1000000035 : TextConst 'ENU=Processing e-mail "%1" as AutoMessage of type "%2";ENG=Processing e-mail "%1" as AutoMessage of type "%2"';
+      TxtKeywordsNotFound@1000000036 : TextConst 'ENU=Keywords not found;ENG=Keywords not found';
+      TxtProcessingWithFAQ@1000000037 : TextConst 'ENU=Processing e-mail "%1" with file attachments queue;ENG=Processing e-mail "%1" with file attachments queue';
+      TxtTriedToAttached@1000000038 : TextConst 'ENU=Tried to attach to queue "%1";ENG=Tried to attach to queue "%1"';
+      TxtUpdatedEntry@1000000039 : TextConst 'ENU=Updated FAQ Entry %1 with Email Entry ID %2;ENG=Updated FAQ Entry %1 with Email Entry ID %2';
+      TxtAskNora@1000000040 : TextConst 'ENU=Process email "%1" with Ask Nora;ENG=Process email "%1" with Ask Nora';
+      TempFilePath@1000000041 : Text;
+      DummyAutoNavTask@9062229 : Record 9062734;
+      TxtDidntFindMatchingType@1000000043 : TextConst 'ENU=Didn''t find matching type in subject "%1";ENG=Didn''t find matching type in subject "%1"';
+      TxtMatchedType@1000000042 : TextConst 'ENU=Matched type "%1" to subject "%2" at pos %3;ENG=Matched type "%1" to subject "%2" at pos %3';
+      eReport@1000000044 : TextConst 'ENU=REPORT;ENG=REPORT';
+      eEnquiry@1000000045 : TextConst 'ENU=ENQUIRY;ENG=ENQUIRY';
+      eHelp@1000000046 : TextConst 'ENU=HELP;ENG=HELP';
+      eIdentifyingNewType@1000000047 : TextConst 'ENU=Identifying new type;ENG=Identifying new type';
+      eSavedEMail@1000000048 : TextConst 'ENU=Saved e-mail to %1;ENG=Saved e-mail to %1';
+    BEGIN
+      MsgSubject := UPPERCASE(mEMailTmp.Subject);
+      Logger.Log('AUTOEMAIL', Logger.Type::Debug, STRSUBSTNO(TxtProcessingEMail, MsgSubject), USERID);
+
+      IF (STRPOS(MsgSubject,eReport) <> 0) OR (STRPOS(MsgSubject,eEnquiry) <> 0) OR (STRPOS(MsgSubject,eHelp) <> 0) THEN BEGIN
+        COMMIT;
+        found := TRUE;
+        lEMailEntryNo := StoreItem();
+        Logger.Log('AUTOEMAIL', Logger.Type::Debug, STRSUBSTNO(TxtEnquiryProcessing, lEMailEntryNo), USERID);
+        JetRepReq.SetEMail(mEMailTmp, mEMailLineTmp,lEMailEntryNo);
+        IF NOT JetRepReq.RUN(DummyAutoNavTask) THEN BEGIN
+          Logger.Log('AUTOEMAIL', Logger.Type::Error, STRSUBSTNO(TxtProcessingErrored, MsgSubject, GETLASTERRORTEXT), USERID);
+          MsgEntry.Errored := TRUE;
+          MsgEntry."Error Reason" := GETLASTERRORTEXT;
+        END;
+      END;
+
+      IF NOT found THEN BEGIN
+        MsgType.SETRANGE("Identify Keywords",TRUE);
+        IF MsgType.FINDSET THEN BEGIN
+          found := FALSE;
+          REPEAT
+            MsgType.CALCFIELDS(Keywords);
+            IF ((STRPOS(MsgSubject,MsgType.Code) <> 0)
+               AND ( STRLEN(MsgType.Code) + STRPOS(MsgSubject,MsgType.Code) - 1 = STRLEN(MsgSubject)))
+               OR
+              (STRPOS(MsgSubject,MsgType.Code + ' ') <> 0)
+              OR
+              (STRPOS(MsgSubject,MsgType.Code + ')') <> 0) THEN BEGIN
+              found := TRUE;
+            END;
+            IF found THEN BEGIN
+              Logger.Log('AUTOEMAIL', Logger.Type::Debug, STRSUBSTNO(TxtProcessingEMailType, MsgSubject, MsgType.Code), USERID);
+              MsgEntry.INIT;
+              MsgEntry."GUID No." := CREATEGUID;
+              MsgEntry."Message Type Code" := MsgType.Code;
+              IF MsgType."Keep Attachment" THEN
+                SaveItemAttachments();
+              MsgEntry."Immediate Action" := MsgType."Process Immediately";
+              MsgEntry.SenderEmail := mEMailTmp."Sender E-Mail";
+              MsgEntry."Received DateTime" := CURRENTDATETIME;
+              MsgEntry."MailItem BLOB" := mEMailTmp.Body;
+              MsgEntry.INSERT;
+              IF MsgType.Keywords > 0 THEN BEGIN
+                IF NOT FindKeywords(MsgEntry) THEN BEGIN
+                  MsgEntry.Errored := TRUE;
+                  MsgEntry."Error Reason" := TxtKeywordsNotFound;
+                  MsgEntry.MODIFY;
+                END;
+              END;
+              lEMailEntryNo := StoreItem();
+              MsgEntry.VALIDATE("E-Mail Entry No.", lEMailEntryNo);
+              MsgEntry.MODIFY(TRUE);
+            END;
+          UNTIL (MsgType.NEXT = 0) OR found;
+        END;
+      END;
+
+      IF NOT found THEN BEGIN
+          Logger.Log('AUTOMSG', Logger.Type::Debug, eIdentifyingNewType, USERID);
+          MsgType.SETRANGE("Identify Keywords",FALSE);
+          IF MsgType.FINDSET THEN BEGIN
+            found := FALSE;
+            REPEAT
+              IF STRPOS(MsgSubject,MsgType.Code) <> 0 THEN BEGIN
+                found := TRUE;
+              END;
+            UNTIL found OR (MsgType.NEXT =0);
+            END;
+
+          IF NOT found THEN BEGIN
+            Logger.Log('AUTOMSG', Logger.Type::Debug, STRSUBSTNO(TxtDidntFindMatchingType, MsgSubject), USERID);
+          END ELSE
+          BEGIN
+            MsgType.GET(MsgType.Code);
+            Logger.Log('AUTOMSG', Logger.Type::Debug, STRSUBSTNO(TxtMatchedType, MsgType.Code, MsgSubject, STRPOS(MsgSubject,MsgType.Code)), USERID);
+
+            MsgEntry.INIT;
+            MsgEntry."GUID No." := CREATEGUID;
+            MsgEntry."Message Type Code" := MsgType.Code;
+            MsgEntry."Immediate Action" := MsgType."Process Immediately";
+            MsgEntry.SenderEmail := mEMailTmp."Sender E-Mail";
+            MsgEntry.SenderName := mEMailTmp."Sender Name";
+            MsgEntry."Received DateTime" := CURRENTDATETIME;
+            MsgEntry."MailItem BLOB" := mEMailTmp.Body;
+            MsgEntry.INSERT;
+            lEMailEntryNo := StoreItem();
+            MsgEntry.VALIDATE("E-Mail Entry No.", lEMailEntryNo);
+            MsgEntry.MODIFY(TRUE);
+            found:=TRUE;
+          END;
+      END;
+
+      IF NOT found THEN BEGIN
+        Logger.Log('AUTOEMAIL', Logger.Type::Debug, STRSUBSTNO(TxtProcessingWithFAQ, MsgSubject), USERID);
+        TmpFileName := FORMAT(SESSIONID) + FORMAT(CURRENTDATETIME, 0, '<Day,2>-<Month,2>-<Year> <Hours24><Minutes,2><Seconds,2>');
+        IF mNAblementSetup."E-Mail Engine" IN [mNAblementSetup."E-Mail Engine"::Exchange, mNAblementSetup."E-Mail Engine"::IMAP] THEN
+          TmpFileName := TmpFileName + '.eml'
+        ELSE
+          TmpFileName := TmpFileName + '.msg';
+
+        TempFilePath := FileSystem.GetTempPathForFile(FALSE, TmpFileName);
+        IF FileSystem.FileExists(FALSE, TempFilePath) THEN BEGIN
+          i := 0;
+          REPEAT
+            i += 1;
+            TempFilePath := FileSystem.GetTempPathForFile(FALSE, '(' + FORMAT(i) + ') ' + TmpFileName);
+          UNTIL NOT FileSystem.FileExists(FALSE, TempFilePath);
+        END;
+        SaveItem(TempFilePath);
+        Logger.Log('AUTOEMAIL', Logger.Type::Debug, STRSUBSTNO(eSavedEMail, TempFilePath), USERID);
+
+        FAQ.GET(FAQ.GetUserDefaultQueue(SysB.GetText('AUTONAV_USER')));
+
+        IF SysB.GetText('AUTONAV_USER') = '' THEN ERROR(eAUTONAV_USER);
+
+        EntryNo := FAQ.AddEntry(TempFilePath,TmpFileName,COPYSTR(mEMailTmp.Subject,1,100),USERID,
+                    FAQ.Code,TRUE,FALSE);
+        Logger.Log('AUTOEMAIL', Logger.Type::Debug, STRSUBSTNO(TxtTriedToAttached, SysB.GetText('AUTONAV_USER')), USERID);
+        IF EntryNo > 0 THEN BEGIN
+          IF FAQEntry.GET(EntryNo) THEN BEGIN
+            lEMailEntryNo := StoreItem();
+            FAQEntry.VALIDATE("E-Mail Entry ID",lEMailEntryNo);
+            Logger.Log('AUTOEMAIL', Logger.Type::Information, STRSUBSTNO(TxtUpdatedEntry, EntryNo, lEMailEntryNo), USERID);
+            FAQIdentification.GetEmailDetails(FAQEntry);
+            FAQEntry.MODIFY(TRUE);
+            found := TRUE;
+          END;
+        END;
+
+        FileSystem.DeleteFileIfExists(FALSE, TempFilePath);
+      END;
+
+      EXIT(found);
+    END;
+
+    LOCAL PROCEDURE FindKeywords@1000000001(MsgEntry@1000000001 : Record 9062278) OK : Boolean;
+    VAR
+      TmpFile@1000000002 : File;
+      TmpFileLocation@1000000003 : TextConst 'ENU=c:\temp\blah.txt;ENG=c:\temp\blah.txt';
+      CurrLine@1000000004 : Text[1024];
+      i@1000000005 : Integer;
+      MsgTypeKeywords@1000000006 : Record 9062275;
+      MsgEntryKeywords@1000000007 : Record 9062279;
+      TmpText@1000000008 : Text[1024];
+      lFound@1000000009 : Boolean;
+      haserror@1000000010 : Boolean;
+      MsgType@1000000011 : Record 9062274;
+      wordCounter@1000000012 : Integer;
+      currWord@1000000013 : Text[1024];
+      currCharCounter@1000000014 : Integer;
+      QuotesOpened@1000000015 : Boolean;
+      cl@1000000017 : Text[100];
+      j@1000000018 : Integer;
+      crlf@1000000019 : Text[2];
+      prevChar@1000000020 : Text[1];
+      currChar@1000000021 : Text[1];
+      currKW@1000000023 : Integer;
+      RecRef@1000000024 : RecordRef;
+      FieldRef@1000000025 : FieldRef;
+      SearchIn@1000000026 : Text[1024];
+      MsgTypeKeywords2@1000000027 : Record 9062275;
+      BSTR@1000000029 : Variant;
+      MyLine@1000000028 : Text[1024];
+      GotLine@1000000030 : Boolean;
+      lFirstLineFound@1000000000 : Boolean;
+      newquotesopened@1000000016 : Boolean;
+      CurrentChar@1000000022 : Text[1];
+      AddCharToCurrWord@1000000031 : Boolean;
+      SaveCurrWordAsKeyword@1000000032 : Boolean;
+    BEGIN
+      MsgType.GET(MsgEntry."Message Type Code");
+
+      IF MsgType."Keyword Type" = MsgType."Keyword Type"::Advanced THEN BEGIN
+        MsgTypeKeywords.SETRANGE("Message Type Code", MsgEntry."Message Type Code");
+        MsgTypeKeywords.SETRANGE("Word Sequence No.", 1);
+        IF MsgTypeKeywords.FINDSET() THEN
+        REPEAT
+          CASE MsgTypeKeywords."Match To" OF
+            MsgTypeKeywords."Match To"::FieldValue:
+            BEGIN
+              mEMailLineTmp.RESET();
+              mEMailLineTmp.SETRANGE("Line Type", mEMailLineTmp."Line Type"::Body);
+              IF (mEMailLineTmp.FINDSET()) THEN
+              REPEAT
+                CurrLine := Trim(mEMailLineTmp.GetLine());
+                IF (CurrLine <> '') THEN
+                BEGIN
+                  lFound := FALSE;
+                  RecRef.OPEN(MsgTypeKeywords."Match Table ID");
+                  IF (RecRef.FINDSET()) THEN
+                  REPEAT
+                    FieldRef := RecRef.FIELD(MsgTypeKeywords."Match Field ID");
+                    IF STRPOS(CurrLine,FORMAT(FieldRef.VALUE)) <> 0 THEN BEGIN
+                      MsgEntryKeywords.INIT;
+                      MsgEntryKeywords."GUID No." := MsgEntry."GUID No.";
+                      MsgEntryKeywords."Keyword Code" := MsgTypeKeywords.Keyword;
+                      MsgEntryKeywords.Value := FORMAT(FieldRef.VALUE);
+                      MsgEntryKeywords.INSERT;
+                      lFound := TRUE;
+                    END;
+                  UNTIL ((lFound) OR (RecRef.NEXT() = 0));
+                END;
+              UNTIL (mEMailLineTmp.NEXT() = 0);
+              mEMailLineTmp.RESET();
+            END;
+          END;
+        UNTIL (MsgTypeKeywords.NEXT() = 0);
+        EXIT(TRUE);
+      END;
+
+      MsgType.CALCFIELDS("Max Keyword Seq. No.");
+      IF MsgType."Max Keyword Seq. No." > 0 THEN BEGIN
+        wordCounter := 1;
+        currCharCounter := 1;
+        currWord := '';
+        countertest := 0;
+        lFirstLineFound := FALSE;
+        mEMailLineTmp.RESET();
+        mEMailLineTmp.SETRANGE("Line Type", mEMailLineTmp."Line Type"::Body);
+        mEMailLineTmp.SETFILTER("Line (Part 1)", '<>''''');
+        IF (mEMailLineTmp.FINDFIRST()) THEN
+        REPEAT
+          CurrLine := Trim(mEMailLineTmp.GetLine());
+          IF (CurrLine <> '') THEN
+          BEGIN
+            lFirstLineFound := TRUE;
+            REPEAT
+              AddCharToCurrWord := FALSE;
+              SaveCurrWordAsKeyword := FALSE;
+
+              CurrentChar := COPYSTR(CurrLine,currCharCounter,1);
+              CASE CurrentChar OF
+                '(' :
+                  BEGIN
+                    IF QuotesOpened THEN BEGIN
+                      AddCharToCurrWord := TRUE;
+                      SaveCurrWordAsKeyword := FALSE;
+                    END ELSE BEGIN
+                      QuotesOpened := TRUE;
+                      AddCharToCurrWord := FALSE;
+                      SaveCurrWordAsKeyword := FALSE;
+                    END;
+                  END;
+                ')' :
+                  BEGIN
+                    IF QuotesOpened THEN BEGIN
+                      QuotesOpened := FALSE;
+                      AddCharToCurrWord := FALSE;
+                      SaveCurrWordAsKeyword := TRUE;
+                    END ELSE BEGIN
+                      AddCharToCurrWord := TRUE;
+                      SaveCurrWordAsKeyword := FALSE;
+                    END;
+                  END;
+                ' ' :
+                  BEGIN
+                    IF QuotesOpened THEN BEGIN
+                      AddCharToCurrWord := TRUE;
+                      SaveCurrWordAsKeyword := FALSE;
+                    END ELSE BEGIN
+                      AddCharToCurrWord := FALSE;
+                      SaveCurrWordAsKeyword := TRUE;
+                    END;
+                  END;
+                ELSE BEGIN //Any other character
+                  AddCharToCurrWord := TRUE;
+                  SaveCurrWordAsKeyword := FALSE;
+                END;
+              END;
+
+              IF currCharCounter = STRLEN(CurrLine) THEN BEGIN
+                SaveCurrWordAsKeyword := TRUE;
+              END;
+
+              IF AddCharToCurrWord THEN BEGIN
+                currWord := currWord + CurrentChar;
+              END;
+
+              IF currWord = '' THEN BEGIN
+                SaveCurrWordAsKeyword := FALSE;
+              END;
+
+              IF SaveCurrWordAsKeyword THEN BEGIN
+                MsgTypeKeywords.SETFILTER("Message Type Code",MsgEntry."Message Type Code");
+                MsgTypeKeywords.SETFILTER(MsgTypeKeywords."Word Sequence No.",'%1',wordCounter);
+                IF MsgTypeKeywords.FINDFIRST THEN BEGIN
+                  MsgEntryKeywords.INIT;
+                  MsgEntryKeywords."GUID No." := MsgEntry."GUID No.";
+                  MsgEntryKeywords."Keyword Code" := MsgTypeKeywords.Keyword;
+                  MsgEntryKeywords.Value := COPYSTR(currWord, 1, MAXSTRLEN(MsgEntryKeywords.Value));
+                  MsgEntryKeywords.INSERT;
+                END;
+
+                wordCounter := wordCounter + 1;
+                currWord := '';
+              END;
+              currCharCounter := currCharCounter + 1;
+            UNTIL (countertest >= 100) OR ( currCharCounter -1 = STRLEN(CurrLine));
+          END;
+        UNTIL ((mEMailLineTmp.NEXT() = 0) OR (lFirstLineFound));
+      END;
+
+      IF currWord <> '' THEN BEGIN
+        MsgTypeKeywords.SETFILTER("Message Type Code",MsgEntry."Message Type Code");
+        MsgTypeKeywords.SETFILTER(MsgTypeKeywords."Word Sequence No.",'%1',wordCounter);
+        IF MsgTypeKeywords.FINDFIRST THEN BEGIN
+          MsgEntryKeywords.INIT;
+          MsgEntryKeywords."GUID No." := MsgEntry."GUID No.";
+          MsgEntryKeywords."Keyword Code" := MsgTypeKeywords.Keyword;
+          MsgEntryKeywords.Value := COPYSTR(currWord, 1, MAXSTRLEN(MsgEntryKeywords.Value));
+          MsgEntryKeywords.INSERT;
+        END;
+      END;
+
+      MsgTypeKeywords.SETRANGE("Message Type Code", MsgEntry."Message Type Code");
+      MsgTypeKeywords.SETRANGE("Word Sequence No.", 0);
+      IF MsgTypeKeywords.FINDSET THEN BEGIN
+        REPEAT
+          lFound := FALSE;
+          mEMailLineTmp.RESET();
+          mEMailLineTmp.SETRANGE("Line Type", mEMailLineTmp."Line Type"::Body);
+          IF (mEMailLineTmp.FINDSET()) THEN
+          BEGIN
+            REPEAT
+              CurrLine := Trim(mEMailLineTmp.GetLine());
+              QuotesOpened := FALSE;
+              IF STRPOS(UPPERCASE(CurrLine),'#' + MsgTypeKeywords.Keyword + ' ') <> 0 THEN BEGIN
+                MsgEntryKeywords.INIT;
+                MsgEntryKeywords."GUID No." := MsgEntry."GUID No.";
+                MsgEntryKeywords."Keyword Code" := MsgTypeKeywords.Keyword;
+                TmpText := '';
+                i := STRPOS(UPPERCASE(CurrLine),'#' + MsgTypeKeywords.Keyword + ' ') +
+                    STRLEN('#' + MsgTypeKeywords.Keyword + ' ');
+                REPEAT
+                  IF (COPYSTR(CurrLine,i,1) = ' ') AND NOT QuotesOpened THEN BEGIN
+                    i := STRLEN(CurrLine)
+                  END ELSE BEGIN
+                    IF NOT QuotesOpened THEN BEGIN
+                      IF COPYSTR(CurrLine,i,1) = '(' THEN
+                        QuotesOpened := TRUE
+                      ELSE
+                        TmpText := TmpText + COPYSTR(CurrLine,i,1);
+                    END ELSE BEGIN
+                      IF COPYSTR(CurrLine,i,1) = ')' THEN
+                        QuotesOpened := FALSE
+                      ELSE
+                        TmpText := TmpText + COPYSTR(CurrLine,i,1);
+                    END;
+                  END;
+                  i := i + 1;
+                UNTIL i -1 = STRLEN(CurrLine);
+                IF STRLEN(TmpText) <> 0 THEN BEGIN
+                  MsgEntryKeywords.Value := TmpText;
+                  MsgEntryKeywords.INSERT;
+                  lFound := TRUE;
+                END;
+              END;
+            UNTIL (mEMailLineTmp.NEXT() = 0);
+          END;
+          IF NOT lFound THEN BEGIN
+            IF MsgTypeKeywords.Required THEN BEGIN
+              haserror := TRUE;
+            END;
+          END;
+        UNTIL (MsgTypeKeywords.NEXT = 0);
+      END;
+
+      IF haserror THEN HandleError(MsgEntry);
+      EXIT (NOT haserror);
+    END;
+
+    LOCAL PROCEDURE HandleError@1000000002(MsgEntry@1000000000 : Record 9062278);
+    VAR
+      ReplyBody@1000000003 : BigText;
+      MsgTypeKeywords@1000000004 : Record 9062275;
+      ReplyRecip@1000000002 : Text[250];
+      CurrLine@1000000006 : Text[1024];
+      TxtError@1000000001 : TextConst 'ENU=There was an error processing this email. Please respond with the following keywords:;ENG=There was an error processing this email. Please respond with the following keywords:';
+      TxtOptional@1000000009 : TextConst 'ENU=(Optional);ENG=(Optional)';
+      TxtOriginalMesssage@1000000007 : TextConst 'ENU=----- Original Message -----;ENG=----- Original Message -----';
+      TxtRe@1000000008 : TextConst 'ENU=Re: %1;ENG=Re: %1';
+    BEGIN
+      EXIT;
+      CRLF := '';
+      CRLF[1] := 13;
+      CRLF[2] := 10;
+
+      mail.AddBodyline(TxtError);
+      MsgTypeKeywords.SETRANGE("Message Type Code",MsgEntry."Message Type Code");
+      IF MsgTypeKeywords.FINDSET THEN BEGIN
+        REPEAT
+          mail.AddBodyline(CRLF + '   #' + MsgTypeKeywords.Keyword);
+          IF NOT MsgTypeKeywords.Required THEN
+            mail.AddBodyline(' ' + TxtOptional);
+        UNTIL MsgTypeKeywords.NEXT = 0;
+      END;
+      mail.AddBodyline(CRLF + CRLF + CRLF + TxtOriginalMesssage + CRLF);
+      mEMailLineTmp.RESET();
+      mEMailLineTmp.SETRANGE("Line Type", mEMailLineTmp."Line Type"::Body);
+      IF (mEMailLineTmp.FINDSET()) THEN
+        REPEAT
+          CurrLine := mEMailLineTmp.GetLine();
+          mail.AddBodyline(CurrLine + CRLF);
+        UNTIL (mEMailLineTmp.NEXT() = 0);
+      mail.NewMessage(MsgEntry.SenderEmail, '', '', STRSUBSTNO(TxtRe, mEMailTmp.Subject), '', '', FALSE);
+
+      MsgEntry.Errored := TRUE;
+      MsgEntry.MODIFY;
+    END;
+
+    PROCEDURE GetMsgBodyLine@1000000004(TxtFilePath@1000000000 : Text[1024];LineNo@1000000002 : Integer;VAR BodyLine@1000000001 : Text[1024]) : Boolean;
+    VAR
+      lLineFound@1000000003 : Boolean;
+    BEGIN
+      mEMailLineTmp.RESET();
+      mEMailLineTmp.SETRANGE("Line Type", mEMailLineTmp."Line Type"::Body);
+      mEMailLineTmp.SETRANGE("Line No.", LineNo);
+      IF (mEMailLineTmp.FINDFIRST()) THEN
+      BEGIN
+        BodyLine := mEMailLineTmp.GetLine();
+        lLineFound := TRUE;
+      END;
+      EXIT(lLineFound);
+    END;
+
+    PROCEDURE "--- Tools ---"@1000000005();
+    BEGIN
+    END;
+
+    PROCEDURE GetFolderId@1000000009(VAR pFolderId@1000000006 : Text[92];VAR pFolderName@1000000005 : Text[250]) Done : Boolean;
+    VAR
+      lResult@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Returning folder ID (and name)
+      //  <> pFolderId: Target folder ID
+      //  <> pFolderName: Target folder name
+      //  <- Result
+
+      mNAblementSetup.GET();
+      mNAblementSetup.TESTFIELD("E-Mail Engine");
+
+      CASE (mNAblementSetup."E-Mail Engine") OF
+        mNAblementSetup."E-Mail Engine"::Exchange:
+          BEGIN
+            CLEAR(mExchangeIntegration);
+            mExchangeIntegration.Initialise();
+            lResult := mExchangeIntegration.GetFolderId(pFolderId, pFolderName);
+            mExchangeIntegration.Finalise();
+            CLEAR(mExchangeIntegration);
+          END;
+        mNAblementSetup."E-Mail Engine"::IMAP:
+          BEGIN
+            CLEAR(mImapIntegration);
+            mImapIntegration.Initialise();
+            lResult := mImapIntegration.GetFolderId(pFolderId, pFolderName);
+            mImapIntegration.Finalise();
+            CLEAR(mImapIntegration);
+          END;
+        ELSE
+          ERROR(tUnknownEngine, FORMAT(mNAblementSetup."E-Mail Engine"));
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE Trim@1000000010(pString@1000000000 : Text[1024]) : Text[1024];
+    VAR
+      lChars@1000000001 : Text[3];
+    BEGIN
+      //DOC NA2015.1 - Trimming the passed string from leading and trailing whitespace
+      //  -> pString: The string
+      //  <- Trimmed string
+
+      lChars := PADSTR('', 3, ' ');
+      lChars[1] := ' '; //space
+      lChars[2] := 160; //non-breaking space
+      lChars[3] := 9; //tab
+
+      pString := DELCHR(pString, '<>', lChars);
+
+      EXIT(pString);
+    END;
+
+    PROCEDURE GetEmailFromOutlookAddress@1000000017(VAR Address@1000000001 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{0006304B-0000-0000-C000-000000000046}:Unknown Automation Server.AddressEntry") EmailAdd : Text[250];
+    VAR
+      exchangeuser@1000000000 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{000610C9-0000-0000-C000-000000000046}:Unknown Automation Server.ExchangeUser";
+    BEGIN
+      IF Address.Type = 'EX' THEN BEGIN
+        exchangeuser := Address.GetExchangeUser;
+        EXIT(LOWERCASE(exchangeuser.PrimarySmtpAddress));
+      END ELSE
+        EXIT(LOWERCASE(Address.Address));
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  PC 24/02/2012 - Changed EmailNot.InsertNewMessage calls to include DOCS Entry ID
+      //DOC NA2015.1  JH 10/08/2012 - Migrated to 2013, Outlook integration changed to DotNet
+      //DOC NA2015.1  JH 30/08/2013 - IMAP fixes
+      //DOC NA2015.1  PC 25/03/2014 - Removed reliance on AutoNAV Tasks
+      //DOC NA2015.4  PC 10/10/2014 - Added option to Ignore emails which aren't for this user
+      //DOC NA2015.4  JH 03/11/2014 - Upgraded to 2015
+      //DOC NA2015.4  PC 09/12/2014 - Fix to Identify Keywords function to split words on open parenthesis
+      //DOC NA2015.4  JH 28/12/2014 - System behaviours renamed
+      //DOC NA2015.6  PC 01/04/2015 - Change to Identify Keywords function to fix bug in handling of parenthesis
+      //DOC NA2016.10 JH 26/08/2015 - Upgraded to 2016
+      //DOC NA2016.14 BM 02/03/2016 - File identification changed
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+      //DOC NA2016.15 JH 21/04/2016 - Bugfixes
+      //DOC NA2016.15 JH 09/05/2016 - CfMD modifications
+      //DOC NA2016.16.3 JH 29/09/2016 - CurrWord value trimmed to 250 characters for message
+    }
+    END.
+  }
+}
+

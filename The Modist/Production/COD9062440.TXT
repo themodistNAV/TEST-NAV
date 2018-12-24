@@ -1,0 +1,148 @@
+OBJECT Codeunit 9062440 Ask nOra - Web Service
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AskNoraConvMgt@1000000000 : Codeunit 9062400;
+
+    PROCEDURE asknOra@1000000001(YourSentence@1000000000 : Text;"No. Historical Entries"@1000000001 : Integer;VAR EntriesXML@1000000002 : Text;ResetConversation@1000000011 : Boolean);
+    VAR
+      ConvEntryXMLPort@1000000003 : XMLport 9062276;
+      TempBLOB@1000000004 : TEMPORARY Record 99008535;
+      OutStr@1000000005 : OutStream;
+      mBlobToolkit@1000000006 : Codeunit 9062242;
+      ANConversation@1000000007 : Record 9062522;
+      ConvID@1000000009 : Integer;
+      CurrConvEntryNo@1000000010 : Integer;
+      Conversation@1000000008 : Record 9062522;
+    BEGIN
+      sendNoraMessage(YourSentence, 0, "No. Historical Entries", EntriesXML, ResetConversation);
+    END;
+
+    PROCEDURE getUserImage@1000000000() : Text;
+    VAR
+      nAblementUser@1000000000 : Record 9062729;
+      Contact@1000000006 : Record 5050;
+      MemoryStream@1000000003 : DotNet "'mscorlib'.System.IO.MemoryStream";
+      Bytes@1000000004 : DotNet "'mscorlib'.System.Array";
+      Convert@1000000005 : DotNet "'mscorlib'.System.Convert";
+      RetVal@1000000001 : Text;
+      InStr@1000000002 : InStream;
+    BEGIN
+      IF (NOT(nAblementUser.GET(USERID))) THEN
+        EXIT('');
+
+      IF (nAblementUser."Contact No." = '') THEN
+        EXIT('');
+
+      IF (NOT(Contact.GET(nAblementUser."Contact No."))) THEN
+        EXIT('');
+
+      Contact.CALCFIELDS(Picture);
+      Contact.Picture.CREATEINSTREAM(InStr);
+
+      MemoryStream := MemoryStream.MemoryStream();
+      COPYSTREAM(MemoryStream, InStr);
+      Bytes := MemoryStream.GetBuffer();
+      RetVal := Convert.ToBase64String(Bytes);
+      EXIT(RetVal);
+    END;
+
+    PROCEDURE uploadFilePart@1000000002(msgType@1000000001 : 'File,FileStart,FileEnd,FilePart';fileIndex@1000000002 : Integer;filePos@1000000003 : Integer;lastFile@1000000004 : Boolean;uploadedFileId@1000000000 : Integer;fileName@1000000005 : Text;fileData@1000000006 : Text;VAR messagesXml@1000000009 : Text) : Integer;
+    VAR
+      UploadedFile@1000000007 : Record 9062630;
+      FileUploadMgt@1000000011 : Codeunit 9062486;
+      UploadedFileFound@1000000008 : Boolean;
+      FileUploaded@1000000010 : Boolean;
+      CreateNewFile@1000000012 : Boolean;
+    BEGIN
+      //DOC NA2015.4
+
+      messagesXml := '';
+      FileUploaded := (msgType IN [msgType::File, msgType::FileEnd]);
+      CreateNewFile := (msgType IN [msgType::File, msgType::FileStart]);
+
+      //find uploaded file entry
+      UploadedFileFound := FALSE;
+      IF (uploadedFileId <> 0) THEN
+        IF (UploadedFile.GET(uploadedFileId)) THEN
+          UploadedFileFound := (UploadedFile."User Id" = USERID);
+
+      IF (NOT(UploadedFileFound)) THEN BEGIN
+        UploadedFile.INIT();
+        UploadedFile."Entry No." := 0;
+        CreateNewFile := TRUE;
+      END;
+
+      //upload file part
+      FileUploadMgt.UploadFilePart(UploadedFile, '', CreateNewFile, fileName, fileData);
+
+      //send message to nora
+      IF (FileUploaded) THEN
+        sendNoraMessage('', UploadedFile."Entry No.", 0, messagesXml, FALSE);
+
+      //return uploaded file id
+      EXIT(UploadedFile."Entry No.");
+    END;
+
+    LOCAL PROCEDURE sendNoraMessage@1000000003(MessageText@1000000000 : Text;UploadedFileId@1000000012 : Integer;"No. Historical Entries"@1000000001 : Integer;VAR EntriesXML@1000000002 : Text;ResetConversation@1000000011 : Boolean);
+    VAR
+      ConvEntryXMLPort@1000000003 : XMLport 9062276;
+      TempBLOB@1000000004 : TEMPORARY Record 99008535;
+      OutStr@1000000005 : OutStream;
+      mBlobToolkit@1000000006 : Codeunit 9062242;
+      ANConversation@1000000007 : Record 9062522;
+      ConvID@1000000009 : Integer;
+      CurrConvEntryNo@1000000010 : Integer;
+      Conversation@1000000008 : Record 9062522;
+    BEGIN
+      //DOC NA2015.4
+
+      AskNoraConvMgt.GetConversation(USERID,ANConversation);
+      ConvID := ANConversation.ID;
+      ANConversation.CALCFIELDS("Max. Entry No.");
+      CurrConvEntryNo := ANConversation."Max. Entry No.";
+
+      CLEAR(TempBLOB);
+      TempBLOB.Blob.CREATEOUTSTREAM(OutStr);
+
+      ConvEntryXMLPort.SetParams(ConvID,"No. Historical Entries",ANConversation."Max. Entry No.");
+
+      IF ResetConversation THEN BEGIN
+        Conversation.GET(AskNoraConvMgt.GetConversation(USERID,Conversation));
+        AskNoraConvMgt.ResetConversation(Conversation);
+      END;
+
+      IF (UploadedFileId = 0) THEN
+        AskNoraConvMgt.AsknOra(MessageText)
+      ELSE
+        AskNoraConvMgt.UploadFileTonOra(MessageText, UploadedFileId);
+      COMMIT;
+
+      ConvEntryXMLPort.SETDESTINATION(OutStr);
+      ConvEntryXMLPort.EXPORT();
+      EntriesXML := mBlobToolkit.BlobToText(TempBLOB);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.4  AZ 09/02/2015 - File Upload functionality added
+      //DOC NA2016.10 JH 28/08/2015 - Upgraded to 2016
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

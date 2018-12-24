@@ -1,0 +1,184 @@
+OBJECT Codeunit 9062687 Http File Download Mgt
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EnablementSetup@1000000001 : Record 9062229;
+      EnablementSetupLoaded@1000000000 : Boolean;
+      errDownloadError@1000000002 : TextConst 'ENU=File download failed with this error message: %2.;ENG=File download failed with this error message: %2.';
+      HttpUtility@1000000003 : DotNet "'System.Web, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Web.HttpUtility";
+
+    LOCAL PROCEDURE "-- Content Server File Download --"@1000000005();
+    BEGIN
+    END;
+
+    [TryFunction]
+    PROCEDURE GetFileList@1000000006(Url@1000000000 : Text;VAR ContentServerFile@1000000001 : Record 9062823);
+    VAR
+      TempBlob@1000000002 : TEMPORARY Record 99008535;
+      ImportFileList@1000000004 : XMLport 9062394;
+      InputStream@1000000003 : InStream;
+    BEGIN
+      //if there is no file name, download list from filelist.xml file
+      IF (Url <> '') THEN
+        IF (Url[STRLEN(Url)] = '/') THEN
+          Url := Url + 'filelist.xml';
+      //download file list
+      DownloadToBlob(Url, TempBlob);
+      TempBlob.Blob.CREATEINSTREAM(InputStream);
+      ImportFileList.SETSOURCE(InputStream);
+      ImportFileList.IMPORT();
+      ImportFileList.GetFileList(ContentServerFile);
+    END;
+
+    LOCAL PROCEDURE "-- File Download and Import --"@1000000001();
+    BEGIN
+    END;
+
+    [TryFunction]
+    PROCEDURE ImportXml@1000000008(Url@1000000000 : Text;XmlPortId@1000000001 : Integer);
+    VAR
+      TempBlob@1000000002 : TEMPORARY Record 99008535;
+      InputStream@1000000003 : InStream;
+      OutputStream@1000000004 : OutStream;
+    BEGIN
+      TempBlob.Blob.CREATEOUTSTREAM(OutputStream);
+      DownloadToStream(Url, OutputStream);
+      TempBlob.Blob.CREATEINSTREAM(InputStream);
+      XMLPORT.IMPORT(XmlPortId, InputStream);
+    END;
+
+    [TryFunction]
+    PROCEDURE DownloadToFile@1000000002(Url@1000000000 : Text;VAR TempFileName@1000000001 : Text);
+    VAR
+      FileMgt@1000000002 : Codeunit 419;
+      File@1000000003 : File;
+      OutputStream@1000000004 : OutStream;
+      Success@1000000005 : Boolean;
+    BEGIN
+      TempFileName := FileMgt.ServerTempFileName('');
+      File.CREATE(TempFileName);
+      File.CREATEOUTSTREAM(OutputStream);
+      Success := DownloadToStream(Url, OutputStream);
+      File.CLOSE();
+      IF (NOT(Success)) THEN
+        CheckLastDownloadError(Url);
+    END;
+
+    [TryFunction]
+    PROCEDURE DownloadToBlob@1000000003(Url@1000000000 : Text;VAR TempBlob@1000000001 : Record 99008535);
+    VAR
+      OutputStream@1000000002 : OutStream;
+    BEGIN
+      TempBlob.Blob.CREATEOUTSTREAM(OutputStream);
+      IF (NOT(DownloadToStream(Url, OutputStream))) THEN
+        CheckLastDownloadError(Url);
+    END;
+
+    [TryFunction]
+    PROCEDURE DownloadToStream@1000000004(Url@1000000000 : Text;VAR OutputStream@1000000001 : OutStream);
+    VAR
+      HttpWebRequest@1000000003 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      HttpWebResponse@1000000002 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+      Stream@1000000004 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Stream";
+      String@1000000005 : Codeunit 9062236;
+    BEGIN
+      Url := ValidateUrl(Url);
+      HttpWebRequest := HttpWebRequest.Create(Url);
+      HttpWebResponse := HttpWebRequest.GetResponse();
+      Stream := HttpWebResponse.GetResponseStream();
+      COPYSTREAM(OutputStream, Stream);
+      Stream.Close();
+      Stream.Dispose();
+      HttpWebResponse.Dispose();
+    END;
+
+    LOCAL PROCEDURE "-- Url Helper Functions --"@1000000009();
+    BEGIN
+    END;
+
+    PROCEDURE UrlEncode@1000000010(Value@1000000000 : Text) : Text;
+    VAR
+      HttpWebRequest@1000000001 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+    BEGIN
+      EXIT(HttpUtility.UrlEncode(Value));
+    END;
+
+    PROCEDURE UrlDecode@1000000012(Value@1000000000 : Text) : Text;
+    VAR
+      HttpWebRequest@1000000001 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+    BEGIN
+      EXIT(HttpUtility.UrlDecode(Value));
+    END;
+
+    LOCAL PROCEDURE "-- Helper Functions --"@1000000013();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ValidateUrl@1000000014(Url@1000000000 : Text) : Text;
+    VAR
+      LCaseUrl@1000000001 : Text;
+      ServerUrl@1000000002 : Text;
+    BEGIN
+      //function checks url and if it does not start with http:// or https://
+      //we assume that it is path to nav content server
+
+      IF (Url = '') THEN
+        EXIT(Url);
+
+      LCaseUrl := LOWERCASE(Url);
+      IF ((STRPOS(LCaseUrl, 'http://') = 1) OR (STRPOS(LCaseUrl, 'https://') = 1)) THEN
+        EXIT(Url);
+
+      GetEnablementSetup();
+
+      ServerUrl := EnablementSetup.GetContentServerUrl();
+      IF (ServerUrl <> '') THEN BEGIN
+        IF (ServerUrl[STRLEN(ServerUrl)] = '/') THEN
+          ServerUrl := COPYSTR(ServerUrl, 1, STRLEN(ServerUrl) - 1);
+        IF (Url[1] <> '/') THEN
+          Url := '/' + Url;
+        EXIT(ServerUrl + Url)
+      END;
+      EXIT(Url);
+    END;
+
+    LOCAL PROCEDURE GetEnablementSetup@1000000000();
+    BEGIN
+      IF (NOT(EnablementSetupLoaded)) THEN BEGIN
+        EnablementSetup.GET();
+        EnablementSetupLoaded := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckLastDownloadError@1000000007(Url@1000000001 : Text);
+    VAR
+      Exception@1000000000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Exception";
+    BEGIN
+      Exception := GETLASTERROROBJECT;
+      IF (ISNULL(Exception)) THEN
+        ERROR(errDownloadError, Url, GETLASTERRORTEXT);
+      ERROR(errDownloadError, Url, Exception.Message);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.14 AZ 04/02/2016 - Created
+      //DOC NA2016.15 JH 09/05/2016 - CfMD modifications
+    }
+    END.
+  }
+}
+

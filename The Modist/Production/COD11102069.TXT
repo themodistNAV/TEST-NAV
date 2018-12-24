@@ -1,0 +1,187 @@
+OBJECT Codeunit 11102069 OM - Repository FS
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12/10/14;
+    Time=12:00:00 PM;
+    Version List=OMA9.04;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            TmpFileRec@1000 : TEMPORARY Record 11102094;
+            FileHandler@1001 : Codeunit 11102097;
+            ctConnectionFailed@1002 : TextConst 'DEU=The repository token cannot be found.;ENU=The repository token cannot be found.;ESP=The repository token cannot be found.;FRA=The repository token cannot be found.;NLD=Het repository token kan niet worden gevonden.;DEA=The repository token cannot be found.';
+            ctPathNotFound@1003 : TextConst 'DEU=Path ''%1'' not found.;ENU=Path ''%1'' not found.;ESP=Path ''%1'' not found.;FRA=Path ''%1'' not found.;NLD=Map ''%1'' niet gevonden.;DEA=Path ''%1'' not found.';
+            ctTokenInvalid@1004 : TextConst 'DEU=The token is invalid.;ENU=The token is invalid.;ESP=The token is invalid.;FRA=The token is invalid.;NLD=Het token is niet geldig.;DEA=The token is invalid.';
+          BEGIN
+            LastTokenNo := -1;
+
+            GetSetup;
+
+            IF NOT FileHandler.ClientDirectoryExists(RepositoryPath) THEN
+              ERROR(ctPathNotFound, RepositoryPath);
+
+            FileHandler.GetClientDirectoryContent(TmpFileRec, RepositoryPath);
+            TmpFileRec.SETFILTER(Name, 'TOKEN*');
+            IF NOT TmpFileRec.FINDFIRST THEN
+              ERROR(ctConnectionFailed);
+
+            IF NOT EVALUATE(LastTokenNo, COPYSTR(TmpFileRec.Name, 7)) THEN
+              ERROR(ctTokenInvalid);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      RepositorySetup@1000 : Record 11102085;
+      RepositoryPath@1001 : Text;
+      LastTokenNo@1002 : Integer;
+
+    PROCEDURE CheckCreateDirectory@1(DirectoryName@1000 : Text);
+    VAR
+      FileHandler@1001 : Codeunit 11102097;
+    BEGIN
+      GetSetup;
+      FileHandler.CheckCreateClientDirectory(RepositoryPath + DirectoryName);
+    END;
+
+    PROCEDURE FileExists@2(Path@1000 : Text;FileName@1001 : Text) : Boolean;
+    VAR
+      FileHandler@1002 : Codeunit 11102097;
+    BEGIN
+      GetSetup;
+      EXIT(FileHandler.ClientFileNameExists(RepositoryPath + Path + FileName));
+    END;
+
+    PROCEDURE FileOpen@3(VAR oFile@1000 : File;Path@1001 : Text;FileName@1002 : Text);
+    BEGIN
+      GetSetup;
+      oFile.OPEN(RepositoryPath + Path + FileName);
+    END;
+
+    PROCEDURE FileSave@4(FromFileName@1000 : Text;ToPath@1001 : Text;ToFileName@1002 : Text);
+    BEGIN
+      GetSetup;
+      IF EXISTS(RepositoryPath + ToPath + ToFileName) THEN BEGIN
+        DeleteReadOnlyAttribute(RepositoryPath + ToPath + ToFileName);
+        ERASE(RepositoryPath + ToPath + ToFileName);
+      END;
+
+      RENAME(FromFileName, RepositoryPath + ToPath + ToFileName);
+    END;
+
+    PROCEDURE FileErase@5(Path@1000 : Text;FileName@1001 : Text);
+    BEGIN
+      GetSetup;
+
+      DeleteReadOnlyAttribute(RepositoryPath + Path + FileName);
+      ERASE(RepositoryPath + Path + FileName);
+    END;
+
+    PROCEDURE FileRename@6(FromPath@1000 : Text;FromFileName@1001 : Text;ToPath@1002 : Text;ToFileName@1003 : Text);
+    BEGIN
+      GetSetup;
+      FILE.RENAME(RepositoryPath + FromPath + FromFileName, RepositoryPath + ToPath + ToFileName);
+    END;
+
+    PROCEDURE FileLock@7(Path@1000 : Text;FileName@1001 : Text);
+    VAR
+      Mgt@1002 : Codeunit 11102035;
+      oFile@1003 : File;
+    BEGIN
+      GetSetup;
+
+      oFile.TEXTMODE(TRUE);
+      oFile.CREATE(RepositoryPath + 'Locks\' + FileName);
+      oFile.WRITE(Mgt.ShortUserId);
+      oFile.WRITE(FORMAT(CURRENTDATETIME, 0, '<Year4>-<Month,2>-<Day,2> <Hours,2>:<Minutes,2>:<Seconds,2>'));
+      oFile.CLOSE;
+    END;
+
+    PROCEDURE FileUnlock@8(Path@1000 : Text;FileName@1001 : Text);
+    BEGIN
+      GetSetup;
+      IF EXISTS(RepositoryPath + 'Locks\' + FileName) THEN BEGIN
+        DeleteReadOnlyAttribute(RepositoryPath + 'Locks\' + FileName);
+        ERASE(RepositoryPath + 'Locks\' + FileName);
+      END;
+    END;
+
+    PROCEDURE FileIsLocked@9(Path@1000 : Text;FileName@1001 : Text) ExitValue : Boolean;
+    BEGIN
+      GetSetup;
+      EXIT(EXISTS(RepositoryPath + 'Locks\' + FileName));
+    END;
+
+    PROCEDURE FileLockedBy@10(Path@1000 : Text;FileName@1001 : Text;VAR LockedBy@1002 : Text[1024];VAR LockDate@1003 : Date;VAR LockTime@1004 : Time);
+    VAR
+      oFile@1005 : File;
+      DateTimeText@1006 : Text[1024];
+      Day@1007 : Integer;
+      Month@1008 : Integer;
+      Year@1009 : Integer;
+    BEGIN
+      GetSetup;
+      oFile.TEXTMODE(TRUE);
+      oFile.OPEN(RepositoryPath + 'Locks\' + FileName);
+      oFile.READ(LockedBy);
+      oFile.READ(DateTimeText);
+
+      EVALUATE(Year, COPYSTR(DateTimeText, 1, 4));
+      EVALUATE(Month, COPYSTR(DateTimeText, 6, 2));
+      EVALUATE(Day, COPYSTR(DateTimeText, 9, 2));
+      LockDate := DMY2DATE(Day, Month, Year);
+
+      EVALUATE(LockTime, COPYSTR(DateTimeText, 12));
+
+      oFile.CLOSE;
+    END;
+
+    PROCEDURE FillFileRec@11(VAR TmpFileRec@1000 : TEMPORARY Record 11102094;Path@1001 : Text);
+    VAR
+      FileHandler@1002 : Codeunit 11102097;
+    BEGIN
+      GetSetup;
+
+      FileHandler.GetClientDirectoryContent(TmpFileRec, RepositoryPath + Path);
+    END;
+
+    LOCAL PROCEDURE GetSetup@12();
+    BEGIN
+      RepositorySetup.GET;
+
+      IF RepositorySetup.RepositoryPath = '' THEN
+        RepositorySetup.TESTFIELD("Repository Path");
+
+      RepositoryPath := RepositorySetup.RepositoryPath;
+
+      IF RepositoryPath[STRLEN(RepositoryPath)] <> '\' THEN
+        RepositoryPath += '\';
+    END;
+
+    PROCEDURE GetLastTokenNo@13() : Integer;
+    BEGIN
+      EXIT(LastTokenNo);
+    END;
+
+    LOCAL PROCEDURE DeleteReadOnlyAttribute@14(PathFileName@1000 : Text);
+    VAR
+      Convert@1001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Convert";
+      FileAttributes@1002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileAttributes";
+      IOFile@1003 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+      NewFileAttributes@1004 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileAttributes";
+    BEGIN
+      FileAttributes := IOFile.GetAttributes(PathFileName);
+      IF FileAttributes.HasFlag(FileAttributes.ReadOnly) THEN BEGIN
+        NewFileAttributes := Convert.ToInt32(FileAttributes) - Convert.ToInt32(FileAttributes.ReadOnly);
+        IOFile.SetAttributes(PathFileName, NewFileAttributes);
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

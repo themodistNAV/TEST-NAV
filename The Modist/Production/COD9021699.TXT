@@ -1,0 +1,174 @@
+OBJECT Codeunit 9021699 Populate Web Delivery Days
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/11/12;
+    Time=12:00:00 PM;
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            //Populate Web Delivery Day
+            InternetSetup.GET;
+            InternetSetup.TESTFIELD("Web Calendar Days Date Formula");
+            StartDate := CALCDATE('<-4D>',TODAY);
+            EndDate := CALCDATE(InternetSetup."Web Calendar Days Date Formula",TODAY);
+
+            DateRec.RESET;
+            DateRec.SETRANGE("Period Type",DateRec."Period Type"::Date);
+            DateRec.SETFILTER("Period Start",'%1..%2',StartDate,EndDate);
+
+            WebDeliveryDay.RESET;
+            WebDeliveryDay.SETFILTER(Date,'<%1',StartDate);
+            WebDeliveryDay.DELETEALL;
+            WebDeliveryDay.SETRANGE(Date);
+            WebDeliveryDay.SETRANGE("Manual Intervention",FALSE);
+            WebDeliveryDay.DELETEALL;
+
+            WebLocation.RESET;
+            WebLocation.SETFILTER("Base Calendar",'<>%1','');
+            IF WebLocation.FIND('-') THEN
+            REPEAT
+              IF DateRec.FIND('-') THEN
+              REPEAT
+                IF NOT CalMgt.CheckDateStatus(WebLocation."Base Calendar",DateRec."Period Start",WebLocation.Name) THEN BEGIN
+                  WebDeliveryDay.INIT;
+                  WebDeliveryDay."Label Code" := WebLocation."Label Code";
+                  WebLocation.TESTFIELD(Code);
+                  WebDeliveryDay."Web Location Code" := WebLocation.Code;
+                  WebDeliveryDay.Date := DateRec."Period Start";
+                  WebDeliveryDay."Base Calendar" := WebLocation."Base Calendar";
+                  WebDeliveryDay.DateTimeInsertedModified := CURRENTDATETIME;
+                  IF WebDeliveryDay.INSERT THEN;
+                END;
+              UNTIL DateRec.NEXT = 0;
+            UNTIL WebLocation.NEXT = 0;
+
+            LabelRec.RESET;
+            LabelRec.SETRANGE("Used-in Company",COMPANYNAME); //DOC EC2013.3.30
+            LabelRec.SETFILTER("Delivery Days Calendar",'<>%1','');
+            IF LabelRec.FIND('-') THEN
+            REPEAT
+              IF DateRec.FIND('-') THEN
+              REPEAT
+                IF NOT CalMgt.CheckDateStatus(LabelRec."Delivery Days Calendar",DateRec."Period Start",LabelRec.Description) THEN BEGIN
+                  WebDeliveryDay.INIT;
+                  WebDeliveryDay."Label Code" := LabelRec.Code;
+                  WebDeliveryDay."Web Location Code" := '';
+                  WebDeliveryDay.Date := DateRec."Period Start";
+                  WebDeliveryDay."Base Calendar" := LabelRec."Delivery Days Calendar";
+                  WebDeliveryDay.DateTimeInsertedModified := CURRENTDATETIME;
+                  IF WebDeliveryDay.INSERT THEN;
+                END;
+              UNTIL DateRec.NEXT = 0;
+            UNTIL LabelRec.NEXT = 0;
+
+
+            //Now Populating Delivery Date Matrix
+            WebDelMatrix.RESET;
+            WebDelMatrix.DELETEALL;
+
+            WebDeliveryDay.RESET;
+            WebDelType.RESET;
+            IF WebDelType.FIND('-') THEN
+            REPEAT
+              WebDeliveryDay.SETRANGE("Web Location Code",WebDelType."Web Location Code");
+              WebDeliveryDay.SETRANGE("Label Code",WebDelType."Label Code");
+              WebDeliveryDay.SETRANGE("Not delivering",FALSE);
+              IF WebDeliveryDay.FIND('-') THEN
+              REPEAT
+                DeliveryDate := 0D;
+                LastDeliveryDate := 0D;
+                Found := TRUE;
+                IF WebDelType."No. of Days to Deliver" = 0 THEN
+                  DeliveryDate := WebDeliveryDay.Date
+                ELSE BEGIN
+                  i := 0;
+                  WebDeliveryDay1.RESET;
+                  WebDeliveryDay1.SETRANGE("Web Location Code",WebDelType."Web Location Code");
+                  WebDeliveryDay1.SETRANGE("Label Code",WebDelType."Label Code");
+                  WebDeliveryDay1.SETRANGE("Not delivering",FALSE);
+                  WebDeliveryDay1.SETFILTER(Date,'>=%1',WebDeliveryDay.Date);
+                  IF WebDeliveryDay1.FIND('-') THEN
+                  REPEAT
+                    IF WebDeliveryDay1.NEXT = 0 THEN BEGIN
+                      Found := FALSE;
+                      i := WebDelType."No. of Days to Deliver";
+                    END ELSE
+                      i := i + 1;
+                  UNTIL i = WebDelType."No. of Days to Deliver";
+                  IF Found THEN
+                    DeliveryDate := WebDeliveryDay1.Date;
+                END;
+
+                IF Found THEN BEGIN
+                  IF WebDelType."No. of Days Delivery Window" = 0 THEN
+                    LastDeliveryDate := DeliveryDate
+                  ELSE BEGIN
+                    i := 0;
+                    WebDeliveryDay1.RESET;
+                    WebDeliveryDay1.SETRANGE("Web Location Code",WebDelType."Web Location Code");
+                    WebDeliveryDay1.SETRANGE("Label Code",WebDelType."Label Code");
+                    WebDeliveryDay1.SETRANGE("Not delivering",FALSE);
+                    WebDeliveryDay1.SETFILTER(Date,'>=%1',DeliveryDate);
+                    IF WebDeliveryDay1.FIND('-') THEN
+                    REPEAT
+                      IF WebDeliveryDay1.NEXT = 0 THEN BEGIN
+                        Found := FALSE;
+                        i := WebDelType."No. of Days Delivery Window";
+                      END ELSE
+                        i := i + 1;
+                    UNTIL i = WebDelType."No. of Days Delivery Window";
+                    IF Found THEN
+                      LastDeliveryDate := WebDeliveryDay1.Date;
+                  END;
+                END;
+                IF Found THEN BEGIN
+                  WebDelMatrix.INIT;
+                  WebDelMatrix."Label Code" := WebDeliveryDay."Label Code";
+                  WebDelMatrix."Web Location Code" := WebDeliveryDay."Web Location Code";
+                  WebDelMatrix."Delivery Type Code" := WebDelType.Code;
+                  WebDelMatrix."Next Open Date"  := WebDeliveryDay.Date;
+                  WebDelMatrix."Default Delivery" := WebDelType."Default Delivery Type";
+                  WebDelMatrix."Latest Order Time"  := WebDelType."Latest Order Time" ;
+                  WebDelMatrix."Earliest Delivery Date" := DeliveryDate;
+                  WebDelMatrix."Latest Delivery Date" := LastDeliveryDate;
+                  WebDelMatrix.Name := WebDelType.Name;
+                  WebDelMatrix.DateTimeInsertedModified := CURRENTDATETIME;
+                  WebDelMatrix.INSERT;
+                END;
+              UNTIL WebDeliveryDay.NEXT = 0;
+            UNTIL WebDelType.NEXT = 0;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      WebDeliveryDay@1000000000 : Record 9021699;
+      WebDeliveryDay1@1000000010 : Record 9021699;
+      InternetSetup@1000000001 : Record 9021609;
+      WebLocation@1000000002 : Record 9021692;
+      DateRec@1000000003 : Record 2000000007;
+      WebDelType@1000000007 : Record 9021700;
+      WebDelMatrix@1000000008 : Record 9021703;
+      LabelRec@1000000009 : Record 9021618;
+      StartDate@1000000006 : Date;
+      EndDate@1000000005 : Date;
+      CalMgt@1000000004 : Codeunit 7600;
+      i@1000000011 : Integer;
+      DeliveryDate@1000000012 : Date;
+      LastDeliveryDate@1000000013 : Date;
+      Found@1000000014 : Boolean;
+
+    BEGIN
+    {
+      //DOC EC2013.3.20 MQ 15/10/2012 - GW121015 Make CalcDate Multilanguage
+      //DOC EC2013.3.30 MQ 08/11/2012 - GW121108 Small mod.
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

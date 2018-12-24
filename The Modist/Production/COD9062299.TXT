@@ -1,0 +1,1014 @@
+OBJECT Codeunit 9062299 SQL Integration
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SqlQuery@1000000019 : Record 9062331;
+      SqlQueryTmp@1000000008 : TEMPORARY Record 9062331;
+      SqlQueryParameterTmp@1000000006 : TEMPORARY Record 9062332;
+      SqlQueryResultTmp@1000000005 : TEMPORARY Record 9062333;
+      SqlQueryFieldTmp@1000000003 : TEMPORARY Record 9062334;
+      SystemBehaviour@1000000002 : Record 9062230;
+      TnpToolkit@1000000020 : Codeunit 9062230;
+      TnpUtils@1000000009 : Codeunit 9062229;
+      GenericDevelopmentUtilities@1000000011 : Codeunit 9062459;
+      ObjectFieldToolkit@1000000018 : Codeunit 9062343;
+      String@1000000010 : Codeunit 9062236;
+      SqlConnection@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+      SqlCommand@1000000007 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      tSqlServerNameSysB@1000000012 : TextConst 'ENU=SQL_SERVER_NAME;ENG=SQL_SERVER_NAME';
+      tSqlDatabaseNameSysB@1000000013 : TextConst 'ENU=SQL_DATABASE_NAME;ENG=SQL_DATABASE_NAME';
+      tSqlAuthenticationSysB@1000000014 : TextConst 'ENU=SQL_AUTHENTICATION;ENG=SQL_AUTHENTICATION';
+      tSqlLoginSysB@1000000015 : TextConst 'ENU=SQL_LOGIN;ENG=SQL_LOGIN';
+      tSqlPasswordSysB@1000000016 : TextConst 'ENU=SQL_PASSWORD;ENG=SQL_PASSWORD';
+      tSqlConnectionTimenoutSysB@1000000017 : TextConst 'ENU=SQL_CONN_TIMEOUT;ENG=SQL_CONN_TIMEOUT';
+      Connected@1000000001 : Boolean;
+      AddSeparatorTo@1000000004 : ' ,Left,Right';
+
+    PROCEDURE "--- General Methods ---"@1000000010();
+    BEGIN
+    END;
+
+    PROCEDURE RunQueryAndGetResults@1000000037(pSqlQueryCode@1000000000 : Code[20];VAR pSqlQueryResultTmp@1000000001 : Record 9062333);
+    BEGIN
+      //DOC NA2015.7 - Running a query and getting its results
+      //  -> pSqlQueryCode: The query code
+      //  <> pSqlQueryResultTmp: Target results recordset
+
+      Connect();
+      ClearQueries();
+      AddQuery(pSqlQueryCode);
+      ExecuteQueries();
+      GetQueryResults(pSqlQueryResultTmp);
+      Disconnect();
+    END;
+
+    PROCEDURE Connect@1000000000();
+    VAR
+      lSqlConnectionStringBuilder@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnectionStringBuilder";
+      lSqlServerName@1000000002 : Text;
+      lSqlDatabaseName@1000000003 : Text;
+      lSqlAuthentication@1000000001 : Code[20];
+      lSqlConnectionTimeout@1000000004 : Integer;
+    BEGIN
+      //DOC NS2015.1 - Connecting to SQL
+
+      IF (Connected) THEN
+        EXIT;
+
+      SystemBehaviour.TestText(tSqlServerNameSysB);
+      SystemBehaviour.TestText(tSqlDatabaseNameSysB);
+      lSqlAuthentication := SystemBehaviour.GetOptionString(tSqlAuthenticationSysB);
+
+      lSqlConnectionStringBuilder := lSqlConnectionStringBuilder.SqlConnectionStringBuilder();
+      lSqlServerName := SystemBehaviour.GetText(tSqlServerNameSysB);
+      lSqlServerName := String.Replace(lSqlServerName,'[SERVICE]', GenericDevelopmentUtilities.GetServiceName(0));
+      lSqlServerName := String.Replace(lSqlServerName,'[TENANT]', TENANTID);
+
+      lSqlConnectionStringBuilder.DataSource := lSqlServerName;
+
+      lSqlDatabaseName := SystemBehaviour.GetText(tSqlDatabaseNameSysB);
+      lSqlDatabaseName := String.Replace(lSqlDatabaseName,'[SERVICE]', GenericDevelopmentUtilities.GetServiceName(0));
+      lSqlDatabaseName := String.Replace(lSqlDatabaseName,'[TENANT]', TENANTID);
+
+      lSqlConnectionStringBuilder.InitialCatalog := lSqlDatabaseName;
+
+      CASE (lSqlAuthentication) OF
+        'WINDOWS':
+          lSqlConnectionStringBuilder.IntegratedSecurity := TRUE;
+        'SQL':
+          BEGIN
+            lSqlConnectionStringBuilder.IntegratedSecurity := FALSE;
+            lSqlConnectionStringBuilder.UserID := SystemBehaviour.GetText(tSqlLoginSysB);
+            lSqlConnectionStringBuilder.Password := SystemBehaviour.GetText(tSqlPasswordSysB);
+          END;
+      END;
+
+      lSqlConnectionTimeout := SystemBehaviour.GetInteger(tSqlConnectionTimenoutSysB);
+      IF lSqlConnectionTimeout = 0 THEN
+        lSqlConnectionStringBuilder.ConnectTimeout := 10
+      ELSE
+        lSqlConnectionStringBuilder.ConnectTimeout := lSqlConnectionTimeout;
+
+      SqlConnection := SqlConnection.SqlConnection(lSqlConnectionStringBuilder.ConnectionString);
+      SqlConnection.Open();
+
+      Connected := TRUE;
+    END;
+
+    PROCEDURE Disconnect@1000000001();
+    BEGIN
+      //DOC NS2015.1 - Disconnecting from SQL
+
+      IF ( NOT (Connected)) THEN
+        EXIT;
+
+      SqlConnection.Close();
+      CLEAR(SqlConnection);
+
+      Connected := FALSE;
+    END;
+
+    PROCEDURE "--- Queries ---"@1000000014();
+    BEGIN
+    END;
+
+    PROCEDURE ClearQueries@1000000006();
+    BEGIN
+      //DOC NS2015.1 - Clearing queries
+
+      SqlQueryTmp.RESET();
+      SqlQueryTmp.DELETEALL();
+
+      SqlQueryParameterTmp.RESET();
+      SqlQueryParameterTmp.DELETEALL();
+    END;
+
+    PROCEDURE AddQuery@1000000003(pSqlQueryCode@1000000000 : Code[20]);
+    VAR
+      lSqlQuery@1000000001 : Record 9062331;
+      lSqlQueryParameter@1000000002 : Record 9062332;
+    BEGIN
+      //DOC NS2015.1 - Adding real (existing in the database) query to buffers (together with its parameters)
+      //  -> pSqlQueryCode: The query code
+
+      SqlQueryTmp.RESET();
+      SqlQueryTmp.SETRANGE(Code, pSqlQueryCode);
+      SqlQueryTmp.DELETEALL();
+
+      SqlQueryParameterTmp.RESET();
+      SqlQueryParameterTmp.SETRANGE("Query Code", pSqlQueryCode);
+      SqlQueryParameterTmp.DELETEALL();
+
+      lSqlQuery.GET(pSqlQueryCode);
+      lSqlQuery.CALCFIELDS("Query Text");
+
+      lSqlQueryParameter.RESET();
+      lSqlQueryParameter.SETRANGE("Query Code", pSqlQueryCode);
+
+      AddQueryTmp(lSqlQuery, lSqlQueryParameter);
+    END;
+
+    PROCEDURE AddQueryTmp@1000000005(VAR pSqlQueryTmp@1000000001 : Record 9062331;VAR pSqlQueryParameterTmp@1000000000 : Record 9062332);
+    BEGIN
+      //DOC NS2015.1 - Adding temporary query and parameters to buffers
+
+      SqlQueryTmp.RESET();
+      SqlQueryTmp.SETRANGE(Code, pSqlQueryTmp.Code);
+      SqlQueryTmp.DELETEALL();
+
+      SqlQueryParameterTmp.RESET();
+      SqlQueryParameterTmp.SETRANGE("Query Code", pSqlQueryTmp.Code);
+      SqlQueryParameterTmp.DELETEALL();
+
+      SqlQueryTmp := pSqlQueryTmp;
+      SqlQueryTmp.INSERT();
+
+      pSqlQueryParameterTmp.SETRANGE("Query Code", pSqlQueryTmp.Code);
+      IF (pSqlQueryParameterTmp.FINDSET()) THEN
+      REPEAT
+        SqlQueryParameterTmp := pSqlQueryParameterTmp;
+        SqlQueryParameterTmp.INSERT();
+      UNTIL (pSqlQueryParameterTmp.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE CheckQueries@1000000013();
+    VAR
+      xNoQueries@1000000000 : TextConst 'ENU=No queries have been defined to be executed.;ENG=No queries have been defined to be executed.';
+      xQueryWithoutValue@1000000001 : TextConst 'ENU=Query text hasn''t been defined for query "%1";ENG=Query text hasn''t been defined for query "%1"';
+    BEGIN
+      //DOC NS2015.1 - Checking queries
+
+      SqlQueryTmp.RESET();
+      IF (SqlQueryTmp.ISEMPTY()) THEN
+        ERROR(xNoQueries);
+
+      IF (SqlQueryTmp.FINDSET()) THEN
+      REPEAT
+
+        SqlQueryTmp.TESTFIELD(Code);
+        IF ( NOT (SqlQueryTmp.QueryTextHasValue)) THEN
+          ERROR(xQueryWithoutValue, SqlQueryTmp.Code);
+
+        SqlQueryParameterTmp.RESET();
+        SqlQueryParameterTmp.SETRANGE("Query Code", SqlQueryTmp.Code);
+        IF (SqlQueryParameterTmp.FINDSET()) THEN
+        REPEAT
+
+          SqlQueryParameterTmp.TESTFIELD(Name);
+          SqlQueryParameterTmp.TESTFIELD(Type);
+
+        UNTIL (SqlQueryParameterTmp.NEXT() = 0);
+
+      UNTIL (SqlQueryTmp.NEXT() = 0);
+    END;
+
+    PROCEDURE ExecuteQueries@1000000015();
+    BEGIN
+      //DOC NS2015.1 - Executing queries (returning only scalars)
+
+      CheckQueries();
+      CreateQueriesCommand();
+      RunQueriesCommand();
+    END;
+
+    PROCEDURE GetQueryResults@1000000016(VAR pSqlQueryResultTmp@1000000000 : Record 9062333);
+    BEGIN
+      //DOC NS2015.1 - Returning query fields
+      //  <> pSQLQueryTmp: Target recordset
+
+      pSqlQueryResultTmp.RESET();
+      pSqlQueryResultTmp.DELETEALL();
+
+      SqlQueryResultTmp.RESET();
+      IF (SqlQueryResultTmp.FINDSET()) THEN
+      REPEAT
+        pSqlQueryResultTmp := SqlQueryResultTmp;
+        pSqlQueryResultTmp.INSERT();
+      UNTIL (SqlQueryResultTmp.NEXT() = 0);
+    END;
+
+    PROCEDURE "--- Query Tools ---"@1000000002();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CreateQueriesCommand@1000000025();
+    VAR
+      lSqlDbType@1000000006 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlDbType";
+      lEndOfLine@1000000000 : Text[2];
+      lQueryId@1000000002 : Code[10];
+      lQueryText@1000000003 : Text;
+      lFullParameterName@1000000004 : Text[100];
+      lParameterValue@1000000005 : Variant;
+      lCommandText@1000000007 : Text;
+      File@1000000001 : File;
+      TNPToolkit@1000000008 : Codeunit 9062230;
+    BEGIN
+      //DOC NS2015.1 - Preparing command text to execute all queries
+
+      lEndOfLine := PADSTR('', 2, ' ');
+      lEndOfLine[1] := 10;
+      lEndOfLine[2] := 13;
+
+      CLEAR(SqlCommand);
+      SqlCommand := SqlCommand.SqlCommand();
+      SqlCommand.Connection := SqlConnection;
+
+      AddGlobalParameters(SqlCommand);
+
+      lQueryId := PADSTR('', MAXSTRLEN(lQueryId), '0');
+
+      SqlQueryTmp.RESET();
+      IF (SqlQueryTmp.FINDSET()) THEN
+      REPEAT
+
+        lQueryId := INCSTR(lQueryId);
+        lQueryText := SqlQueryTmp.GetQueryText();
+        ApplyGlobalIdentifiers(lQueryText);
+
+        SqlQueryParameterTmp.RESET();
+        SqlQueryParameterTmp.SETRANGE("Query Code", SqlQueryTmp.Code);
+        IF (SqlQueryParameterTmp.FINDSET()) THEN
+        REPEAT
+          lFullParameterName := FullParameterName(SqlQueryParameterTmp, lQueryId);
+          SqlQueryParameterTmp.GetValue(lParameterValue);
+          ParameterTypeToSqlDbType(SqlQueryParameterTmp, lSqlDbType);
+          AddParameter(SqlCommand, lFullParameterName, lSqlDbType, lParameterValue);
+          lQueryText := String.Replace(lQueryText,SqlQueryParameterTmp.Name,lFullParameterName);
+        UNTIL (SqlQueryParameterTmp.NEXT() = 0);
+
+        IF (lCommandText <> '') THEN
+          lCommandText := lCommandText + lEndOfLine;
+        lCommandText := lCommandText + lQueryText;
+
+      UNTIL (SqlQueryTmp.NEXT() = 0);
+
+      SqlCommand.CommandText := lCommandText;
+    END;
+
+    LOCAL PROCEDURE RunQueriesCommand@1000000027();
+    VAR
+      lSqlDataReader@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      lReadingResults@1000000001 : Boolean;
+      lRecordNo@1000000002 : Integer;
+      lFieldIndex@1000000003 : Integer;
+      lFieldName@1000000005 : Text[50];
+      lFieldValue@1000000004 : Variant;
+      xFieldName@1000000006 : TextConst 'ENU=Field%1;ENG=Field%1';
+      lFieldValueObject@1000000007 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Object";
+      lFieldValueText@1000000008 : Text;
+      lFieldValueDecimal@1000000009 : Decimal;
+    BEGIN
+      //DOC NS2015.1 - Running queries command and reading results
+
+      lSqlDataReader := SqlCommand.ExecuteReader();
+
+      SqlQueryResultTmp.RESET();
+      SqlQueryResultTmp.DELETEALL();
+
+      SqlQueryTmp.RESET();
+      IF (SqlQueryTmp.FINDSET()) THEN
+      BEGIN
+        lReadingResults := TRUE;
+        WHILE (lReadingResults) DO
+        BEGIN
+          lRecordNo := 0;
+          WHILE (lSqlDataReader.Read()) DO
+          BEGIN
+            lRecordNo += 1;
+            FOR lFieldIndex := 0 TO lSqlDataReader.FieldCount - 1 DO
+            BEGIN
+              SqlQueryResultTmp.INIT();
+              SqlQueryResultTmp."Query Code" := SqlQueryTmp.Code;
+              SqlQueryResultTmp."Record No." := lRecordNo;
+              SqlQueryResultTmp."Field Name" := lSqlDataReader.GetName(lFieldIndex);
+              IF (SqlQueryResultTmp."Field Name" = '') THEN
+                SqlQueryResultTmp."Field Name" := STRSUBSTNO(xFieldName, lFieldIndex + 1);
+              SqlQueryResultTmp."Field Type" := SystemTypeToFieldType(lSqlDataReader.GetFieldType(lFieldIndex));
+              CASE (SqlQueryResultTmp."Field Type") OF
+                SqlQueryResultTmp."Field Type"::Boolean:
+                  lFieldValue := lSqlDataReader.GetBoolean(lFieldIndex);
+                SqlQueryResultTmp."Field Type"::Integer:
+                  lFieldValue := lSqlDataReader.GetInt32(lFieldIndex);
+                SqlQueryResultTmp."Field Type"::Decimal:
+                  BEGIN
+                    lFieldValueObject := lSqlDataReader.GetSqlDecimal(lFieldIndex);
+                    lFieldValueText := lFieldValueObject.ToString();
+                    IF (EVALUATE(lFieldValueDecimal, lFieldValueText)) THEN;
+                    lFieldValue := lFieldValueDecimal;
+                  END;
+                SqlQueryResultTmp."Field Type"::Text:
+                  lFieldValue := lSqlDataReader.GetString(lFieldIndex);
+                SqlQueryResultTmp."Field Type"::Date,
+                SqlQueryResultTmp."Field Type"::Time,
+                SqlQueryResultTmp."Field Type"::DateTime:
+                  lFieldValue := lSqlDataReader.GetDateTime(lFieldIndex);
+                ELSE
+                  lFieldValue := FORMAT(lSqlDataReader.Item(lFieldIndex));
+              END;
+              SqlQueryResultTmp.SetValue(lFieldValue);
+              SqlQueryResultTmp.INSERT();
+            END;
+          END;
+          lReadingResults := lSqlDataReader.NextResult();
+          IF (lReadingResults) THEN
+            lReadingResults := (SqlQueryTmp.NEXT() <> 0);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ApplyGlobalIdentifiers@1000000009(VAR pQueryText@1000000003 : Text);
+    VAR
+      lSqlParameter@1000000001 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlParameter";
+      lSqlDbType@1000000002 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlDbType";
+      TNPToolkit@1000000000 : Codeunit 9062230;
+    BEGIN
+      //DOC NS2015.1 - Applying global identifiers to the query passed
+      //  <> pQueryText: Query text to modify
+
+      pQueryText := String.ReplaceAll(pQueryText, '%COMPANYNAME%', ConvertIdentifierToSql(COMPANYNAME()));
+    END;
+
+    LOCAL PROCEDURE AddGlobalParameters@1000000018(VAR pSqlCommand@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand");
+    VAR
+      lSqlParameter@1000000001 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlParameter";
+      lSqlDbType@1000000002 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlDbType";
+    BEGIN
+      //DOC NS2015.1 - Adding global parameters for the command passed
+      //  <> pSqlCommand: The command to add parameters to
+
+      AddParameter(pSqlCommand, '@COMPANYNAME', lSqlDbType.VarChar, ConvertIdentifierToSql(COMPANYNAME()));
+      AddParameter(pSqlCommand, '@USERID', lSqlDbType.VarChar, ConvertIdentifierToSql(USERID()));
+      AddParameter(pSqlCommand, '@SESSIONID', lSqlDbType.VarChar, FORMAT(SESSIONID()));
+    END;
+
+    PROCEDURE FullParameterName@1000000017(pSqlQueryParameter@1000000000 : Record 9062332;pQueryId@1000000001 : Code[10]) : Text[100];
+    BEGIN
+      //DOC NS2015.1 - Returning full name of the parameter (including query ID)
+      //  -> pSqlQueryParameter: The parameter
+      //  -> pQueryId: Query ID
+      //  <- The full name
+
+      IF (COPYSTR(pSqlQueryParameter.Name, 1, 1) = '@') THEN
+        EXIT('@' + pQueryId + '_' + COPYSTR(pSqlQueryParameter.Name, 2, STRLEN(pSqlQueryParameter.Name) - 1))
+      ELSE
+        EXIT(pQueryId + pSqlQueryParameter.Name);
+    END;
+
+    LOCAL PROCEDURE AddParameter@1000000023(VAR pSqlCommand@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";pName@1000000004 : Text[50];pType@1000000003 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlDbType";pValue@1000000005 : Variant);
+    VAR
+      lSqlParameter@1000000001 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlParameter";
+      lSqlDbType@1000000002 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlDbType";
+    BEGIN
+      //DOC NS2015.1 - Adding one parameters to the command passed
+      //  -> pSqlCommand: The command
+      //  -> pName: Parameter name
+      //  -> pType: Type (SqlDbType please)
+      //  -> pValue: Value
+
+      lSqlParameter := pSqlCommand.Parameters.Add(pName, pType);
+      lSqlParameter.Value := pValue;
+    END;
+
+    PROCEDURE "--- Tables and Fields ---"@1000000022();
+    BEGIN
+    END;
+
+    PROCEDURE AddTableFieldQuery@1000000024(pTableId@1000000000 : Integer;pPosition@1000000001 : Text;pView@1000000003 : Text;VAR pSqlQueryField@1000000002 : Record 9062334);
+    VAR
+      lFieldText@1000000005 : Text[100];
+      lFieldAlias@1000000007 : Text[50];
+      lFieldsText@1000000004 : Text;
+      xFieldAlias@1000000006 : TextConst 'ENU=Field%1;ENG=Field%1';
+      xFieldName@1000000009 : TextConst 'ENU=[%1];ENG=[%1]';
+      xFieldText@1000000008 : TextConst 'ENU=%1 %2;ENG=%1 %2';
+    BEGIN
+      //DOC NS2015.1 - Adding a table with field(s) as a query
+      //  -> pTableId: Table ID
+      //  -> pPosition: Position
+      //  -> pView: View
+      //  <> pSqlQueryField: Field recordset (with fields inside)
+
+      IF (pSqlQueryField.FINDSET()) THEN
+      REPEAT
+        IF (lFieldsText <> '') THEN
+          lFieldsText := lFieldsText + ', ';
+        lFieldText := ConvertIdentifierToSql(ObjectFieldToolkit.GetFieldName(pTableId, pSqlQueryField."Field ID"));
+        lFieldText := STRSUBSTNO(xFieldName, lFieldText);
+        lFieldText := ConvertAggregationToSql(lFieldText, pSqlQueryField.Aggregation);
+        lFieldAlias := pSqlQueryField.Alias;
+        IF (lFieldAlias = '') THEN
+          lFieldAlias := STRSUBSTNO(xFieldAlias, pSqlQueryField."Field ID");
+        lFieldsText := lFieldsText + STRSUBSTNO(xFieldText, lFieldText, lFieldAlias);
+      UNTIL (pSqlQueryField.NEXT() = 0);
+
+      AddTableQuery(pTableId, pPosition, pView, lFieldsText);
+    END;
+
+    PROCEDURE AddTableExpressionQuery@1000000028(pTableId@1000000000 : Integer;pPosition@1000000001 : Text;pView@1000000008 : Text;VAR pSqlQueryField@1000000007 : Record 9062334);
+    VAR
+      lExpressionsText@1000000004 : Text;
+      lExpressionText@1000000002 : Text;
+      lExpressionAlias@1000000005 : Text[50];
+      xExpressionAlias@1000000006 : TextConst 'ENU=Expression%1;ENG=Expression%1';
+      xExpressionText@1000000003 : TextConst 'ENU=%1 %2;ENG=%1 %2';
+    BEGIN
+      //DOC NS2015.1 - Adding a table with expression(s) as a query
+      //  -> pTableId: Table ID
+      //  -> pPosition: Table position
+      //  -> pView: View
+      //  <> pSqlQueryField: Field recordset (with expressions inside)
+
+      IF (pSqlQueryField.FINDSET()) THEN
+      REPEAT
+        IF (lExpressionsText <> '') THEN
+          lExpressionsText := lExpressionsText + ', ';
+        lExpressionText := ConvertExpressionToSql(pSqlQueryField.Expression);
+        lExpressionText := ConvertAggregationToSql(lExpressionText, pSqlQueryField.Aggregation);
+        lExpressionAlias := pSqlQueryField.Alias;
+        IF (lExpressionAlias = '') THEN
+          lExpressionAlias := STRSUBSTNO(xExpressionAlias, pSqlQueryField.Index);
+        lExpressionsText := lExpressionsText + STRSUBSTNO(xExpressionText, lExpressionText, lExpressionAlias);
+      UNTIL (pSqlQueryField.NEXT() = 0);
+
+      AddTableQuery(pTableId, pPosition, pView, lExpressionsText);
+    END;
+
+    LOCAL PROCEDURE AddTableQuery@1000000030(pTableId@1000000000 : Integer;pPosition@1000000001 : Text;pView@1000000011 : Text;pExpression@1000000002 : Text);
+    VAR
+      lSqlQueryTmp@1000000003 : TEMPORARY Record 9062331;
+      xCode@1000000004 : TextConst 'ENU=TABLE_%1;ENG=TABLE_%1';
+      xQueryText@1000000006 : TextConst 'ENU=SELECT %1 FROM [%COMPANYNAME%$%2] %3;ENG=SELECT %1 FROM [%COMPANYNAME%$%2] %3';
+      lSqlQueryParameter@1000000009 : TEMPORARY Record 9062332;
+      lQueryText@1000000007 : Text;
+      lWhereText@1000000008 : Text;
+      lTableName@1000000010 : Text;
+    BEGIN
+      //DOC NS2015.1 - Adding a table with an expression as a query
+      //  -> pTableId: Table ID
+      //  -> pPosition: Table position
+      //  -> pView: Table view
+      //  -> pExpression: Expression (already converted to SQL idenfiers)
+      //  -> pAggregation: Aggregation (see "SQL Query"."Aggregation" field options)
+
+      lSqlQueryTmp.INIT();
+      lSqlQueryTmp.Code := STRSUBSTNO(xCode, pTableId);
+      lSqlQueryTmp.Description := ObjectFieldToolkit.GetTableName(pTableId);
+
+      lTableName := ConvertIdentifierToSql(ObjectFieldToolkit.GetTableName(pTableId));
+      IF (pPosition <> '') THEN
+        ConvertPositionToSql(lSqlQueryTmp.Code, pTableId, pPosition, lWhereText, lSqlQueryParameter)
+      ELSE
+        ConvertViewToSql(lSqlQueryTmp.Code, pTableId, pView, lWhereText, lSqlQueryParameter);
+
+      lQueryText := STRSUBSTNO(xQueryText, pExpression, lTableName, lWhereText);
+
+      lSqlQueryTmp.SetQueryText(lQueryText);
+
+      AddQueryTmp(lSqlQueryTmp, lSqlQueryParameter);
+    END;
+
+    PROCEDURE "--- SQL ---"@1000000031();
+    BEGIN
+    END;
+
+    PROCEDURE ConvertIdentifierToSql@1000000012(pIdentifier@1000000000 : Text[100]) : Text[100];
+    VAR
+      ConvertedStr@1000000001 : Text;
+    BEGIN
+      //DOC NS2015.1 - Converting identifier (company / table / field name) to SQL
+      //  -> pIdentifier: Identifier to be converted
+      //  <- Converted identifier
+
+      EXIT(CONVERTSTR(pIdentifier, '."\/&[]', '_______'));
+    END;
+
+    LOCAL PROCEDURE ConvertPositionToSql@1000000019(pQueryCode@1000000012 : Code[20];pTableId@1000000001 : Integer;pPosition@1000000000 : Text;VAR pWhere@1000000007 : Text;VAR pSqlQueryParameter@1000000008 : Record 9062332);
+    VAR
+      lRecordRef@1000000002 : RecordRef;
+      lFieldRef@1000000005 : FieldRef;
+      lKeyRef@1000000003 : KeyRef;
+      lIndex@1000000004 : Integer;
+      xFieldName@1000000013 : TextConst 'ENU=[%1];ENG=[%1]';
+      xWherePart@1000000006 : TextConst 'ENU="(%1 = %2)";ENG="(%1 = %2)"';
+      lFieldName@1000000009 : Text[100];
+      lParameterName@1000000010 : Text[100];
+      xParameterName@1000000011 : TextConst 'ENU=@FIELD%1;ENG=@FIELD%1';
+    BEGIN
+      //DOC NS2015.1 - Converting standard NAV position (without names) to SQL
+      //  -> pQueryCode: Query code
+      //  -> pTableId: Table ID
+      //  -> pPosition: Position
+      //  <> pWhere: Target where
+      //  <> pSqlQueryParameter: Target recordset of parameters
+
+      pWhere := '';
+
+      IF (pPosition <> '') THEN
+      BEGIN
+        lRecordRef.OPEN(pTableId);
+        lRecordRef.SETPOSITION(pPosition);
+        lRecordRef.SETRECFILTER();
+        IF (lRecordRef.FINDFIRST()) THEN
+        BEGIN
+          lKeyRef := lRecordRef.KEYINDEX(1);
+          FOR lIndex := 1 TO lKeyRef.FIELDCOUNT DO
+          BEGIN
+            lFieldRef := lKeyRef.FIELDINDEX(lIndex);
+            lFieldName := lFieldRef.NAME;
+            lFieldName := STRSUBSTNO(xFieldName, ConvertIdentifierToSql(lFieldName));
+            lParameterName := STRSUBSTNO(xParameterName, lFieldRef.NUMBER);
+            IF (pWhere = '') THEN
+              pWhere := 'WHERE '
+            ELSE
+              pWhere := pWhere + ' AND ';
+            pWhere := pWhere + STRSUBSTNO(xWherePart, lFieldName, lParameterName);
+            pSqlQueryParameter.INIT();
+            pSqlQueryParameter."Query Code" := pQueryCode;
+            pSqlQueryParameter.Name := STRSUBSTNO(xParameterName, lFieldRef.NUMBER);
+            pSqlQueryParameter.Type := FieldRefTypeToParameterType(lFieldRef.TYPE);
+            pSqlQueryParameter.SetValue(lFieldRef.VALUE);
+            pSqlQueryParameter.INSERT();
+          END;
+        END;
+        lRecordRef.CLOSE();
+      END;
+    END;
+
+    LOCAL PROCEDURE ConvertViewToSql@1000000032(pQueryCode@1000000012 : Code[20];pTableId@1000000001 : Integer;pView@1000000000 : Text;VAR pWhere@1000000007 : Text;VAR pSqlQueryParameter@1000000008 : Record 9062332);
+    VAR
+      xFieldName@1000000014 : TextConst 'ENU=[%1];ENG=[%1]';
+      xWherePart@1000000013 : TextConst 'ENU="(%1 = %2)";ENG="(%1 = %2)"';
+      xParameterName@1000000005 : TextConst 'ENU=@FIELD%1;ENG=@FIELD%1';
+      lRecordRef@1000000010 : RecordRef;
+      lFieldRef@1000000009 : FieldRef;
+      lIndex@1000000004 : Integer;
+      lFieldName@1000000003 : Text[100];
+      lFieldFilter@1000000006 : Text[1024];
+      lParameterName@1000000002 : Text[100];
+    BEGIN
+      //DOC NS2015.1 - Converting standard NAV view to SQL
+      //  -> pQueryCode: Query code
+      //  -> pTableId: Table ID
+      //  -> pView: View
+      //  <> pWhere: Target where
+      //  <> pSqlQueryParameter: Target recordset of parameters
+
+      pWhere := '';
+
+      IF (pView <> '') THEN
+      BEGIN
+        lRecordRef.OPEN(pTableId);
+        lRecordRef.SETVIEW(pView);
+        FOR lIndex := 1 TO lRecordRef.FIELDCOUNT DO
+        BEGIN
+          lFieldRef := lRecordRef.FIELDINDEX(lIndex);
+          lFieldFilter := lFieldRef.GETFILTER();
+          IF (lFieldFilter <> '') THEN
+          BEGIN
+            lFieldName := lFieldRef.NAME;
+            lFieldName := STRSUBSTNO(xFieldName, ConvertIdentifierToSql(lFieldName));
+            IF (pWhere = '') THEN
+              pWhere := 'WHERE '
+            ELSE
+              pWhere := pWhere + ' AND ';
+            pWhere := pWhere + STRSUBSTNO(xWherePart, lFieldName, lParameterName);
+            lParameterName := STRSUBSTNO(xParameterName, lFieldRef.NUMBER);
+            pSqlQueryParameter.INIT();
+            pSqlQueryParameter."Query Code" := pQueryCode;
+            pSqlQueryParameter.Name := STRSUBSTNO(xParameterName, lFieldRef.NUMBER);
+            pSqlQueryParameter.Type := FieldRefTypeToParameterType(lFieldRef.TYPE);
+            pSqlQueryParameter.SetValue(lFieldRef.VALUE);
+            pSqlQueryParameter.INSERT();
+          END;
+        END;
+        lRecordRef.CLOSE();
+      END;
+    END;
+
+    LOCAL PROCEDURE ConvertExpressionToSql@1000000033(pExpression@1000000000 : Text) : Text;
+    VAR
+      lLeftToConvert@1000000003 : Text;
+      lConverted@1000000004 : Text;
+      lLeftSide@1000000006 : Text;
+      lRightSide@1000000007 : Text;
+      lFieldStarted@1000000005 : Boolean;
+      lSeparatorFound@1000000008 : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Converting expresssion to SQL (fields are delimited by '[' and ']')
+      //  -> pExpression: Expression to convert
+      //  <- Converted expression
+
+      lLeftToConvert := pExpression;
+      lConverted := '';
+      lFieldStarted := FALSE;
+
+      WHILE (lLeftToConvert <> '') DO
+      BEGIN
+        IF (lFieldStarted) THEN
+        BEGIN
+          lSeparatorFound := StrSplitBy(lLeftToConvert, ']', AddSeparatorTo::Right, lLeftSide, lRightSide);
+          lConverted := lConverted + ConvertIdentifierToSql(lLeftSide);
+          lLeftToConvert := lRightSide;
+          lFieldStarted := ( NOT (lSeparatorFound));
+        END
+        ELSE
+        BEGIN
+          lSeparatorFound := StrSplitBy(lLeftToConvert, '[', AddSeparatorTo::Left, lLeftSide, lRightSide);
+          lConverted := lConverted + lLeftSide;
+          lLeftToConvert := lRightSide;
+          lFieldStarted := lSeparatorFound;
+        END;
+      END;
+
+      EXIT(lConverted);
+    END;
+
+    PROCEDURE ConvertAggregationToSql@1000000052(pExpression@1000000000 : Text;pAggregation@1000000001 : Integer) : Text;
+    VAR
+      xSum@1000000002 : TextConst 'ENU=SUM(%1);ENG=SUM(%1)';
+      xAverage@1000000005 : TextConst 'ENU=AVG(%1);ENG=AVG(%1)';
+      xMinimum@1000000004 : TextConst 'ENU=MIN(%1);ENG=MIN(%1)';
+      xMaximum@1000000003 : TextConst 'ENU=MAX(%1);ENG=MAX(%1)';
+      xCount@1000000006 : TextConst 'ENU=COUNT(*);ENG=COUNT(*)';
+    BEGIN
+      //DOC NS2015.1 - Converting aggregation to SQL
+      //  <> pExpression: Expression (will be changed if there is aggregation)
+      //  -> pAggregation: Aggregation (see "SQL Query"."Aggregation" field options)
+
+      CASE (pAggregation) OF
+        SqlQueryFieldTmp.Aggregation::Sum:
+          EXIT(STRSUBSTNO(xSum, pExpression));
+        SqlQueryFieldTmp.Aggregation::Average:
+          EXIT(STRSUBSTNO(xAverage, pExpression));
+        SqlQueryFieldTmp.Aggregation::Minimum:
+          EXIT(STRSUBSTNO(xMinimum, pExpression));
+        SqlQueryFieldTmp.Aggregation::Maximum:
+          EXIT(STRSUBSTNO(xMaximum, pExpression));
+        SqlQueryFieldTmp.Aggregation::Count:
+          EXIT(xCount);
+      END;
+
+      EXIT(pExpression);
+    END;
+
+    PROCEDURE "--- Tools ---"@1000000020();
+    BEGIN
+    END;
+
+    PROCEDURE StrSplitBy@1000000038(pString@1000000000 : Text;pSeparator@1000000001 : Text[1];pAddSeparatorTo@1000000006 : Integer;VAR pLeftSide@1000000002 : Text;VAR pRightSide@1000000003 : Text) : Boolean;
+    VAR
+      lPos@1000000004 : Integer;
+      lSeparatorFound@1000000005 : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Splitting string by passed separator
+      //  -> pString: Expression to split
+      //  -> pSeparator: Separator
+      //  -> pAddSeparatorTo: Add separator to None / Left / Right side
+      //  <> pLeftSide: Target left side
+      //  <> pRightSide: Target right side
+      //  <- Separator found / not
+
+      lPos := STRPOS(pString, pSeparator);
+      IF (lPos > 0) THEN
+      BEGIN
+        pLeftSide := COPYSTR(pString, 1, lPos - 1);
+        IF (lPos < STRLEN(pString)) THEN
+          pRightSide := COPYSTR(pString, lPos + 1, STRLEN(pString) - lPos)
+        ELSE
+          pRightSide := '';
+        lSeparatorFound := TRUE;
+      END;
+
+      IF (lSeparatorFound) THEN
+        CASE (pAddSeparatorTo) OF
+          AddSeparatorTo::Left: pLeftSide := pLeftSide + pSeparator;
+          AddSeparatorTo::Right: pRightSide := pRightSide + pSeparator;
+        END;
+
+      EXIT(lSeparatorFound);
+    END;
+
+    LOCAL PROCEDURE ParameterTypeToSqlDbType@1000000007(pSqlQueryParameter@1000000000 : Record 9062332;VAR pSqlDbType@1000000001 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlDbType");
+    BEGIN
+      //DOC NS2015.1 - Converting parameter type to SqlDbType
+      //  -> pSqlQueryParameter: SQL query parameter record
+      //  <> pSqlDbType: Target SqlDbType
+
+      CASE (pSqlQueryParameter.Type) OF
+        pSqlQueryParameter.Type::Boolean:
+          pSqlDbType := pSqlDbType.Bit;
+        pSqlQueryParameter.Type::Integer:
+          pSqlDbType := pSqlDbType.Int;
+        pSqlQueryParameter.Type::Decimal:
+          pSqlDbType := pSqlDbType.Decimal;
+        pSqlQueryParameter.Type::Text:
+          pSqlDbType := pSqlDbType.VarChar;
+        pSqlQueryParameter.Type::Date:
+          pSqlDbType := pSqlDbType.Date;
+        pSqlQueryParameter.Type::Time:
+          pSqlDbType := pSqlDbType.Time;
+        pSqlQueryParameter.Type::DateTime:
+          pSqlDbType := pSqlDbType.DateTime;
+        ELSE
+          pSqlDbType := pSqlDbType.VarChar;
+      END;
+    END;
+
+    LOCAL PROCEDURE FieldRefTypeToParameterType@1000000046(pFieldRefType@1000000000 : Variant) : Integer;
+    VAR
+      lFieldRefTypeText@1000000001 : Code[20];
+    BEGIN
+      //DOC NS2015.1 - Converting FieldRef type to parameter type
+      //  -> pFieldRefType: FieldRef type
+      //  <- Parameter type
+
+      lFieldRefTypeText := FORMAT(pFieldRefType);
+      CASE (lFieldRefTypeText) OF
+        'BOOLEAN':
+          EXIT(SqlQueryParameterTmp.Type::Boolean);
+        'INT':
+          EXIT(SqlQueryParameterTmp.Type::Integer);
+        'DECIMAL':
+          EXIT(SqlQueryParameterTmp.Type::Decimal);
+        'TEXT':
+          EXIT(SqlQueryParameterTmp.Type::Text);
+        'DATE':
+          EXIT(SqlQueryParameterTmp.Type::Date);
+        'TIME':
+          EXIT(SqlQueryParameterTmp.Type::Time);
+        'DATETIME':
+          EXIT(SqlQueryParameterTmp.Type::DateTime);
+        ELSE
+          EXIT(SqlQueryParameterTmp.Type::Text);
+      END;
+    END;
+
+    LOCAL PROCEDURE SystemTypeToFieldType@1000000034(pSystemType@1000000000 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Type") : Integer;
+    VAR
+      lSystemTypeText@1000000001 : Text[1024];
+      TNPToolkit@1000000002 : Codeunit 9062230;
+    BEGIN
+      //DOC NS2015.1 - Converting System.Type to SQL query field type
+      //  -> pSystemType: System.Type value
+      //  <- SQL query field type
+
+      lSystemTypeText := String.ReplaceAll(LOWERCASE(pSystemType.ToString()), 'system.', '');
+
+      CASE (lSystemTypeText) OF
+        'boolean':
+          EXIT(SqlQueryResultTmp."Field Type"::Boolean);
+        'byte',
+        'int16',
+        'int32',
+        'int64',
+        'sbyte',
+        'single',
+        'uint16',
+        'uint32',
+        'uint64':
+          EXIT(SqlQueryResultTmp."Field Type"::Integer);
+        'decimal',
+        'double',
+        'float':
+          EXIT(SqlQueryResultTmp."Field Type"::Decimal);
+        'char',
+        'string':
+          EXIT(SqlQueryResultTmp."Field Type"::Text);
+        'datetime':
+          EXIT(SqlQueryResultTmp."Field Type"::DateTime);
+        ELSE
+          EXIT(SqlQueryResultTmp."Field Type"::Text);
+      END;
+    END;
+
+    PROCEDURE "--- Result Fields ---"@1000000035();
+    BEGIN
+    END;
+
+    PROCEDURE GetResultFields@1000000040(pQueryCode@1000000000 : Code[20];VAR pSqlQueryResultField@1000000008 : Record 9062387);
+    VAR
+      lSqlQuery@1000000001 : Record 9062331;
+      lSqlQueryParameterTmp@1000000003 : TEMPORARY Record 9062332;
+      lSqlDataReader@1000000002 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      lSqlDataReaderFieldIndex@1000000009 : Integer;
+    BEGIN
+      //DOC NA2015.7 - Returning result fields of a given query
+      //  -> pQueryCode: Query code
+      //  <> pSqlQueryResultField: Target recordset
+
+      Connect();
+      ClearQueries();
+
+      lSqlQuery.GET(pQueryCode);
+      lSqlQuery.CALCFIELDS("Query Text");
+      AddQueryTmp(lSqlQuery, lSqlQueryParameterTmp);
+
+      CheckQueries();
+      CreateQueriesCommand();
+
+      lSqlDataReader := SqlCommand.ExecuteReader();
+      lSqlDataReader.Read();
+
+      FOR lSqlDataReaderFieldIndex := 0 TO lSqlDataReader.FieldCount - 1 DO
+      BEGIN
+        pSqlQueryResultField.INIT();
+        pSqlQueryResultField.VALIDATE("Query Code", pQueryCode);
+        pSqlQueryResultField.VALIDATE(ID, lSqlDataReaderFieldIndex + 1);
+        pSqlQueryResultField.VALIDATE(Name, lSqlDataReader.GetName(lSqlDataReaderFieldIndex));
+        pSqlQueryResultField.VALIDATE(Type, SystemTypeToFieldType(lSqlDataReader.GetFieldType(lSqlDataReaderFieldIndex)));
+        pSqlQueryResultField.INSERT(TRUE);
+      END;
+
+      Disconnect();
+    END;
+
+    PROCEDURE AutoUpdateResultFields@1000000004(pQueryCode@1000000000 : Code[20]) : Boolean;
+    VAR
+      lSqlQueryTimestamp@1000000001 : DateTime;
+    BEGIN
+      //DOC NA2016.14 - Auto-updating result fields of the given query
+      //  -> pQueryCode: Query code
+      //  <- TRUE: Fields updated, FALSE: Fields already up-to-date
+
+      SqlQuery.GET(pQueryCode);
+      lSqlQueryTimestamp := SqlQuery.GetTimestampDateTime();
+      IF ((lSqlQueryTimestamp <> 0DT) AND (SqlQuery."Updated Date Time" <> 0DT) AND
+          (lSqlQueryTimestamp = SqlQuery."Updated Date Time")) THEN
+        EXIT(FALSE);
+
+      UpdateResultFields(pQueryCode);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE UpdateResultFields@1000000041(pQueryCode@1000000000 : Code[20]);
+    VAR
+      lSqlQueryResultField@1000000001 : Record 9062387;
+    BEGIN
+      //DOC NA2016.14 - Updating result fields of the given query
+      //  -> pQueryCode: Query code
+
+      lSqlQueryResultField.RESET();
+      lSqlQueryResultField.SETRANGE("Query Code", pQueryCode);
+      lSqlQueryResultField.SETFILTER("Created Date Time", STRSUBSTNO('<%1', CALCDATE('<-1D>', TODAY)));
+      IF ( NOT (lSqlQueryResultField.ISEMPTY)) THEN
+        lSqlQueryResultField.DELETEALL(TRUE);
+
+      lSqlQueryResultField.RESET();
+      lSqlQueryResultField.SETRANGE("Query Code", pQueryCode);
+      lSqlQueryResultField.DELETEALL(TRUE);
+      GetResultFields(pQueryCode, lSqlQueryResultField);
+
+      SqlQuery.GET(pQueryCode);
+      SqlQuery.VALIDATE("Updated Date Time", SqlQuery.GetTimestampDateTime());
+      SqlQuery.MODIFY(TRUE);
+    END;
+
+    PROCEDURE ValidateResultField@1000000036(pQueryCode@1000000001 : Code[20];VAR pFieldName@1000000000 : Text);
+    VAR
+      lSqlQueryResultField@1000000003 : Record 9062387;
+      lResult@1000000002 : Boolean;
+      lFilter@1000000004 : ARRAY [4] OF Text;
+      lFilterIndex@1000000005 : Integer;
+    BEGIN
+      //DOC NA2016.14 - Validating (SQL query) result field
+      //  -> pQueryCode: Query code
+      //  <> pFieldName: Source / target field name
+
+      lResult := FALSE;
+
+      IF (pFieldName <> '') THEN
+      BEGIN
+        IF (AutoUpdateResultFields(pQueryCode)) THEN
+          COMMIT;
+
+        lFilter[1] := pFieldName;
+        lFilter[2] := '@' + pFieldName;
+        lFilter[3] := '@' + pFieldName + '*';
+        lFilter[4] := '@*' + pFieldName + '*';
+        lFilterIndex := 1;
+
+        lSqlQueryResultField.RESET();
+        lSqlQueryResultField.SETRANGE("Query Code", pQueryCode);
+
+        WHILE (( NOT (lResult)) AND (lFilterIndex <= ARRAYLEN(lFilter))) DO
+        BEGIN
+          lSqlQueryResultField.SETFILTER(Name, lFilter[lFilterIndex]);
+          lResult := lSqlQueryResultField.FINDFIRST();
+          lFilterIndex += 1;
+        END;
+      END;
+
+      IF (lResult) THEN
+        pFieldName := lSqlQueryResultField.Name
+      ELSE
+        pFieldName := '';
+    END;
+
+    PROCEDURE ResultFieldLookup@1000000026(pQueryCode@1000000002 : Code[20];VAR pFieldName@1000000000 : Text) : Boolean;
+    VAR
+      lSqlQueryResultField@1000000001 : Record 9062387;
+      lResult@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2016.14 - Lookup for (SQL query) result field
+      //  -> pQueryCode: Query code
+      //  <> pFieldName: Source / target field name
+      //  <- Lookup result
+
+      IF (AutoUpdateResultFields(pQueryCode)) THEN
+        COMMIT;
+
+      lSqlQueryResultField.RESET();
+      lSqlQueryResultField.SETRANGE("Query Code", pQueryCode);
+      IF (pFieldName <> '') THEN
+      BEGIN
+        lSqlQueryResultField.SETRANGE(Name, pFieldName);
+        IF (lSqlQueryResultField.FINDFIRST()) THEN;
+        lSqlQueryResultField.SETRANGE(Name);
+      END;
+
+      IF (PAGE.RUNMODAL(0, lSqlQueryResultField) = ACTION::LookupOK) THEN
+      BEGIN
+        pFieldName := lSqlQueryResultField.Name;
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    EVENT SqlCommand@1000000007::StatementCompleted@57(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Data, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.StatementCompletedEventArgs");
+    BEGIN
+    END;
+
+    EVENT SqlCommand@1000000007::Disposed@58(sender@1000000001 : Variant;e@1000000000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.EventArgs");
+    BEGIN
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  JH 16/05/2013 - Created
+      //DOC NA2015.4  PC 24/20/2014 - NAV on Demand modifications
+      //DOC NA2015.4  JH 30/12/2014 - System behaviour used instead of nAblement setup
+      //DOC NA2015.7  JH 26/05/2015 - Result fields added, "RunQueryAndGetResults" added
+      //DOC NA2016.7  JH 26/08/2015 - Upgraded to 2016
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit used
+      //DOC NA2016.14 JH 02/03/2016 - Auto-update modified
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

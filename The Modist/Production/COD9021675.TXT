@@ -1,0 +1,124 @@
+OBJECT Codeunit 9021675 AutoPopPageItem
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:21 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Item@1000000000 : Record 27;
+      Item1@1000000012 : Record 27;
+      ProdGroup@1000000001 : Record 5723;
+      PageItem@1000000002 : Record 9021629;
+      Text000@1000000003 : TextConst 'ENU=You cannot request Put At Top and Put At Bottom simultaneously.  See item %1.;ENG=You cannot request Put At Top and Put At Bottom simultaneously.  See item %1.';
+      Text001@1000000004 : TextConst 'ENU=Item No. must not be blank.;ENG=Item No. must not be blank.';
+      Text002@1000000006 : TextConst 'ENU=Unexpected error, ePageGuID is blank on Item No. %1.;ENG=Unexpected error, ePageGuID is blank on Item No. %1.';
+      PageItem1@1000000011 : Record 9021629;
+      Label@1000000007 : Record 9021618;
+      ePage@1000000009 : Record 9021628;
+      ePageGuID@1000000008 : Integer;
+      Text003@1000000005 : TextConst 'ENU=There is more than one label so you need to specify the label code.;ENG=There is more than one label so you need to specify the label code.';
+      Text004@1000000010 : TextConst 'ENU=Cannot find ePage (Label Code %2, Page GuID %3) for Item No. %1;ENG=Cannot find ePage (Label Code %2, Page GuID %3) for Item No. %1';
+      FoundOrder@1000000013 : Boolean;
+      OrderNo@1000000014 : Integer;
+      Text005@1000000015 : TextConst 'ENU=Error in finding order no. on item %1.;ENG=Error in finding order no. on item %1.';
+
+    PROCEDURE InsertCondition@1000000000(ItemNo@1000000000 : Code[20];OnlyInsertIfNotAlreadyOnWebPag@1000000001 : Boolean;PutAtBottom@1000000003 : Boolean;OverrideePageGuID@1000000004 : Integer;LabelCode@1000000002 : Code[10]);
+    BEGIN
+      IF LabelCode = '' THEN BEGIN
+        Label.RESET;
+        Label.SETRANGE("Used-in Company",COMPANYNAME);
+        IF Label.COUNT = 1 THEN BEGIN
+          Label.FINDFIRST;
+          LabelCode := Label.Code;
+        END ELSE
+          ERROR(Text003)
+      END ELSE
+        Label.GET(LabelCode);
+
+      IF ItemNo = '' THEN
+        ERROR(Text001);
+
+      Item.GET(ItemNo);
+      IF OverrideePageGuID = 0 THEN BEGIN
+        IF (Item."Product Group Code" = '') OR
+           (Item."Item Category Code" = '') THEN
+          EXIT;
+        ProdGroup.GET(Item."Item Category Code",Item."Product Group Code");
+        IF ProdGroup."ePage GuID" = 0 THEN
+          EXIT
+        ELSE
+          ePageGuID := ProdGroup."ePage GuID";
+      END ELSE
+        ePageGuID := OverrideePageGuID;
+
+      IF ePageGuID = 0 THEN
+        ERROR(Text002,ItemNo);
+
+      IF NOT ePage.GET(LabelCode,ePageGuID) THEN
+        ERROR(Text004,ItemNo,LabelCode,ePageGuID);
+
+      FoundOrder := FALSE;
+      OrderNo := 0;
+      IF PageItem.GET(LabelCode,ePageGuID,PageItem1.Type::Item,'',ItemNo) THEN BEGIN
+        PageItem1 := PageItem;
+        //PageItem.DELETE(true);
+        //PageItem1.INSERT(TRUE);
+      END ELSE BEGIN
+        PageItem1.INIT;
+        PageItem1."Label Code" := LabelCode;
+        PageItem1."Page GroupGuid" := ePageGuID;
+        PageItem1.Type := PageItem1.Type::Item;
+        PageItem1."Page Item Type Code" := '';
+        PageItem1.VALIDATE("No.",ItemNo);
+        PageItem1."Inserted by Auto Process" := TRUE;
+        PageItem1.INSERT(TRUE);
+      END;
+
+      PageItem.RESET;
+      PageItem.SETRANGE("Label Code",LabelCode);
+      PageItem.SETRANGE("Page GroupGuid",ePageGuID);
+      PageItem.SETRANGE(Type,PageItem.Type::Item);
+      IF PageItem.FINDFIRST THEN BEGIN
+        IF PutAtBottom THEN BEGIN
+          PageItem.FINDLAST;
+          PageItem1.Order := PageItem.Order + 1;
+        END ELSE BEGIN
+          //working out order if PutAtTop but below Items on Promo
+          PageItem.FIND('-');
+          REPEAT
+            IF FoundOrder = FALSE THEN BEGIN
+              Item1.GET(PageItem."No.");
+              FoundOrder := TRUE;
+              OrderNo := PageItem.Order + 1;
+            END;
+          UNTIL PageItem.NEXT = 0;
+        END;
+        IF OrderNo = 0 THEN
+          ERROR(Text005,ItemNo);
+        PageItem1.Order := OrderNo;
+      END ELSE
+        PageItem1.Order := 2;
+
+      PageItem1.Reorder(LabelCode,ePageGuID);
+      PageItem1.MODIFY;
+    END;
+
+    BEGIN
+    {
+      //DOC EC2009.2 GW 01/06/2010 - Created
+      //DOC EC2016.6 JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

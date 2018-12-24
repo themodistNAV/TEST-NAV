@@ -1,0 +1,363 @@
+OBJECT Table 50020 Purchase Payment Details
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/12/17;
+    Time=11:59:23 AM;
+    Modified=Yes;
+    Version List=TM0011;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               TestPurchHeaderStatusOpen;
+               SetPaymentNo;
+             END;
+
+    OnDelete=BEGIN
+               // TestPurchHeaderStatusOpen;
+               // TestStatusOpen;
+               DeleteAttachments;
+             END;
+
+  }
+  FIELDS
+  {
+    { 10  ;   ;Document Type       ;Option        ;CaptionML=[ENU=Document Type;
+                                                              ENG=Document Type];
+                                                   OptionCaptionML=[ENU=Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order;
+                                                                    ENG=Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order];
+                                                   OptionString=Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order }
+    { 20  ;   ;Document No.        ;Code20        ;TableRelation="Purchase Header".No. WHERE (Document Type=FIELD(Document Type));
+                                                   CaptionML=[ENU=Document No.;
+                                                              ENG=Document No.] }
+    { 30  ;   ;Line No.            ;Integer       ;CaptionML=[ENU=Line No.;
+                                                              ENG=Line No.] }
+    { 40  ;   ;Type                ;Option        ;OnValidate=BEGIN
+                                                                TestPurchHeaderStatusOpen;
+                                                                TestStatusOpen;
+                                                              END;
+
+                                                   OptionCaptionML=ENU=Deposit,Delivery,Full Delivery;
+                                                   OptionString=Deposit,Delivery,Full Delivery }
+    { 50  ;   ;Amount              ;Decimal       ;OnValidate=BEGIN
+                                                                TestPurchHeaderStatusOpen;
+                                                                TestStatusOpen;
+                                                                CheckTotalAmnt;
+                                                              END;
+                                                               }
+    { 60  ;   ;Due Date            ;Date          ;OnValidate=BEGIN
+                                                                TestPurchHeaderStatusOpen;
+                                                                TestStatusOpen;
+                                                              END;
+                                                               }
+    { 70  ;   ;Paid Date           ;Date          ;OnValidate=BEGIN
+                                                                TestPurchHeaderStatusOpen;
+                                                                TestStatusOpen;
+                                                              END;
+                                                               }
+    { 80  ;   ;Status              ;Option        ;OptionCaptionML=ENU=Open,Paid;
+                                                   OptionString=Open,Paid }
+    { 90  ;   ;Attachments         ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Exist("Incoming Document Attachment" WHERE (Incoming Document Entry No.=FIELD(Incoming Document Entry No.)));
+                                                   Editable=No }
+    { 100 ;   ;Bank Account No.    ;Code20        ;TableRelation="Bank Account";
+                                                   OnValidate=BEGIN
+                                                                TestPurchHeaderStatusOpen;
+                                                                TestStatusOpen;
+                                                                BankAccount.GET("Bank Account No.");
+                                                                "Bank Account Name" := BankAccount.Name;
+                                                              END;
+                                                               }
+    { 101 ;   ;Bank Account Name   ;Text30        ;Editable=No }
+    { 102 ;   ;Payment Document No.;Code20        ;Editable=No }
+    { 200 ;   ;Remarks             ;Text50         }
+    { 1000;   ;Payment No.         ;Integer       ;BlankZero=Yes;
+                                                   Editable=No }
+    { 2000;   ;Incoming Document Entry No.;Integer;TableRelation="Incoming Document";
+                                                   OnValidate=VAR
+                                                                IncomingDocument@1000 : Record 130;
+                                                              BEGIN
+                                                              END;
+
+                                                   CaptionML=[ENU=Incoming Document Entry No.;
+                                                              ENG=Incoming Document Entry No.] }
+    { 3000;   ;Total               ;Decimal       ;FieldClass=FlowFilter;
+                                                   BlankZero=Yes;
+                                                   Editable=No;
+                                                   CaptionClass=GetTotal }
+  }
+  KEYS
+  {
+    {    ;Document Type,Document No.,Line No.     ;SumIndexFields=Amount;
+                                                   Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      PurchasePayment@1000000000 : Record 50020;
+      PurchaseHeader@1000000001 : Record 38;
+      Text000@1000000002 : TextConst 'ENU=Total Payments cannot be more than Purchase Order Amount.';
+      IncomingDocument@1000000003 : Record 130;
+      IncomingDocumentAttachment@1000000005 : Record 133;
+      IncDocAttachmentOverview@1000000008 : TEMPORARY Record 137;
+      Currency@1000000010 : Record 4;
+      BankAccount@1000000013 : Record 270;
+      IncomingDocumentAttachments@1000000009 : Page 194;
+      ImportAttachmentIncDoc@1000000004 : Codeunit 134;
+      FileManagement@1000000007 : Codeunit 419;
+      GenJnlPostLine@1000000012 : Codeunit 12;
+      FileName@1000000006 : Text;
+      Text001@1000000011 : TextConst 'ENU=Are you sure you want to Create & Post Payment for %1';
+
+    LOCAL PROCEDURE SetPaymentNo@1000000000();
+    BEGIN
+      PurchasePayment.RESET;
+      PurchasePayment.SETRANGE("Document Type","Document Type");
+      PurchasePayment.SETRANGE("Document No.","Document No.");
+      PurchasePayment.SETRANGE(Type,Type);
+      IF PurchasePayment.FINDLAST THEN
+        "Payment No." := PurchasePayment."Payment No." + 1
+      ELSE
+        "Payment No." := 1;
+    END;
+
+    LOCAL PROCEDURE CheckTotalAmnt@1000000001();
+    BEGIN
+      GetPurchaseHeader;
+      PurchasePayment.RESET;
+      PurchasePayment.SETRANGE("Document Type","Document Type");
+      PurchasePayment.SETRANGE("Document No.","Document No.");
+      PurchasePayment.CALCSUMS(Amount);
+      IF (Amount + PurchasePayment.Amount) > PurchaseHeader."Amount Including VAT" THEN
+        ERROR(Text000);
+    END;
+
+    LOCAL PROCEDURE GetPurchaseHeader@1000000005();
+    BEGIN
+      IF (PurchaseHeader."Document Type" <> "Document Type") OR (PurchaseHeader."No." <> "Document No.") THEN
+        PurchaseHeader.GET("Document Type","Document No.");
+      PurchaseHeader.CALCFIELDS("Amount Including VAT");
+    END;
+
+    LOCAL PROCEDURE TestPurchHeaderStatusOpen@1000000002();
+    BEGIN
+      GetPurchaseHeader;
+      PurchaseHeader.TESTFIELD(Status,PurchaseHeader.Status::Open);
+    END;
+
+    LOCAL PROCEDURE TestStatusOpen@1000000004();
+    BEGIN
+      TESTFIELD(Status,Status::Open);
+    END;
+
+    PROCEDURE CreateAttachment@1000000003();
+    VAR
+      lLineNo@1000000000 : Integer;
+    BEGIN
+      IncomingDocumentAttachment.RESET;
+      IncomingDocumentAttachment.SETRANGE("Incoming Document Entry No.","Incoming Document Entry No.");
+      IF IncomingDocumentAttachment.FINDLAST THEN
+        lLineNo := IncomingDocumentAttachment."Line No." + 10000
+      ELSE
+        lLineNo := 10000;
+
+      CLEAR(IncomingDocumentAttachment);
+      CLEAR(ImportAttachmentIncDoc);
+      ImportAttachmentIncDoc.UploadFile(IncomingDocumentAttachment,FileName);
+      IF FileName = '' THEN
+        ERROR('');
+
+      CLEAR(IncomingDocument);
+      IF "Incoming Document Entry No." = 0 THEN BEGIN
+        IncomingDocument.CreateIncomingDocument('','');
+        "Incoming Document Entry No." := IncomingDocument."Entry No.";
+      END ELSE
+        IncomingDocument.GET("Incoming Document Entry No.");
+
+      IncomingDocumentAttachment."Incoming Document Entry No." := IncomingDocument."Entry No.";
+      IncomingDocumentAttachment."Line No." := lLineNo;
+      IncomingDocumentAttachment.VALIDATE("File Extension",LOWERCASE(COPYSTR(FileManagement.GetExtension(FileName),1,MAXSTRLEN(IncomingDocumentAttachment."File Extension"))));
+      IF IncomingDocumentAttachment.Name = '' THEN
+        IncomingDocumentAttachment.Name := COPYSTR(FileManagement.GetFileNameWithoutExtension(FileName),1,MAXSTRLEN(IncomingDocumentAttachment.Name));
+      IncomingDocumentAttachment.INSERT(TRUE);
+    END;
+
+    PROCEDURE ViewAttachements@1000000006();
+    VAR
+      lStortingOrder@1000000000 : Integer;
+    BEGIN
+      IncDocAttachmentOverview.RESET;
+      IncDocAttachmentOverview.DELETEALL;
+
+      IncomingDocumentAttachment.RESET;
+      IncomingDocumentAttachment.SETRANGE("Incoming Document Entry No.","Incoming Document Entry No.");
+      IF IncomingDocumentAttachment.FINDSET THEN BEGIN
+        lStortingOrder := 1;
+        REPEAT
+          IncDocAttachmentOverview.INIT;
+          IncDocAttachmentOverview.TRANSFERFIELDS(IncomingDocumentAttachment);
+          IncDocAttachmentOverview."Sorting Order" := lStortingOrder;
+          IncDocAttachmentOverview.INSERT;
+          lStortingOrder += 1;
+        UNTIL IncomingDocumentAttachment.NEXT=0;
+      END ELSE
+        EXIT;
+
+      IncDocAttachmentOverview.RESET;
+      PAGE.RUN(PAGE::"Incoming Document Attachments",IncDocAttachmentOverview);
+    END;
+
+    PROCEDURE CreatePaymentJrnl@1000000007();
+    VAR
+      lGenJournalBatch@1000000001 : Record 232;
+      lText000@1000000003 : TextConst 'ENU=Default Batch not found for %1';
+      lGenJournalLine@1000000000 : Record 81;
+      lSourceCodeSetup@1000000008 : Record 242;
+      lLastDocNo@1000000005 : Code[20];
+      lLastLineNo@1000000004 : Integer;
+      lText001@1000000009 : TextConst 'ENU=Payment Journal No. %1 Posted Successfully.';
+      lPaymentTxt@1000000007 : TextConst 'ENU=Payment for %1 %2 %3.';
+    BEGIN
+      TESTFIELD(Status,Status::Open);
+      TESTFIELD("Bank Account No.");
+      TESTFIELD("Paid Date");
+      TESTFIELD("Due Date");
+      CALCFIELDS(Attachments);
+      TESTFIELD(Attachments,TRUE);
+      IF NOT CONFIRM(STRSUBSTNO(Text001,Type)) THEN
+        EXIT;
+
+      lLastLineNo := 0;
+      lLastDocNo := '';
+
+      GetPurchaseHeader;
+      lGenJournalBatch.RESET;
+      lGenJournalBatch.SETRANGE("Bal. Account Type",lGenJournalBatch."Bal. Account Type"::"Bank Account");
+      lGenJournalBatch.SETRANGE("Bal. Account No.","Bank Account No.");
+      IF NOT lGenJournalBatch.FINDFIRST THEN
+        ERROR(lText000,"Bank Account No.");
+
+      GetCurrency(PurchaseHeader);
+      PurchaseHeader.CALCFIELDS("Amount Including VAT");
+
+      lSourceCodeSetup.GET;
+
+      lGenJournalLine.SETRANGE("Journal Template Name",lGenJournalBatch."Journal Template Name");
+      lGenJournalLine.SETRANGE("Journal Batch Name",lGenJournalBatch.Name);
+      IF lGenJournalLine.FINDLAST THEN BEGIN
+        lLastLineNo := lGenJournalLine."Line No.";
+        lLastDocNo := lGenJournalLine."Document No.";
+      END;
+
+      lGenJournalLine.INIT;
+      lGenJournalLine."Journal Template Name" := lGenJournalBatch."Journal Template Name";
+      lGenJournalLine."Journal Batch Name" := lGenJournalBatch.Name;
+      lGenJournalLine."Line No." := lLastLineNo + 10000;
+      lGenJournalLine.VALIDATE("Posting Date","Paid Date");
+      lGenJournalLine."Document Type" := lGenJournalLine."Document Type"::Payment;
+      lGenJournalLine."Account Type" := lGenJournalLine."Account Type"::Vendor;
+      lGenJournalLine.VALIDATE("Account No.",PurchaseHeader."Pay-to Vendor No.");
+      lGenJournalLine."Bal. Account Type" := lGenJournalLine."Bal. Account Type"::"Bank Account";
+      lGenJournalLine.VALIDATE("Bal. Account No.",lGenJournalBatch."Bal. Account No.");
+      lGenJournalLine.VALIDATE("Currency Code",PurchaseHeader."Currency Code");
+      lGenJournalLine.Description := STRSUBSTNO(lPaymentTxt,Type,PurchaseHeader."Document Type",PurchaseHeader."No.");
+      lGenJournalLine."Shortcut Dimension 1 Code" := PurchaseHeader."Shortcut Dimension 1 Code";
+      lGenJournalLine."Shortcut Dimension 2 Code" := PurchaseHeader."Shortcut Dimension 2 Code";
+      lGenJournalLine."Dimension Set ID" := PurchaseHeader."Dimension Set ID";
+      lGenJournalLine."Source Code" := lSourceCodeSetup."Payment Journal";
+      lGenJournalLine.VALIDATE(Amount,Amount);
+      lGenJournalLine."Applies-to Ext. Doc. No." := PurchaseHeader."No.";
+      lGenJournalLine."External Document No." := PurchaseHeader."Vendor Invoice No.";
+      lGenJournalLine."Document No." := GetDocumentNo(lGenJournalLine,lLastDocNo);
+      lGenJournalLine.VALIDATE("Due Date","Due Date");
+      lGenJournalLine.INSERT;
+
+      CLEAR(GenJnlPostLine);
+      GenJnlPostLine.RUN(lGenJournalLine);
+
+      Status := Status::Paid;
+      "Payment Document No." := lGenJournalLine."Document No.";
+
+      lGenJournalLine.DELETE(TRUE);
+
+      MESSAGE(lText001,lGenJournalLine."Document No.");
+    END;
+
+    LOCAL PROCEDURE GetDocumentNo@1000000008(pGenJournalLine@1000000003 : Record 81;pLasDocNo@1000000002 : Code[20]) : Code[20];
+    VAR
+      lGenJournalBatch@1000000000 : Record 232;
+      lNoSeriesMgt@1000000001 : Codeunit 396;
+    BEGIN
+      lGenJournalBatch.GET(pGenJournalLine."Journal Template Name",pGenJournalLine."Journal Batch Name");
+      IF lGenJournalBatch."No. Series" = '' THEN
+        EXIT(INCSTR(pLasDocNo));
+
+      CLEAR(lNoSeriesMgt);
+      EXIT(lNoSeriesMgt.GetNextNo(lGenJournalBatch."No. Series",pGenJournalLine."Posting Date",TRUE));
+    END;
+
+    LOCAL PROCEDURE GetCurrency@1000000009(pPurchaseHeader@1000000000 : Record 38);
+    BEGIN
+      CLEAR(Currency);
+      IF pPurchaseHeader."Currency Code" = '' THEN
+        Currency.InitRoundingPrecision
+      ELSE BEGIN
+        pPurchaseHeader.TESTFIELD("Currency Factor");
+        Currency.GET(pPurchaseHeader."Currency Code");
+        Currency.TESTFIELD("Amount Rounding Precision");
+      END;
+    END;
+
+    PROCEDURE SetStyle@5() : Text;
+    BEGIN
+      IF Status = Status::Open THEN
+        EXIT('Unfavorable')
+      ELSE
+        EXIT('Favorable');
+      EXIT('');
+    END;
+
+    PROCEDURE SetAttStyle@1000000010() : Text;
+    BEGIN
+      CALCFIELDS(Attachments);
+      IF Attachments THEN
+        EXIT('Favorable')
+      ELSE
+        EXIT('Unfavorable');
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE DeleteAttachments@1000000011();
+    BEGIN
+      IF IncomingDocument.GET("Incoming Document Entry No.") THEN
+        IncomingDocument.DELETE(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetTotal@1000000013() : Text;
+    BEGIN
+      CALCSUMS(Amount);
+      EXIT('Total: ' + FORMAT(Amount));
+    END;
+
+    PROCEDURE Navigate@2();
+    VAR
+      NavigateForm@1000 : Page 344;
+    BEGIN
+      IF "Payment Document No." = '' THEN
+        EXIT;
+      NavigateForm.SetDoc("Paid Date","Payment Document No.");
+      NavigateForm.RUN;
+    END;
+
+    BEGIN
+    {
+      //DOC TM0011 AW 19/09/2017 - Purchase Payment Details
+    }
+    END.
+  }
+}
+

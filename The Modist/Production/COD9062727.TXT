@@ -1,0 +1,277 @@
+OBJECT Codeunit 9062727 Page Metadata Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            IF (CONFIRM(cnfUpdateAllPages)) THEN
+              ProcessAllPages(TRUE, TRUE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ObjMetadataMgt@1000000001 : Codeunit 9062725;
+      PageMetadata@1000000009 : Record 2000000138;
+      EnhPageMetadata@1000000003 : Record 9062847;
+      ControlMetadata@1000000002 : Record 9062848;
+      XmlDocument@1000000007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XmlNamespaceManager@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+      XmlToolkit@1000000005 : Codeunit 9062641;
+      ControlLineNo@1000000004 : Integer;
+      cnfUpdateAllPages@1000000011 : TextConst 'ENU=Do you want to update metadata of all pages?;ENG=Do you want to update metadata of all pages?';
+      errUnknownControlType@1000000008 : TextConst 'ENU=Unknown control type ''%1''.;ENG=Unknown control type ''%1''.';
+      txtProgressDialog@1000000000 : TextConst 'ENU=Processing pages @1@@@@@@@@@@@@@@@@@@@@;ENG=Processing pages @1@@@@@@@@@@@@@@@@@@@@';
+      txtPagesProcessed@1000000010 : TextConst 'ENU=Processing finished.\Deleted: %1\Processed: %2\Updated: %3.;ENG=Processing finished.\Deleted: %1\Processed: %2\Updated: %3.';
+
+    PROCEDURE ProcessAllPages@1000000009(ForceRefresh@1000000001 : Boolean;WithUI@1000000002 : Boolean);
+    VAR
+      ObjectMetadata@1000000000 : Record 2000000071;
+      ProgressDlg@1000000006 : Dialog;
+      DeletedMetadata@1000000007 : Integer;
+      MetadataCount@1000000003 : Integer;
+      MetadataIndex@1000000004 : Integer;
+      ProcessedMetadata@1000000005 : Integer;
+    BEGIN
+      //Process all pages metadata
+      WithUI := (WithUI AND GUIALLOWED);
+      IF (WithUI) THEN
+        ProgressDlg.OPEN(txtProgressDialog);
+
+      //delete enhanced metadata for deleted pages
+      EnhPageMetadata.RESET();
+      EnhPageMetadata.SETRANGE("Object Exists", FALSE);
+      DeletedMetadata := EnhPageMetadata.COUNT;
+      EnhPageMetadata.DELETEALL(TRUE);
+
+      //process all pages
+      ObjectMetadata.RESET();
+      ObjectMetadata.SETRANGE("Object Type", ObjectMetadata."Object Type"::Page);
+      MetadataCount := ObjectMetadata.COUNT;
+      MetadataIndex := 0;
+      ProcessedMetadata := 0;
+      IF (ObjectMetadata.FINDSET()) THEN BEGIN
+        REPEAT
+          //update ui
+          MetadataIndex += 1;
+          IF (WithUI) THEN
+            ProgressDlg.UPDATE(1, ROUND(10000 * MetadataIndex / MetadataCount, 1));
+          //process metadata
+          IF (ProcessPage(ObjectMetadata, ForceRefresh)) THEN
+            ProcessedMetadata += 1;
+        UNTIL (ObjectMetadata.NEXT() = 0);
+      END;
+
+      IF (WithUI) THEN BEGIN
+        ProgressDlg.CLOSE();
+        MESSAGE(STRSUBSTNO(txtPagesProcessed, DeletedMetadata, MetadataCount, ProcessedMetadata));
+      END;
+    END;
+
+    PROCEDURE ProcessPageById@1000000001(PageId@1000000000 : Integer;ForceRefresh@1000000001 : Boolean) : Boolean;
+    VAR
+      ObjectMetadata@1000000004 : Record 2000000071;
+    BEGIN
+      ObjectMetadata.GET(ObjectMetadata."Object Type"::Page, PageId);
+      EXIT(ProcessPage(ObjectMetadata, ForceRefresh));
+    END;
+
+    PROCEDURE ProcessPage@1000000000(VAR ObjectMetadata@1000000000 : Record 2000000071;ForceRefresh@1000000005 : Boolean) : Boolean;
+    VAR
+      Node@1000000004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      NodeList@1000000003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      MetadataTimestamp@1000000006 : BigInteger;
+    BEGIN
+      //create enhanced object metadata if record is missing
+      EnhPageMetadata.RESET();
+      IF (NOT(EnhPageMetadata.GET(ObjectMetadata."Object ID"))) THEN BEGIN
+        ForceRefresh := TRUE;
+        EnhPageMetadata.INIT();
+        EnhPageMetadata."Page Id" := ObjectMetadata."Object ID";
+        EnhPageMetadata.INSERT();
+      END;
+
+      //collect metadata information
+      MetadataTimestamp := ObjMetadataMgt.GetMetadataTimestamp(ObjectMetadata);
+
+      //check if enhanced metadata should be processed
+      IF (NOT(ForceRefresh)) THEN
+        ForceRefresh := (MetadataTimestamp <> EnhPageMetadata."Metadata Timestamp");
+      IF (NOT(ForceRefresh)) THEN
+        EXIT(FALSE);
+
+      //update enhanced metadata
+      EnhPageMetadata."Metadata Timestamp" := MetadataTimestamp;
+      EnhPageMetadata.MODIFY();
+
+      //initialize processing
+      ControlMetadata.RESET();
+      ControlMetadata.SETRANGE("Page Id", EnhPageMetadata."Page Id");
+      ControlMetadata.DELETEALL();
+      ControlLineNo := 0;
+
+      //load metadata
+      PageMetadata.GET(EnhPageMetadata."Page Id");
+      ObjMetadataMgt.GetMetadata(ObjectMetadata, XmlDocument);
+      XmlToolkit.GetXmlDocumentNamespaces(XmlDocument, 'd', XmlNamespaceManager);
+
+      //process container nodes
+      NodeList := XmlDocument.SelectNodes('//d:Containers', XmlNamespaceManager);
+      FOREACH Node IN NodeList DO BEGIN
+        ProcessContainer(Node, 0);
+      END;
+
+      //metadata processed
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ProcessContainer@1000000002(VAR ContainerNode@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";Indent@1000000004 : Integer);
+    VAR
+      Node@1000000002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      NodeList@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      ControlId@1000000003 : Integer;
+    BEGIN
+      //create container node
+      ControlId := CreateControlMetadata(ContainerNode, 0, Indent);
+
+      //process child nodes
+      NodeList := ContainerNode.SelectNodes('d:Controls', XmlNamespaceManager);
+      FOREACH Node IN NodeList DO BEGIN
+        ProcessControl(Node, ControlId, Indent + 1);
+      END;
+    END;
+
+    LOCAL PROCEDURE ProcessControl@1000000003(VAR ParentNode@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";ParentControlId@1000000003 : Integer;Indent@1000000005 : Integer);
+    VAR
+      Node@1000000002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      NodeList@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      ControlId@1000000004 : Integer;
+    BEGIN
+      //create control node
+      ControlId := CreateControlMetadata(ParentNode, ParentControlId, Indent);
+
+      //process child nodes
+      NodeList := ParentNode.SelectNodes('d:Controls', XmlNamespaceManager);
+      FOREACH Node IN NodeList DO BEGIN
+        ProcessControl(Node, ControlId, Indent + 1);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateControlMetadata@1000000004(VAR Node@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";ParentId@1000000003 : Integer;Indent@1000000005 : Integer) : Integer;
+    VAR
+      ExpressionNode@1000000004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      NodeTypeName@1000000001 : Text;
+      FieldId@1000000002 : Integer;
+    BEGIN
+      ControlLineNo += 1;
+      ControlMetadata.INIT;
+      ControlMetadata."Page Id" := PageMetadata.ID;
+      ControlMetadata."Line No." := ControlLineNo;
+      ControlMetadata."Parent Id" := ParentId;
+      ControlMetadata.Indent := Indent;
+      ControlMetadata."Source Table Id" := PageMetadata.SourceTable;
+      ControlMetadata.Id := XmlToolkit.GetXmlNodeIntegerAttribute(Node, 'ID');
+      //load xsi:type
+      NodeTypeName := XmlToolkit.GetXmlNodeAttribute(Node, 'xsi:type');
+      CASE (NodeTypeName) OF
+        //part
+        'InfopartPageDefinition':
+          BEGIN
+            ControlMetadata.SetPartType(ControlMetadata."Part Type"::Page);
+            ControlMetadata."Page Part Id" := XmlToolkit.GetXmlNodeIntegerAttribute(Node, 'PagePartID');
+            ControlMetadata."Run Object Src. Table Id" := XmlToolkit.GetXmlNodeIntegerAttribute(Node, 'RunObjectSrcTable');
+          END;
+        'InfopartSystemDefinition': ControlMetadata.SetPartType(ControlMetadata."Part Type"::System);
+        'InfopartChartDefinition': ControlMetadata.SetPartType(ControlMetadata."Part Type"::Chart);
+        //container
+        'ControlContainerDefinition':
+          BEGIN
+            ControlMetadata.Type := ControlMetadata.Type::Container;
+            EVALUATE(ControlMetadata."Container Type", XmlToolkit.GetXmlNodeAttribute(Node, 'ContainerType'));
+          END;
+        //group
+        'RepeaterDefinition': ControlMetadata.SetGroupType(ControlMetadata."Group Type"::Repeater);
+        'ControlGroupDefinition': ControlMetadata.SetGroupType(ControlMetadata."Group Type"::Group);
+        'StackGroupDefinition': ControlMetadata.SetGroupType(ControlMetadata."Group Type"::CueGroup);
+        'ColumnLayoutDefinition': ControlMetadata.SetGroupType(ControlMetadata."Group Type"::FixedLayout);
+        'GridLayoutDefinition': ControlMetadata.SetGroupType(ControlMetadata."Group Type"::GridLayout);
+        //control
+        'ControlDefinition':
+          BEGIN
+            ControlMetadata.Type := ControlMetadata.Type::Field;
+            ControlMetadata."Source Expression" := XmlToolkit.GetXmlNodeAttribute(Node, 'DataColumnName');
+            IF (EVALUATE(ControlMetadata."Source Field Id", ControlMetadata."Source Expression")) THEN BEGIN
+              ControlMetadata."Source Type" := ControlMetadata."Source Type"::Field;
+            END ELSE BEGIN
+              ControlMetadata."Source Type" := ControlMetadata."Source Type"::Expression;
+              ControlMetadata."Source Field Id" := 0;
+              IF (FindExpressionNode(ExpressionNode, ControlMetadata."Source Expression")) THEN BEGIN
+                ControlMetadata."Source Expression" := COPYSTR(
+                  XmlToolkit.GetXmlNodeAttribute(ExpressionNode, 'SourceExpression'),
+                  1, MAXSTRLEN(ControlMetadata."Source Expression"));
+                ControlMetadata."Source Data Type" := XmlToolkit.GetXmlNodeAttribute(ExpressionNode, 'Datatype');
+              END;
+            END;
+          END;
+      ELSE
+        ERROR(errUnknownControlType, NodeTypeName);
+      END;
+      //other settings
+      ControlMetadata.VALIDATE("Visible Expression", COPYSTR(
+        XmlToolkit.GetXmlNodeAttribute(Node, 'Visible'),
+        1, MAXSTRLEN(ControlMetadata."Visible Expression")));
+
+      //create record
+      ControlMetadata.INSERT();
+
+      EXIT(ControlMetadata.Id);
+    END;
+
+    LOCAL PROCEDURE FindExpressionNode@1000000014(VAR Node@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";VariableName@1000000000 : Text) : Boolean;
+    BEGIN
+      //find expression node
+      Node := XmlDocument.SelectSingleNode(
+        STRSUBSTNO('//d:Expression[Name=''%1'']', VariableName),
+        XmlNamespaceManager);
+      EXIT(NOT(ISNULL(Node)));
+    END;
+
+    EVENT XmlDocument@1000000007::NodeInserting@94(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XmlDocument@1000000007::NodeInserted@95(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XmlDocument@1000000007::NodeRemoving@96(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XmlDocument@1000000007::NodeRemoved@97(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XmlDocument@1000000007::NodeChanging@98(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XmlDocument@1000000007::NodeChanged@99(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.15 AZ 14/03/2016 - Created
+      //DOC NA2016.15 JH 09/05/2016 - CfMD modifications
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,239 @@
+OBJECT Codeunit 9062563 Import Help
+{
+  OBJECT-PROPERTIES
+  {
+    Date=26/09/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.16.2;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      HelpHeader@1000000007 : Record 9062710;
+      HelpImage@1000000009 : Record 9062713;
+      TextCommentExtension@1000000014 : Record 9062238;
+      FileManagement@1000000004 : Codeunit 419;
+      FileSystem@1000000001 : Codeunit 9062264;
+      TextExtensionManagement@1000000008 : Codeunit 9062250;
+      TnpToolkit@1000000013 : Codeunit 9062230;
+      HtmlFilePath@1000000003 : Text;
+      HtmlFileName@1000000006 : Text;
+      HtmlFileFolder@1000000000 : Text;
+      HtmlServerFilePath@1000000005 : Text;
+      HtmlText@1000000002 : Text;
+
+    PROCEDURE ImportHtmlFile@1000000000(VAR pHelpHeader@1000000000 : Record 9062710) : Boolean;
+    VAR
+      eTitle@1000000002 : TextConst 'ENU=Choose HTML File to Import;ENG=Choose HTML File to Import';
+      eFilter@1000000003 : TextConst 'ENU="HTML Files (*.htm;*.html)|*.htm;*.html|All Files (*.*)|*.*";ENG="HTML Files (*.htm;*.html)|*.htm;*.html|All Files (*.*)|*.*"';
+      eConfirmation@1000000005 : TextConst 'ENU=Do you want to import "%1" HTML file to help "%2"?;ENG=Do you want to import "%1" HTML file to help "%2"?';
+      lResult@1000000006 : Boolean;
+    BEGIN
+      //DOC NA2016.16.2 - Importing help from HTML file
+      //  <> pHelpHeader: The help header
+      //  <- TRUE = Imported, FALSE = Cancelled
+
+      lResult := FALSE;
+
+      HelpHeader := pHelpHeader;
+
+      HtmlFilePath := FileManagement.OpenFileDialog(eTitle, '', eFilter);
+      IF (HtmlFilePath <> '') THEN
+        IF (CONFIRM(eConfirmation, TRUE, HtmlFilePath, pHelpHeader."No.")) THEN
+        BEGIN
+          HtmlFileName := FileSystem.GetFileName(TRUE, HtmlFilePath);
+          HtmlServerFilePath := FileSystem.GetTempPathForFile(FALSE, HtmlFileName);
+          FileSystem.DeleteFileIfExists(FALSE, HtmlServerFilePath);
+          FileSystem.UploadSilent(TRUE, HtmlFilePath, HtmlServerFilePath);
+          ImportHtmlFileSelected();
+          FileSystem.DeleteFileIfExists(FALSE, HtmlServerFilePath);
+          lResult := TRUE;
+        END;
+
+      IF (lResult) THEN
+        pHelpHeader := HelpHeader;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE ImportHtmlFileSelected@1000000002();
+    VAR
+      lHtmlFile@1000000002 : File;
+      lHtmlFileLength@1000000003 : Integer;
+      lHtmlLine@1000000004 : Text;
+    BEGIN
+      //DOC NA2016.16.2 - Importing help from selected HTML file
+
+      InitialiseHelp();
+
+      HtmlFileFolder := FileSystem.GetFolderName(TRUE, HtmlFilePath);
+
+      lHtmlFile.WRITEMODE(FALSE);
+      lHtmlFile.TEXTMODE(TRUE);
+      lHtmlFile.OPEN(HtmlServerFilePath);
+      lHtmlFileLength := lHtmlFile.LEN;
+      WHILE (lHtmlFile.POS < lHtmlFileLength) DO
+      BEGIN
+        lHtmlFile.READ(lHtmlLine);
+        HtmlText := HtmlText + lHtmlLine;
+      END;
+      lHtmlFile.CLOSE();
+
+      ProcessHtmlText();
+
+      FinaliseHelp();
+    END;
+
+    LOCAL PROCEDURE InitialiseHelp@1000000013();
+    BEGIN
+      //DOC NA2016.16.2 - Initialising help
+
+      TextExtensionManagement.DeleteRecordExtensions(DATABASE::"Help Header", HelpHeader.GETPOSITION());
+      HelpHeader.VALIDATE("Help Text", '');
+      CLEAR(HelpHeader."Screen Shot 1");
+      CLEAR(HelpHeader."Screen Shot 2");
+      CLEAR(HelpHeader."Screen Shot 3");
+      CLEAR(HelpHeader."Small Picture");
+      HelpHeader.MODIFY(TRUE);
+
+      HelpImage.RESET();
+      HelpImage.SETRANGE("Help No.", HelpHeader."No.");
+      HelpImage.DELETEALL(TRUE);
+
+      CLEAR(HtmlText);
+    END;
+
+    LOCAL PROCEDURE ProcessHtmlText@1000000007();
+    VAR
+      lProcessing@1000000000 : Boolean;
+      lHtmlTextToProcess@1000000002 : Text;
+      lHtmlTextProcessed@1000000003 : Text;
+      lRegex@1000000001 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex";
+      lOuterMatch@1000000004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Match";
+      lOuterGroup@1000000010 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Group";
+      lInnerMatch@1000000009 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Match";
+      lInnerGroup@1000000005 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Group";
+      lHelpImageIndex@1000000006 : Integer;
+      lHelpImagePath@1000000007 : Text;
+      lHelpImageName@1000000011 : Text;
+      lHelpImagePlaceholder@1000000008 : Text;
+    BEGIN
+      //DOC NA2016.16.2 - Processing HTML line
+
+      lHtmlTextToProcess := HtmlText;
+      lHelpImageIndex := 0;
+      lHelpImagePath := '';
+      lHelpImagePlaceholder := '';
+
+      lProcessing := TRUE;
+      WHILE (lProcessing) DO
+      BEGIN
+        lOuterMatch := lRegex.Match(lHtmlTextToProcess, '<img(.*?)(/>|>.*?</img>)');
+        IF (lOuterMatch.Success) THEN
+        BEGIN
+          IF (lOuterMatch.Index > 0) THEN
+            lHtmlTextProcessed := lHtmlTextProcessed + COPYSTR(lHtmlTextToProcess, 1, lOuterMatch.Index);
+          lHelpImageName := CreateHelpImageName(lHelpImageIndex);
+          lHelpImagePlaceholder := CreatePlaceholder(lHelpImageName);
+          lOuterGroup := lOuterMatch.Groups.Item(1);
+          IF ( NOT (ISNULL(lOuterGroup))) THEN
+          BEGIN
+            lInnerMatch := lRegex.Match(lOuterGroup.Value, 'src="(.+?)"');
+            IF (lInnerMatch.Success) THEN
+            BEGIN
+              lInnerGroup := lInnerMatch.Groups.Item(1);
+              IF ( NOT (ISNULL(lInnerGroup))) THEN
+              BEGIN
+                lHelpImagePath := lInnerGroup.Value;
+                lHelpImagePath := FileSystem.Combine(TRUE, HtmlFileFolder, lHelpImagePath);
+                IF (FileSystem.FileExists(TRUE, lHelpImagePath)) THEN
+                  InsertHelpImage(lHelpImagePath, lHelpImageIndex, lHelpImageName);
+              END;
+            END;
+          END;
+          lHtmlTextProcessed := lHtmlTextProcessed + lHelpImagePlaceholder;
+          lHtmlTextToProcess := COPYSTR(lHtmlTextToProcess, lOuterMatch.Index + lOuterMatch.Length + 1);
+        END
+        ELSE
+          lProcessing := FALSE;
+      END;
+
+      HtmlText := lHtmlTextProcessed;
+    END;
+
+    LOCAL PROCEDURE CreateHelpImageName@1000000004(VAR pHelpImageIndex@1000000001 : Integer) : Text;
+    VAR
+      lHelpImageName@1000000000 : Text;
+      eHelpImageNameTemplate@1000000002 : TextConst 'ENU=Image %1;ENG=Image %1';
+    BEGIN
+      //DOC NA2016.16.2 - Creating help image name
+      //  <> pHelpImageIndex: Help image index (is changed inside)
+      //  <- The name
+
+      pHelpImageIndex += 1;
+      lHelpImageName := TnpToolkit.IntegerWithLeadingZeros(pHelpImageIndex, 3);
+      lHelpImageName := STRSUBSTNO(eHelpImageNameTemplate, lHelpImageName);
+      EXIT(lHelpImageName);
+    END;
+
+    LOCAL PROCEDURE CreatePlaceholder@1000000025(pName@1000000000 : Text) : Text;
+    BEGIN
+      //DOC NA2016.16.2 - Creating a placeholder
+      //  -> pName: The placeholder name
+      //  <- The placeholder
+
+
+      EXIT('[' + pName + ']');
+    END;
+
+    LOCAL PROCEDURE InsertHelpImage@1000000008(pHelpImagePath@1000000001 : Text;pHelpImageIndex@1000000002 : Integer;pHelpImageName@1000000000 : Text);
+    VAR
+      lHelpImageFileName@1000000005 : Text;
+      lHelpImageServerPath@1000000004 : Text;
+      lHelpImageBlob@1000000003 : Record 99008535;
+    BEGIN
+      //DOC NA2016.16.2 - Inserting help image
+      //  -> pHelpImagePath: Help image path
+      //  -> pHelpImageIndex: Help image index
+      //  -> pHelpImageName: Help image name
+
+      lHelpImageFileName := FileSystem.GetFileName(TRUE, pHelpImagePath);
+      lHelpImageServerPath := FileSystem.GetTempPathForFile(FALSE, lHelpImageFileName);
+      FileSystem.DeleteFileIfExists(FALSE, lHelpImageServerPath);
+      FileSystem.UploadSilent(TRUE, pHelpImagePath, lHelpImageServerPath);
+      FileSystem.ImportFileToBlobSilent(FALSE, lHelpImageServerPath, lHelpImageBlob);
+      FileSystem.DeleteFileIfExists(FALSE, lHelpImageServerPath);
+
+      CLEAR(HelpImage);
+      HelpImage.INIT();
+      HelpImage.VALIDATE("Help No.", HelpHeader."No.");
+      HelpImage.VALIDATE("Line No.", pHelpImageIndex * 10000);
+      HelpImage.VALIDATE(Name, pHelpImageName);
+      HelpImage.VALIDATE(Content, lHelpImageBlob.Blob);
+      HelpImage.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE FinaliseHelp@1000000001();
+    BEGIN
+      //DOC NA2016.16.2 - Finalising help
+
+      TextExtensionManagement.SetText(TextCommentExtension, DATABASE::"Help Header", HelpHeader.FIELDNO("Help Text"), HelpHeader.GETPOSITION(), HtmlText);
+
+      HelpHeader.VALIDATE("Help Text", COPYSTR(HtmlText, 1, MAXSTRLEN(HelpHeader."Help Text")));
+      HelpHeader.MODIFY(TRUE);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.16.2 JH 26/07/2016 - Created
+    }
+    END.
+  }
+}
+

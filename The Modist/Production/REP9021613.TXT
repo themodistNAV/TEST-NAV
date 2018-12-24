@@ -1,0 +1,353 @@
+OBJECT Report 9021613 Generate Vouchers
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:05 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Generate Vouchers;
+               ENG=Generate Vouchers];
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  FourLetterWords.Reorder;  //DOC EC2015.5.02
+
+                  Window.OPEN(Text001);
+
+                  IF VoucherScheme.Code = '' THEN
+                    ERROR(Text004);
+                  IF Campaign.GETFILTER("No.") = '' THEN
+                    ERROR(Text002);
+
+                  MarketSetup.GET;
+                  MarketSetup.TESTFIELD("Bus. Rel. Code for Customers");
+                END;
+
+    OnPostReport=BEGIN
+                   Window.CLOSE;
+                 END;
+
+  }
+  DATASET
+  {
+    { 4372;    ;DataItem;                    ;
+               DataItemTable=Table5071;
+               OnAfterGetRecord=BEGIN
+                                  Window.UPDATE(1,"No.");
+
+                                  IssueVouchers(Campaign);
+                                END;
+
+               ReqFilterFields=No. }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+      { 1000000000;;Container;
+                  CaptionML=ENG=<Control1000000000>;
+                  ContainerType=ContentArea }
+
+      { 1000000001;1;Group  ;
+                  GroupType=Group }
+
+      { 1000000002;2;Field  ;
+                  CaptionML=[ENU=Voucher Scheme;
+                             ENG=Voucher Scheme];
+                  SourceExpr=VoucherScheme.Code;
+                  Editable=FALSE;
+                  OnValidate=BEGIN
+                               //IF NOT VoucherScheme.GET(VoucherSchemeCode) THEN
+                               //  CLEAR(VoucherScheme);
+
+                               //RequestOptionsForm.VouchAmt.EDITABLE(VoucherScheme."Voucher Type" = VoucherScheme."Voucher Type"::Amount);
+                               //RequestOptionsPage.VouchAmt.EDITABLE(VoucherScheme."Voucher Type" = VoucherScheme."Voucher Type"::Amount);
+
+                               //from OnLookup
+                               //IF FORM.RUNMODAL(0,VoucherSch) = ACTION::LookupOK THEN BEGIN
+                               //  VoucherSchemeCode := VoucherSch.Code;
+                               //  VoucherScheme.GET(VoucherSchemeCode);
+                               //  //RequestOptionsForm.VouchAmt.EDITABLE(VoucherScheme."Voucher Type" = VoucherScheme."Voucher Type"::Amount);
+                               //END;
+                             END;
+
+                  OnLookup=VAR
+                             VoucherSch@1000000000 : Record 9021659;
+                           BEGIN
+                           END;
+                            }
+
+      { 1000000003;2;Field  ;
+                  CaptionML=[ENU=Voucher Description;
+                             ENG=Voucher Description];
+                  SourceExpr=VoucherScheme.Description;
+                  Editable=FALSE }
+
+      { 1000000004;2;Field  ;
+                  CaptionML=[ENU=Voucher No.;
+                             ENG=Voucher No.];
+                  ToolTipML=[ENU=Leave blank for system to generate random Voucher Numbers;
+                             ENG=Leave blank for system to generate random Voucher Numbers];
+                  SourceExpr=VoucherNo }
+
+      { 1000000005;2;Field  ;
+                  CaptionML=[ENU=Expiry Date Calculation;
+                             ENG=Expiry Date Calculation];
+                  SourceExpr=VoucherScheme."Expiry Date";
+                  Editable=FALSE }
+
+      { 1000000006;2;Field  ;
+                  CaptionML=[ENU=Voucher Type;
+                             ENG=Voucher Type];
+                  SourceExpr=VoucherScheme."Voucher Type";
+                  Editable=FALSE }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      VoucherScheme@1040003 : Record 9021659;
+      Text001@1040004 : TextConst 'ENU=Generating Vouchers for Campaign Target Group #1#############;ENG=Generating Vouchers for Campaign Target Group #1#############';
+      Text002@1040001 : TextConst 'ENU=You must select a Campaign No. or range of Campaign Nos on the Campaign tab.;ENG=You must select a Campaign No. or range of Campaign Nos on the Campaign tab.';
+      Text003@1040008 : TextConst 'ENU=Voucher Amount must not be zero.;ENG=Voucher Amount must not be zero.';
+      Text004@1040007 : TextConst 'ENU=You must run this from a Voucher Scheme.;ENG=You must run this from a Voucher Scheme.';
+      PromoHead@1000000000 : Record 9021656;
+      ContBusRel@1000000005 : Record 5054;
+      MarketSetup@1000000006 : Record 5079;
+      FourLetterWords@1000000007 : Record 9021638;
+      Window@1000000001 : Dialog;
+      VoucherNo@1000000002 : Code[20];
+      PromoCampaign@1000000003 : Code[20];
+      ContactCustNo@1000000004 : Code[20];
+      i@1000000008 : Integer;
+      j@1000000009 : Integer;
+      jprev@1000000010 : Integer;
+      k@1000000011 : Integer;
+      kprev@1000000012 : Integer;
+      l@1000000015 : Integer;
+      lprev@1000000016 : Integer;
+      Seed@1000000013 : Integer;
+      BigSeed@1000000014 : BigInteger;
+
+    PROCEDURE SetScheme@1040000(iVoucherScheme@1040000 : Record 9021659) : Code[20];
+    BEGIN
+      VoucherScheme.GET(iVoucherScheme.Code);
+
+      VoucherScheme.TESTFIELD("Expiry Date");
+      VoucherScheme.TESTFIELD("Non-Segment Voucher",FALSE);
+      PromoCampaign := '';
+
+      CASE VoucherScheme."Voucher Type"OF
+        VoucherScheme."Voucher Type"::Promotional:
+          BEGIN
+            VoucherScheme.TESTFIELD(VoucherScheme."Promotion Code");
+            PromoHead.GET(VoucherScheme."Promotion Code");
+            PromoCampaign := PromoHead."Campaign No.";
+          END;
+        VoucherScheme."Voucher Type"::Amount:
+          BEGIN
+            IF VoucherScheme."Voucher Amount" = 0 THEN
+              ERROR(Text003);
+          END;
+      END;
+
+      VoucherScheme.TESTFIELD("Post Voucher Redemp. Res. No");
+      EXIT(PromoCampaign);
+    END;
+
+    PROCEDURE IssueVouchers@1040002(iCampaign@1040002 : Record 5071);
+    VAR
+      lVoucherEntry@1040000 : Record 9021672;
+      lVoucherEntry1@1000000002 : Record 9021672;
+      SegmentHead@1000000000 : Record 5076;
+      SegmentLine@1000000001 : Record 5077;
+      Contact@1000000008 : Record 5050;
+      EntryNo@1000000007 : Integer;
+      NoGenerated@1000000003 : Integer;
+      NoNoContact@1000000005 : Integer;
+      NoVouchEntryAlreadyExist@1000000006 : Integer;
+      RandomVoucherNo@1000000004 : Code[40];
+      TxtL001@1000000009 : TextConst 'ENU=Generated %1 vouchers for Campaign %2, Contacts not found %3, Vouchers already exist %4;ENG=Generated %1 vouchers for Campaign %2, Contacts not found %3, Vouchers already exist %4';
+    BEGIN
+      NoGenerated := 0;
+      NoVouchEntryAlreadyExist := 0;
+      NoNoContact := 0;
+
+      lVoucherEntry.RESET;
+      IF lVoucherEntry.FINDLAST THEN
+        EntryNo := lVoucherEntry."Entry No." + 1
+      ELSE
+        EntryNo := 1;
+
+      SegmentLine.RESET;
+      //SegmentLine.SETFILTER("Contact Company No.",'<>%1','');
+
+      //DOC EC2015.5.03 - Moved from lower down, only need to do once.
+      FourLetterWords.RESET;
+      FourLetterWords.FINDLAST;
+      i := FourLetterWords."Entry No.";
+      //DOC EC2015.5.03 +
+
+      lVoucherEntry1.RESET;
+      lVoucherEntry1.SETCURRENTKEY("Customer No.","Voucher No.",Open);
+      lVoucherEntry1.SETRANGE("Entry Type",lVoucherEntry1."Entry Type"::Issued);
+      lVoucherEntry1.SETRANGE("Voucher Scheme Code",VoucherScheme.Code);
+
+      SegmentHead.RESET;
+      SegmentHead.SETRANGE("Campaign No.",iCampaign."No.");
+      IF SegmentHead.FIND('-') THEN
+      REPEAT
+        SegmentLine.SETRANGE("Segment No.",SegmentHead."No.");
+        IF SegmentLine.FIND('-') THEN
+        REPEAT
+          ContactCustNo := '';
+          Contact.GET(SegmentLine."Contact No.");  //DOC EC2013.4.67
+          //DOC EC2013.4.67 IF ContBusRel.GET(SegmentLine."Contact No.",MarketSetup."Bus. Rel. Code for Customers") THEN BEGIN;
+          IF ContBusRel.GET(Contact."Company No.",MarketSetup."Bus. Rel. Code for Customers") THEN BEGIN
+            ContBusRel.TESTFIELD("Link to Table",ContBusRel."Link to Table"::Customer);
+            ContactCustNo := ContBusRel."No.";
+            IF ContactCustNo <> '' THEN BEGIN
+              lVoucherEntry1.SETRANGE("Customer No.",ContactCustNo);
+              IF lVoucherEntry1.FINDFIRST THEN BEGIN
+                NoVouchEntryAlreadyExist := NoVouchEntryAlreadyExist + 1;
+              END ELSE BEGIN
+                lVoucherEntry.LOCKTABLE();
+                lVoucherEntry.INIT;
+                lVoucherEntry."Entry No." := EntryNo;
+                EntryNo := EntryNo + 1;
+                lVoucherEntry."Entry Type" := lVoucherEntry."Entry Type"::Issued;
+                lVoucherEntry."Posting Date" := TODAY;
+                lVoucherEntry."Voucher Scheme Code" := VoucherScheme.Code;
+                lVoucherEntry."Voucher Type" := VoucherScheme."Voucher Type";
+                IF VoucherNo = '' THEN BEGIN
+                  //DOC EC2015.5.02 -
+                  //DOC EC2015.5.03 -
+                  //moved higher up
+                  //FourLetterWords.RESET;
+                  //FourLetterWords.FINDLAST;
+                  //i := FourLetterWords."Entry No.";
+
+                  //j := RANDOM(i);
+                  //k := RANDOM(i);
+
+                  jprev := j;
+                  kprev := k;
+                  lprev := l;
+
+                  //j - Entry No. of first word
+                  EVALUATE(BigSeed, COPYSTR(DELCHR(CREATEGUID(),'=','{}-ABCDEF'),1,10));
+                  Seed := (BigSeed MOD 2147483646) +1;
+                  RANDOMIZE(Seed);
+                  j := RANDOM(i);
+                  IF j = jprev THEN BEGIN
+                    EVALUATE(BigSeed, COPYSTR(DELCHR(CREATEGUID(),'=','{}-ABCDEF'),1,10));
+                    Seed:= (BigSeed MOD 2147483646) +1;
+                    RANDOMIZE(Seed);
+                    j := RANDOM(i);
+                  END;
+
+                  //k - Entry No. of second word
+                  EVALUATE(BigSeed, COPYSTR(DELCHR(CREATEGUID(),'=','{}-ABCDEF'),1,10));
+                  Seed := (BigSeed MOD 2147483646) +1;
+                  RANDOMIZE(Seed);
+                  k := RANDOM(i);
+                  IF k = kprev THEN BEGIN
+                    EVALUATE(BigSeed, COPYSTR(DELCHR(CREATEGUID(),'=','{}-ABCDEF'),1,10));
+                    Seed:= (BigSeed MOD 2147483646) +1;
+                    RANDOMIZE(Seed);
+                    k := RANDOM(i);
+                  END;
+
+                  //Get a new k if j and k the same
+                  IF j = k THEN BEGIN
+                    EVALUATE(BigSeed, COPYSTR(DELCHR(CREATEGUID(),'=','{}-ABCDEF'),1,10));
+                    Seed:= (BigSeed MOD 2147483646) +1;
+                    RANDOMIZE(Seed);
+                    k := RANDOM(i);
+                  END;
+
+                  //l - Integer (up to 99) at end of voucher
+                  EVALUATE(BigSeed, COPYSTR(DELCHR(CREATEGUID(),'=','{}-ABCDEF'),1,10));
+                  Seed := (BigSeed MOD 2147483646) +1;
+                  RANDOMIZE(Seed);
+                  l := RANDOM(99);
+                  IF l = lprev THEN BEGIN
+                    EVALUATE(BigSeed, COPYSTR(DELCHR(CREATEGUID(),'=','{}-ABCDEF'),1,10));
+                    Seed:= (BigSeed MOD 2147483646) +1;
+                    RANDOMIZE(Seed);
+                    l := RANDOM(99);
+                  END;
+                  //DOC EC2015.5.03 +
+
+                  FourLetterWords.GET(j);
+                  lVoucherEntry."Voucher No." := FourLetterWords.Word;
+                  FourLetterWords.GET(k);
+                  lVoucherEntry."Voucher No." := lVoucherEntry."Voucher No." + '-' + FourLetterWords.Word
+                                                 + '-' + FORMAT(RANDOM(l));
+
+                  {
+                  RandomVoucherNo := FORMAT(CREATEGUID);
+                  RandomVoucherNo := DELCHR(RandomVoucherNo,'=','-{}');
+                  lVoucherEntry."Voucher No." := COPYSTR(RandomVoucherNo,1,4) + '-' +
+                                COPYSTR(RandomVoucherNo,5,4) + '-' +
+                                COPYSTR(RandomVoucherNo,9,4) + '-' +
+                                COPYSTR(RandomVoucherNo,13,4);
+                  }
+                  //DOC EC2015.5.02 +
+                END ELSE
+                  lVoucherEntry."Voucher No." := VoucherNo;
+                lVoucherEntry."Customer No." := ContactCustNo;
+                CASE VoucherScheme."Voucher Type" OF
+                  VoucherScheme."Voucher Type"::Amount:
+                    BEGIN
+                      lVoucherEntry."Original Amount" := VoucherScheme."Voucher Amount";
+                      lVoucherEntry."Remaining Amount" := lVoucherEntry."Original Amount";
+                    END;
+                  VoucherScheme."Voucher Type"::Promotional:
+                    lVoucherEntry."Promotion Code" := VoucherScheme."Promotion Code";
+                END;
+                lVoucherEntry.Open := TRUE;
+                lVoucherEntry."Start Date" := TODAY;
+                lVoucherEntry."Expiry Date" := VoucherScheme."Expiry Date";
+                lVoucherEntry."User ID" := USERID;
+                lVoucherEntry."Campaign No." := iCampaign."No.";
+                lVoucherEntry."Segment No." := SegmentHead."No.";
+                lVoucherEntry."One Off" := VoucherScheme."One Off";
+                lVoucherEntry.INSERT;
+                NoGenerated := NoGenerated + 1;
+              END;
+            END;
+          END ELSE
+            NoNoContact := NoNoContact + 1;
+        UNTIL SegmentLine.NEXT = 0;
+      UNTIL SegmentHead.NEXT = 0;
+
+      MESSAGE(TxtL001,NoGenerated,iCampaign."No.",NoNoContact,NoVouchEntryAlreadyExist);
+    END;
+
+    BEGIN
+    {
+      //DOC EC2013.3.00 MQ 01/01/2013 - Created Request Page
+      //DOC EC2013.4.60 MQ 04/04/2014 - GW140404 Enhanced - designed to be called from a voucher scheme
+      //DOC EC2013.4.67 MQ 15/10/2014 - GW141015 Enhanced to show no. of contacts not found and fixed problem
+      //DOC EC2015.5.02 MQ 25/03/2015 - GW150325 Changes to use Four Letter Words table to generate voucher numbers
+      //DOC EC2015.5.03 MQ 01/06/2015 - GW150601 Enhanced RANDOM No generation because we were getting multiple same voucher nos.
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

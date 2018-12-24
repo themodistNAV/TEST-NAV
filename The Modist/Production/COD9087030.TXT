@@ -1,0 +1,106 @@
+OBJECT Codeunit 9087030 nSemble Purchase Events
+{
+  OBJECT-PROPERTIES
+  {
+    Date=21/02/17;
+    Time=[ 2:10:31 PM];
+    Modified=Yes;
+    Version List=NS2016.16.2;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    [EventSubscriber(Table,38,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE PurchaseHeader_AfterDelete@1000000000(VAR Rec@1000000000 : Record 38;RunTrigger@1000000001 : Boolean);
+    VAR
+      lPurchaseSummaryLine@1000000002 : Record 9087030;
+      lBuyingSheetSummaryLine@1000000003 : Record 9087021;
+      lBuyingSheetLine@1000000004 : Record 9087022;
+    BEGIN
+      //DOC NS2016.16.2 >>
+      IF (Rec.ISTEMPORARY()) THEN
+        EXIT;
+      //DOC NS2016.16.2 <<
+
+      lPurchaseSummaryLine.RESET();
+      lPurchaseSummaryLine.SETRANGE("Document Type", Rec."Document Type");
+      lPurchaseSummaryLine.SETRANGE("Document No.", Rec."No.");
+      lPurchaseSummaryLine.DELETEALL();
+
+      lBuyingSheetSummaryLine.RESET();
+      lBuyingSheetSummaryLine.SETCURRENTKEY("Purchase Order No.");
+      lBuyingSheetSummaryLine.SETRANGE("Purchase Order No.", Rec."No.");
+      lBuyingSheetSummaryLine.MODIFYALL("Purchase Order No.", '', TRUE);
+
+      lBuyingSheetLine.RESET();
+      lBuyingSheetLine.SETCURRENTKEY("Purchase Order No.");
+      lBuyingSheetLine.SETRANGE("Purchase Order No.", Rec."No.");
+      lBuyingSheetLine.MODIFYALL("Purchase Order No.", '', FALSE);
+      lBuyingSheetLine.MODIFYALL("Purchase Order Line No.", 0, FALSE);
+      lBuyingSheetLine.MODIFYALL("Purchase Order Line Posted", FALSE, TRUE);
+    END;
+
+    [EventSubscriber(Table,39,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE PurchaseLine_AfterDelete@1000000001(VAR Rec@1000000000 : Record 39;RunTrigger@1000000001 : Boolean);
+    VAR
+      lBuyingSheetLine@1000000002 : Record 9087022;
+    BEGIN
+      IF Rec.ISTEMPORARY THEN  //DOC NS2016.16 PCM 23/09/2016
+        EXIT;                  //DOC NS2016.16 PCM 23/09/2016
+      lBuyingSheetLine.RESET();
+      lBuyingSheetLine.SETCURRENTKEY("Purchase Order No.", "Purchase Order Line No.");
+      lBuyingSheetLine.SETRANGE("Purchase Order No.", Rec."Document No.");
+      lBuyingSheetLine.SETRANGE("Purchase Order Line No.", Rec."Line No.");
+      lBuyingSheetLine.MODIFYALL("Purchase Order No.", '', TRUE);
+      lBuyingSheetLine.MODIFYALL("Purchase Order Line No.", 0, TRUE);
+      lBuyingSheetLine.MODIFYALL("Purchase Order Line Posted", FALSE, TRUE);
+    END;
+
+    [EventSubscriber(Codeunit,415,OnBeforeReleasePurchaseDoc)]
+    LOCAL PROCEDURE ReleasePurchaseDocument_OnBeforeReleasePurchaseDoc@1000000002(VAR PurchaseHeader@1000000000 : Record 38);
+    VAR
+      lBrandVendor@1000000001 : Record 9087007;
+      lPurchaseLine@1000000002 : Record 39;
+      tmpBrand@1000000003 : TEMPORARY Record 9087006;
+    BEGIN
+      //DOC NS2016.16 PCM 23/09/2016 - Created
+      IF (PurchaseHeader."Document Type" = PurchaseHeader."Document Type"::Order) THEN BEGIN
+
+        lPurchaseLine.SETRANGE("Document Type",PurchaseHeader."Document Type");
+        lPurchaseLine.SETRANGE("Document No.",PurchaseHeader."No.");
+        IF lPurchaseLine.FINDSET THEN REPEAT
+          IF NOT tmpBrand.GET(lPurchaseLine."Brand Code") THEN BEGIN
+            tmpBrand.Code := lPurchaseLine."Brand Code";
+            tmpBrand.INSERT;
+          END;
+        UNTIL (lPurchaseLine.NEXT = 0);
+
+        tmpBrand.SETFILTER(Code,'<>%1','');
+        IF tmpBrand.FINDSET THEN REPEAT
+          IF NOT lBrandVendor.GET(tmpBrand.Code,PurchaseHeader."Buy-from Vendor No.") THEN BEGIN
+            lBrandVendor.INIT;
+            lBrandVendor.VALIDATE("Brand Code",tmpBrand.Code);
+            lBrandVendor.VALIDATE("Vendor No.",PurchaseHeader."Buy-from Vendor No.");
+            lBrandVendor.INSERT(TRUE);
+          END;
+        UNTIL (tmpBrand.NEXT = 0);
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NS2016.16   JH  07/09/2016 - Created
+      //DOC NS2016.16   PCM 23/09/2016 - Added ReleasePurchaseDocument_OnBeforeReleasePurchaseDoc EventSubscriber to populate Brand Vendor record.
+      //                                 Amend PurchaseLine_AfterDelete to prevent Buying Sheet Lines if temporary record (used for PO statistics).
+      //DOC NS2016.16.2 JH  21/02/2017 - Not running event logic for temporary records
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,224 @@
+OBJECT Codeunit 9062519 Sequence Toolkit
+{
+  OBJECT-PROPERTIES
+  {
+    Date=31/10/15;
+    Time=11:27:35 PM;
+    Version List=NA2016.11;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Record@1000000001 : RecordRef;
+      RecordSequence@1000000003 : FieldRef;
+      Recordset@1000000002 : RecordRef;
+      RecordsetSequence@1000000004 : FieldRef;
+      Direction@1000000000 : ' ,Up,Down';
+
+    LOCAL PROCEDURE "--- Constants --"@9062231();
+    BEGIN
+    END;
+
+    PROCEDURE Up@9062232() : Integer;
+    BEGIN
+      //DOC NA2016.11 - Returning "Up" value
+      //  <- The value
+
+      EXIT(Direction::Up);
+    END;
+
+    PROCEDURE Down@9062233() : Integer;
+    BEGIN
+      //DOC NA2016.11 - Returning "Down" value
+      //  <- The value
+
+      EXIT(Direction::Down);
+    END;
+
+    PROCEDURE "--- General ---"@1000000005();
+    BEGIN
+    END;
+
+    PROCEDURE SequenceUpDown@9062230(VAR pRecord@1000000000 : Variant;pTableId@1000000001 : Integer;pSequenceFieldId@1000000003 : Integer;pDirection@9062230 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2016.11 - Moving sequence up / down
+      //  <> pRecord: The current record
+      //  -> pTableId: Table ID
+      //  -> pSequenceFieldId: Sequence field ID
+      //  -> pDirection: Direction
+      //  <- Result (TRUE = moved, FALSE = not moved)
+
+      IF ( NOT (pDirection IN [Direction::Up, Direction::Down])) THEN
+        EXIT(FALSE);
+      EXIT(MoveSequence(pRecord, pTableId, pSequenceFieldId, pDirection));
+    END;
+
+    PROCEDURE SequenceUp@1000000008(VAR pRecord@1000000000 : Variant;pTableId@1000000001 : Integer;pSequenceFieldId@1000000003 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.6 - Moving sequence up
+      //  <> pRecord: The current record
+      //  -> pTableId: Table ID
+      //  -> pSequenceFieldId: Sequence field ID
+      //  <- Result (TRUE = moved, FALSE = not moved)
+
+      EXIT(MoveSequence(pRecord, pTableId, pSequenceFieldId, Direction::Up));
+    END;
+
+    PROCEDURE SequenceDown@1000000009(VAR pRecord@1000000003 : Variant;pTableId@1000000002 : Integer;pSequenceFieldId@1000000000 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.6 - Moving sequence down
+      //  <> pRecord: The current record
+      //  -> pTableId: Table ID
+      //  -> pSequenceFieldId: Sequence field ID
+      //  <- Result (TRUE = moved, FALSE = not moved)
+
+      EXIT(MoveSequence(pRecord, pTableId, pSequenceFieldId, Direction::Down));
+    END;
+
+    LOCAL PROCEDURE "--- Internal ---"@1000000000();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE MoveSequence@1000000010(VAR pRecord@1000000010 : Variant;pTableId@1000000009 : Integer;pSequenceFieldId@1000000000 : Integer;pDirection@1000000001 : Integer) : Boolean;
+    VAR
+      lFound@1000000003 : Boolean;
+      lCode@1000000007 : Code[20];
+      lExcludeCode@1000000004 : Code[20];
+      lSequence@1000000005 : Integer;
+      lResult@1000000006 : Boolean;
+      lRecordId@1000000011 : RecordID;
+    BEGIN
+      //DOC RE2009.6 - Moving migration table category up / down
+      //  <> pRecord: The current record
+      //  -> pTableId: Table ID
+      //  -> pSequenceFieldId: Sequence field ID
+      //  -> pDirection: Direction (up / down)
+      //  <- Result (TRUE = moved, FALSE = not moved)
+
+      lResult := FALSE;
+
+      Record.OPEN(pTableId);
+      Record.GETTABLE(pRecord);
+      Record.FIND('=');
+      RecordSequence := Record.FIELD(pSequenceFieldId);
+
+      Recordset := Record.DUPLICATE();
+      RecordsetSequence := Recordset.FIELD(pSequenceFieldId);
+
+      lRecordId := Record.RECORDID;
+      IF (CheckSequenceConsistency()) THEN
+        Record.GET(lRecordId);
+
+      IF (FindPreviousNext(pDirection)) THEN
+      BEGIN
+        lSequence := RecordSequence.VALUE;
+        RecordSequence.VALIDATE(RecordsetSequence.VALUE);
+        Record.MODIFY(TRUE);
+        RecordsetSequence.VALIDATE(lSequence);
+        Recordset.MODIFY(TRUE);
+        lResult := TRUE;
+      END;
+
+      Recordset.CLOSE();
+      Record.SETTABLE(pRecord);
+      Record.CLOSE();
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE CheckSequenceConsistency@1000000001() : Boolean;
+    VAR
+      lSequenceBuffer@9062231 : TEMPORARY Record 9062758;
+      lSequenceValueBuffer@9062229 : TEMPORARY Record 2000000026;
+      lSequenceConsistent@1000000000 : Boolean;
+      lSequence@9062233 : Integer;
+      lResult@1000000002 : Boolean;
+      lCurrentSequence@9062230 : Integer;
+      lNewSequence@9062232 : Integer;
+    BEGIN
+      //DOC NA2015.6 - Checking sequence consistency and re-sequencing if necessary
+      //  <- TRUE = Re-sequenced, FALSE = Not
+
+      lResult := FALSE;
+      lSequenceConsistent := TRUE;
+
+      IF (Recordset.FINDSET()) THEN
+      REPEAT
+        lSequence := RecordsetSequence.VALUE;
+        IF (lSequenceValueBuffer.GET(lSequence)) THEN
+          lSequenceConsistent := FALSE
+        ELSE
+        BEGIN
+          lSequenceValueBuffer.Number := lSequence;
+          lSequenceValueBuffer.INSERT();
+        END;
+      UNTIL ((Recordset.NEXT() = 0) OR ( NOT (lSequenceConsistent)));
+      lSequenceValueBuffer.DELETEALL();
+
+      IF ( NOT (lSequenceConsistent)) THEN
+      BEGIN
+        lNewSequence := 0;
+        IF (Recordset.FINDSET(FALSE)) THEN
+        REPEAT
+          lNewSequence += 10;
+          lCurrentSequence := RecordsetSequence.VALUE;
+          IF (lNewSequence <> lCurrentSequence) THEN
+          BEGIN
+            lSequenceBuffer."Record ID" := Recordset.RECORDID();
+            lSequenceBuffer.Sequence := lNewSequence;
+            lSequenceBuffer.INSERT();
+          END;
+        UNTIL (Recordset.NEXT() = 0);
+        IF (lSequenceBuffer.FINDSET()) THEN
+        REPEAT
+          Recordset.GET(lSequenceBuffer."Record ID");
+          RecordsetSequence.VALIDATE(lSequenceBuffer.Sequence);
+          Recordset.MODIFY(TRUE);
+        UNTIL (lSequenceBuffer.NEXT() = 0);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE FindPreviousNext@1000000006(pDirection@1000000000 : Integer) : Boolean;
+    VAR
+      lFound@1000000001 : Boolean;
+    BEGIN
+      //DOC NA2015.6 - Trying to find previous / next record
+      //  -> pDirection: Direction (up / down)
+
+      CASE (pDirection) OF
+        Direction::Up:
+          BEGIN
+            RecordsetSequence.SETFILTER('<%1', RecordSequence.VALUE);
+            lFound := Recordset.FINDLAST();
+          END;
+        Direction::Down:
+          BEGIN
+            RecordsetSequence.SETFILTER('>%1', RecordSequence.VALUE);
+            lFound := Recordset.FINDFIRST();
+          END;
+      END;
+
+      RecordsetSequence.SETRANGE();
+
+      EXIT(lFound);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.6  JH 14/04/2015 - Created
+      //DOC NA2016.10 JH 28/08/2015 - Upgraded to 2016
+      //DOC NA2016.11 JH 31/10/2015 - "Up", "Down", "SequenceUpDown" added
+    }
+    END.
+  }
+}
+

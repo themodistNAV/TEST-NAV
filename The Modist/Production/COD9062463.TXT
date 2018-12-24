@@ -1,0 +1,106 @@
+OBJECT Codeunit 9062463 Inv. Matching File Processing
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.15;
+  }
+  PROPERTIES
+  {
+    TableNo=9062630;
+    OnRun=BEGIN
+            ProcessInvoiceMatchingDocument(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      errNoSheetSelected@1000000001 : TextConst 'ENU=No sheet selected;ENG=No sheet selected';
+      FileSystem@1000000003 : Codeunit 9062264;
+      TNPToolkit@1000000005 : Codeunit 9062230;
+      TNPUtils@1000000002 : Codeunit 9062229;
+      FileAction@1000000000 : 'None,ImportExcel,ProcessnForm,InvoiceMatchingDocument';
+      HideDialogs@1000000004 : Boolean;
+      FileProcessingMgt@1000000006 : Codeunit 9062600;
+
+    LOCAL PROCEDURE ProcessInvoiceMatchingDocument@1000000008(VAR File@1000000000 : Record 9062630);
+    VAR
+      PurchInvMatchingBatch@1000000001 : Record 9062440;
+      OCRFolder@1000000002 : Text[150];
+      SystemBehaviour@1000000003 : Record 9062230;
+      FileSystem@1000000004 : Codeunit 9062264;
+      FIleName@1000000005 : Text[100];
+      PurchaseInvoiceMatching@1000000006 : Codeunit 9062349;
+      PrepInvMatchDocuments@1000000007 : Codeunit 9062568;
+      SystemBehaviourCard@9062231 : Page 9062231;
+      InvoiceMatchingSetup@9062230 : Record 9062762;
+      eFolderNotSetUp@1000000008 : TextConst 'ENU=The Default Scanning folder is not setup. Would you like to set it up now?;ENG=The Default Scanning folder is not setup. Would you like to set it up now?';
+      eConfirmation@1000000009 : TextConst 'ENU=Do you want to create a new Incoming Document for %1?;ENG=Do you want to create a new Incoming Document for %1?';
+    BEGIN
+      InvoiceMatchingSetup.GET;
+      OCRFolder := SystemBehaviour.GetText('INV_M_SCAN_FOLDER');
+      IF OCRFolder = '' THEN BEGIN
+        IF CONFIRM(eFolderNotSetUp,TRUE) THEN BEGIN
+          SystemBehaviour.SETFILTER(SystemBehaviour.Code,'INV_M_SCAN_FOLDER');
+          SystemBehaviour.SETFILTER(SystemBehaviour."User ID",'');
+          IF SystemBehaviour.FINDFIRST THEN BEGIN
+            SystemBehaviourCard.SETRECORD(SystemBehaviour);
+            IF (SystemBehaviourCard.RUNMODAL = ACTION::OK) THEN
+             OCRFolder := SystemBehaviour.GetText('INV_M_SCAN_FOLDER');
+          END;
+        END;
+      END;
+      IF OCRFolder = '' THEN
+        EXIT;
+
+      OCRFolder := STRSUBSTNO('%1\%2',OCRFolder,'Drag And Drop');
+
+      FileSystem.CreateFolder(FALSE,OCRFolder);
+
+      IF (OCRFolder <> '') THEN BEGIN
+        FIleName := FileSystem.GetFileName(FALSE,File."Source File Name");
+        IF NOT FileSystem.FileExists(FALSE,STRSUBSTNO('%1\%2',OCRFolder,FIleName)) THEN
+          FileSystem.CopyFile(FALSE,File."Temp File Name",STRSUBSTNO('%1\%2',OCRFolder,FIleName))
+        ELSE BEGIN
+          FileSystem.DeleteFile(FALSE,STRSUBSTNO('%1\%2',OCRFolder,FIleName));
+          FileSystem.CopyFile(FALSE,File."Temp File Name",STRSUBSTNO('%1\%2',OCRFolder,FIleName));
+        END;
+        FileSystem.DeleteFile(FALSE,File."Temp File Name");
+
+        IF SystemBehaviour.GetBoolean('QUERY_INCOMING_DOC') THEN BEGIN
+          IF CONFIRM(STRSUBSTNO(eConfirmation,FIleName),TRUE) THEN BEGIN
+            CreateIncommingDocument(STRSUBSTNO('%1\%2',OCRFolder,FIleName),FIleName)
+          END ELSE
+          EXIT;
+        END;
+      END;
+        FileSystem.DeleteFileIfExists(FALSE,STRSUBSTNO('%1\%2',OCRFolder,FIleName));
+        FileSystem.DeleteFolderIfExists(FALSE,OCRFolder,TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateIncommingDocument@9062230(FilePath@9062230 : Text;FileName@9062236 : Text);
+    VAR
+      IncomingDocument@9062231 : Record 130;
+      IncomingDocumentAttachment@9062232 : Record 133;
+      FileManagement@9062233 : Codeunit 419;
+      TempBlob@9062234 : Record 99008535;
+      ImportAttachmentIncDoc@9062235 : Codeunit 134;
+    BEGIN
+      FileManagement.BLOBImportFromServerFile(TempBlob,FilePath);
+      IncomingDocumentAttachment.Content := TempBlob.Blob;
+      ImportAttachmentIncDoc.ImportAttachment(IncomingDocumentAttachment,FileName);
+      IncomingDocument.GET(IncomingDocumentAttachment."Incoming Document Entry No.");
+      PAGE.RUN(PAGE::"Incoming Document",IncomingDocument);
+    END;
+
+    BEGIN
+    {
+      //DOC NH2016.12 JH 04/02/2016 - Extracted from "Uploaded File Processing"
+      //DOC NH2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

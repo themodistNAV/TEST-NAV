@@ -1,0 +1,314 @@
+OBJECT Codeunit 9086955 nF. User Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=22/12/16;
+    Time=12:00:00 PM;
+    Version List=NF2016.17.11;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            NfUser.MODIFYALL(Pending, FALSE);
+            MESSAGE('Done');
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      NfSetup@1000000000 : Record 9086950;
+      NfUser@1000000001 : Record 9086953;
+      User@1000000003 : Record 2000000120;
+      NfLog@1000000006 : Record 9086967;
+      NfIif@1000000004 : Codeunit 9086975;
+      NfDialogManagement@1000000009 : Codeunit 9086952;
+      NfManagement@1000000002 : Codeunit 9086950;
+      EmptyGuid@1000000005 : GUID;
+      UpdatingUsers@1000000010 : Boolean;
+      UpdatingUsersActivityId@1000000007 : Integer;
+      tLogActivity@1000000008 : TextConst 'ENU=Users;ENG=Users';
+
+    LOCAL PROCEDURE "--- User Synchronisation ---"@1000000009();
+    BEGIN
+    END;
+
+    [EventSubscriber(Table,2000000120,OnAfterInsertEvent)]
+    LOCAL PROCEDURE User_OnAfterInsert@1000000003(VAR pUser@1000000000 : Record 2000000120;pRunTrigger@1000000001 : Boolean);
+    BEGIN
+      ///<summary>On after insert of "User" table</summary>
+      ///<param name="pUser">The record</param>
+      ///<param name="pRunTrigger">Flag to run a trigger</param>
+
+      IF (ToUpdateUsersOnTriggers()) THEN
+        UpdateUser(pUser, NfSetup.Activity::Insert);
+    END;
+
+    [EventSubscriber(Table,2000000120,OnAfterModifyEvent)]
+    LOCAL PROCEDURE User_OnAfterModify@1000000005(VAR pUser@1000000000 : Record 2000000120;VAR pXUser@1000000001 : Record 2000000120;RunTrigger@1000000002 : Boolean);
+    BEGIN
+      ///<summary>On after modify of "User" table</summary>
+      ///<param name="pUser">The record</param>
+      ///<param name="pXUser">The record before event</param>
+      ///<param name="pRunTrigger">Flag to run a trigger</param>
+
+      IF (ToUpdateUsersOnTriggers()) THEN
+        UpdateUser(pUser, NfSetup.Activity::Modify);
+    END;
+
+    [EventSubscriber(Table,2000000120,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE User_OnAfterDelete@1000000006(VAR pUser@1000000000 : Record 2000000120;pRunTrigger@1000000001 : Boolean);
+    BEGIN
+      ///<summary>On after delete of "User" table</summary>
+      ///<param name="pUser">The record</param>
+      ///<param name="pRunTrigger">Flag to run a trigger</param>
+
+      IF (ToUpdateUsersOnTriggers()) THEN
+        UpdateUser(pUser, NfSetup.Activity::Delete);
+    END;
+
+    LOCAL PROCEDURE ToUpdateUsersOnTriggers@1000000000() : Boolean;
+    BEGIN
+      ///<summary>Returning if users should be updated on triggers</summary>
+      ///<returns>Response</returns>
+
+      NfSetup.VerifyAndGet();
+      EXIT(NfSetup."Update Users On Triggers");
+    END;
+
+    PROCEDURE UpdateUser@1000000019(pUser@1000000000 : Record 2000000120;pActivity@1000000001 : Integer);
+    VAR
+      lNfUserExists@1000000002 : Boolean;
+    BEGIN
+      ///<summary>Updating a user</summary>
+      ///<param name="pUser">The user</param>
+      ///<param name="pActivity">Activity to perform</param>
+
+      NfUser.RESET();
+      NfUser.SETCURRENTKEY("User Security ID");
+      NfUser.SETRANGE("User Security ID", User."User Security ID");
+
+      pActivity := NfManagement.UpdateActivity(pActivity, ( NOT (NfUser.ISEMPTY())));
+
+      CASE (pActivity) OF
+        NfSetup.Activity::Insert:
+          BEGIN
+            CLEAR(NfUser);
+            NfUser.INIT();
+            NfUser.VALIDATE("User Security ID", pUser."User Security ID");
+            NfUser.VALIDATE(Pending, TRUE);
+            NfUser.INSERT(TRUE);
+          END;
+        NfSetup.Activity::Modify:
+          BEGIN
+            NfUser.VALIDATE("User Security ID", pUser."User Security ID");
+            NfUser.VALIDATE(Pending, TRUE);
+            NfUser.MODIFY(TRUE);
+          END;
+        NfSetup.Activity::Delete:
+          NfUser.DELETE(TRUE);
+      END;
+
+      LogUpdateUser(pActivity);
+    END;
+
+    PROCEDURE UpdateUsers@1000000011(pInteraction@1000000002 : Boolean);
+    VAR
+      eDialogTitle@1000000000 : TextConst 'ENU=Updating users...;ENG=Updating users...';
+      lDialogControl@1000000001 : ' ,Progress';
+    BEGIN
+      ///<summary>Updating users</summary>
+      ///<param name="pInteraction">Interaction flag</param>
+
+      LogUpdateUsersBegin();
+
+      NfUser.RESET();
+      NfUser.SETCURRENTKEY("User Security ID");
+
+      User.RESET();
+      User.SETRANGE(State, User.State::Enabled);
+      IF (User.FINDSET()) THEN
+      BEGIN
+        IF (pInteraction) THEN
+        BEGIN
+          CLEAR(NfDialogManagement);
+          NfDialogManagement.AddProgressControlNoCaption(lDialogControl::Progress);
+          NfDialogManagement.SetCount(lDialogControl::Progress, User.COUNT());
+          NfDialogManagement.Open(eDialogTitle);
+        END;
+        REPEAT
+          IF (pInteraction) THEN
+            NfDialogManagement.Step(lDialogControl::Progress);
+          NfUser.SETRANGE("User Security ID", User."User Security ID");
+          IF (NfUser.ISEMPTY()) THEN
+            UpdateUser(User, NfSetup.Activity::Insert);
+        UNTIL (User.NEXT() = 0);
+        IF (pInteraction) THEN
+          NfDialogManagement.Close();
+      END;
+
+      LogUpdateUsersEnd();
+    END;
+
+    PROCEDURE UpdateUsersOnPageOpen@1000000004();
+    BEGIN
+      ///<summary>Updating users on page open</summary>
+
+      NfSetup.VerifyAndGet();
+      IF ( NOT (NfSetup."Update Users On Page Open")) THEN
+        EXIT;
+
+      UpdateUsers(FALSE);
+
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE "--- User Special Flags ---"@1000000001();
+    BEGIN
+    END;
+
+    PROCEDURE ValidateIsSuperuser@1000000002(pNfUser@1000000007 : Record 9086953;VAR pIsSuperuser@1000000000 : Boolean;pInteraction@1000000001 : Boolean);
+    VAR
+      eConfirmationSet@1000000002 : TextConst 'ENU=Do you want to set "%1" as superuser?;ENG=Do you want to set "%1" as superuser?';
+      eConfirmationRemove@1000000003 : TextConst 'ENU=Do you want to remove superuser permissions from "%1"?;ENG=Do you want to remove superuser permissions from "%1"?';
+      lAccessControl@1000000005 : Record 2000000053;
+      lConfirmationText@1000000004 : Text;
+      eSuperPermissionSet@1000000006 : TextConst 'ENU=SUPER;ENG=SUPER';
+      lEmptyGuid@1000000008 : GUID;
+    BEGIN
+      ///<summary>Validating "Is Superuser" flag</summary>
+      ///<param name="pNfUser">The user record</param>
+      ///<param name="pIsSuperuser">The flag</param>
+      ///<param name="pInteraction">Interaction flag</param>
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+      IF (pInteraction) THEN
+      BEGIN
+        lConfirmationText := NfIif.Text(pIsSuperuser, eConfirmationSet, eConfirmationRemove);
+        IF ( NOT (CONFIRM(lConfirmationText, TRUE, pNfUser.GetName()))) THEN
+          ERROR('');
+      END;
+
+      IF (pIsSuperuser) THEN
+      BEGIN
+        IF ( NOT (lAccessControl.GET(pNfUser."User Security ID", eSuperPermissionSet, '', lAccessControl.Scope::System, lEmptyGuid))) THEN
+        BEGIN
+          lAccessControl.INIT();
+          lAccessControl.VALIDATE("User Security ID", pNfUser."User Security ID");
+          lAccessControl.VALIDATE("Role ID", eSuperPermissionSet);
+          lAccessControl.INSERT(TRUE);
+        END;
+      END
+      ELSE
+        IF (lAccessControl.GET(pNfUser."User Security ID", eSuperPermissionSet, '', lAccessControl.Scope::System, lEmptyGuid)) THEN
+          lAccessControl.DELETE(TRUE);
+    END;
+
+    PROCEDURE ValidateIsDisabled@1000000007(pNfUser@1000000002 : Record 9086953;VAR pIsDisabled@1000000000 : Boolean;pInteraction@1000000001 : Boolean) : Boolean;
+    VAR
+      eConfirmationDisable@1000000003 : TextConst 'ENU=Do you want to disable user "%1"?;ENG=Do you want to disable user "%1"?';
+      eConfirmationEnable@1000000004 : TextConst 'ENU=Do you want to enable user "%1"?;ENG=Do you want to enable user "%1"?';
+      lConfirmationText@1000000005 : Text;
+    BEGIN
+      ///<summary>Validating "Is Superuser" flag</summary>
+      ///<param name="pNfUser">The user record</param>
+      ///<param name="pIsDisabled">The flag</param>
+      ///<param name="pInteraction">Interaction flag</param>
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+      IF (pInteraction) THEN
+      BEGIN
+        lConfirmationText := NfIif.Text(pIsDisabled, eConfirmationDisable, eConfirmationEnable);
+        IF ( NOT (CONFIRM(lConfirmationText, TRUE, pNfUser.GetName()))) THEN
+          ERROR('');
+      END;
+
+      User.GET(pNfUser."User Security ID");
+      User.VALIDATE(State, NfIif.Integer(pIsDisabled, User.State::Disabled, User.State::Enabled));
+      User.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Collecting ---"@1000000010();
+    BEGIN
+    END;
+
+    PROCEDURE CollectUsers@1000000008(pNfUser@1000000000 : Record 9086953;VAR pNfUserTmp@1000000001 : Record 9086953);
+    VAR
+      lNfUser@1000000002 : Record 9086953;
+    BEGIN
+      ///<summary>Collecting users</summary>
+      ///<param name="pNfUser">User (if empty - all users)</param>
+      ///<param name="pNfUserTmp">Target user recordset</param>
+
+      IF (pNfUser."User Security ID" <> EmptyGuid) THEN
+      BEGIN
+        pNfUserTmp := pNfUser;
+        pNfUserTmp.INSERT();
+      END
+      ELSE
+        IF (lNfUser.FINDSET()) THEN
+        REPEAT
+          pNfUserTmp := lNfUser;
+          pNfUserTmp.INSERT();
+        UNTIL (lNfUser.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE "--- Logging ---"@1000000012();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE LogUpdateUsersBegin@1000000013();
+    BEGIN
+      ///<summary>Logging "Update Users" (begin)</summary>
+
+      UpdatingUsers := TRUE;
+    END;
+
+    LOCAL PROCEDURE LogUpdateUsersEnd@1000000016();
+    BEGIN
+      ///<summary>Logging "Update Users" (end)</summary>
+
+      IF (UpdatingUsersActivityId <> 0) THEN
+      BEGIN
+        NfLog.GET(UpdatingUsersActivityId);
+        NfLog.VALIDATE(Result, NfLog.Result::Success);
+        NfLog.MODIFY(TRUE);
+      END;
+
+      CLEAR(UpdatingUsers);
+      CLEAR(UpdatingUsersActivityId);
+    END;
+
+    LOCAL PROCEDURE LogUpdateUser@1000000014(pActivity@1000000000 : Option);
+    VAR
+      lUserText@1000000007 : Text;
+      lActivityText@1000000002 : Text;
+      eUpdatingUsersMessage@1000000001 : TextConst 'ENU=Users update has been triggered.;ENG=Users update has been triggered.';
+      eUserUpdatedMessage@1000000006 : TextConst 'ENU=User "%1" has been %2.;ENG=User "%1" has been %2.';
+    BEGIN
+      ///<summary>Logging "Update User"</summary>
+      ///<param name="pActivity">Activity</param>
+
+      IF ((UpdatingUsers) AND (UpdatingUsersActivityId = 0)) THEN
+        UpdatingUsersActivityId := NfLog.AddNoResultActivity(tLogActivity, eUpdatingUsersMessage, FALSE);
+
+      lUserText := NfUser."User Name";
+      IF (lUserText = '') THEN
+        lUserText := NfUser."User ID";
+      lActivityText  := NfSetup.GetActivityText(pActivity);
+      IF (UpdatingUsersActivityId <> 0) THEN
+        NfLog.AddSuccessEvent(tLogActivity, UpdatingUsersActivityId, STRSUBSTNO(eUserUpdatedMessage, lUserText, lActivityText), FALSE)
+      ELSE
+        NfLog.AddSuccessActivity(tLogActivity, STRSUBSTNO(eUserUpdatedMessage, lUserText, lActivityText), FALSE);
+    END;
+
+    BEGIN
+    {
+      ///<summary>General user-related functions of nForcement</summary>
+      ///<change version="NF2016.17" initials="JH" date="2016-04-22">Created</change>
+      ///<change version="NF2016.17.11" initials="JH" date="2016-11-03">Logging changes</change>
+    }
+    END.
+  }
+}
+

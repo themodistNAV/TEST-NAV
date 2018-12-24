@@ -1,0 +1,689 @@
+OBJECT Codeunit 11102040 OM - Version Control
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE AddVersionListId@1(VAR Object@1000 : Record 2000000001;VersionListId@1001 : Text;VersionNo@1002 : Text);
+    VAR
+      NewTransport@1003 : Text;
+      NewVersionList@1004 : Text;
+      RestOfTransport@1005 : Text;
+      CommaPos@1006 : Integer;
+      IdPos@1007 : Integer;
+      ctVersionListToLong@1008 : TextConst 'DEU=The Version List of %1 %2 cannot be updated.\The length of the version list will be longer the %3 characters.\\Continue?;ENU=The Version List of %1 %2 cannot be updated.\The length of the version list will be longer the %3 characters.\\Continue?;ESP=The Version List of %1 %2 cannot be updated.\The length of the version list will be longer the %3 characters.\\Continue?;FRA=The Version List of %1 %2 cannot be updated.\The length of the version list will be longer the %3 characters.\\Continue?;NLD=De versielijst van %1 %2 kan niet worden bijgewerkt.\De lengte van de versielijst wordt langer dan %3 karakter.\\Wilt u doorgaan?;DEA=The Version List of %1 %2 cannot be updated.\The length of the version list will be longer the %3 characters.\\Continue?';
+    BEGIN
+      NewTransport := VersionListId + VersionNo;
+
+      IdPos := VersionListIdPos(Object."Version List", VersionListId);
+      IF IdPos = 0 THEN BEGIN
+        CASE Object."Version List" OF
+          '' :
+            NewVersionList := NewTransport;
+          '#' :
+            NewVersionList := '#' + NewTransport;
+          ELSE
+            NewVersionList := Object."Version List" + ',' + NewTransport;
+        END;
+
+        IF STRLEN(NewVersionList) > MAXSTRLEN(Object."Version List") THEN BEGIN
+          IF NOT CONFIRM(ctVersionListToLong, FALSE, Object.Type, Object.ID, MAXSTRLEN(Object."Version List")) THEN
+            ERROR('');
+          EXIT;
+        END;
+
+        Object."Version List" := NewVersionList;
+      END ELSE BEGIN
+        RestOfTransport := COPYSTR(Object."Version List", IdPos);
+        CommaPos := STRPOS(RestOfTransport, ',');
+        IF CommaPos = 0 THEN
+          Object."Version List" := DELSTR(Object."Version List", IdPos) + NewTransport
+        ELSE
+          Object."Version List" :=
+            DELSTR(Object."Version List", IdPos) +
+            NewTransport +
+            COPYSTR(Object."Version List", IdPos + CommaPos - 1);
+      END;
+    END;
+
+    PROCEDURE RemoveVersionListId@2(VAR Object@1000 : Record 2000000001;VersionListId@1001 : Text;VersionNo@1002 : Text);
+    VAR
+      CurChar@1003 : Text;
+      CurVersionListId@1004 : Text;
+      CurVersionNo@1005 : Text;
+      NewVersionList@1006 : Text;
+      i@1007 : Integer;
+      VersionStartPos@1008 : Integer;
+      VersionListNoStarted@1009 : Boolean;
+    BEGIN
+      NewVersionList := Object."Version List";
+
+      VersionStartPos := 1;
+
+      FOR i := 1 TO STRLEN(Object."Version List") DO BEGIN
+        CurChar := FORMAT(Object."Version List"[i]);
+
+        IF (CurChar = ',') OR ((CurChar = '#') AND (i = 1)) THEN BEGIN
+          IF (LOWERCASE(VersionListId) = LOWERCASE(CurVersionListId)) AND
+             (LOWERCASE(VersionNo) IN ['', LOWERCASE(CurVersionNo)])
+          THEN
+            NewVersionList := COPYSTR(Object."Version List", 1, VersionStartPos - 1) + COPYSTR(Object."Version List", i + 1);
+          VersionStartPos := i + 1;
+          CurVersionListId := '';
+          CurVersionNo := '';
+          VersionListNoStarted := FALSE;
+        END ELSE BEGIN
+          IF CurChar IN ['0'..'9'] THEN
+            VersionListNoStarted := TRUE;
+          IF VersionListNoStarted THEN
+            CurVersionNo += FORMAT(CurChar)
+          ELSE
+            CurVersionListId += FORMAT(CurChar);
+        END;
+      END;
+
+      IF (LOWERCASE(VersionListId) = LOWERCASE(CurVersionListId)) AND
+         (LOWERCASE(VersionNo) IN ['', LOWERCASE(CurVersionNo)])
+      THEN
+        IF VersionStartPos = 1 THEN
+          NewVersionList := ''
+        ELSE
+          NewVersionList := COPYSTR(Object."Version List", 1, VersionStartPos - 2);
+
+      IF Object."Version List"[1] = '#' THEN
+        IF NewVersionList[1] <> '#' THEN
+          NewVersionList := '#' + NewVersionList;
+
+      Object."Version List" := NewVersionList;
+    END;
+
+    PROCEDURE CleanUpVersionList@3(VersionList@1000 : Text) : Text;
+    BEGIN
+      IF VersionList[1] = '#' THEN
+        VersionList := COPYSTR(VersionList, 2);
+
+      IF DELSTR(VersionList, 7) = 'LOCKED' THEN
+        VersionList := COPYSTR(VersionList, 7);
+
+      IF VersionList[1] = ',' THEN
+        VersionList := COPYSTR(VersionList, 2);
+
+      EXIT(VersionList);
+    END;
+
+    PROCEDURE RemoveObjectMarks@4(TryObjectsOutsideLicense@1000 : Boolean);
+    VAR
+      Object@1001 : Record 2000000001;
+      ObjectMgt@1002 : Codeunit 11102046;
+      RemoveHash@1003 : Boolean;
+    BEGIN
+      Object.SETFILTER(Type, '<>%1', Object.Type::TableData);
+      Object.SETFILTER("Version List", '#*');
+      IF Object.FINDSET THEN
+        REPEAT
+          IF TryObjectsOutsideLicense THEN
+            RemoveHash := TRUE
+          ELSE
+            RemoveHash := ModifyPermission(Object);
+
+          IF RemoveHash THEN BEGIN
+            Object."Version List" := COPYSTR(Object."Version List", 2);
+            ObjectMgt.UpdateObject(Object, TRUE);
+          END;
+        UNTIL Object.NEXT = 0;
+
+      ObjectMgt.WaitForObjectUpdate;
+
+      RemoveMarkLock(FALSE);
+    END;
+
+    PROCEDURE RemoveObjectMark@6(VAR Object@1000 : Record 2000000001);
+    VAR
+      ObjectMgt@1001 : Codeunit 11102046;
+    BEGIN
+      IF FORMAT(Object."Version List"[1]) = '#' THEN BEGIN
+        Object."Version List" := COPYSTR(Object."Version List", 2);
+        ObjectMgt.UpdateObject(Object, FALSE);
+      END;
+    END;
+
+    PROCEDURE MarkObject@5(VAR Object@1000 : Record 2000000001;TryObjectOutsideLicense@1001 : Boolean);
+    VAR
+      ObjectMgt@1002 : Codeunit 11102046;
+      AddHash@1003 : Boolean;
+    BEGIN
+      SetMarkLock;
+
+      IF FORMAT(Object."Version List"[1]) <> '#' THEN BEGIN
+
+        IF TryObjectOutsideLicense THEN
+          AddHash := ModifyPermission(Object)
+        ELSE
+          AddHash := TRUE;
+
+        IF AddHash THEN
+          IF STRLEN(Object."Version List") < MAXSTRLEN(Object."Version List") THEN BEGIN
+            Object."Version List" := '#' + Object."Version List";
+            ObjectMgt.UpdateObject(Object, TRUE);
+          END;
+
+      END;
+
+      ObjectMgt.WaitForObjectUpdate;
+    END;
+
+    PROCEDURE CheckMarkLock@21();
+    VAR
+      Setup@1000 : Record 11102035;
+      Mgt@1001 : Codeunit 11102035;
+      ctMarkingUsedBy@1002 : TextConst 'DEU=Marking is currently used by ''%1''.\Are you sure?;ENU=Marking is currently used by ''%1''.\Are you sure?;ESP=Marking is currently used by ''%1''.\Are you sure?;FRA=Marking is currently used by ''%1''.\Are you sure?;NLD=Markeren wordt gebruikt door ''%1''.\Weet u het zeker?;DEA=Marking is currently used by ''%1''.\Are you sure?';
+    BEGIN
+      Setup.GET;
+      IF Setup."Marking User" IN [Mgt.ShortUserId, ''] THEN
+        EXIT;
+
+      IF NOT CONFIRM(ctMarkingUsedBy, TRUE, Setup."Marking User") THEN
+        ERROR('');
+    END;
+
+    LOCAL PROCEDURE SetMarkLock@22();
+    VAR
+      Setup@1000 : Record 11102035;
+      Mgt@1001 : Codeunit 11102035;
+    BEGIN
+      Setup.CustomGet;
+      IF Setup."Lock Marking" THEN BEGIN
+        Setup.GET;
+        IF Setup."Marking User" <> Mgt.ShortUserId THEN BEGIN
+          Setup."Marking User" := Mgt.ShortUserId;
+          Setup.MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE RemoveMarkLock@23(OnlyIfAllMarksDeleted@1000 : Boolean);
+    VAR
+      Setup@1001 : Record 11102035;
+      Object@1002 : Record 2000000001;
+      Mgt@1003 : Codeunit 11102035;
+    BEGIN
+      IF OnlyIfAllMarksDeleted THEN BEGIN
+        Object.SETFILTER("Version List", '#*');
+        IF NOT Object.ISEMPTY THEN
+          EXIT;
+      END;
+
+      Setup.GET;
+      IF Setup."Marking User" = Mgt.ShortUserId THEN BEGIN
+        Setup."Marking User" := '';
+        Setup.MODIFY;
+      END;
+    END;
+
+    LOCAL PROCEDURE ModifyPermission@7(VAR Object@1000 : Record 2000000001) : Boolean;
+    VAR
+      LicensePermission@1001 : Record 2000000043;
+    BEGIN
+      IF (Object.Type = Object.Type::MenuSuite) AND (Object.ID < 50) THEN
+        EXIT(FALSE);
+
+      IF NOT LicensePermission.GET(Object.Type, Object.ID) THEN
+        EXIT(TRUE);
+      EXIT(LicensePermission."Modify Permission" = LicensePermission."Modify Permission"::Yes);
+    END;
+
+    PROCEDURE LookupTransportListId@8(VAR Text@1000 : Text) : Boolean;
+    VAR
+      TmpProject@1001 : TEMPORARY Record 11102036;
+      Object@1002 : Record 2000000001;
+      Progressbar@1003 : Codeunit 11102044;
+      CurVersionListId@1004 : Text;
+      CurVersionListNo@1005 : Text;
+      LastVersionNo@1006 : Text;
+      VersionListIdArray@1007 : ARRAY [1000] OF Text[100];
+      VersionListNoArray@1008 : ARRAY [1000] OF Text[100];
+      CurChar@1009 : Char;
+      i@1010 : Integer;
+      j@1011 : Integer;
+      NoOfNos@1012 : Integer;
+      NoOfVersionListIds@1013 : Integer;
+      NoOfVersionListNos@1014 : Integer;
+      Pos@1015 : Integer;
+      StartPos@1016 : Integer;
+      VersionListIdCounter@1017 : ARRAY [1000] OF Integer;
+      VersionListNoCounter@1018 : ARRAY [1000] OF Integer;
+      VersionListNoStarted@1019 : Boolean;
+    BEGIN
+      Progressbar.ShowRemainingTime(FALSE);
+      Progressbar.Open('', 0);
+
+      Object.SETFILTER(Type, '<>%1', Object.Type::TableData);
+      Object.SETRANGE("Company Name", '');
+
+      Progressbar.BarSize := Object.COUNT;
+
+      IF Object.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+
+          CurVersionListId := '';
+          CurVersionListNo := '';
+          VersionListNoStarted := FALSE;
+
+          IF Object."Version List"[1] = '#' THEN
+            StartPos := 2
+          ELSE
+            StartPos := 1;
+
+          FOR Pos := StartPos TO STRLEN(Object."Version List") DO BEGIN
+            CurChar := Object."Version List"[Pos];
+
+            IF CurChar = ',' THEN BEGIN
+              AddToVersionListIds(NoOfVersionListIds, VersionListIdArray, VersionListIdCounter, CurVersionListId);
+              AddToVersionListIds(NoOfVersionListNos, VersionListNoArray, VersionListNoCounter, CurVersionListNo);
+              VersionListNoStarted := FALSE;
+              CurVersionListId := '';
+              CurVersionListNo := '';
+            END ELSE BEGIN
+              IF CurChar IN ['0'..'9'] THEN
+                VersionListNoStarted := TRUE;
+
+              IF NOT VersionListNoStarted THEN
+                CurVersionListId += FORMAT(CurChar);
+              CurVersionListNo += FORMAT(CurChar);
+            END;
+
+          END;
+
+          AddToVersionListIds(NoOfVersionListIds, VersionListIdArray, VersionListIdCounter, CurVersionListId);
+          AddToVersionListIds(NoOfVersionListNos, VersionListNoArray, VersionListNoCounter, CurVersionListNo);
+
+        UNTIL Object.NEXT = 0;
+
+      FOR i := 1 TO NoOfVersionListIds DO
+        IF STRLEN(VersionListIdArray[i]) <= 20 THEN BEGIN
+          IF TmpProject.GET(VersionListIdArray[i]) THEN
+            TmpProject."No." := VersionListIdArray[i] + FORMAT(i)
+          ELSE
+            TmpProject."No." := VersionListIdArray[i];
+          TmpProject.Description := VersionListIdArray[i];
+
+          NoOfNos := 0;
+          LastVersionNo := '';
+          IF VersionListIdArray[i] <> '' THEN
+            FOR j := 1 TO NoOfVersionListNos DO
+              IF IsIdOfVersionList(VersionListIdArray[i], VersionListNoArray[j]) THEN BEGIN
+                NoOfNos += 1;
+                IF GetValueOfVersionNo(VersionListNoArray[j]) > GetValueOfVersionNo(LastVersionNo) THEN
+                  LastVersionNo := COPYSTR(VersionListNoArray[j], STRLEN(VersionListIdArray[i]) + 1);
+              END;
+
+          TmpProject."Search Description" := FORMAT(VersionListIdCounter[i]) + '-' + FORMAT(NoOfNos) + '-' + LastVersionNo;
+          TmpProject.INSERT;
+        END;
+
+      Progressbar.Close;
+
+      IF TmpProject.GET(Text) THEN
+        ;
+
+      IF PAGE.RUNMODAL(PAGE::"OM - Version List", TmpProject) = ACTION::LookupOK THEN BEGIN
+        Text := TmpProject.Description;
+        EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE AddToVersionListIds@9(VAR NoOfVersionListIds@1000 : Integer;VAR VersionListId@1001 : ARRAY [1000] OF Text[100];VAR Counter@1002 : ARRAY [1000] OF Integer;CurVersionListId@1003 : Text);
+    VAR
+      i@1004 : Integer;
+    BEGIN
+      FOR i := 1 TO NoOfVersionListIds DO
+        IF VersionListId[i] = CurVersionListId THEN BEGIN
+          Counter[i] += 1;
+          EXIT;
+        END;
+
+      NoOfVersionListIds += 1;
+      VersionListId[NoOfVersionListIds] := CurVersionListId;
+      Counter[NoOfVersionListIds] += 1;
+    END;
+
+    PROCEDURE GetLastTransportNumber@10(TransportListIdentifier@1000 : Text) : Text;
+    VAR
+      Object@1001 : Record 2000000001;
+      HighestTransportNumber@1002 : Text;
+      RestTransport@1003 : Text;
+      TransportNumber@1004 : Text;
+      HighestTransportNumberValue@1005 : Decimal;
+      TransportNumberValue@1006 : Decimal;
+      CommaPos@1007 : Integer;
+      TransportIdPos@1008 : Integer;
+    BEGIN
+      IF TransportListIdentifier = '' THEN
+        EXIT;
+      Object.SETFILTER("Version List", '@*' + TransportListIdentifier + '*');
+      IF Object.FINDSET THEN
+        REPEAT
+          TransportIdPos := VersionListIdPos(Object."Version List", TransportListIdentifier);
+
+          IF TransportIdPos > 0 THEN BEGIN
+            RestTransport := COPYSTR(Object."Version List", TransportIdPos);
+
+            IF IsIdOfVersionList(TransportListIdentifier, RestTransport) THEN BEGIN
+
+              CommaPos := STRPOS(RestTransport, ',');
+              IF CommaPos > 0 THEN
+                TransportNumber := COPYSTR(Object."Version List", TransportIdPos, CommaPos - 1)
+              ELSE
+                TransportNumber := COPYSTR(Object."Version List", TransportIdPos);
+              TransportNumberValue := GetValueOfVersionNo(TransportNumber);
+
+              IF TransportNumberValue > HighestTransportNumberValue THEN BEGIN
+                HighestTransportNumberValue := TransportNumberValue;
+                HighestTransportNumber := TransportNumber;
+              END;
+            END;
+          END;
+        UNTIL Object.NEXT = 0;
+
+      IF HighestTransportNumber <> '' THEN
+        HighestTransportNumber := COPYSTR(HighestTransportNumber, STRLEN(TransportListIdentifier) + 1);
+
+      EXIT(HighestTransportNumber);
+    END;
+
+    LOCAL PROCEDURE GetValueOfVersionNo@11(VersionNo@1000 : Text) ExitValue : Decimal;
+    VAR
+      PartNumber@1001 : ARRAY [100] OF Text[30];
+      i@1002 : Integer;
+      PartCounter@1003 : Integer;
+      PartNumber2@1004 : Integer;
+      VersionLen@1005 : Integer;
+    BEGIN
+      VersionLen := STRLEN(VersionNo);
+
+      PartCounter := 1;
+      i := 1;
+      WHILE i <= VersionLen DO BEGIN
+        IF (VersionNo[i] >= '0') AND (VersionNo[i] <= '9') THEN
+          PartNumber[PartCounter] := PartNumber[PartCounter] + FORMAT(VersionNo[i])
+        ELSE
+          IF PartNumber[PartCounter] <> '' THEN
+            PartCounter += 1;
+
+        i += 1;
+      END;
+
+      FOR i := 1 TO PartCounter DO
+        IF PartNumber[i] <> '' THEN BEGIN
+          EVALUATE(PartNumber2, PartNumber[i]);
+          ExitValue += PartNumber2 * POWER(10000, 3 - i);
+        END;
+    END;
+
+    PROCEDURE SplitVersionList@12(VersionList@1000 : Text;VAR VersionListId@1001 : ARRAY [100] OF Text[250];VAR VersionListNo@1002 : ARRAY [100] OF Text[250]) : Integer;
+    VAR
+      CurChar@1003 : Char;
+      Pos@1004 : Integer;
+      VersionIdCounter@1005 : Integer;
+      VersionListNoStarted@1006 : Boolean;
+    BEGIN
+      CLEAR(VersionListId);
+      CLEAR(VersionListNo);
+
+      VersionIdCounter := 1;
+
+      IF VersionList[1] = '#' THEN
+        VersionList := COPYSTR(VersionList, 2);
+
+      FOR Pos := 1 TO STRLEN(VersionList) DO BEGIN
+        CurChar := VersionList[Pos];
+
+        IF CurChar = ',' THEN BEGIN
+          VersionIdCounter += 1;
+          VersionListNoStarted := FALSE;
+        END ELSE BEGIN
+          IF CurChar IN ['0'..'9'] THEN
+            VersionListNoStarted := TRUE;
+          IF VersionListNoStarted THEN
+            VersionListNo[VersionIdCounter] += FORMAT(CurChar)
+          ELSE
+            VersionListId[VersionIdCounter] += FORMAT(CurChar);
+        END;
+
+      END;
+
+      EXIT(VersionIdCounter);
+    END;
+
+    PROCEDURE DrillDownNoOfObjects@13(VersionListId@1000 : Text);
+    VAR
+      Object@1001 : Record 2000000001;
+      TmpObject@1002 : TEMPORARY Record 2000000001;
+      VersionControl@1003 : Codeunit 11102040;
+      SplitVersionListId@1004 : ARRAY [100] OF Text[250];
+      SplitVersionListNo@1005 : ARRAY [100] OF Text[250];
+      i@1006 : Integer;
+    BEGIN
+      Object.SETFILTER(Type, '<>%1', Object.Type::TableData);
+      Object.SETRANGE("Company Name", '');
+      Object.SETFILTER("Version List", '@*' + VersionListId + '*');
+      IF Object.FINDSET THEN
+        REPEAT
+          FOR i := 1 TO VersionControl.SplitVersionList(Object."Version List", SplitVersionListId, SplitVersionListNo) DO
+            IF (SplitVersionListId[i] = VersionListId) OR
+               (SplitVersionListId[i] + SplitVersionListNo[i] = VersionListId)
+            THEN BEGIN
+              TmpObject := Object;
+              TmpObject.INSERT;
+            END;
+        UNTIL Object.NEXT = 0;
+
+      IF TmpObject.FINDFIRST THEN
+        ;
+
+      PAGE.RUN(PAGE::"OM - Object List", TmpObject);
+    END;
+
+    PROCEDURE DrillDownNoOfVersionListIds@14(VersionListId@1000 : Text);
+    VAR
+      TmpProject@1001 : TEMPORARY Record 11102036;
+      Object@1002 : Record 2000000001;
+      VersionControl@1003 : Codeunit 11102040;
+      SplitVersionListId@1004 : ARRAY [100] OF Text[250];
+      SplitVersionListNo@1005 : ARRAY [100] OF Text[250];
+      VersionListId2@1006 : ARRAY [1000] OF Text[100];
+      i@1007 : Integer;
+      NoOfVersionListIds@1008 : Integer;
+      VersionListIdCounter@1009 : ARRAY [1000] OF Integer;
+    BEGIN
+      Object.SETFILTER(Type, '<>%1', Object.Type::TableData);
+      Object.SETRANGE("Company Name", '');
+      Object.SETFILTER("Version List", '@*' + VersionListId + '*');
+      IF Object.FINDSET THEN
+        REPEAT
+          FOR i := 1 TO VersionControl.SplitVersionList(Object."Version List", SplitVersionListId, SplitVersionListNo) DO
+            IF (SplitVersionListId[i] = VersionListId) OR
+               (SplitVersionListId[i] + SplitVersionListNo[i] = VersionListId)
+            THEN
+              AddToVersionListIds(
+                NoOfVersionListIds, VersionListId2, VersionListIdCounter, SplitVersionListId[i] + SplitVersionListNo[i]);
+        UNTIL Object.NEXT = 0;
+
+      Object.MARKEDONLY(TRUE);
+
+      FOR i := 1 TO NoOfVersionListIds DO
+        IF STRLEN(VersionListId2[i]) <= 20 THEN BEGIN
+          IF TmpProject.GET(VersionListId2[i]) THEN
+            TmpProject."No." := VersionListId2[i] + FORMAT(i)
+          ELSE
+            TmpProject."No." := VersionListId2[i];
+          TmpProject.Description := VersionListId2[i];
+          TmpProject."Search Description" := FORMAT(VersionListIdCounter[i]) + '-' + FORMAT(0) + '-' + '';
+          TmpProject.INSERT;
+        END;
+
+      PAGE.RUN(PAGE::"OM - Version List", TmpProject);
+    END;
+
+    LOCAL PROCEDURE IsIdOfVersionList@15(VersionListId@1000 : Text;CompleteVersionList@1001 : Text) : Boolean;
+    VAR
+      NextChar@1002 : Char;
+    BEGIN
+      IF COPYSTR(CompleteVersionList, 1, STRLEN(VersionListId)) = VersionListId THEN BEGIN
+        NextChar := CompleteVersionList[STRLEN(VersionListId) + 1];
+        EXIT(NextChar IN ['.', '0'..'9']);
+      END;
+    END;
+
+    PROCEDURE ProjectTagPreview@16(Project@1000 : Record 11102036;ProjectTagDescription@1001 : Text) : Text;
+    VAR
+      Setup@1002 : Record 11102035;
+      User@1003 : Record 11102056;
+      ProjectType@1004 : Record 11102097;
+    BEGIN
+      Setup.CustomGet;
+
+      User.GetActiveUser(FALSE);
+
+      IF ProjectType.GET(Project."Project Type Code") THEN
+        ;
+
+      EXIT(
+        STRSUBSTNO(
+          FORMAT(
+            WORKDATE, 0,
+            STRSUBSTNO(ProjectType.ProjectTagDocTrigger)),
+          Project."No.", User.Initials, ProjectTagDescription));
+    END;
+
+    PROCEDURE AddProjectTag@17(Object@1000 : Record 2000000001;Project@1001 : Record 11102036;Tag@1002 : Text);
+    VAR
+      TmpCALHistoryLine@1003 : TEMPORARY Record 11102053;
+      Mgt@1004 : Codeunit 11102035;
+      AssignModificationsMgt@1005 : Codeunit 11102036;
+      SourceControl@1006 : Codeunit 11102050;
+      SplitTag@1007 : ARRAY [100] OF Text[120];
+      i@1008 : Integer;
+      LastEntryNo@1009 : Integer;
+      LineToInsert@1010 : Integer;
+      AddBrackets@1011 : Boolean;
+      ObjectWasModified@1012 : Boolean;
+      ctNotAllowedCharacter@1013 : TextConst 'DEU=A bracket is not allowed in the documentation trigger.;ENU=A bracket is not allowed in the documentation trigger.;ESP=A bracket is not allowed in the documentation trigger.;FRA=A bracket is not allowed in the documentation trigger.;NLD=Een accolade in niet toegestaan in de documentatietrigger.;DEA=A bracket is not allowed in the documentation trigger.';
+    BEGIN
+      IF Object.Type = Object.Type::MenuSuite THEN
+        EXIT;
+
+      IF STRPOS(Tag, '{') + STRPOS(Tag, '}') > 0 THEN
+        ERROR(ctNotAllowedCharacter);
+
+      SourceControl.ReadLifeObject(Object, TmpCALHistoryLine);
+
+      TmpCALHistoryLine.SETRANGE(Code, '      ' + Tag);
+      IF NOT TmpCALHistoryLine.ISEMPTY THEN
+        EXIT;
+      TmpCALHistoryLine.SETRANGE(Code);
+
+      TmpCALHistoryLine.SETRANGE("Sub Line No.", 1);
+      TmpCALHistoryLine.SETRANGE(Code, '  RDLDATA');
+      IF NOT TmpCALHistoryLine.FINDLAST THEN BEGIN
+        TmpCALHistoryLine.SETRANGE(Code, '}');
+        IF NOT TmpCALHistoryLine.FINDLAST THEN
+          EXIT;
+      END;
+      TmpCALHistoryLine.RESET;
+
+      IF TmpCALHistoryLine.NEXT(-3) <> -3 THEN
+        EXIT;
+
+      CASE TmpCALHistoryLine.Code OF
+        '    BEGIN' :
+          BEGIN
+            LineToInsert := TmpCALHistoryLine."Line No." + 1;
+            AddBrackets := TRUE;
+          END;
+
+        '    }' :
+          LineToInsert := TmpCALHistoryLine."Line No.";
+
+      END;
+
+      TmpCALHistoryLine.SETFILTER("Line No.", '>=%1', LineToInsert);
+      IF TmpCALHistoryLine.FINDLAST THEN
+        REPEAT
+          TmpCALHistoryLine.DELETE;
+          TmpCALHistoryLine."Line No." += 100;
+          TmpCALHistoryLine.INSERT;
+        UNTIL TmpCALHistoryLine.NEXT(-1) = 0;
+
+      IF AddBrackets THEN BEGIN
+        TmpCALHistoryLine."Line No." := LineToInsert;
+        TmpCALHistoryLine."Sub Line No." := 1;
+        TmpCALHistoryLine.Code := '    {';
+        TmpCALHistoryLine.INSERT;
+        LineToInsert += 1;
+      END;
+
+      FOR i := 1 TO Mgt.Split(Tag, '\', SplitTag) DO BEGIN
+        TmpCALHistoryLine."Line No." := LineToInsert;
+        TmpCALHistoryLine."Sub Line No." := 1;
+        TmpCALHistoryLine.Code := '      ' + SplitTag[i];
+        TmpCALHistoryLine.INSERT;
+        LineToInsert += 1;
+      END;
+
+      IF AddBrackets THEN BEGIN
+        TmpCALHistoryLine."Line No." := LineToInsert;
+        TmpCALHistoryLine."Sub Line No." := 1;
+        TmpCALHistoryLine.Code := '    }';
+        TmpCALHistoryLine.INSERT;
+        LineToInsert += 1;
+      END;
+
+      LastEntryNo := AssignModificationsMgt.GetLastEntryNo(Object);
+      ObjectWasModified := AssignModificationsMgt.ObjectIsModified(Object, FALSE);
+
+      TmpCALHistoryLine.RESET;
+      SourceControl.SetModifyFlagInHistoryLines(TmpCALHistoryLine, TODAY, TIME);
+      SourceControl.WriteLifeObject(Object, TmpCALHistoryLine);
+
+      AssignModificationsMgt.AssignIfNewModification(Object, Project."No.", LastEntryNo, NOT ObjectWasModified);
+    END;
+
+    LOCAL PROCEDURE VersionListIdPos@18(VersionList@1000 : Text;VersionListId@1001 : Text) : Integer;
+    VAR
+      VersionList2@1002 : Text;
+      VersionListId2@1003 : Text;
+      i@1004 : Integer;
+      FirstCharacter@1005 : Boolean;
+    BEGIN
+      VersionList2 := UPPERCASE(VersionList);
+      VersionListId2 := UPPERCASE(VersionListId);
+
+      FOR i := 1 TO STRLEN(VersionList2) DO BEGIN
+        IF i = 1 THEN
+          FirstCharacter := TRUE
+        ELSE
+          FirstCharacter := VersionList2[i - 1] IN [',', '#'];
+        IF FirstCharacter THEN
+          IF COPYSTR(VersionList, i, STRLEN(VersionListId2)) = VersionListId2 THEN
+            EXIT(i);
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

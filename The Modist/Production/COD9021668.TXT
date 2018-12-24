@@ -1,0 +1,558 @@
+OBJECT Codeunit 9021668 StdTableTriggerCode
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:20 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      InternetSetup@1000000000 : Record 9021609;
+      LabelRec@1000000001 : Record 9021618;
+      SalesHeadMQ@1000000002 : Record 9021605;
+      SalesLineMQ@1000000003 : Record 9021615;
+      WebAttMgt@1190000005 : Codeunit 9021620;
+      MQGlobalsFunc@1190000007 : Codeunit 9021624;
+      Text000@1190000009 : TextConst 'ENU=Pass On Discount % is not allowed.;ENG=Pass On Discount % is not allowed.';
+      Text001@1190000008 : TextConst 'ENU=%1 must not be greater than the %2 of %3;ENG=%1 must not be greater than the %2 of %3';
+      Text002@1190000010 : TextConst 'ENU=You cannot enter a multilanguage key as the Label  %1 in not in Multi Language mode.;ENG=You cannot enter a multilanguage key as the Label  %1 in not in Multi Language mode.';
+      MultiLangFunc@1190000011 : Codeunit 9021603;
+
+    PROCEDURE T13OnDelete@1000000012(VAR SalesPurchPar@1000000000 : Record 13);
+    VAR
+      InternetLogin@1000000002 : Record 9021643;
+      WebSecUserRole@1000000001 : Record 9021731;
+    BEGIN
+      //DOC EC2013.4.67 MQ 29/09/2014 - GW140929 New function
+      IF InternetLogin.GET(SalesPurchPar.Code) THEN BEGIN
+        InternetLogin.TESTFIELD(Type,InternetLogin.Type::Salesperson);
+        WebSecUserRole.RESET;
+        WebSecUserRole.SETRANGE("Label Code",InternetLogin."Label Code");
+        WebSecUserRole.SETRANGE("User Type",WebSecUserRole."User Type"::B2B);
+        WebSecUserRole.SETRANGE("Internet Customer No.",InternetLogin."No.");
+        WebSecUserRole.DELETEALL;
+        InternetLogin.DELETE;
+      END;
+    END;
+
+    PROCEDURE T13OnRename@1000000005(VAR SalesPurchPar@1000000000 : Record 13;xRecCode@1000000003 : Code[10]);
+    VAR
+      InternetLogin@1000000001 : Record 9021643;
+      TextL000@1000000002 : TextConst 'ENU=You cannot rename a Salesperson if a Internet Login exists.  Delete the Internet Login first by blanking the password, then try the Rename again.;ENG=You cannot rename a Salesperson if a Internet Login exists.  Delete the Internet Login first by blanking the password, then try the Rename again.';
+    BEGIN
+      //DOC EC2015.5.03 SalesPurchPar.DateTimeInsertedModified := CURRENTDATETIME;
+
+      //DOC EC2013.4.67 -
+      IF InternetLogin.GET(xRecCode) THEN
+        ERROR(TextL000);
+      //DOC EC2013.4.67 +
+    END;
+
+    PROCEDURE T13NameOnVal@1000000013(VAR SalesPurchPar@1000000000 : Record 13);
+    VAR
+      InternetLogin@1000000001 : Record 9021643;
+    BEGIN
+      //DOC EC2013.4.67 MQ 29/09/2014 - GW140929 New function
+      IF InternetLogin.GET(SalesPurchPar.Code) THEN BEGIN
+        InternetLogin.TESTFIELD(Type,InternetLogin.Type::Salesperson);
+        InternetLogin.Contact := SalesPurchPar.Name;
+        InternetLogin.DateTimeInsertedModified := CURRENTDATETIME;
+        InternetLogin.MODIFY;
+      END;
+    END;
+
+    PROCEDURE T13EmailOnVal@1000000010(VAR SalesPurchPar@1000000000 : Record 13);
+    VAR
+      InternetLogin@1000000001 : Record 9021643;
+      WebSecUserRole@1000000004 : Record 9021731;
+      LabelFunctions@1000000002 : Codeunit 9021619;
+      TextL000@1000000003 : TextConst 'ENU=%1 is an invalid Email address.;ENG=%1 is an invalid Email address.';
+    BEGIN
+      //DOC EC2013.4.67 MQ 29/09/2014 - GW140929 New function
+      IF SalesPurchPar."Enable Internet Login" THEN BEGIN
+        IF InternetLogin.GET(SalesPurchPar.Code) THEN BEGIN
+          InternetLogin.TESTFIELD(Type,InternetLogin.Type::Salesperson);
+          IF SalesPurchPar."E-Mail" = '' THEN BEGIN
+            WebSecUserRole.RESET;
+            WebSecUserRole.SETRANGE("Label Code",InternetLogin."Label Code");
+            WebSecUserRole.SETRANGE("User Type",WebSecUserRole."User Type"::B2B);
+            WebSecUserRole.SETRANGE("Internet Customer No.",InternetLogin."No.");
+            WebSecUserRole.DELETEALL;
+            InternetLogin.DELETE;
+          END ELSE BEGIN
+            IF NOT LabelFunctions.EmailOK(SalesPurchPar."E-Mail") THEN
+              ERROR(TextL000,SalesPurchPar."E-Mail");
+            InternetLogin."E-Mail" := SalesPurchPar."E-Mail";
+            InternetLogin.Login := SalesPurchPar."E-Mail";
+            InternetLogin."Code Login" := SalesPurchPar."E-Mail";
+            InternetLogin.CheckUniqueEmail;
+            InternetLogin.DateTimeInsertedModified := CURRENTDATETIME;
+            InternetLogin.MODIFY;
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE T13PassOnDiscAllowOnVal@1000000001(VAR SalesPurchPar@1000000000 : Record 13);
+    BEGIN
+      IF SalesPurchPar."Pass-on Discount Allowed" THEN BEGIN
+        SalesPurchPar."Commission %" := 0;
+        T13CalcDiscountsFunc(SalesPurchPar,TRUE);
+      END ELSE BEGIN
+        SalesPurchPar."Pass-on Discount %" := 0;
+        SalesPurchPar."Commission %" := 0;
+      END;
+    END;
+
+    PROCEDURE T13CalcDiscountsFunc@1000000000(VAR SalesPurchPar@1000000000 : Record 13;FromPassOn@1000000001 : Boolean);
+    BEGIN
+      InternetSetup.GET;
+
+      IF (SalesPurchPar."Pass-on Discount %" <> 0) AND
+         (SalesPurchPar."Pass-on Discount Allowed" = FALSE) AND
+         (FromPassOn = TRUE) THEN
+        ERROR(Text000);
+
+      IF SalesPurchPar."Pass-on Discount Allowed" THEN BEGIN
+        IF FromPassOn THEN BEGIN
+          IF SalesPurchPar."Pass-on Discount %" > InternetSetup."Global Max. Pass-on Discount %" THEN
+            ERROR(Text001,'Pass-on Discount %','Global Max. Pass-on Discount %',
+                  InternetSetup."Global Max. Pass-on Discount %");
+          SalesPurchPar."Commission %" := (InternetSetup."Global Max. Pass-on Discount %" -
+               SalesPurchPar."Pass-on Discount %");
+        END ELSE BEGIN
+          IF SalesPurchPar."Commission %" > InternetSetup."Global Max. Pass-on Discount %" THEN
+            ERROR(Text001,'Commission %','Global Max. Pass-on Discount %',
+                  InternetSetup."Global Max. Pass-on Discount %");
+          SalesPurchPar."Pass-on Discount %" := (InternetSetup."Global Max. Pass-on Discount %" -
+               SalesPurchPar."Commission %");
+        END;
+      END ELSE BEGIN
+        SalesPurchPar."Pass-on Discount %" := 0;
+      END;
+      SalesPurchPar.MODIFY;
+    END;
+
+    PROCEDURE T13EnableInternetLoginOnVal@1000000008(VAR SalesPurchPar@1000000000 : Record 13);
+    VAR
+      InternetLogin@1000000001 : Record 9021643;
+    BEGIN
+      //DOC EC2013.4.67 MQ 29/09/2014 - GW140929 New function
+      //DOC EC2015.5.03 SalesPurchPar.DateTimeInsertedModified := CURRENTDATETIME;
+      IF SalesPurchPar."Enable Internet Login" THEN BEGIN
+        IF InternetLogin.GET(SalesPurchPar.Code) THEN BEGIN
+          InternetLogin.TESTFIELD(Type,InternetLogin.Type::Salesperson);
+          IF InternetLogin.Enable = FALSE THEN BEGIN
+            InternetLogin.Enable := TRUE;
+            InternetLogin."Inserted Modified By" := USERID;
+            InternetLogin.DateTimeInsertedModified := CURRENTDATETIME;
+            InternetLogin.MODIFY;
+          END;
+        END ELSE BEGIN
+          IF SalesPurchPar."Internet Password" <> '' THEN
+            T13CreateInternetLogin(SalesPurchPar);
+        END;
+      END ELSE BEGIN
+        IF InternetLogin.GET(SalesPurchPar.Code) THEN BEGIN
+          InternetLogin.TESTFIELD(Type,InternetLogin.Type::Salesperson);
+          IF InternetLogin.Enable THEN BEGIN
+            InternetLogin.Enable := FALSE;
+            InternetLogin."Inserted Modified By" := USERID;
+            InternetLogin.DateTimeInsertedModified := CURRENTDATETIME;
+            InternetLogin.MODIFY;
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE T13InternetPasswordOnVal@1000000009(VAR SalesPurchPar@1000000000 : Record 13);
+    VAR
+      InternetLogin@1000000001 : Record 9021643;
+      WebSecUserRole@1000000002 : Record 9021731;
+      TextL000@1000000003 : TextConst 'ENU=Sorry, you have used an invalid character of %1 in the password, please try again.\\You can only use A to Z, a to z, 0 to 9, .,!-_*@ and ?.;ENG=Sorry, you have used an invalid character of %1 in the password, please try again.\\You can only use A to Z, a to z, 0 to 9, .,!-_*@ and ?.';
+      i@1000000004 : Integer;
+      j@1000000005 : Integer;
+      InternetShopMgt@1000000006 : Codeunit 9021610;
+    BEGIN
+      //DOC EC2013.4.67 MQ 29/09/2014 - GW140929 New function
+      //DOC EC2015.5.03 SalesPurchPar.DateTimeInsertedModified := CURRENTDATETIME;
+
+      IF InternetLogin.GET(SalesPurchPar.Code) THEN BEGIN
+        InternetLogin.TESTFIELD(Type,InternetLogin.Type::Salesperson);
+        IF SalesPurchPar."Internet Password" = '' THEN BEGIN
+          WebSecUserRole.RESET;
+          WebSecUserRole.SETRANGE("Label Code",InternetLogin."Label Code");
+          WebSecUserRole.SETRANGE("User Type",WebSecUserRole."User Type"::B2B);
+          WebSecUserRole.SETRANGE("Internet Customer No.",InternetLogin."No.");
+          WebSecUserRole.DELETEALL;
+          InternetLogin.DELETE;
+        END ELSE BEGIN
+          InternetLogin.Enable := SalesPurchPar."Enable Internet Login";
+          FOR i := 1 TO STRLEN(SalesPurchPar."Internet Password") DO
+            IF COPYSTR(SalesPurchPar."Internet Password",i,1) IN
+              ['0'..'9','A'..'Z','a'..'z','_','.','!','-','*','@','?',','] THEN
+              j := 1
+            ELSE
+              ERROR(TextL000,COPYSTR(SalesPurchPar."Internet Password",i,1));
+          InternetLogin."Password Version" := CREATEGUID;
+          InternetLogin."Password Version" := COPYSTR(InternetLogin."Password Version",2,36);
+          InternetLogin.Password := InternetShopMgt.Encrypt(SalesPurchPar."Internet Password");
+          InternetLogin."Inserted Modified By" := USERID;
+          InternetLogin.DateTimeInsertedModified := CURRENTDATETIME;
+          InternetLogin.MODIFY;
+        END;
+      END ELSE BEGIN
+        IF SalesPurchPar."Enable Internet Login" THEN BEGIN
+          IF SalesPurchPar."Internet Password" <> '' THEN
+            T13CreateInternetLogin(SalesPurchPar);
+        END;
+      END;
+    END;
+
+    PROCEDURE T13CreateInternetLogin@1000000011(VAR SalesPurchPar@1000000000 : Record 13);
+    VAR
+      InternetLogin@1000000001 : Record 9021643;
+      TextL000@1000000003 : TextConst 'ENU=%1 is an invalid Email address.;ENG=%1 is an invalid Email address.';
+      i@1000000006 : Integer;
+      j@1000000005 : Integer;
+      LabelFunctions@1000000002 : Codeunit 9021619;
+      InternetShopMgt@1000000004 : Codeunit 9021610;
+      TextL001@1000000007 : TextConst 'ENU=Sorry, you have used an invalid character of %1 in the password, please try again.\\You can only use A to Z, a to z, 0 to 9, .,!-_*@ and ?.;ENG=Sorry, you have used an invalid character of %1 in the password, please try again.\\You can only use A to Z, a to z, 0 to 9, .,!-_*@ and ?.';
+      MQGlobalFunctions@1000000008 : Codeunit 9021624;
+    BEGIN
+      SalesPurchPar.TESTFIELD("E-Mail");
+      IF NOT LabelFunctions.EmailOK(SalesPurchPar."E-Mail") THEN
+        ERROR(TextL000,SalesPurchPar."E-Mail");
+
+      InternetLogin.INIT;
+      InternetLogin."No." := SalesPurchPar.Code;
+      FOR i := 1 TO STRLEN(SalesPurchPar."Internet Password") DO
+        IF COPYSTR(SalesPurchPar."Internet Password",i,1) IN
+          ['0'..'9','A'..'Z','a'..'z','_','.','!','-','*','@','?',','] THEN
+          j := 1
+        ELSE
+          ERROR(TextL001,COPYSTR(SalesPurchPar."Internet Password",i,1));
+      InternetLogin."Label Code" := MQGlobalFunctions.GetLabelCode;
+      InternetLogin.Contact := SalesPurchPar.Name;
+      InternetLogin.Type := InternetLogin.Type::Salesperson;
+      InternetLogin."E-Mail" := SalesPurchPar."E-Mail";
+      InternetLogin.Login := SalesPurchPar."E-Mail";
+      InternetLogin."Code Login" := SalesPurchPar."E-Mail";
+      InternetLogin.CheckUniqueEmail;
+      InternetLogin."Password Version" := CREATEGUID;
+      InternetLogin."Password Version" := COPYSTR(InternetLogin."Password Version",2,36);
+      InternetLogin.Password := InternetShopMgt.Encrypt(SalesPurchPar."Internet Password");
+      InternetLogin.Enable := TRUE;
+      InternetLogin."Inserted Modified By" := USERID;
+      InternetLogin.DateTimeInsertedModified := CURRENTDATETIME;
+      InternetLogin.INSERT;
+    END;
+
+    PROCEDURE T36OnInsert@1190000006(VAR SalesHeaderPar@1190000005 : Record 36);
+    BEGIN
+      SalesHeaderPar.DateTimeInsertedModified := CURRENTDATETIME;
+      SalesHeaderPar."Order GuID" := SalesHeaderPar."No.";
+
+      IF SalesHeaderPar."No." <> '' THEN BEGIN
+        IF NOT SalesHeadMQ.GET(SalesHeaderPar."Document Type",SalesHeaderPar."No.") THEN BEGIN
+          SalesHeadMQ.INIT;
+          SalesHeadMQ."Document Type" := SalesHeaderPar."Document Type";
+          SalesHeadMQ."No." := SalesHeaderPar."No.";
+          SalesHeadMQ.DateTimeInsertedModified := SalesHeaderPar.DateTimeInsertedModified;
+          SalesHeadMQ."Order GuID" := SalesHeaderPar."No.";
+          SalesHeadMQ."Internet Order Reference" := SalesHeaderPar."Internet Order Reference";
+          SalesHeadMQ.INSERT;
+        END;
+        IF (SalesHeadMQ."Label Code" <> SalesHeaderPar."Label Code") OR
+          (SalesHeadMQ."Is An Internet Customer" <> SalesHeaderPar."Is An Internet Customer") OR
+          (SalesHeadMQ."User GuID" <> SalesHeaderPar."User GuID") OR
+          (SalesHeadMQ."Internet Order Reference" <> SalesHeaderPar."Internet Order Reference") THEN BEGIN
+          SalesHeadMQ."Label Code" := SalesHeaderPar."Label Code";
+          SalesHeadMQ."Is An Internet Customer" := SalesHeaderPar."Is An Internet Customer";
+          SalesHeadMQ."User GuID" := SalesHeaderPar."User GuID";
+          SalesHeadMQ."Internet Order Reference" := SalesHeaderPar."Internet Order Reference";
+          SalesHeadMQ.DateTimeInsertedModified := SalesHeaderPar.DateTimeInsertedModified;
+          SalesHeadMQ.MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE T36OnModify@1190000007(VAR SalesHeaderPar@1190000005 : Record 36);
+    BEGIN
+      SalesHeaderPar.DateTimeInsertedModified := CURRENTDATETIME;
+
+      IF NOT SalesHeadMQ.GET(SalesHeaderPar."Document Type",SalesHeaderPar."No.") THEN BEGIN
+        SalesHeadMQ.INIT;
+        SalesHeadMQ."Document Type" := SalesHeaderPar."Document Type";
+        SalesHeadMQ."No." := SalesHeaderPar."No.";
+        SalesHeadMQ.DateTimeInsertedModified := SalesHeaderPar.DateTimeInsertedModified;
+        SalesHeadMQ."Order GuID" := SalesHeaderPar."No.";
+        SalesHeadMQ."Internet Order Reference" := SalesHeaderPar."Internet Order Reference";
+        SalesHeadMQ.INSERT;
+      END;
+      IF (SalesHeadMQ."Label Code" <> SalesHeaderPar."Label Code") OR
+        (SalesHeadMQ."Is An Internet Customer" <> SalesHeaderPar."Is An Internet Customer") OR
+        (SalesHeadMQ."User GuID" <> SalesHeaderPar."User GuID") OR
+        (SalesHeadMQ."Internet Order Reference" <> SalesHeaderPar."Internet Order Reference") THEN BEGIN
+        SalesHeadMQ."Label Code" := SalesHeaderPar."Label Code";
+        SalesHeadMQ."Is An Internet Customer" := SalesHeaderPar."Is An Internet Customer";
+        SalesHeadMQ."User GuID" := SalesHeaderPar."User GuID";
+        SalesHeadMQ."Internet Order Reference" := SalesHeaderPar."Internet Order Reference";
+        SalesHeadMQ.DateTimeInsertedModified := SalesHeaderPar.DateTimeInsertedModified;
+        SalesHeadMQ.MODIFY;
+      END;
+    END;
+
+    PROCEDURE T36OnDelete@1190000005(VAR SalesHeaderPar@1190000005 : Record 36);
+    VAR
+      AdSearchFunc@1000000000 : Codeunit 9021674;
+    BEGIN
+      IF SalesHeaderPar."Label Code" <> '' THEN  //DOC EC2013.4.67 MQ 05/12/2014 - GW141205
+      WebAttMgt.DeleteWebAttValuesForRecord(SalesHeaderPar."Label Code",36,'',
+                         SalesHeaderPar."No.",0,TRUE,SalesHeaderPar."Document Type");
+
+      //DOC EC2013.4.67 MQ 05/12/2014 - GW141205 -
+      IF SalesHeaderPar."Label Code" <> '' THEN
+        IF SalesHeaderPar."Label Code" <> 'LM' THEN
+      //DOC EC2013.4.67 MQ 05/12/2014 - GW141205 +
+      AdSearchFunc.DeleteSalesHeadEntries(SalesHeaderPar."Document Type",SalesHeaderPar."No.");
+
+      IF SalesHeadMQ.GET(SalesHeaderPar."Document Type",SalesHeaderPar."No.") THEN
+        SalesHeadMQ.DELETE;
+
+      //DOC EC2013.4.60 -
+      SalesLineMQ.RESET;
+      SalesLineMQ.SETRANGE("Document Type",SalesHeaderPar."Document Type");
+      SalesLineMQ.SETRANGE("Document No.",SalesHeaderPar."No.");
+      SalesLineMQ.DELETEALL;
+      //DOC EC2013.4.60 +
+    END;
+
+    PROCEDURE T36OrderFinancialReleaseCode@1000000003(SalesHeader@1000000000 : Record 36);
+    VAR
+      SalesSetup@1000000003 : Record 311;
+      InvtSetup@1000000002 : Record 313;
+      WhseSalesReleasex@1000000001 : Codeunit 5771;
+      SalesLine@1000000004 : Record 37;
+      TempVATAmountLine0@1000000006 : TEMPORARY Record 290;
+      TempVATAmountLine1@1000000005 : TEMPORARY Record 290;
+    BEGIN
+      //copy of code from CU414 Release Sales Document - OnRun
+      //noting changes
+      WITH SalesHeader DO BEGIN
+        IF Status = Status::Released THEN
+          EXIT;
+
+        IF "Document Type" = "Document Type"::Quote THEN
+          IF CheckCustomerCreated(TRUE) THEN
+            GET("Document Type"::Quote,"No.")
+          ELSE
+            EXIT;
+
+        TESTFIELD("Sell-to Customer No.");
+
+        SalesLine.SETRANGE("Document Type","Document Type");
+        SalesLine.SETRANGE("Document No.","No.");
+        SalesLine.SETFILTER(Type,'>0');
+        SalesLine.SETFILTER(Quantity,'<>0');
+        IF NOT SalesLine.FIND('-') THEN
+          ERROR(Text001,"Document Type","No.");
+        InvtSetup.GET;
+        IF InvtSetup."Location Mandatory" THEN BEGIN
+          SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+          IF SalesLine.FINDSET THEN
+            REPEAT
+              SalesLine.TESTFIELD("Location Code");
+            UNTIL SalesLine.NEXT = 0;
+          SalesLine.SETFILTER(Type,'>0');
+        END;
+        SalesLine.SETRANGE("Drop Shipment",FALSE);
+        //NotOnlyDropShipment := SalesLine.FINDFIRST;
+        SalesLine.RESET;
+
+        SalesSetup.GET;
+        IF SalesSetup."Calc. Inv. Discount" THEN BEGIN
+          CODEUNIT.RUN(CODEUNIT::"Sales-Calc. Discount",SalesLine);
+          GET("Document Type","No.");
+        END;
+
+        //IF TestPrepayment(Rec) AND ("Document Type" = "Document Type"::Order) THEN BEGIN
+        //  Status := Status::"Pending Prepayment";
+        //  MODIFY(TRUE);
+        //  EXIT;
+        //END
+        //ELSE
+        //  Status := Status::Released;
+
+        //SalesLine.SetSalesHeader(Rec);
+        //SalesLine.CalcVATAmountLines(0,Rec,SalesLine,TempVATAmountLine0);
+        //SalesLine.CalcVATAmountLines(1,Rec,SalesLine,TempVATAmountLine1);
+        //SalesLine.UpdateVATOnLines(0,Rec,SalesLine,TempVATAmountLine0);
+        //SalesLine.UpdateVATOnLines(1,Rec,SalesLine,TempVATAmountLine1);
+        //New -
+        SalesLine.SetSalesHeader(SalesHeader);
+        SalesLine.CalcVATAmountLines(0,SalesHeader,SalesLine,TempVATAmountLine0);
+        SalesLine.CalcVATAmountLines(1,SalesHeader,SalesLine,TempVATAmountLine1);
+
+        Status := Status::Released; //need to make next line work
+
+        SalesLine.UpdateVATOnLines(0,SalesHeader,SalesLine,TempVATAmountLine0);
+
+        Status := Status::"5"; //add here so Rec is not Released
+
+        SalesLine.UpdateVATOnLines(1,SalesHeader,SalesLine,TempVATAmountLine1);
+        //New +
+
+        MODIFY(TRUE);
+
+        //IF NotOnlyDropShipment THEN
+        //  IF "Document Type" IN ["Document Type"::Order,"Document Type"::"Return Order"] THEN
+        //    WhseSalesRelease.Release(Rec);
+      END;
+    END;
+
+    PROCEDURE T36RunCCManagement@1000000007(VAR SalesHeader@1000000000 : Record 36);
+    VAR
+      RecRef@1000000003 : RecordRef;
+    BEGIN
+      //Moved from the button on the Sales Order
+      //IF Status = Status::Open THEN
+      //  ERROR(EECC001);
+      //EECC001 was Status must be greater than Open in order to call Credit Management.
+
+      IF SalesHeader.Status = SalesHeader.Status::Open THEN
+        T36OrderFinancialReleaseCode(SalesHeader);
+      COMMIT;   //because we need to do this for CCManagement to work.
+
+
+      RecRef.GETTABLE(SalesHeader);
+    END;
+
+    PROCEDURE T37OnInsert@1190000008(VAR SalesLinePar@1190000005 : Record 37);
+    VAR
+      SalesHeadLocal@1000000000 : Record 36;
+    BEGIN
+      SalesLinePar.DateTimeInsertedModified := CURRENTDATETIME;
+
+      IF (SalesLinePar."No." = '') AND (SalesLinePar."Order GuID" = '') THEN BEGIN
+        SalesHeadLocal.GET(SalesLinePar."Document Type",SalesLinePar."Document No.");
+        SalesLinePar."Label Code" := SalesHeadLocal."Label Code";
+        SalesLinePar."Is An Internet Customer" := SalesHeadLocal."Is An Internet Customer";
+        SalesLinePar."Order GuID" := SalesHeadLocal."Order GuID";
+      END;
+    END;
+
+    PROCEDURE T37OnModify@1190000009(VAR SalesLinePar@1190000005 : Record 37);
+    BEGIN
+      SalesLinePar.DateTimeInsertedModified := CURRENTDATETIME;
+    END;
+
+    PROCEDURE T37OnDelete@1190000010(VAR SalesLinePar@1190000005 : Record 37);
+    BEGIN
+      WebAttMgt.DeleteWebAttValuesForRecord(SalesLinePar."Label Code",37,'0',
+                         SalesLinePar."Document No.",0,TRUE,SalesLinePar."Document Type");
+    END;
+
+    PROCEDURE T222OnInsert@1190000011(VAR ShipToPar@1190000005 : Record 222;CustName@1190000006 : Text[50];CustCountry@1190000007 : Code[10];CustEmail@1190000008 : Text[80]);
+    BEGIN
+      ShipToPar.VALIDATE(Name,CustName);
+      ShipToPar."Country/Region Code" := CustCountry;
+      ShipToPar."E-Mail" := CustEmail;
+      //DOC EC2015.5.03 ShipToPar.DateTimeInsertedModified := CURRENTDATETIME;
+    END;
+
+    PROCEDURE T222NameOnVal@1190000015(VAR ShipToPar@1190000005 : Record 222);
+    BEGIN
+      IF ShipToPar.Name = '' THEN
+        ShipToPar.Contact := ShipToPar."Name 2"
+      ELSE
+        ShipToPar.Contact := COPYSTR((ShipToPar.Name + ' ' + ShipToPar."Name 2"),1,50);
+    END;
+
+    PROCEDURE T225WebLocationOnVal@1000000006(VAR PostCodePar@1000000000 : Record 225);
+    VAR
+      WebLoc@1000000001 : Record 9021692;
+    BEGIN
+      IF PostCodePar."Web Location" <> '' THEN BEGIN
+        WebLoc.RESET;
+        WebLoc.SETRANGE(Code,PostCodePar."Web Location");
+        IF WebLoc.COUNT = 1 THEN BEGIN
+          WebLoc.FINDFIRST;
+          WebLoc.TESTFIELD("Country Code");
+        END;
+      END;
+    END;
+
+    PROCEDURE T291OnInsert@1190000016(VAR ShipAgentPar@1190000005 : Record 291);
+    BEGIN
+      //DOC EC2015.5.03 ShipAgentPar.DateTimeInsertedModified := CURRENTDATETIME;
+      IF ShipAgentPar."Label Code Used" = '' THEN
+        ShipAgentPar."Label Code Used" := MQGlobalsFunc.GetLabelCode;
+      IF ShipAgentPar."Label Code Used" <> '' THEN BEGIN
+        LabelRec.GET(ShipAgentPar."Label Code Used");
+        ShipAgentPar."In Multi Language Mode" := LabelRec."Multi-Language Mode";
+      END;
+      IF (ShipAgentPar."In Multi Language Mode") AND
+        (ShipAgentPar."Multilanguage Key" = '') AND
+        (ShipAgentPar."Label Code Used" <> '') THEN
+          ShipAgentPar."Multilanguage Key" :=
+            MultiLangFunc.CreateKey(291,ShipAgentPar."Label Code Used",
+                          ShipAgentPar.Code,0);
+    END;
+
+    PROCEDURE T291MultilangOnVal@1190000019(VAR ShipAgentPar@1190000005 : Record 291);
+    BEGIN
+      IF ShipAgentPar."Label Code Used" = '' THEN
+        ShipAgentPar."Label Code Used" := MQGlobalsFunc.GetLabelCode;
+      IF ShipAgentPar."Label Code Used" <> '' THEN BEGIN
+        LabelRec.GET(ShipAgentPar."Label Code Used");
+        ShipAgentPar."In Multi Language Mode" := LabelRec."Multi-Language Mode";
+      END;
+      IF (ShipAgentPar."In Multi Language Mode" = FALSE) AND
+        (ShipAgentPar."Multilanguage Key" <> '') THEN
+        ERROR(Text002,ShipAgentPar."Label Code Used");
+      IF ShipAgentPar."Multilanguage Key" <> '' THEN BEGIN
+        IF ShipAgentPar."Multilanguage Key" = '?' THEN
+          ShipAgentPar."Multilanguage Key" :=
+            MultiLangFunc.CreateKey(291,ShipAgentPar."Label Code Used",
+                          ShipAgentPar.Code,0);
+        MultiLangFunc.UpdateMultiLang(ShipAgentPar."Multilanguage Key",
+                      ShipAgentPar."Label Code Used");
+      END;
+    END;
+
+    PROCEDURE T291MultilangOnLookup@1190000020(VAR ShipAgentPar@1190000005 : Record 291);
+    BEGIN
+      ShipAgentPar.VALIDATE("Multilanguage Key",
+               MultiLangFunc.ReturnResxName(ShipAgentPar."Multilanguage Key",
+               ShipAgentPar."Label Code Used"));
+    END;
+
+    BEGIN
+    {
+      //DOC EC2009.2    MA 29/04/2011 - MA20110429 Added comment to FindLabel advising usage of MQ Global Functions
+      //DOC EC2009.2.67 MQ 01/01/2012 - Removed function FindLabel - use GetLabelCode from MQ Global Functions
+      //DOC EC2013.3.10 MQ 20/09/2012 - GW120920 Add code to T37OnInsert
+      //DOC EC2013.3.40 MQ 21/01/2013 - GW130121 CreateKey changed from 'G' to '?'
+      //DOC EC2013.3.70 MQ 12/07/2013 - GW130712 Add line to T36OnDelete requires CU9021497 Additional Doc. Search Funcs
+      //DOC EC2013.3.70 MQ 26/07/2013 - GW130726 Stop getting SalesHead if not necessary in T37OnInsert
+      //DOC EC2013.3.80 MQ 19/08/2013 - GW130819 Handle SalesHeaderMQ; Remove use of SyncMgt
+      //DOC EC2013.4.6  MQ 14/03/2014 - GW140314 Add functions T36OrderFinancialReleaseCode, T36RunCCManagement; and T36ReOpenSalesHeader; Code in T36OnDelete
+      //DOC EC2013.4.67 MQ 25/09/2014 - GW140925 Salesperson portal
+      //DOC EC2013.4.67 MQ 05/12/2014 - GW141205 Enhanced for LM
+      //DOC EC2015.5.01 MQ 13/01/2015 - GW150113 Use standard Country/Region field in Post Code table
+      //DOC EC2015.5.03 MQ 05/05/2015 - GW150505 Remove field DateTimeInsMod; Remove T13 Insert, Modify; T222 Modify, Delete, Rename, T291 Modify, Rename; Comment out code T13OnRename, T222 and T291 OnInsert,
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,305 @@
+OBJECT Report 9021622 Create CMS Data from Master
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:06 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Create CMS Data from Master;
+               ENG=Create CMS Data from Master];
+    ProcessingOnly=Yes;
+    OnPreReport=VAR
+                  TxtL001@1000000000 : TextConst 'ENU=Master Label Code on the Option tab must not be blank;ENG=Master Label Code on the Option tab must not be blank';
+                  TxtL002@1000000001 : TextConst 'ENU=New Label Code on the Option tab must not be blank;ENG=New Label Code on the Option tab must not be blank';
+                  TxtL003@1000000002 : TextConst 'ENU=The Master Label Code must not be the same as the New Label Code.;ENG=The Master Label Code must not be the same as the New Label Code.';
+                  TxtL004@1000000003 : TextConst 'ENU=You can only do this if you are in Company %1.;ENG=You can only do this if you are in Company %1.';
+                  TxtL005@1000000004 : TextConst 'ENU=ePages exist for Label %1 therefore this routine will not work.;ENG=ePages exist for Label %1 therefore this routine will not work.';
+                  TxtL006@1000000005 : TextConst 'ENU=You are in the same Company as the Master Data. This will copy the data.  Are you sure?;ENG=You are in the same Company as the Master Data. This will copy the data.  Are you sure?';
+                  TxtL007@1000000006 : TextConst 'ENU=Abandonned;ENG=Abandonned';
+                BEGIN
+                  IF MasterLabelCode = '' THEN
+                    ERROR(TxtL001);
+                  IF NewLabelCode = '' THEN
+                    ERROR(TxtL002);
+                  IF NewLabelCode = MasterLabelCode THEN
+                    ERROR(TxtL003);
+
+                  LabelR.GET(NewLabelCode);
+                  LabelR.TESTFIELD("Used-in Company");
+                  IF LabelR."Used-in Company" <> COMPANYNAME THEN
+                    ERROR(TxtL004,COMPANYNAME);
+
+                  ePage.RESET;
+                  ePage.SETRANGE("Label Code",NewLabelCode);
+                  IF ePage.FINDFIRST THEN
+                    ERROR(TxtL005,NewLabelCode);
+
+                  IF LabelR.GET(MasterLabelCode) THEN BEGIN
+                    LabelR.TESTFIELD("Used-in Company");
+                    IF LabelR."Used-in Company" = COMPANYNAME THEN BEGIN
+                      IF CONFIRM(TxtL006,FALSE) THEN
+                        CopyNotReplace := TRUE
+                      ELSE
+                        ERROR(TxtL007);
+                    END ELSE
+                      CopyNotReplace := FALSE;
+                  END ELSE
+                    CopyNotReplace := FALSE;
+                END;
+
+    OnPostReport=VAR
+                   TxtL001@1000000000 : TextConst 'ENU=Done;ENG=Done';
+                 BEGIN
+                   MESSAGE(TxtL001);
+                 END;
+
+  }
+  DATASET
+  {
+    { 5444;    ;DataItem;                    ;
+               DataItemTable=Table2000000026;
+               DataItemTableView=SORTING(Number)
+                                 WHERE(Number=CONST(1));
+               ReqFilterHeadingML=[ENU=5444;
+                                   ENG=5444];
+               OnAfterGetRecord=VAR
+                                  TxtL001@1000000000 : TextConst 'ENU=Could not find last Label Attribute but there must be some.;ENG=Could not find last Label Attribute but there must be some.';
+                                  TxtL002@1000000001 : TextConst 'ENU=Lab Att Val Entry no. wrong. Is %1 should be %2;ENG=Lab Att Val Entry no. wrong. Is %1 should be %2';
+                                BEGIN
+                                  //ERROR('there is a problem with this');
+                                  IF CopyNotReplace = FALSE THEN BEGIN
+                                    IntSet.GET;
+                                    IntSet."Unique Customer Identifier" := '';
+                                    IntSet.MODIFY;
+                                  END;
+
+                                  LabAtt2.RESET;
+                                  LabAtt.RESET;
+                                  LabAtt.SETRANGE("Label Code",MasterLabelCode);
+                                  LabAttVal.RESET;
+                                  LabAttVal.SETRANGE("Label Code",MasterLabelCode);
+                                  IF LabAtt.FIND('-') THEN
+                                  REPEAT
+                                    LabAtt1.INIT;
+                                    LabAtt1 := LabAtt;
+                                    LabAtt1."Label Code" := NewLabelCode;
+                                    IF CopyNotReplace THEN BEGIN
+                                      IF LabAtt2.FINDLAST THEN
+                                        LabAtt1."Entry No." := LabAtt2."Entry No." + 1
+                                      ELSE
+                                        ERROR(TxtL001);
+                                    END ELSE BEGIN
+                                      LabAtt.DELETE;
+                                    END;
+                                    LabAttVal.SETRANGE("Label Attribute Entry No.",LabAtt."Entry No.");
+                                    IF LabAttVal.FIND('-') THEN
+                                    REPEAT
+                                      LabAttVal1.INIT;
+                                      LabAttVal1 := LabAttVal;
+                                      LabAttVal1."Label Code" := NewLabelCode;
+                                      IF CopyNotReplace THEN
+                                        LabAttVal1."Label Attribute Entry No." := LabAtt1."Entry No."
+                                      ELSE BEGIN
+                                        IF LabAttVal1."Label Attribute Entry No." <> LabAtt1."Entry No." THEN
+                                          ERROR(TxtL002,LabAttVal1."Label Attribute Entry No.",LabAtt1."Entry No.");
+                                        LabAttVal.DELETE;
+                                      END;
+                                      LabAttVal1.INSERT;
+                                    UNTIL LabAttVal.NEXT = 0;
+                                    LabAtt1.INSERT;
+                                  UNTIL LabAtt.NEXT = 0;
+
+                                  HighestePageEntryNo := 0;
+                                  ePage.RESET;
+                                  ePage.SETRANGE("Label Code",MasterLabelCode);
+                                  IF ePage.FIND('-') THEN
+                                  REPEAT
+                                    IF ePage."Page GUID" > HighestePageEntryNo THEN
+                                      HighestePageEntryNo := ePage."Page GUID";
+                                    ePage1.INIT;
+                                    ePage1 := ePage;
+                                    ePage1."Label Code" := NewLabelCode;
+                                    ePage1.INSERT;
+                                    IF NOT CopyNotReplace THEN
+                                      ePage.DELETE;
+                                  UNTIL ePage.NEXT = 0;
+
+                                  ePageSort.RESET;
+                                  ePageSort.SETRANGE("Label Code",MasterLabelCode);
+                                  IF ePageSort.FIND('-') THEN
+                                  REPEAT
+                                    ePageSort1.INIT;
+                                    ePageSort1 := ePageSort;
+                                    ePageSort1."Label Code" := NewLabelCode;
+                                    ePageSort1.INSERT;
+                                    IF NOT CopyNotReplace THEN
+                                      ePageSort.DELETE;
+                                  UNTIL ePageSort.NEXT = 0;
+
+                                  PageItem.RESET;
+                                  PageItem.SETRANGE("Label Code",MasterLabelCode);
+                                  IF PageItem.FIND('-') THEN
+                                  REPEAT
+                                    PageItem1.INIT;
+                                    PageItem1 := PageItem;
+                                    PageItem1."Label Code" := NewLabelCode;
+                                    PageItem1.INSERT;
+                                    IF NOT CopyNotReplace THEN
+                                      PageItem.DELETE;
+                                  UNTIL PageItem.NEXT = 0;
+
+                                  PageCont.RESET;
+                                  PageCont.SETRANGE("Label Code",MasterLabelCode);
+                                  IF PageCont.FIND('-') THEN
+                                  REPEAT
+                                    PageCont1.INIT;
+                                    PageCont1 := PageCont;
+                                    PageCont1."Label Code" := NewLabelCode;
+                                    PageCont1.INSERT;
+                                    IF NOT CopyNotReplace THEN
+                                      PageCont.DELETE;
+                                  UNTIL PageCont.NEXT = 0;
+
+                                  LayoutCpt.RESET;
+                                  LayoutCpt.SETRANGE("Label Code",MasterLabelCode);
+                                  IF LayoutCpt.FIND('-') THEN
+                                  REPEAT
+                                    LayoutCpt1.INIT;
+                                    LayoutCpt1 := LayoutCpt;
+                                    LayoutCpt1."Label Code" := NewLabelCode;
+                                    LayoutCpt1.INSERT;
+                                    IF NOT CopyNotReplace THEN
+                                      LayoutCpt.DELETE;
+                                  UNTIL LayoutCpt.NEXT = 0;
+
+                                  PageItemContT.RESET;
+                                  PageItemContT.SETRANGE("Label Code",MasterLabelCode);
+                                  IF PageItemContT.FIND('-') THEN
+                                  REPEAT
+                                    PageItemContT1.INIT;
+                                    PageItemContT1 := PageItemContT;
+                                    PageItemContT1."Label Code" := NewLabelCode;
+                                    PageItemContT1.INSERT;
+                                    IF NOT CopyNotReplace THEN
+                                      PageItemContT.DELETE;
+                                  UNTIL PageItemContT.NEXT = 0;
+
+                                  HighestBlobEntryNo := 0;
+                                  PageContV.RESET;
+                                  PageContV.SETRANGE("Label Code",MasterLabelCode);
+                                  IF PageContV.FIND('-') THEN
+                                  REPEAT
+                                    IF PageContV."Html Entry No." > HighestBlobEntryNo THEN
+                                      HighestBlobEntryNo := PageContV."Html Entry No.";
+                                    PageContV1.INIT;
+                                    PageContV1 := PageContV;
+                                    PageContV1."Label Code" := NewLabelCode;
+                                    PageContV1.INSERT;
+                                    IF NOT CopyNotReplace THEN
+                                      PageContV.DELETE;
+                                  UNTIL PageContV.NEXT = 0;
+
+                                  LabelR.GET(NewLabelCode);
+                                  LabelR."Last ePage Entry GroupGuid" := HighestePageEntryNo;
+                                  LabelR."Last Blob Entry No." := HighestBlobEntryNo;
+                                  LabelR.MODIFY;
+
+                                  PageItemC.RESET;
+                                  PageItemC.SETRANGE("Label Code",MasterLabelCode);
+                                  IF PageItemC.FIND('-') THEN
+                                  REPEAT
+                                    PageItemC1.INIT;
+                                    PageItemC1 := PageItemC;
+                                    PageItemC1."Label Code" := NewLabelCode;
+                                    PageItemC1.INSERT;
+                                    IF NOT CopyNotReplace THEN
+                                      PageItemC.DELETE;
+                                  UNTIL PageItemC.NEXT = 0;
+
+                                  WebL.RESET;
+                                  WebL.SETRANGE("Label Code",MasterLabelCode);
+                                  IF WebL.FIND('-') THEN
+                                  REPEAT
+                                    WebL1.INIT;
+                                    WebL1 := WebL;
+                                    WebL1."Label Code" := NewLabelCode;
+                                    WebL1.INSERT;
+                                    IF NOT CopyNotReplace THEN
+                                      WebL.DELETE;
+                                  UNTIL WebL.NEXT = 0;
+
+                                  LabelWebConfig.RESET;
+                                  LabelWebConfig.SETRANGE("Label Code",MasterLabelCode);
+                                  IF LabelWebConfig.FIND('-') THEN
+                                  REPEAT
+                                    LabelWebConfig1 := LabelWebConfig;
+                                    LabelWebConfig1."Label Code" := NewLabelCode;
+                                    IF LabelWebConfig1.INSERT THEN;
+                                  UNTIL LabelWebConfig.NEXT = 0;
+                                END;
+                                 }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      MasterLabelCode@1000000000 : Code[10];
+      NewLabelCode@1000000001 : Code[10];
+      IntSet@1000000002 : Record 9021609;
+      LabAtt@1000000003 : Record 9021623;
+      LabAtt1@1000000017 : Record 9021623;
+      LabAtt2@1000000028 : Record 9021623;
+      LabAttVal@1000000004 : Record 9021624;
+      LabAttVal1@1000000018 : Record 9021624;
+      ePageSort@1000000030 : Record 9021600;
+      ePageSort1@1000000031 : Record 9021600;
+      ePage@1000000005 : Record 9021628;
+      ePage1@1000000019 : Record 9021628;
+      PageItem@1000000006 : Record 9021629;
+      PageItem1@1000000020 : Record 9021629;
+      PageCont@1000000007 : Record 9021630;
+      PageCont1@1000000021 : Record 9021630;
+      LayoutCpt@1000000008 : Record 9021631;
+      LayoutCpt1@1000000022 : Record 9021631;
+      PageItemContT@1000000009 : Record 9021632;
+      PageItemContT1@1000000023 : Record 9021632;
+      PageContV@1000000010 : Record 9021635;
+      PageContV1@1000000024 : Record 9021635;
+      PageItemC@1000000011 : Record 9021636;
+      PageItemC1@1000000025 : Record 9021636;
+      WebL@1000000012 : Record 9021692;
+      WebL1@1000000026 : Record 9021692;
+      LabelWebConfig@1000000033 : Record 9021620;
+      LabelWebConfig1@1000000034 : Record 9021620;
+      LabelR@1000000015 : Record 9021618;
+      CopyNotReplace@1000000016 : Boolean;
+      HighestePageEntryNo@1000000027 : Integer;
+      HighestBlobEntryNo@1000000029 : Integer;
+
+    BEGIN
+    {
+      //DOC EC2009.2 GW 01/06/2010 - Created
+      //DOC EC2016.6 JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

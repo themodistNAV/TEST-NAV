@@ -1,0 +1,278 @@
+OBJECT Codeunit 9087037 Sales-Driven Replenishment
+{
+  OBJECT-PROPERTIES
+  {
+    Date=21/09/16;
+    Time=[ 6:21:40 PM];
+    Version List=NS2016.16;
+  }
+  PROPERTIES
+  {
+    TableNo=9087044;
+    OnRun=VAR
+            lResult@1000000000 : Boolean;
+          BEGIN
+            ReplenishmentContext := Rec;
+            ReplenishmentContext.TESTFIELD(Activity);
+            ReplenishmentContext.TESTFIELD("Replenishment Template Code");
+            ReplenishmentContext.TESTFIELD("Replenishment Batch Code");
+            CASE (ReplenishmentContext.Activity) OF
+              ReplenishmentContext.Activity::"Update Parameters": lResult := UpdateParameters();
+              ReplenishmentContext.Activity::"Calculate Required": lResult := CalculateRequired();
+              ReplenishmentContext.Activity::"Calculate Available": lResult := CalculateAvailable();
+            END;
+            Rec := ReplenishmentContext;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ReplenishmentLine@1000000006 : Record 9087043;
+      ReplenishmentContext@1000000012 : Record 9087044;
+      ReplenishmentParameter@1000000016 : Record 9087047;
+      Location@1000000000 : Record 14;
+      ItemLedgerEntry@1000000001 : Record 32;
+      DialogManagement@1000000002 : Codeunit 9062249;
+      ReplenishmentParametersMgt@1000000015 : Codeunit 9087038;
+      ReplenishmentProcessing@1000000004 : Codeunit 9087040;
+      TnpToolkit@1000000023 : Codeunit 9062230;
+      FromLocationFilter@1000000021 : Text;
+      ToLocationFilter@1000000020 : Text;
+      ItemFilter@1000000019 : Text;
+      PeriodDates@1000000022 : ARRAY [2] OF Date;
+      DialogIndex@1000000003 : ',Location,ItemLedgerEntry';
+      tFromLocationFilterParameter@1000000013 : TextConst 'ENU=From Location Filter;ENG=From Location Filter';
+      tToLocationFilterParameter@1000000014 : TextConst 'ENU=To Location Filter;ENG=To Location Filter';
+      tItemFilterParameter@1000000017 : TextConst 'ENU=Item Filter;ENG=Item Filter';
+      tPeriodParameter@1000000018 : TextConst 'ENU=Period;ENG=Period';
+
+    LOCAL PROCEDURE UpdateParameters@1000000007() : Boolean;
+    BEGIN
+      //DOC NS2016.16 - Updating parameters
+
+      ReplenishmentParametersMgt.AddParameterAdv(ReplenishmentContext, tFromLocationFilterParameter, ReplenishmentParameter.Type::Text, '', FALSE, DATABASE::Location);
+      ReplenishmentParametersMgt.AddParameterAdv(ReplenishmentContext, tToLocationFilterParameter, ReplenishmentParameter.Type::Text, '', FALSE, DATABASE::Location);
+      ReplenishmentParametersMgt.AddParameterAdv(ReplenishmentContext, tItemFilterParameter, ReplenishmentParameter.Type::Text, '', FALSE, DATABASE::Item);
+      ReplenishmentParametersMgt.AddParameterAdv(ReplenishmentContext, tPeriodParameter, ReplenishmentParameter.Type::DateFormula, '', FALSE, 0);
+    END;
+
+    LOCAL PROCEDURE RetrieveParameters@1000000013();
+    VAR
+      lPeriod@1000000003 : DateFormula;
+      lPeriodText@1000000002 : Text;
+      lPeriodDates@1000000001 : Date;
+      lEmptyDateFormula@1000000000 : DateFormula;
+    BEGIN
+
+      FromLocationFilter := ReplenishmentParametersMgt.GetTextParameter(ReplenishmentContext, tFromLocationFilterParameter);
+      ToLocationFilter := ReplenishmentParametersMgt.GetTextParameter(ReplenishmentContext, tToLocationFilterParameter);
+      ItemFilter := ReplenishmentParametersMgt.GetTextParameter(ReplenishmentContext, tItemFilterParameter);
+      ReplenishmentParametersMgt.GetDateFormulaParameter(ReplenishmentContext, tPeriodParameter, lPeriod);
+
+      IF (lPeriod <> lEmptyDateFormula) THEN
+      BEGIN
+        lPeriodText := FORMAT(lPeriod);
+        IF (COPYSTR(lPeriodText, 1, 1) = '<') THEN
+          lPeriodText := COPYSTR(lPeriodText, 2);
+        IF (lPeriodText <> '') THEN
+          IF (COPYSTR(lPeriodText, STRLEN(lPeriodText), 1) = '>') THEN
+            lPeriodText := COPYSTR(lPeriodText, 1, STRLEN(lPeriodText) - 1);
+        IF (COPYSTR(lPeriodText, 1, 1) <> '-') THEN
+          lPeriodText := '-' + lPeriodText;
+        EVALUATE(lPeriod, lPeriodText);
+      END
+      ELSE
+        EVALUATE(lPeriod, '<-1W>');
+
+      PeriodDates[2] := CALCDATE('<-1D>', WORKDATE());
+      PeriodDates[1] := CALCDATE(lPeriod, PeriodDates[2]);
+    END;
+
+    LOCAL PROCEDURE CalculateRequired@1000000000() : Boolean;
+    VAR
+      eDialogTitle@1000000004 : TextConst 'ENU=Creating Replenishment...;ENG=Creating Replenishment...';
+      eDialogLocationCounter@1000000002 : TextConst 'ENU=Location;ENG=Location';
+      eDialogItemLedgerEntryCounter@1000000003 : TextConst 'ENU=Sales History;ENG=Sales History';
+      lReplenishmentLineNo@1000000005 : Integer;
+    BEGIN
+      //DOC NS2016.16 - Calculating required quantities for replenishment
+      //  <- TRUE = Calculated, FALSE = Not
+
+      IF ( NOT (CalculateRequiredConfirmation())) THEN
+        EXIT(FALSE);
+
+      RetrieveParameters();
+
+      CLEAR(DialogManagement);
+      DialogManagement.Add(eDialogLocationCounter, 20, DialogIndex::Location, 20, FALSE, FALSE);
+      DialogManagement.Add(eDialogItemLedgerEntryCounter, 20, DialogIndex::ItemLedgerEntry, 20, TRUE, TRUE);
+      DialogManagement.Open(eDialogTitle);
+
+      Location.RESET();
+      Location.SETRANGE(Store, TRUE);
+      IF (ToLocationFilter <> '') THEN
+        Location.SETFILTER(Code, ToLocationFilter);
+      IF (Location.FINDSET()) THEN
+      REPEAT
+        DialogManagement.SetCounterTextValue(DialogIndex::Location, Location.Code);
+        ItemLedgerEntry.RESET();
+        ItemLedgerEntry.SETCURRENTKEY("Item No.", "Entry Type", "Variant Code", "Drop Shipment", "Location Code", "Posting Date");
+        ItemLedgerEntry.SETRANGE("Entry Type", ItemLedgerEntry."Entry Type"::Sale);
+        ItemLedgerEntry.SETRANGE("Location Code", Location.Code);
+        IF (ItemFilter <> '') THEN
+          ItemLedgerEntry.SETFILTER("Item No.", ItemFilter);
+        ItemLedgerEntry.SETRANGE("Posting Date", PeriodDates[1], PeriodDates[2]);
+        DialogManagement.SetCounterCount(DialogIndex::ItemLedgerEntry, ItemLedgerEntry.COUNT);
+        IF (ItemLedgerEntry.FINDSET()) THEN
+        REPEAT
+          DialogManagement.StepCounter(DialogIndex::ItemLedgerEntry);
+          ReplenishmentLine.RESET();
+          ReplenishmentLine.SETRANGE("Replenishment Template Code", ReplenishmentContext."Replenishment Template Code");
+          ReplenishmentLine.SETRANGE("Replenishment Batch Code", ReplenishmentContext."Replenishment Batch Code");
+          ReplenishmentLine.SETRANGE("Item No.", ItemLedgerEntry."Item No.");
+          ReplenishmentLine.SETRANGE("Variant Code", ItemLedgerEntry."Variant Code");
+          ReplenishmentLine.SETRANGE("To Location Code", ItemLedgerEntry."Location Code");
+          IF ( NOT (ReplenishmentLine.FINDFIRST())) THEN
+          BEGIN
+            lReplenishmentLineNo += 10000;
+            CLEAR(ReplenishmentLine);
+            ReplenishmentLine.INIT();
+            ReplenishmentLine.VALIDATE("Replenishment Template Code", ReplenishmentContext."Replenishment Template Code");
+            ReplenishmentLine.VALIDATE("Replenishment Batch Code", ReplenishmentContext."Replenishment Batch Code");
+            ReplenishmentLine.VALIDATE("Line No.", lReplenishmentLineNo);
+            ReplenishmentLine.VALIDATE("Item No.", ItemLedgerEntry."Item No.");
+            ReplenishmentLine.VALIDATE("Variant Code", ItemLedgerEntry."Variant Code");
+            ReplenishmentLine.VALIDATE("To Location Code", ItemLedgerEntry."Location Code");
+            ReplenishmentLine.INSERT(TRUE);
+          END;
+          ReplenishmentLine.VALIDATE("Required Quantity", ReplenishmentLine."Required Quantity" + (-ItemLedgerEntry.Quantity));
+          ReplenishmentLine.MODIFY(TRUE);
+        UNTIL (ItemLedgerEntry.NEXT() = 0);
+        DialogManagement.SetCounterMax(DialogIndex::ItemLedgerEntry);
+      UNTIL (Location.NEXT() = 0);
+
+      DialogManagement.Close();
+    END;
+
+    LOCAL PROCEDURE CalculateRequiredConfirmation@1000000012() : Boolean;
+    VAR
+      eConfirmation@1000000000 : TextConst 'ENU=Required calculation will delete all existing lines. Do you want to continue?;ENG=Required calculation will delete all existing lines. Do you want to continue?';
+    BEGIN
+      //DOC NS2016.16 - Confirmation for "Calculate Required" procedure
+      //  <- Result
+
+      ReplenishmentLine.RESET();
+      ReplenishmentLine.SETRANGE("Replenishment Template Code", ReplenishmentContext."Replenishment Template Code");
+      ReplenishmentLine.SETRANGE("Replenishment Batch Code", ReplenishmentContext."Replenishment Batch Code");
+      IF ( NOT (ReplenishmentLine.ISEMPTY())) THEN
+      BEGIN
+        IF (GUIALLOWED()) THEN
+          IF ( NOT (CONFIRM(eConfirmation, TRUE))) THEN
+            EXIT(FALSE);
+        ReplenishmentLine.DELETEALL(TRUE);
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CalculateAvailable@1000000002() : Boolean;
+    VAR
+      eNoLines@1000000003 : TextConst 'ENU=There are no lines to calculate availability for in replenishment %1.;ENG=There are no lines to calculate availability for in replenishment %1.';
+      eConfirmation@1000000004 : TextConst 'ENU=Do you want to calculate availability for replenishment %1?;ENG=Do you want to calculate availability for replenishment %1?';
+      eReduced@1000000008 : TextConst 'ENU=Reduced due to distribution centre availability.;ENG=Reduced due to distribution centre availability.';
+      lItemVariantReplenishmentBuffer@1000000006 : TEMPORARY Record 9087048;
+      lRequiredReplenishmentBuffer@1000000000 : TEMPORARY Record 9087048;
+      lAvailableReplenishmentBuffer@1000000001 : TEMPORARY Record 9087048;
+      lTransferReplenishmentBuffer@1000000005 : TEMPORARY Record 9087048;
+    BEGIN
+      //DOC NS2016.16 - Calculating available quantities for replenishment
+      //  <- TRUE = Calculated, FALSE = Not
+
+      IF ( NOT (CalculateAvailableConfirmation())) THEN
+        EXIT(FALSE);
+
+      RetrieveParameters();
+
+      ReplenishmentProcessing.FillItemVariantReplenishmentBuffer(ReplenishmentContext, lItemVariantReplenishmentBuffer);
+      ReplenishmentProcessing.FillRequiredReplenishmentBuffer(ReplenishmentContext, lRequiredReplenishmentBuffer);
+      FillAvailableReplenishmentBuffer(lItemVariantReplenishmentBuffer, lAvailableReplenishmentBuffer);
+
+      ReplenishmentProcessing.FillTransferReplenishmentBuffer(ReplenishmentContext, lRequiredReplenishmentBuffer, lAvailableReplenishmentBuffer,
+        lTransferReplenishmentBuffer);
+
+      ReplenishmentProcessing.ApplyTransferReplenishmentBuffer(ReplenishmentContext, lTransferReplenishmentBuffer);
+      ReplenishmentProcessing.ApplyRequiredReplenishmentBuffer(ReplenishmentContext, lRequiredReplenishmentBuffer);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CalculateAvailableConfirmation@1000000020() : Boolean;
+    VAR
+      eConfirmation@1000000000 : TextConst 'ENU=Do you want to calculate available stock?;ENG=Do you want to calculate available stock?';
+      eNoLines@1000000001 : TextConst 'ENU=Replenishment worksheet "%1" - "%2" doesn''t have any lines to process.;ENG=Replenishment worksheet "%1" - "%2" doesn''t have any lines to process.';
+    BEGIN
+      //DOC NS2016.16 - Confirmation for "Calculate Available" procedure
+      //  <- Result
+
+      ReplenishmentLine.RESET();
+      ReplenishmentLine.SETRANGE("Replenishment Template Code", ReplenishmentContext."Replenishment Template Code");
+      ReplenishmentLine.SETRANGE("Replenishment Batch Code", ReplenishmentContext."Replenishment Batch Code");
+      IF ( NOT (ReplenishmentLine.ISEMPTY())) THEN
+      BEGIN
+        IF (GUIALLOWED()) THEN
+          IF ( NOT (CONFIRM(eConfirmation, TRUE))) THEN
+            EXIT(FALSE);
+      END
+      ELSE
+        ERROR(eNoLines, ReplenishmentContext."Replenishment Template Code", ReplenishmentContext."Replenishment Batch Code");
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE FillAvailableReplenishmentBuffer@1000000027(VAR pItemVariantReplenishmentBuffer@1000000001 : Record 9087048;VAR pAvailableReplenishmentBuffer@1000000000 : Record 9087048);
+    VAR
+      lLocation@1000000005 : Record 14;
+      lItem@1000000006 : Record 27;
+    BEGIN
+      //DOC NS2016.16 - Filling available replenishment buffer for given template and batch
+      //  <> pReplenishmentBuffer: Target buffer
+
+      lLocation.RESET();
+      lLocation.SETRANGE(Store, FALSE);
+      lLocation.SETRANGE("Use As In-Transit", FALSE);
+      IF (FromLocationFilter <> '') THEN
+        lLocation.SETFILTER(Code, FromLocationFilter);
+
+      IF (pItemVariantReplenishmentBuffer.FINDSET()) THEN
+      REPEAT
+        IF (lLocation.FINDSET()) THEN
+        REPEAT
+          lItem.GET(pItemVariantReplenishmentBuffer."Item No.");
+          lItem.RESET();
+          lItem.SETRANGE("Variant Filter", pItemVariantReplenishmentBuffer."Variant Code");
+          lItem.SETRANGE("Location Filter", lLocation.Code);
+          lItem.CALCFIELDS(Inventory);
+          IF (lItem.Inventory > 0) THEN
+          BEGIN
+            pAvailableReplenishmentBuffer."Item No." := pItemVariantReplenishmentBuffer."Item No.";
+            pAvailableReplenishmentBuffer."Variant Code" := pItemVariantReplenishmentBuffer."Variant Code";
+            pAvailableReplenishmentBuffer."From Location Code" := lLocation.Code;
+            pAvailableReplenishmentBuffer.Quantity := lItem.Inventory;
+            pAvailableReplenishmentBuffer."Outstanding Quantity" := lItem.Inventory;
+            pAvailableReplenishmentBuffer.INSERT();
+          END;
+        UNTIL (lLocation.NEXT() = 0);
+      UNTIL (pItemVariantReplenishmentBuffer.NEXT() = 0);
+    END;
+
+    BEGIN
+    {
+      //DOC NS2015.1  JH 21/11/2013 - Created
+      //DOC NS2016.16 JH 07/09/2016 - nSemble 2016
+      //^^^THe whole thing should be rebuilt
+    }
+    END.
+  }
+}
+

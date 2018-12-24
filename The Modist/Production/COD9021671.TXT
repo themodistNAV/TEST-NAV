@@ -1,0 +1,164 @@
+OBJECT Codeunit 9021671 ContactTableTriggerCode
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:20 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      LabelRec@1000000003 : Record 9021618;
+      ContBusRel@1040000 : Record 5054;
+      MQGlobals@1000000000 : Codeunit 9021624;
+
+    PROCEDURE OnInsert@1000000000(VAR ContactPar@1000000000 : Record 5050);
+    BEGIN
+      IF ContactPar."Label Code" = '' THEN
+        //DOC EC2009.2.67 ContactPar.VALIDATE("Label Code",StdTableTriggerCode.FindLabel);
+        ContactPar.VALIDATE("Label Code",MQGlobals.GetLabelCode);
+    END;
+
+    PROCEDURE OnDelete@1000000002(ContactPar@1000000000 : Record 5050);
+    VAR
+      Text000@1000000001 : TextConst 'ENU=You cannot delete a contact that is linked to an Internet B2B Customer.  If you delete the Internet B2B Customer you will then be able to delete the Contact.;ENG=You cannot delete a contact that is linked to an Internet B2B Customer.  If you delete the Internet B2B Customer you will then be able to delete the Contact.';
+      Text001@1000000002 : TextConst 'ENU=You cannot delete a contact that is linked to Customer where the field Is An Internet Customer is ticked.  If you want to delete the contact, first go to the Customer and untick the Is An Internet Customer field.;ENG=You cannot delete a contact that is linked to Customer where the field Is An Internet Customer is ticked.  If you want to delete the contact, first go to the Customer and untick the Is An Internet Customer field.';
+    BEGIN
+      IF ContactPar."Is An Internet Customer" THEN BEGIN
+        ContactPar.CALCFIELDS("Is An Internet B2B Customer");
+        IF ContactPar."Is An Internet B2B Customer" THEN
+          ERROR(Text000);
+        ContBusRel.RESET;
+        ContBusRel.SETRANGE("Contact No.",ContactPar."No.");
+        ContBusRel.SETRANGE("Link to Table",ContBusRel."Link to Table"::Customer);
+        IF ContBusRel.FINDFIRST THEN
+          ERROR(Text001);
+      END;
+    END;
+
+    PROCEDURE EmailOnVal@1000000001(ContactPar@1000000000 : Record 5050;xRecEmail@1000000001 : Text[80];xRecNo@1000000002 : Code[20]);
+    VAR
+      Text000@1000000003 : TextConst 'ENU=This contact %1 is an Internet B2B Customer so you cannot change the email address here.  Please go to the Customer card, then Internet, Logins and change the email address as this is the contact''s web login.;ENG=This contact %1 is an Internet B2B Customer so you cannot change the email address here.  Please go to the Customer card, then Internet, Logins and change the email address as this is the contact''s web login.';
+    BEGIN
+      IF (ContactPar."Is An Internet Customer") THEN BEGIN
+        IF (ContactPar."E-Mail" <> xRecEmail) AND (xRecNo = ContactPar."No.") THEN BEGIN
+          ContactPar.CALCFIELDS("Is An Internet B2B Customer");
+          IF ContactPar."Is An Internet B2B Customer" THEN
+            ERROR(Text000,ContactPar."No.");
+        END;
+      END;
+    END;
+
+    PROCEDURE LabelCodeOnVal@1000000003(VAR ContactPar@1000000000 : Record 5050);
+    VAR
+      Text000@1000000001 : TextConst 'ENU=The contact is an Internet B2B Customer so you cannot change the %1 here.;ENG=The contact is an Internet B2B Customer so you cannot change the %1 here.';
+      Text001@1000000004 : TextConst 'ENU=You can not have a label %1 that is associated with a different company %2.;ENG=You can not have a label %1 that is associated with a different company %2.';
+      Text002@1000000003 : TextConst 'ENU=The Label Code must be %1 as it must be the same as the Internet Customer.;ENG=The Label Code must be %1 as it must be the same as the Internet Customer.';
+      InternetCust@1000000005 : Record 9021642;
+      InternetB2BCust@1000000002 : Record 9021643;
+    BEGIN
+      ContactPar.CALCFIELDS("Is An Internet B2B Customer");
+      IF ContactPar."Is An Internet B2B Customer" THEN BEGIN
+        InternetB2BCust.GET(ContactPar."User GuID");
+        InternetB2BCust.TESTFIELD("Label Code");
+        IF ContactPar."Label Code" <> InternetB2BCust."Label Code" THEN
+          ERROR(Text000,ContactPar.FIELDCAPTION("Label Code"));
+        EXIT;
+      END;
+      IF ContactPar."Label Code" = '' THEN BEGIN
+        IF InternetCust.GET(ContactPar."User GuID") THEN BEGIN
+          InternetCust."Contact No." := '';
+          InternetCust."Customer No." := '';
+          InternetCust.MODIFY;
+        END ELSE BEGIN
+          InternetCust.RESET;
+          InternetCust.SETCURRENTKEY("Contact No.");
+          InternetCust.SETRANGE("Contact No.",ContactPar."No.");
+          IF InternetCust.FINDFIRST THEN BEGIN
+            InternetCust."Contact No." := '';
+            InternetCust."Customer No." := '';
+            InternetCust.MODIFY;
+          END;
+        END;
+        ContactPar.VALIDATE("Is An Internet Customer",FALSE);
+        ContactPar."User GuID" := '';
+      END ELSE BEGIN
+        LabelRec.GET(ContactPar."Label Code");
+        IF LabelRec."Used-in Company" <> COMPANYNAME THEN
+          ERROR(Text001,ContactPar."Label Code",LabelRec."Used-in Company");
+        IF InternetCust.GET(ContactPar."User GuID") THEN BEGIN
+          IF ContactPar."Label Code" <> InternetCust."Label Code" THEN
+            ERROR(Text002,InternetCust."Label Code");
+          IF ContactPar."Is An Internet Customer" = FALSE THEN
+            ContactPar.VALIDATE("Is An Internet Customer",TRUE);
+          //MQ 25/02/2011 - GW110225 -
+          IF InternetCust."Contact No." <> ContactPar."No." THEN BEGIN
+            InternetCust.VALIDATE("Contact No.",ContactPar."No.");  //should populate customer no. as well
+          END;
+          //MQ 25/02/2011 - GW110225 +
+        END ELSE BEGIN
+          InternetCust.RESET;
+          InternetCust.SETCURRENTKEY("Contact No.");
+          InternetCust.SETRANGE("Contact No.",ContactPar."No.");
+          IF InternetCust.FINDFIRST THEN BEGIN
+            IF ContactPar."Label Code" <> InternetCust."Label Code" THEN
+              ERROR(Text002,InternetCust."Label Code");
+            ContactPar."User GuID" := InternetCust."No.";
+            IF ContactPar."Is An Internet Customer" = FALSE THEN
+              ContactPar.VALIDATE("Is An Internet Customer",TRUE);
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE CreateCustomer1@1000000005(LabelCode@1000000000 : Code[10];CustNo@1000000001 : Code[20];ContactNo@1000000002 : Code[20];CompanyName@1000000004 : Text[80];CountryCode@1000000005 : Code[20]) RetCustNo : Code[20];
+    VAR
+      CustLocal@1190000005 : Record 18;
+      TextL000@1190000006 : TextConst 'ENU=Cannot create a Customer %1 as the customer already exists. (System is set in %2 to create customers with same no. as contact.);ENG=Cannot create a Customer %1 as the customer already exists. (System is set in %2 to create customers with same no. as contact.)';
+    BEGIN
+      IF LabelCode = '' THEN
+      //DOC EC2013.3.40 -
+        LabelCode := MQGlobals.GetLabelCode;
+      IF LabelCode = '' THEN EXIT(CustNo);
+      LabelRec.GET(LabelCode);
+      IF LabelRec."Custs have Same No. as Contact" THEN BEGIN
+        IF CustLocal.GET(ContactNo) THEN
+          ERROR(TextL000,ContactNo,LabelRec.TABLECAPTION);
+        EXIT(ContactNo)
+      END ELSE
+        EXIT(CustNo);
+    END;
+
+    PROCEDURE CreateCustomer3@1190000005(VAR ContactPar@1000000000 : Record 5050);
+    VAR
+      SegLineRec@1000000001 : Record 5077;
+      ContRec1@1000000002 : Record 5050;
+    BEGIN
+      ContRec1.GET(ContactPar."Company No.");
+      SegLineRec.RESET;
+      SegLineRec.SETCURRENTKEY("Contact No.");
+      SegLineRec.SETRANGE("Contact No.",ContactPar."No.");
+      SegLineRec.MODIFYALL("Company User GuID",ContRec1."User GuID");
+      SegLineRec.MODIFYALL("Label Code",ContactPar."Label Code");
+    END;
+
+    BEGIN
+    {
+      //DOC EC2009.2.67 MQ 01/01/2011 - Use GetLabelCode function from MQ Global Functions rather than from StdTableTrigger
+      //DOC EC2009.2.69 MQ 23/08/2011 - GW110823 Error if Creating Customer from Contact with same no. if Customer already exists.
+      //DOC EC2013.3.40 MQ 21/01/2013 - GW130121 Code to auto CustNo generation for SKS.
+      //DOC EC2013.4.00 MQ 17/12/2013 - GW131217 Changes in CreateCustomer1 for SKS
+      //DOC EC2015.5.03 MQ 05/05/2015 - GW150505 Remove function CreateCustomer2 cos it is empty
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

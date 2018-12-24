@@ -1,0 +1,1064 @@
+OBJECT Codeunit 9062321 Panel Request
+{
+  OBJECT-PROPERTIES
+  {
+    Date=24/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EnablementSetup@1000000001 : Record 9062229;
+      Panel@1000000016 : Record 9062363;
+      PanelValue@1000000017 : Record 9062598;
+      PanelEventArgs@1000000007 : Record 9062370;
+      BuildPanel@1000000015 : Codeunit 9062324;
+      FieldRefTools@1000000002 : Codeunit 9062241;
+      EnhancedFieldManagement@1000000018 : Codeunit 9062298;
+      EnhancedPermissionsMgt@1000000000 : Codeunit 9062277;
+      PanelCacheToolkit@1000000008 : Codeunit 9062341;
+      PanelToolkit@1000000005 : Codeunit 9062320;
+      SmartFilterManagement@1000000010 : Codeunit 9062231;
+      TnpToolkit@1000000004 : Codeunit 9062230;
+      LastDateTime@1000000003 : DateTime;
+      TileGroupSequence@1000000006 : Integer;
+      PanelEventArgsSet@1000000009 : Boolean;
+      ExcludeBack@1000000011 : Boolean;
+
+    PROCEDURE "--- Building Panel ---"@1000000037();
+    BEGIN
+    END;
+
+    PROCEDURE BuildPanelWin@1000000013(pPanelCode@1000000000 : Code[20];pUpdate@1000000005 : Integer;VAR pBlob@1000000001 : Record 99008535);
+    VAR
+      lMemoryStream@1000000009 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.MemoryStream";
+      lStream@1000000013 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Stream";
+      lPanelSerialiserObj@1000000004 : DotNet "'TheNavPeople.Panels.9.0.3.7, Version=9.0.3.7, Culture=neutral, PublicKeyToken=f71ae4a876a51bae'.TheNavPeople.Panels.PanelSerialiser";
+      lPanelObj@1000000002 : DotNet "'TheNavPeople.Panels.9.0.3.7, Version=9.0.3.7, Culture=neutral, PublicKeyToken=f71ae4a876a51bae'.TheNavPeople.Panels.Panel";
+      lTimeSinceLastUpdate@1000000006 : Integer;
+      lInStream@1000000012 : InStream;
+      lOutStream@1000000008 : OutStream;
+      lResult@1000000007 : Boolean;
+      lRestoredFromCache@1000000003 : Boolean;
+      eDebugFile@1000000011 : TextConst 'ENU=%1\Panel %2.bin;ENG=%1\Panel %2.bin';
+      lUpdateCache@1000000014 : Boolean;
+    BEGIN
+      //DOC NA2015.8 - Building a panel (windows version)
+      //  -> pPanelCode: Panel code
+      //  -> pUpdate: Update (see "Panel"."Update" field options)
+      //  <> pBlob: Source / target BLOB
+
+      IF ( NOT (Panel.GET(pPanelCode))) THEN
+        EXIT;
+
+      IF ( NOT (EnhancedPermissionsMgt.HasPanelExecutePermission(Panel, USERID()))) THEN
+        EXIT;
+
+      IF (PanelEventArgsSet) THEN
+        Panel.CopyParametersFromPanelEventArgs(PanelEventArgs);
+
+      IF ((pUpdate = Panel."Update Type"::" ") AND (Panel."Auto Refresh Every" <> 0)) THEN
+        IF (LastDateTime <> 0DT) THEN
+        BEGIN
+          lTimeSinceLastUpdate := CURRENTDATETIME() - LastDateTime;
+          IF (lTimeSinceLastUpdate >= Panel."Auto Refresh Every") THEN
+            pUpdate := Panel."Update Type"::Properties;
+        END;
+
+      lRestoredFromCache := FALSE;
+      lUpdateCache := FALSE;
+
+      IF (Panel."Use Cache") THEN
+      BEGIN
+        IF (pUpdate = Panel."Update Type"::Full) THEN
+          PanelCacheToolkit.Remove(Panel.Code);
+        IF (PanelCacheToolkit.Exists(Panel.Code)) THEN
+        BEGIN
+          PanelCacheToolkit.Restore(Panel.Code, pBlob);
+          lRestoredFromCache := TRUE;
+        END;
+      END;
+
+      IF (lRestoredFromCache) THEN
+      BEGIN
+        IF (pUpdate = Panel."Update Type"::Properties) THEN
+        BEGIN
+          pBlob.Blob.CREATEINSTREAM(lInStream);
+          lStream := lInStream;
+          lPanelObj := lPanelSerialiserObj.Deserialise(lStream);
+          IF (UpdatePanelStructure(Panel, lPanelObj)) THEN
+          BEGIN
+            lMemoryStream := lMemoryStream.MemoryStream();
+            lPanelSerialiserObj.Serialise(lPanelObj, lMemoryStream);
+            CLEAR(pBlob.Blob);
+            pBlob.Blob.CREATEOUTSTREAM(lOutStream);
+            COPYSTREAM(lOutStream, lMemoryStream);
+            lUpdateCache := TRUE;
+            PanelToolkit.SavePanelToFile(lPanelObj);
+          END;
+        END;
+      END
+      ELSE
+      BEGIN
+        CLEAR(BuildPanel);
+        BuildPanelStructureWin(FALSE, lPanelObj);
+        IF ( NOT (ISNULL(lPanelObj))) THEN
+        BEGIN
+          lMemoryStream := lMemoryStream.MemoryStream();
+          lPanelSerialiserObj.Serialise(lPanelObj, lMemoryStream);
+          CLEAR(pBlob.Blob);
+          pBlob.Blob.CREATEOUTSTREAM(lOutStream);
+          COPYSTREAM(lOutStream, lMemoryStream);
+          PanelToolkit.SavePanelToFile(lPanelObj);
+        END;
+        EnablementSetup.GET();
+        lUpdateCache := TRUE;
+      END;
+
+      IF ((Panel."Use Cache") AND (lUpdateCache)) THEN
+        PanelCacheToolkit.Add(Panel.Code, 0DT, pBlob);
+
+      LastDateTime := CURRENTDATETIME();
+    END;
+
+    PROCEDURE BuildPanelToCU@1000000005(pPanelCode@1000000000 : Code[20];VAR pBuildPanel@1000000001 : Codeunit 9062324);
+    BEGIN
+      //DOC NA2015.8 - Building a panel (to a codeunit)
+      //  -> pPanelCode: Panel code
+      //  <> pBuildPanel: Target codeunit
+
+      IF ( NOT (Panel.GET(pPanelCode))) THEN
+        EXIT;
+
+      IF ( NOT (EnhancedPermissionsMgt.HasPanelExecutePermission(Panel, USERID()))) THEN
+        EXIT;
+
+      IF (PanelEventArgsSet) THEN
+        Panel.CopyParametersFromPanelEventArgs(PanelEventArgs);
+
+      BuildPanelStructureToCU(FALSE, pBuildPanel);
+    END;
+
+    LOCAL PROCEDURE BuildPanelStructureWin@1000000012(pOnlyTemplate@1000000002 : Boolean;VAR pPanelObj@1000000001 : DotNet "'TheNavPeople.Panels.9.0.3.7, Version=9.0.3.7, Culture=neutral, PublicKeyToken=f71ae4a876a51bae'.TheNavPeople.Panels.Panel");
+    BEGIN
+      //DOC NA2015.8 - Building panel structure (windows version)
+      //  -> pOnlyTemplate: TRUE = only build template, FALSE = build the whole panel
+      //  <> pPanelObj: Target panel object
+
+      BuildPanelStructure(pOnlyTemplate);
+      BuildPanel.BuildPanel(pPanelObj);
+    END;
+
+    LOCAL PROCEDURE BuildPanelStructureToCU@1000000011(pOnlyTemplate@1000000002 : Boolean;VAR pBuildPanel@1000000000 : Codeunit 9062324);
+    BEGIN
+      //DOC NA2015.8 - Building panel structure (windows version)
+      //  -> pOnlyTemplate: TRUE = only build template, FALSE = build the whole panel
+      //  <> pBuildPanel: Target codeunit
+
+      BuildPanelStructure(pOnlyTemplate);
+      pBuildPanel := BuildPanel;
+    END;
+
+    LOCAL PROCEDURE BuildPanelStructure@1000000028(pOnlyTemplate@1000000002 : Boolean);
+    VAR
+      lTileGroup@1000000005 : Record 9062366;
+      lTileGroupTmp@1000000003 : TEMPORARY Record 9062366;
+      lTile@1000000007 : Record 9062367;
+      lTileFrame@1000000006 : Record 9062368;
+      lPanelLink@1000000008 : Record 9062364;
+    BEGIN
+      //DOC NA2015.8 - Building panel structure
+      //  -> pOnlyTemplate: TRUE = only build template, FALSE = build the whole panel
+
+      CLEAR(TileGroupSequence);
+
+      BuildPanel.AddPanel(Panel, TRUE);
+
+      BuildPanelMenu(Panel."Menu Code");
+      BuildPanelMenu(Panel."Tile Menu Code");
+      BuildPanelMenu(Panel."Link Menu Code");
+
+      lTileGroup.RESET();
+      lTileGroup.SETCURRENTKEY("Panel Code", Sequence, ID);
+      lTileGroup.SETRANGE("Panel Code", Panel.Code);
+      lTileGroup.SETFILTER(ID, '<>0');
+      IF (lTileGroup.FINDSET()) THEN
+      REPEAT
+        lTileGroupTmp := lTileGroup;
+        lTileGroupTmp.INSERT();
+        TileGroupSequence := TnpToolkit.MaxInteger(lTileGroup.Sequence, TileGroupSequence);
+      UNTIL (lTileGroup.NEXT() = 0);
+
+      lTile.RESET();
+      lTile.SETCURRENTKEY("Panel Code", "Tile Group ID", Sequence, ID);
+      lTile.SETRANGE("Panel Code", Panel.Code);
+      lTile.SETRANGE("Tile Group ID", 0);
+      IF ( NOT (lTile.ISEMPTY)) THEN
+        AddGroupZero(lTileGroupTmp);
+
+      lTileGroupTmp.RESET();
+      IF (lTileGroupTmp.FINDSET()) THEN
+      REPEAT
+        IF ( NOT (lTileGroupTmp.IsBlocked)) THEN
+        BEGIN
+          BuildPanel.AddTileGroup(lTileGroupTmp, TRUE);
+
+          lTile.RESET();
+          lTile.SETRANGE("Panel Code", Panel.Code);
+          lTile.SETRANGE("Tile Group ID", lTileGroupTmp.ID);
+          IF (lTile.FINDSET()) THEN
+          REPEAT
+            lTile.CALCFIELDS(Image);
+            lTile.CopyParametersFromPanel(Panel);
+            SetTileProperties(lTile);
+            IF (( NOT (lTile.GetBlocked)) AND
+                ( NOT (IsBackToExclude(DATABASE::Tile, lTile."Panel Code", lTile.ID)))) THEN
+            BEGIN
+              BuildPanel.AddTile(lTile, TRUE);
+
+              lTileFrame.RESET();
+              lTileFrame.SETCURRENTKEY("Panel Code", "Tile ID", Sequence, ID);
+              lTileFrame.SETRANGE("Panel Code", Panel.Code);
+              lTileFrame.SETRANGE("Tile ID", lTile.ID);
+              lTileFrame.SETRANGE(Blocked, FALSE);
+              IF (lTileFrame.FINDSET()) THEN
+              REPEAT
+                lTileFrame.CALCFIELDS(Image);
+                BuildPanel.AddTileFrame(lTileFrame, TRUE);
+              UNTIL (lTileFrame.NEXT() = 0);
+            END;
+          UNTIL (lTile.NEXT() = 0);
+        END;
+      UNTIL (lTileGroupTmp.NEXT() = 0);
+
+      lPanelLink.RESET();
+      lPanelLink.SETCURRENTKEY("Panel Code", Sequence);
+      lPanelLink.SETRANGE("Panel Code", Panel.Code);
+      IF (lPanelLink.FINDSET()) THEN
+      REPEAT
+        IF ( NOT (IsBackToExclude(DATABASE::"Panel Link", lPanelLink."Panel Code", lPanelLink.ID))) THEN
+        BEGIN
+          lPanelLink.CopyParametersFromPanel(Panel);
+          BuildPanel.AddPanelLink(lPanelLink, TRUE);
+        END;
+      UNTIL (lPanelLink.NEXT() = 0);
+
+      ProcessPanelData(Panel, lTileGroupTmp);
+    END;
+
+    LOCAL PROCEDURE BuildPanelMenu@1000000018(pMenuCode@1000000000 : Code[20]);
+    VAR
+      lPanelMenu@1000000001 : Record 9062446;
+      lPanelMenuItem@1000000002 : Record 9062445;
+    BEGIN
+      //DOC NA2015.1 - Building panel menu
+      //  -> pMenuCode: Menu code
+
+      IF (pMenuCode = '') THEN
+        EXIT;
+      IF ( NOT (lPanelMenu.GET(pMenuCode))) THEN
+        EXIT;
+
+      lPanelMenuItem.RESET();
+      lPanelMenuItem.SETCURRENTKEY("Panel Menu Code", Additional, Sequence);
+      lPanelMenuItem.SETRANGE("Panel Menu Code", lPanelMenu.Code);
+      lPanelMenuItem.SETRANGE(Blocked, FALSE);
+      IF (lPanelMenuItem.FINDSET()) THEN
+      BEGIN
+        BuildPanel.AddPanelMenu(lPanelMenu);
+        REPEAT
+          lPanelMenuItem.CALCFIELDS(Image);
+          BuildPanel.AddPanelMenuItem(lPanelMenuItem, TRUE);
+        UNTIL (lPanelMenuItem.NEXT() = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE AddGroupZero@1000000001(VAR pTileGroupTmp@1000000000 : Record 9062366) : Boolean;
+    BEGIN
+      //DOC NA2015.8 - Adding group zero (if it hasn't been added already)
+      //  <> pTileGroupTmp: Target group recordset
+      //  <- TRUE = Group added, FALSE = Group already there
+
+      IF (pTileGroupTmp.GET(Panel.Code, 0)) THEN
+        EXIT(FALSE);
+
+      pTileGroupTmp.INIT();
+      pTileGroupTmp."Panel Code" := Panel.Code;
+      pTileGroupTmp.ID := 0;
+      IF (Panel.Text <> '') THEN
+        pTileGroupTmp.Text := Panel.Text
+      ELSE IF (Panel.Description <> '') THEN
+        pTileGroupTmp.Text := Panel.Description
+      ELSE
+        pTileGroupTmp.Text := Panel.Code;
+      pTileGroupTmp.Sequence := TileGroupSequence + 10;
+      pTileGroupTmp.UpdateControlName();
+      pTileGroupTmp.INSERT();
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE "--- Properties ---"@1000000016();
+    BEGIN
+    END;
+
+    PROCEDURE SetPanelEventArgs@1000000007(pPanelEventArgs@1000000000 : Record 9062370);
+    BEGIN
+      //DOC NA2015.8 - Setting panel event args
+      //  -> pPanelEventArgs: The args
+
+      PanelEventArgs := pPanelEventArgs;
+      PanelEventArgsSet := TRUE;
+    END;
+
+    PROCEDURE SetTileProperties@1000000029(VAR pTile@1000000000 : Record 9062367);
+    VAR
+      lRecordRef@1000000001 : RecordRef;
+    BEGIN
+      //DOC NA2015.1 - Setting tile properties
+      //  <> pTile: The tile
+
+      pTile."Tile Group ID" := pTile.GetTileGroupId();
+      pTile.Sequence := pTile.GetSequence();
+
+      lRecordRef.OPEN(DATABASE::Tile);
+      lRecordRef.GETTABLE(pTile);
+      SetProperties(lRecordRef, DATABASE::Tile, pTile."Panel Code", pTile.ID, 0);
+      lRecordRef.SETTABLE(pTile);
+      lRecordRef.CLOSE();
+    END;
+
+    LOCAL PROCEDURE SetProperties@1000000017(VAR pToRecordRef@1000000000 : RecordRef;pTableId@1000000001 : Integer;pSourceCode@1000000002 : Code[20];pSourceId@1000000003 : Integer;pSourceId2@1000000004 : Integer);
+    VAR
+      lPanelProperty@1000000005 : Record 9062433;
+      lPanelTile@1000000007 : Record 9062367;
+    BEGIN
+      //DOC NA2015.1 - Setting properties
+      //  <> pToRecordRef: Record reference
+      //  -> pTableId: Table ID
+      //  -> pSourceCode: Source code
+      //  -> pSourceId: Source ID
+      //  -> pSourceId2: Source ID 2
+
+      lPanelProperty.RESET();
+      lPanelProperty.SETRANGE("Parent Table ID", pTableId);
+      lPanelProperty.SETRANGE("Parent Code", pSourceCode);
+      lPanelProperty.SETRANGE("Parent ID", pSourceId);
+      lPanelProperty.SETRANGE("Parent ID 2", pSourceId2);
+      lPanelProperty.SETFILTER("Property ID", '<>0');
+
+      lPanelProperty.SETRANGE(Type, lPanelProperty.Type::Table);
+      IF (lPanelProperty.FINDSET()) THEN
+      REPEAT
+        SetTableProperty(lPanelProperty, pToRecordRef);
+      UNTIL (lPanelProperty.NEXT() = 0);
+
+      lPanelProperty.SETRANGE(Type, lPanelProperty.Type::Property);
+      IF (lPanelProperty.FINDSET()) THEN
+      REPEAT
+        SetSourcePropertyProperty(lPanelProperty, pToRecordRef);
+      UNTIL (lPanelProperty.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE SetTableProperty@1000000004(pPanelProperty@1000000003 : Record 9062433;VAR pToRecordRef@1000000006 : RecordRef);
+    VAR
+      lTnpUtils@1000000004 : Codeunit 9062229;
+      lFromRecordRef@1000000002 : RecordRef;
+      lFromFieldRef@1000000001 : FieldRef;
+      lToFieldRef@1000000000 : FieldRef;
+      lTableFilter@1000000009 : Text;
+      lPropertyIsBlob@1000000012 : Boolean;
+      lFromValue@1000000011 : Record 9062598;
+      lFromValueTmp@1000000007 : Record 9062598;
+      lToValue@1000000005 : Record 9062598;
+      lRecordByRecord@1000000013 : Boolean;
+      lNewValue@1000000008 : Boolean;
+    BEGIN
+      //DOC NA2015.3 - Setting table property
+      //  -> pPanelProperty: Panel property
+      //  <> pToRecordRef: Target record reference
+
+      IF ((pPanelProperty."Property Table ID" = 0) OR (pPanelProperty."Property ID" = 0) OR
+          (pPanelProperty.Calculation = pPanelProperty.Calculation::" ")) THEN
+        EXIT;
+
+      CLEAR(lFromValue);
+      lNewValue := FALSE;
+
+      IF (pPanelProperty."Table ID" <> 0) THEN
+      BEGIN
+        lFromRecordRef.OPEN(pPanelProperty."Table ID");
+        IF (pPanelProperty."Table Filter" <> '') THEN
+        BEGIN
+          lTableFilter := pPanelProperty."Table Filter";
+          lTableFilter := PanelToolkit.ApplyPanelParameters(Panel, lTableFilter);
+          lTableFilter := SmartFilterManagement.ApplySmartFilters(lTableFilter);
+          lFromRecordRef.SETVIEW(lTableFilter);
+        END;
+        CASE (pPanelProperty.Calculation) OF
+          pPanelProperty.Calculation::First:
+            IF (lFromRecordRef.FINDFIRST()) THEN
+            BEGIN
+              ProcessPanelPropertyFields(pPanelProperty, lFromRecordRef, lFromValue);
+              lNewValue := TRUE;
+            END;
+          pPanelProperty.Calculation::Last:
+            IF (lFromRecordRef.FINDLAST()) THEN
+            BEGIN
+              ProcessPanelPropertyFields(pPanelProperty, lFromRecordRef, lFromValue);
+              lNewValue := TRUE;
+            END;
+          pPanelProperty.Calculation::Sum:
+            BEGIN
+              DetectPanelPropertiesCalculationMode(pPanelProperty, lFromRecordRef, lRecordByRecord, lFromValue);
+              IF (lRecordByRecord) THEN
+              BEGIN
+                lFromValueTmp := lFromValue;
+                IF (lFromRecordRef.FINDSET()) THEN
+                REPEAT
+                  ProcessPanelPropertyFields(pPanelProperty, lFromRecordRef, lFromValueTmp);
+                  lFromValue.VALIDATE("Value Type", lFromValueTmp."Value Type");
+                  lFromValue.VALIDATE("Numeric Value", lFromValue."Numeric Value" + lFromValueTmp."Numeric Value");
+                UNTIL (lFromRecordRef.NEXT() = 0);
+              END
+              ELSE
+                ProcessPanelPropertyFieldsSum(pPanelProperty, lFromRecordRef, lFromValue);
+              lNewValue := TRUE;
+            END;
+          pPanelProperty.Calculation::Count:
+            BEGIN
+              lFromValue.VALIDATE("Numeric Value", lFromRecordRef.COUNT);
+              lNewValue := TRUE;
+            END;
+        END;
+        lFromRecordRef.CLOSE();
+      END;
+
+      IF (lFromValue."Value Type" = lFromValue."Value Type"::Numeric) THEN
+      BEGIN
+        IF (pPanelProperty.Multiplier <> 0) THEN
+        BEGIN
+          lFromValue.VALIDATE("Numeric Value", lFromValue."Numeric Value" * pPanelProperty.Multiplier);
+          lNewValue := TRUE;
+        END;
+        IF (pPanelProperty.Rounding > 0) THEN
+        BEGIN
+          lFromValue.VALIDATE("Numeric Value", ROUND(lFromValue."Numeric Value", pPanelProperty.Rounding));
+          lNewValue := TRUE;
+        END;
+      END;
+
+      IF ((pPanelProperty.Prefix <> '') OR (pPanelProperty.Suffix <> '')) THEN
+      BEGIN
+        lFromValue.VALIDATE("Text Value", pPanelProperty.Prefix + lFromValue."Text Value" + pPanelProperty.Suffix);
+        lNewValue := TRUE;
+      END;
+
+      IF (lNewValue) THEN
+      BEGIN
+        lToFieldRef := pToRecordRef.FIELD(pPanelProperty."Property ID");
+        lToValue.DetectFieldRefValueType(lToFieldRef);
+        ProcessPanelPropertyValues(pPanelProperty, lFromValue, lToValue);
+        lToValue.SetValueToFieldRef(lToFieldRef, FALSE);
+      END;
+    END;
+
+    LOCAL PROCEDURE SetSourcePropertyProperty@1000000022(pPanelProperty@1000000001 : Record 9062433;VAR pToRecordRef@1000000000 : RecordRef);
+    VAR
+      lFromFieldRef@1000000003 : FieldRef;
+      lToFieldRef@1000000002 : FieldRef;
+      lFromValue@1000000004 : Record 9062598;
+      lToValue@1000000005 : Record 9062598;
+    BEGIN
+      //DOC NA2015.3 - Setting source property property
+      //  -> pPanelProperty: Panel property
+      //  <> pToRecordRef: Target record reference
+
+      IF ((pPanelProperty."Property Table ID" = 0) OR (pPanelProperty."Property ID" = 0) OR
+          (pPanelProperty."Source Property ID" = 0)) THEN
+        EXIT;
+
+      lFromFieldRef := pToRecordRef.FIELD(pPanelProperty."Source Property ID");
+      lFromValue.GetValueFromFieldRef(lFromFieldRef);
+
+      IF (lFromValue."Value Type" = lFromValue."Value Type"::Text) THEN
+        IF (EVALUATE(lFromValue."Numeric Value", lFromValue."Text Value")) THEN
+          lFromValue."Value Type" := lFromValue."Value Type"::Numeric;
+
+      lToFieldRef := pToRecordRef.FIELD(pPanelProperty."Property ID");
+      lToValue.DetectFieldRefValueType(lToFieldRef);
+      IF (ProcessPanelPropertyValues(pPanelProperty, lFromValue, lToValue)) THEN
+        lToValue.SetValueToFieldRef(lToFieldRef, FALSE);
+    END;
+
+    PROCEDURE "--- Updates ---"@1000000049();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE UpdatePanelStructure@1000000021(pPanel@1000000002 : Record 9062363;VAR pPanelObj@1000000000 : DotNet "'TheNavPeople.Panels.9.0.3.7, Version=9.0.3.7, Culture=neutral, PublicKeyToken=f71ae4a876a51bae'.TheNavPeople.Panels.Panel") : Boolean;
+    VAR
+      lUpdated@1000000001 : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Updating panel structure
+      //  -> pPanel: Source panel
+      //  <> pPanelObj: Target panel object
+      //  <- TRUE if the panel has been updated, FALSE otherwise
+
+      lUpdated := FALSE;
+
+      IF ( NOT (ISNULL(pPanelObj))) THEN
+      BEGIN
+        CLEAR(BuildPanel);
+        UpdateTiles(pPanel, pPanelObj, lUpdated);
+        UpdatePanelTimestamp(pPanelObj, lUpdated);
+      END;
+
+      EXIT(lUpdated);
+    END;
+
+    LOCAL PROCEDURE UpdatePanelTimestamp@1000000025(VAR pPanelObj@1000000001 : DotNet "'TheNavPeople.Panels.9.0.3.7, Version=9.0.3.7, Culture=neutral, PublicKeyToken=f71ae4a876a51bae'.TheNavPeople.Panels.Panel";VAR pUpdated@1000000000 : Boolean);
+    BEGIN
+      //DOC NA2015.1 - Updating panel timestamp
+      //  <> pPanelObj: Target panel object
+      //  -> pUpdated: Updated flag
+
+      BuildPanel.UpdatePanelTimestamp(pPanelObj, pUpdated);
+    END;
+
+    LOCAL PROCEDURE UpdateTiles@1000000053(pPanel@1000000001 : Record 9062363;VAR pPanelObj@1000000002 : DotNet "'TheNavPeople.Panels.9.0.3.7, Version=9.0.3.7, Culture=neutral, PublicKeyToken=f71ae4a876a51bae'.TheNavPeople.Panels.Panel";VAR pUpdated@1000000011 : Boolean);
+    VAR
+      lPanelProperty@1000000007 : Record 9062433;
+      lTile@1000000006 : Record 9062367;
+      lTileObj@1000000004 : DotNet "'TheNavPeople.Panels.9.0.3.7, Version=9.0.3.7, Culture=neutral, PublicKeyToken=f71ae4a876a51bae'.TheNavPeople.Panels.Tile";
+    BEGIN
+      //DOC NA2015.1 - Updating tiles
+      //  -> pPanel: Panel to update tiles for
+      //  <> pPanelObj: Target panel object
+      //  <> pUpdated: Target updated flag
+
+      lPanelProperty.RESET();
+      lPanelProperty.SETRANGE("Parent Table ID", DATABASE::Tile);
+      lPanelProperty.SETRANGE("Parent Code", pPanel.Code);
+      IF (lPanelProperty.FINDSET()) THEN
+      REPEAT
+        IF (lTile.GET(lPanelProperty."Parent Code", lPanelProperty."Parent ID")) THEN
+        BEGIN
+          lTileObj := pPanelObj.FindTile(lTile."Control Name");
+          IF ( NOT (ISNULL(lTileObj))) THEN
+          BEGIN
+            SetTileProperties(lTile);
+            BuildPanel.UpdateTile(lTile, lPanelProperty."Property ID", lTileObj, pUpdated);
+          END;
+        END;
+      UNTIL (lPanelProperty.NEXT() = 0);
+    END;
+
+    PROCEDURE "--- Panel Data ---"@1000000002();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ProcessPanelData@1000000008(pPanel@1000000000 : Record 9062363;VAR pTileGroupTmp@1000000002 : Record 9062366);
+    VAR
+      lPanelData@1000000001 : Record 9062432;
+    BEGIN
+      //DOC NA2015.1 - Processing panel data
+      //  -> pPanel: Panel to process data for
+      //  <> pTileGroupTmp: Tile group recordset
+
+      lPanelData.RESET();
+      lPanelData.SETCURRENTKEY("Panel Code", Sequence);
+      lPanelData.SETRANGE("Panel Code", pPanel.Code);
+      lPanelData.SETRANGE(Blocked, FALSE);
+      IF (lPanelData.FINDSET()) THEN
+      REPEAT
+        CASE (lPanelData."Data Source") OF
+          lPanelData."Data Source"::Table:
+            ProcessPanelTableData(pPanel, lPanelData, pTileGroupTmp);
+          lPanelData."Data Source"::"Quick Report":
+            ProcessPanelQuickReportData(pPanel, lPanelData, pTileGroupTmp);
+        END;
+      UNTIL (lPanelData.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE ProcessPanelTableData@1000000026(pPanel@1000000008 : Record 9062363;pPanelData@1000000001 : Record 9062432;VAR pTileGroupTmp@1000000007 : Record 9062366);
+    VAR
+      lPanelProperty@1000000002 : Record 9062433;
+      lTile@1000000003 : Record 9062367;
+      lTnpUtils@1000000009 : Codeunit 9062229;
+      lRecordRef@1000000000 : RecordRef;
+      lPropertyRecordRef@1000000004 : RecordRef;
+      lPropertyFieldRef@1000000005 : FieldRef;
+      lTableFilter@1000000006 : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Processing panel table data
+      //  -> pPanel: Panel to process data for
+      //  -> pPanelData: Data record
+      //  <> pTileGroupTmp: Tile group recordset
+
+      IF ((pPanelData."Property Table ID" = 0) OR (pPanelData."Table ID" = 0)) THEN
+        EXIT;
+
+      lPanelProperty.RESET();
+      lPanelProperty.SETRANGE("Parent Table ID", DATABASE::"Panel Data");
+      lPanelProperty.SETRANGE("Parent Code", pPanelData."Panel Code");
+      lPanelProperty.SETRANGE("Parent ID", pPanelData.ID);
+      lPanelProperty.SETFILTER("Property Table ID", '<>0');
+      lPanelProperty.SETFILTER("Property ID", '<>0');
+
+      lRecordRef.OPEN(pPanelData."Table ID");
+      IF (pPanelData."Table Filter" <> '') THEN
+      BEGIN
+        lTableFilter := pPanelData."Table Filter";
+        lTableFilter := PanelToolkit.ApplyPanelParameters(pPanel, lTableFilter);
+        lTableFilter := SmartFilterManagement.ApplySmartFilters(lTableFilter);
+        lRecordRef.SETVIEW(lTableFilter);
+      END;
+      IF (lRecordRef.FINDSET()) THEN
+      REPEAT
+        CASE (pPanelData."Property Table ID") OF
+          DATABASE::Tile:
+            BEGIN
+              CLEAR(lTile);
+              lTile.INIT();
+              lTile.VALIDATE("Panel Code", pPanelData."Panel Code");
+              lTile.VALIDATE("Panel Data ID", pPanelData.ID);
+            END;
+        END;
+        lPropertyRecordRef.OPEN(pPanelData."Property Table ID");
+        lPropertyRecordRef.GETTABLE(lTile);
+        IF (lPanelProperty.FINDSET()) THEN
+        REPEAT
+          lPropertyFieldRef := lPropertyRecordRef.FIELD(lPanelProperty."Property ID");
+          lPanelProperty.CALCFIELDS(Fields);
+          IF (lPanelProperty.Fields > 0) THEN
+            ProcessPanelTableDataDynamic(pPanel, lPanelProperty, lRecordRef, lPropertyFieldRef)
+          ELSE
+            ProcessPanelTableDataStatic(pPanel, lPanelProperty, lPropertyFieldRef);
+        UNTIL (lPanelProperty.NEXT() = 0);
+        CASE (pPanelData."Property Table ID") OF
+          DATABASE::Tile:
+            BEGIN
+              lPropertyRecordRef.SETTABLE(lTile);
+              IF (lTile."Tile Group ID" = 0) THEN
+                IF (AddGroupZero(pTileGroupTmp)) THEN
+                  BuildPanel.AddTileGroup(pTileGroupTmp, TRUE);
+              BuildPanel.AddTile(lTile, FALSE);
+            END;
+        END;
+        lPropertyRecordRef.CLOSE();
+      UNTIL (lRecordRef.NEXT() = 0);
+      lRecordRef.CLOSE();
+    END;
+
+    PROCEDURE ProcessPanelTableDataDynamic@1000000024(pPanel@1000000003 : Record 9062363;VAR pPanelProperty@1000000000 : Record 9062433;VAR pRecordRef@1000000002 : RecordRef;VAR pPropertyFieldRef@1000000001 : FieldRef);
+    VAR
+      lValue@1000000006 : Record 9062598;
+    BEGIN
+      //DOC NA2015.1 - Processing dynamic data of panel table data
+      //  -> pPanel: Panel to process data for
+      //  <> pPanelProperty: The property
+      //  <> pRecordRef: Source record reference
+      //  <> pPropertyFieldRef: Target field reference
+
+      ProcessPanelPropertyFields(pPanelProperty, pRecordRef, lValue);
+      ProcessPanelPropertyValues(pPanelProperty, lValue, lValue);
+
+      lValue.SetValueToFieldRef(pPropertyFieldRef, FALSE);
+    END;
+
+    LOCAL PROCEDURE ProcessPanelTableDataStatic@1000000023(pPanel@1000000003 : Record 9062363;VAR pPanelProperty@1000000000 : Record 9062433;VAR pPropertyFieldRef@1000000001 : FieldRef);
+    VAR
+      lFieldRef@1000000002 : FieldRef;
+    BEGIN
+      //DOC NA2015.1 - Processing static data of panel table data
+      //  -> pPanel: Panel to process data for
+      //  <> pPanelProperty: The property
+      //  <> pPropertyFieldRef: Target field reference
+
+      IF (LOWERCASE(FORMAT(pPropertyFieldRef.TYPE)) = 'blob') THEN
+      BEGIN
+        pPanelProperty.CALCFIELDS("Static Image");
+        IF (pPanelProperty."Static Image".HASVALUE) THEN
+          pPropertyFieldRef.VALUE := pPanelProperty."Static Image";
+      END
+      ELSE
+        IF (pPanelProperty."Static Value" <> '') THEN
+          FieldRefTools.TextToFieldRef(pPanelProperty."Static Value", pPropertyFieldRef);
+    END;
+
+    LOCAL PROCEDURE ProcessPanelQuickReportData@1000000000(pPanel@1000000000 : Record 9062363;pPanelData@1000000001 : Record 9062432;VAR pTileGroupTmp@1000000002 : Record 9062366);
+    BEGIN
+      //DOC NA2015.8 - Processing panel quick report data
+      //  -> pPanel: Panel to process data for
+      //  -> pPanelData: Data record
+      //  <> pTileGroupTmp: Tile group recordset
+    END;
+
+    PROCEDURE "--- Panel Properties ---"@1000000038();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE DetectPanelPropertiesCalculationMode@1000000044(pPanelProperty@1000000000 : Record 9062433;pRecordRef@1000000001 : RecordRef;VAR pRecordByRecord@1000000008 : Boolean;VAR pValue@1000000003 : Record 9062598);
+    VAR
+      lPanelPropertyField@1000000002 : Record 9062443;
+      lValue@1000000004 : Record 9062598;
+      lFieldRef@1000000006 : FieldRef;
+    BEGIN
+      //DOC NA2015.2 - Detecting panel properties calculation mode
+      //  -> pPanelProperty: The property
+      //  -> pRecordRef: Source record reference
+      //  <> pRecordByRecord: Target "Record by Record" flag
+      //  <> pValue: Target value
+
+      pRecordByRecord := pPanelProperty."Record by Record";
+      pValue."Value Type" := PanelValue."Value Type"::" ";
+
+      FilterPropertyFields(pPanelProperty, lPanelPropertyField);
+      IF (lPanelPropertyField.FINDSET()) THEN
+      REPEAT
+        lFieldRef := pRecordRef.FIELD(lPanelPropertyField."Field ID");
+
+        lValue.DetectFieldRefValueType(lFieldRef);
+        CASE (lValue."Value Type") OF
+          lValue."Value Type"::BLOB:
+            pValue."Value Type" := pValue."Value Type"::BLOB;
+          lValue."Value Type"::Numeric:
+            IF (pValue."Value Type" = pValue."Value Type"::" ") THEN
+              pValue."Value Type" := pValue."Value Type"::Numeric;
+          lValue."Value Type"::Text:
+            IF (pValue."Value Type" IN [pValue."Value Type"::" ", pValue."Value Type"::Numeric]) THEN
+              pValue."Value Type" := pValue."Value Type"::Text;
+        END;
+
+        IF ( NOT (pRecordByRecord)) THEN
+          IF (FieldRefTools.FieldRefIsFlowField(lFieldRef)) THEN
+            pRecordByRecord := TRUE;
+        IF ( NOT (pRecordByRecord)) THEN
+          IF (lPanelPropertyField."Field Type" = lPanelPropertyField."Field Type"::"Enhanced Field") THEN
+            pRecordByRecord := TRUE;
+      UNTIL (lPanelPropertyField.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE ProcessPanelPropertyFields@1000000003(pPanelProperty@1000000003 : Record 9062433;pRecordRef@1000000001 : RecordRef;VAR pValue@1000000000 : Record 9062598);
+    VAR
+      lField@1000000005 : Record 2000000041;
+      lPanelPropertyField@1000000002 : Record 9062443;
+      lValue@1000000004 : Record 9062598;
+      lFieldRef@1000000006 : FieldRef;
+    BEGIN
+      //DOC NA2015.2 - Processing panel property fields
+      //  -> pPanelProperty: The property
+      //  -> pRecordRef: Source record reference
+      //  <> pValue: Target value
+
+      IF ( NOT (lField.GET(pPanelProperty."Property Table ID", pPanelProperty."Property ID"))) THEN
+        CLEAR(lField);
+
+      IF (lField.Type = lField.Type::BLOB) THEN
+      BEGIN
+        FilterPropertyFields(pPanelProperty, lPanelPropertyField);
+        IF (lPanelPropertyField.FINDFIRST()) THEN
+          GetPanelPropertyFieldValue(lPanelPropertyField, pRecordRef, FALSE, pValue);
+      END
+      ELSE
+      BEGIN
+        IF (pPanelProperty.Formula <> '') THEN
+          ProcessPanelPropertyFieldsFormula(pPanelProperty, pRecordRef, FALSE, pValue)
+        ELSE
+        BEGIN
+          FilterPropertyFields(pPanelProperty, lPanelPropertyField);
+          IF (lPanelPropertyField.FINDFIRST()) THEN
+            GetPanelPropertyFieldValue(lPanelPropertyField, pRecordRef, FALSE, pValue);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ProcessPanelPropertyFieldsSum@1000000030(pPanelProperty@1000000001 : Record 9062433;pRecordRef@1000000000 : RecordRef;VAR pValue@1000000004 : Record 9062598);
+    VAR
+      lPanelPropertyField@1000000005 : Record 9062443;
+    BEGIN
+      //DOC NA2015.2 - Processing panel property field sums
+      //  -> pPanelProperty: The property
+      //  -> pRecordRef: Source record reference
+      //  <> pValue: Target value
+
+      IF (pPanelProperty.Formula <> '') THEN
+        ProcessPanelPropertyFieldsFormula(pPanelProperty, pRecordRef, TRUE, pValue)
+      ELSE
+      BEGIN
+        FilterPropertyFields(pPanelProperty, lPanelPropertyField);
+        IF (lPanelPropertyField.FINDFIRST()) THEN
+          GetPanelPropertyFieldValue(lPanelPropertyField, pRecordRef, TRUE, pValue);
+      END;
+    END;
+
+    LOCAL PROCEDURE ProcessPanelPropertyFieldsFormula@1000000057(pPanelProperty@1000000001 : Record 9062433;pRecordRef@1000000000 : RecordRef;pSums@1000000008 : Boolean;VAR pValue@1000000007 : Record 9062598);
+    VAR
+      lPanelPropertyField@1000000004 : Record 9062443;
+      lFormulaCalculator@1000000005 : Codeunit 9062445;
+      lFieldValues@1000000002 : ARRAY [10] OF Record 9062598;
+      lNumericValues@1000000006 : ARRAY [10] OF Decimal;
+      lIndex@1000000009 : Integer;
+    BEGIN
+      //DOC NA2015.2 - Processing panel property fields formula
+      //  -> pPanelProperty: The property
+      //  -> pRecordRef: Source record reference
+      //  -> pSums: TRUE = Use CALCSUMS, FALSE = Use normal value
+      //  <> pValue: Source / target value
+
+      FilterPropertyFields(pPanelProperty, lPanelPropertyField);
+      IF (lPanelPropertyField.FINDSET()) THEN
+      REPEAT
+        GetPanelPropertyFieldValue(lPanelPropertyField, pRecordRef, pSums, lFieldValues[lPanelPropertyField."Field Index"]);
+      UNTIL (lPanelPropertyField.NEXT() = 0);
+
+      IF (pValue."Value Type" = pValue."Value Type"::Numeric) THEN
+      BEGIN
+        FOR lIndex := 1 TO ARRAYLEN(lFieldValues) DO
+          lNumericValues[lIndex] := lFieldValues[lIndex]."Numeric Value";
+        pValue.VALIDATE("Numeric Value", lFormulaCalculator.CalculateFormula(pPanelProperty.Formula, lNumericValues));
+      END
+      ELSE
+        pValue.VALIDATE("Text Value", COPYSTR(STRSUBSTNO(pPanelProperty.Formula, lFieldValues[1]."Text Value", lFieldValues[2]."Text Value", lFieldValues[3]."Text Value",
+          lFieldValues[4]."Text Value", lFieldValues[5]."Text Value", lFieldValues[6]."Text Value", lFieldValues[7]."Text Value", lFieldValues[8]."Text Value",
+          lFieldValues[9]."Text Value", lFieldValues[10]."Text Value"), 1, MAXSTRLEN(pValue."Text Value")));
+    END;
+
+    LOCAL PROCEDURE ProcessPanelPropertyValues@1000000020(pPanelProperty@1000000000 : Record 9062433;pFromValue@1000000003 : Record 9062598;VAR pToValue@1000000001 : Record 9062598) : Boolean;
+    VAR
+      lBufferTmp@1000000005 : TEMPORARY Record 9062598;
+      lPanelPropertyValue@1000000008 : Record 9062444;
+      lValueFound@1000000006 : Boolean;
+      lResult@1000000002 : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Processing panel property values
+      //  -> pPanelProperty: The property
+      //  -> pFromValue: Source value
+      //  <> pToValue: Target value
+      //  <- TRUE = Values processed, FALSE = No values
+
+      lResult := FALSE;
+
+      pToValue := pFromValue;
+
+      IF (pFromValue."Value Type" = pFromValue."Value Type"::BLOB) THEN
+        EXIT(lResult);
+
+      pPanelProperty.CALCFIELDS(Values);
+      IF (pPanelProperty.Values = 0) THEN
+        EXIT(lResult);
+
+      FilterPropertyValues(pPanelProperty, pFromValue."Text Value", lPanelPropertyValue);
+      IF (lPanelPropertyValue.FINDFIRST()) THEN
+      BEGIN
+        IF (pToValue."Value Type" = pToValue."Value Type"::BLOB) THEN
+        BEGIN
+          lPanelPropertyValue.CALCFIELDS(Image);
+          pToValue."BLOB Value" := lPanelPropertyValue.Image;
+        END
+        ELSE
+          pToValue."Text Value" := lPanelPropertyValue.Value;
+        lResult := TRUE;
+      END
+      ELSE
+      BEGIN
+        CASE (pFromValue."Value Type") OF
+          pFromValue."Value Type"::Numeric:
+            lBufferTmp."Numeric Value" := pFromValue."Numeric Value";
+          ELSE
+            lBufferTmp."Text Value" := pFromValue."Text Value";
+        END;
+        lBufferTmp.INSERT();
+        lValueFound := FALSE;
+
+        FilterPropertyValues(pPanelProperty, '', lPanelPropertyValue);
+        IF (lPanelPropertyValue.FINDSET()) THEN
+        REPEAT
+          CASE (pFromValue."Value Type") OF
+            pFromValue."Value Type"::Numeric:
+              lBufferTmp.SETFILTER("Numeric Value", lPanelPropertyValue."Property Value");
+            ELSE
+              lBufferTmp.SETFILTER("Text Value", lPanelPropertyValue."Property Value");
+          END;
+          IF (lBufferTmp.FINDFIRST()) THEN
+          BEGIN
+            IF (pToValue."Value Type" = pToValue."Value Type"::BLOB) THEN
+            BEGIN
+              lPanelPropertyValue.CALCFIELDS(Image);
+              pToValue."BLOB Value" := lPanelPropertyValue.Image;
+            END
+            ELSE
+              pToValue."Text Value" := lPanelPropertyValue.Value;
+            lValueFound := TRUE;
+          END;
+        UNTIL ((lPanelPropertyValue.NEXT() = 0) OR (lValueFound));
+        lResult := lValueFound;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE GetPanelPropertyFieldValue@1000000040(pPanelPropertyField@1000000004 : Record 9062443;pRecordRef@1000000002 : RecordRef;pSums@1000000001 : Boolean;VAR pValue@1000000000 : Record 9062598);
+    VAR
+      lFieldRef@1000000003 : FieldRef;
+    BEGIN
+      //DOC NA2015.2 - Reurning panel property field value
+      //  -> pPanelPropertyField: The property field
+      //  -> pRecordRef: Source record reference
+      //  -> pSums: TRUE = Use CALCSUMS, FALSE = Use normal value
+      //  <> pValue: Source / target value
+
+      CASE (pPanelPropertyField."Field Type") OF
+        pPanelPropertyField."Field Type"::Field:
+          BEGIN
+            lFieldRef := pRecordRef.FIELD(pPanelPropertyField."Field ID");
+            IF (pSums) THEN
+              lFieldRef.CALCSUM();
+            pValue.GetValueFromFieldRef(lFieldRef);
+          END;
+        pPanelPropertyField."Field Type"::"Enhanced Field":
+          BEGIN
+            pPanelPropertyField.CALCFIELDS("Enhanced Field Name", "Enhanced Field Type");
+            pValue.VALIDATE("Text Value", EnhancedFieldManagement.GetFieldValue(pRecordRef, pPanelPropertyField."Enhanced Field Name"));
+            IF (pPanelPropertyField."Enhanced Field Type" IN [pPanelPropertyField."Enhanced Field Type"::Integer, pPanelPropertyField."Enhanced Field Type"::Decimal]) THEN
+            BEGIN
+              pValue.VALIDATE("Value Type", pValue."Value Type"::Numeric);
+              IF (EVALUATE(pValue."Numeric Value", pValue."Text Value")) THEN
+                pValue.VALIDATE("Numeric Value");
+            END;
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE FilterPropertyFields@1000000041(pPanelProperty@1000000000 : Record 9062433;VAR pPanelPropertyField@1000000001 : Record 9062443);
+    BEGIN
+      //DOC NA2015.2 - Filtering property fields
+      //  -> pPanelProperty: Property to base filtering on
+      //  <> pPanelPropertyField: Property field recordset to filter
+
+      pPanelPropertyField.RESET();
+      pPanelPropertyField.SETCURRENTKEY("Parent Table ID", "Parent Code", "Parent ID", "Parent ID 2", "Panel Property ID", "Field Index");
+      pPanelPropertyField.SETRANGE("Parent Table ID", pPanelProperty."Parent Table ID");
+      pPanelPropertyField.SETRANGE("Parent Code", pPanelProperty."Parent Code");
+      pPanelPropertyField.SETRANGE("Parent ID", pPanelProperty."Parent ID");
+      pPanelPropertyField.SETRANGE("Parent ID 2", pPanelProperty."Parent ID 2");
+      pPanelPropertyField.SETRANGE("Panel Property ID", pPanelProperty.ID);
+      pPanelPropertyField.SETFILTER("Field Index", '<>0');
+      pPanelPropertyField.SETFILTER("Field ID", '<>0');
+    END;
+
+    LOCAL PROCEDURE FilterPropertyValues@1000000042(pPanelProperty@1000000001 : Record 9062433;pPropertyValue@1000000002 : Text[250];VAR pPanelPropertyValue@1000000000 : Record 9062444);
+    BEGIN
+      //DOC NA2015.2 - Filtering property values
+      //  -> pPanelProperty: Property to base filtering on
+      //  <> pPanelPropertyValue: Property value recordset to filter
+
+      pPanelPropertyValue.RESET();
+      pPanelPropertyValue.SETCURRENTKEY("Parent Table ID", "Parent Code", "Parent ID", "Parent ID 2", "Panel Property ID", Sequence);
+      pPanelPropertyValue.SETRANGE("Parent Table ID", pPanelProperty."Parent Table ID");
+      pPanelPropertyValue.SETRANGE("Parent Code", pPanelProperty."Parent Code");
+      pPanelPropertyValue.SETRANGE("Parent ID", pPanelProperty."Parent ID");
+      pPanelPropertyValue.SETRANGE("Parent ID 2", pPanelProperty."Parent ID 2");
+      pPanelPropertyValue.SETRANGE("Panel Property ID", pPanelProperty.ID);
+      IF (pPropertyValue <> '') THEN
+        pPanelPropertyValue.SETRANGE("Property Value", pPropertyValue)
+      ELSE
+        pPanelPropertyValue.SETFILTER("Property Value", '<>''''');
+    END;
+
+    PROCEDURE "--- Tile Querying ---"@1000000034();
+    BEGIN
+    END;
+
+    PROCEDURE GetPanelTileProperties@1000000035(pPanelCode@1000000000 : Code[20];pTileTextFilter@1000000003 : Text[250];VAR pTile@1000000001 : Record 9062367) : Boolean;
+    VAR
+      lTile@1000000002 : Record 9062367;
+      lResult@1000000004 : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Returning tile properties
+      //  -> pPanelCode: Panel code
+      //  -> pTileTextFilter: Tile text filter
+      //  <> pTile: Target tile
+      //  <- TRUE = Tile found and updated, FALSE = Tile not found
+
+      lResult := FALSE;
+
+      lTile.RESET();
+      lTile.SETCURRENTKEY("Panel Code", Sequence);
+      lTile.SETRANGE("Panel Code", pPanelCode);
+      lTile.SETFILTER(Text, pTileTextFilter);
+      IF (lTile.FINDFIRST()) THEN
+      BEGIN
+        SetTileProperties(lTile);
+        pTile := lTile;
+        lResult := TRUE;
+      END
+      ELSE
+        pTile.INIT();
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE "--- Back Exclusion ---"@1000000047();
+    BEGIN
+    END;
+
+    PROCEDURE SetExcludeBack@1000000006(pExcludeBack@1000000000 : Boolean);
+    BEGIN
+      //DOC NA2016.14 - Setting "Exclude Back" flag
+      //  -> pExcludeBack: The flag
+
+      ExcludeBack := pExcludeBack;
+    END;
+
+    LOCAL PROCEDURE IsBackToExclude@1000000048(pParentTableId@1000000001 : Integer;pParentCode@1000000002 : Code[20];pParentId@1000000003 : Integer) : Boolean;
+    VAR
+      lPanelEvent@1000000000 : Record 9062369;
+    BEGIN
+      //DOC NA2016.14 - Responds if parent element has "BACK" action defined and should be excluded
+      //  -> pParentTableId: Parent table ID (tile / link)
+      //  -> pParentCode: Parent (panel) code
+      //  -> pParentId: Parent ID
+      //  <- Response
+
+      IF ( NOT (ExcludeBack)) THEN
+        EXIT(FALSE);
+
+      lPanelEvent.RESET();
+      lPanelEvent.SETRANGE("Parent Table ID", pParentTableId);
+      lPanelEvent.SETRANGE("Parent Code", pParentCode);
+      lPanelEvent.SETRANGE("Parent ID", pParentId);
+      lPanelEvent.SETRANGE("Action Type", lPanelEvent."Action Type"::Back);
+      EXIT( NOT (lPanelEvent.ISEMPTY()));
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  JH 28/04/2013 - Created
+      //DOC NA2015.1  JH 19/07/2013 - Tiles
+      //DOC NA2015.1  JH 22/09/2013 - Panel caching, tile drop
+      //DOC NA2015.1  JH 16/12/2013 - Sources and properties combined
+      //DOC NA2015.1  JH 21/02/2014 - Cleaning, bug-fixing
+      //DOC NA2015.1  JH 14/03/2014 - New smart update
+      //DOC NA2015.1  JH 16/04/2014 - Panels 3
+      //DOC NA2015.3  JH 15/08/2014 - Fixes, amendments
+      //DOC NA2015.4  JH 10/11/2014 - Upgraded to 2013
+      //DOC NA2015.8  JH 26/06/2015 - Tile lists
+      //DOC NA2016.10 JH 27/08/2015 - Upgraded to 2016
+      //DOC NA2016.12 JH 04/01/2016 - New panels
+      //DOC NA2016.12 JH 28/01/2016 - Smart filters
+      //DOC NA2016.14 JH 18/02/2016 - BACK exclusion added
+      //DOC NA2016.15 JH 05/05/2016 - Enhanced permissions
+      //DOC NA2016.16 JH 19/05/2016 - CfMD amendments (new .NET library)
+    }
+    END.
+  }
+}
+

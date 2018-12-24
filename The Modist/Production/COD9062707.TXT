@@ -1,0 +1,384 @@
+OBJECT Codeunit 9062707 Import Validation
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/04/16;
+    Time=11:53:37 AM;
+    Version List=NH2016.14;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Field@1000000008 : Record 2000000041;
+      ImportErrorLine@1000000012 : Record 9062842;
+      Convert@1000000009 : Codeunit 9062683;
+      ImportErrorManagement@1000000007 : Codeunit 9062708;
+      ImportToolkit@1000000011 : Codeunit 9062701;
+      ObjectFieldToolkit@1000000002 : Codeunit 9062343;
+      RecordRefManagement@1000000001 : Codeunit 9062241;
+      TnpToolkit@1000000000 : Codeunit 9062230;
+      ImportHeaderTableId@1000000017 : Integer;
+      ImportBatchNo@1000000018 : Code[20];
+      ImportLineRecord@1000000003 : Variant;
+      ImportLineRecordRef@1000000005 : RecordRef;
+      ImportLineFieldRef@1000000004 : FieldRef;
+      ConfigTemplateCode@1000000010 : Code[20];
+      tIsEmpty@1000000015 : TextConst 'ENU="""%1"" is empty.";ENG="""%1"" is empty."';
+      tRecordDoesntExist@1000000016 : TextConst 'ENU="""%1"" ''%2'' doesn''t exist.";ENG="""%1"" ''%2'' doesn''t exist."';
+
+    LOCAL PROCEDURE "--- General ---"@1000000002();
+    BEGIN
+    END;
+
+    PROCEDURE SetRecord@1000000006(pImportHeaderTableId@1000000003 : Integer;pImportLineRecord@1000000000 : Variant;pImportLineBatchNoFieldId@1000000004 : Integer;pConfigTemplateCode@1000000001 : Code[20]);
+    VAR
+      lBatchNoFieldRef@1000000002 : FieldRef;
+    BEGIN
+      //DOC NH2016.14 - Setting current record parameters
+      //  -> pImportHeaderTableId: Import header table ID
+      //  -> pImportLineRecord: The import line record (passed as variant)
+      //  -> pImportLineBatchNoFieldId: Field ID with "Batch No." value
+      //  -> pConfigTemplateCode: Configuration template code
+
+      ImportHeaderTableId := pImportHeaderTableId;
+      ImportLineRecord := pImportLineRecord;
+      ImportLineRecordRef.GETTABLE(pImportLineRecord);
+      lBatchNoFieldRef := ImportLineRecordRef.FIELD(pImportLineBatchNoFieldId);
+      ImportBatchNo := lBatchNoFieldRef.VALUE();
+      ConfigTemplateCode := pConfigTemplateCode;
+    END;
+
+    PROCEDURE CheckIfFieldNotEmpty@1000000004(pFieldId@1000000000 : Integer;pConfigTemplateFieldId@1000000003 : Integer;pWarning@1000000002 : Boolean);
+    VAR
+      lValueIncorrect@1000000004 : Boolean;
+    BEGIN
+      //DOC NH2016.14 - Checking if field is not empty
+      //  -> pFieldId: The field ID
+      //  -> pConfigTemplateFieldId: The corresponding master table field ID (for configuration template value retrieval)
+      //  -> pWarning: TRUE = Issue a warning, FALSE = Issue an error
+
+      ImportLineFieldRef := ImportLineRecordRef.FIELD(pFieldId);
+      lValueIncorrect := RecordRefManagement.FieldRefValueIsEmpty(ImportLineFieldRef);
+      IF (lValueIncorrect) THEN
+        IF (pConfigTemplateFieldId <> 0) THEN
+          lValueIncorrect := (ImportToolkit.GetConfigTemplateTextValue(ConfigTemplateCode, pConfigTemplateFieldId) = '');
+      IF (lValueIncorrect) THEN
+        CreateErrorOrWarning(STRSUBSTNO(tIsEmpty, ObjectFieldToolkit.GetFieldName(ImportLineRecordRef.NUMBER(), pFieldId)), pWarning);
+    END;
+
+    PROCEDURE CheckFieldLength@1000000015(pFieldId@1000000000 : Integer;pConfigTemplateFieldId@1000000005 : Integer;pFieldLength@1000000001 : Integer;pWarning@1000000003 : Boolean);
+    VAR
+      eError@1000000002 : TextConst 'ENU=Field "%1" value is too long (it can have maximum of %2 characters);ENG=Field "%1" value is too long (it can have maximum of %2 characters)';
+      lFieldValue@1000000004 : Text;
+    BEGIN
+      //DOC NH2016.14 - Checking field length
+      //  -> pFieldId: The field ID
+      //  -> pConfigTemplateFieldId: The corresponding master table field ID (for configuration template value retrieval)
+      //  -> pWarning: TRUE = Issue a warning, FALSE = Issue an error
+
+      ImportLineFieldRef := ImportLineRecordRef.FIELD(pFieldId);
+      Field.GET(ImportLineRecordRef.NUMBER(), pFieldId);
+      IF (Field.Type IN [Field.Type::Code, Field.Type::OemCode, Field.Type::Text, Field.Type::OemText]) THEN
+      BEGIN
+        lFieldValue := FORMAT(ImportLineFieldRef.VALUE(), 0, 1);
+        IF ((lFieldValue = '') AND (pConfigTemplateFieldId <> 0)) THEN
+          lFieldValue := ImportToolkit.GetConfigTemplateTextValue(ConfigTemplateCode, pConfigTemplateFieldId);
+        IF (STRLEN(lFieldValue) > pFieldLength) THEN
+          CreateErrorOrWarning(STRSUBSTNO(eError, ObjectFieldToolkit.GetFieldName(ImportLineRecordRef.NUMBER(), pFieldId), pFieldLength), pWarning);
+      END;
+    END;
+
+    PROCEDURE CheckCodeFieldWithRelation@1000000040(VAR pCode@1000000000 : Code[1024];pAcceptTheOnlyOne@1000000010 : Boolean;pCreateAutomatically@1000000008 : Boolean;pFieldName@1000000011 : Text;pMasterFieldId@1000000005 : Integer;pRelatedTableId@1000000004 : Integer;pErrorType@1000000009 : Integer;VAR pModify@1000000002 : Boolean);
+    BEGIN
+      //DOC NH2016.14 - Checking code field with relation
+      //  <> pCode: The code (can be changed)
+      //  -> pAcceptTheOnlyOne: Flag to accept the only one record
+      //  -> pCreateAutomatically: Flag to create a record automatically
+      //  -> pFieldName: Field name
+      //  -> pMasterFieldId: Field ID (from master table)
+      //  -> pRelatedTableId: Related table ID
+      //  -> pErrorType: Error type (see "Import Error Line"."Type" for option list)
+      //  <> pModify: Target "Modify" flag
+
+      CheckCodeFieldWithRelationAdv(pCode, '', pAcceptTheOnlyOne, pCreateAutomatically, pFieldName, pMasterFieldId, pRelatedTableId, pErrorType, pModify);
+    END;
+
+    PROCEDURE CheckCodeFieldWithRelationAdv@1000000007(VAR pCode@1000000000 : Code[1024];pDefaultCode@1000000012 : Code[1024];pAcceptTheOnlyOne@1000000010 : Boolean;pCreateAutomatically@1000000008 : Boolean;pFieldName@1000000011 : Text;pMasterFieldId@1000000005 : Integer;pRelatedTableId@1000000004 : Integer;pErrorType@1000000009 : Integer;VAR pModify@1000000002 : Boolean);
+    VAR
+      lRecordRef@1000000001 : RecordRef;
+      lKeyRef@1000000006 : KeyRef;
+      lFieldRef@1000000007 : FieldRef;
+      lPreviousCode@1000000003 : Code[1024];
+    BEGIN
+      //DOC NH2016.14 - Checking code field with relation (advanced version)
+      //  <> pCode: The code (can be changed)
+      //  -> pDefaultCode: Default code
+      //  -> pAcceptTheOnlyOne: Flag to accept the only one record
+      //  -> pCreateAutomatically: Flag to create a record automatically
+      //  -> pFieldName: Field name
+      //  -> pMasterFieldId: Field ID (from master table)
+      //  -> pRelatedTableId: Related table ID
+      //  -> pErrorType: Error type (see "Import Error Line"."Type" for option list)
+      //  <> pModify: Target "Modify" flag
+
+      lRecordRef.OPEN(pRelatedTableId);
+      lKeyRef := lRecordRef.KEYINDEX(1);
+      lFieldRef := lKeyRef.FIELDINDEX(1);
+      lPreviousCode := pCode;
+      IF (pCode = '') THEN
+        pCode := ImportToolkit.GetConfigTemplateTextValue(ConfigTemplateCode, pMasterFieldId);
+      IF (pCode = '') THEN
+        pCode := pDefaultCode;
+      IF ((pCode = '') AND (pAcceptTheOnlyOne)) THEN
+        IF (lRecordRef.COUNT() = 1) THEN
+        BEGIN
+          lRecordRef.FINDFIRST();
+          pCode := lFieldRef.VALUE();
+        END;
+      IF ((pCode = '') AND (pErrorType <> ImportErrorLine.Type::" ")) THEN
+        CreateErrorOrWarning(STRSUBSTNO(tIsEmpty, pFieldName), pErrorType = ImportErrorLine.Type::Warning);
+      IF (pCode <> '') THEN
+      BEGIN
+        lFieldRef.SETRANGE(pCode);
+        IF ( NOT (lRecordRef.FINDFIRST())) THEN
+          IF ( NOT (pCreateAutomatically)) THEN
+            CreateError(STRSUBSTNO(tRecordDoesntExist, lRecordRef.CAPTION, pCode));
+      END;
+      IF (pCode <> lPreviousCode) THEN
+        pModify := TRUE;
+      lRecordRef.CLOSE();
+    END;
+
+    PROCEDURE ProcessCodeFieldWithRelation@1000000019(pCode@1000000000 : Code[20];pRelatedTableId@1000000003 : Integer;pRelatedNameFieldId@1000000004 : Integer) : Code[20];
+    VAR
+      lRecordRef@1000000005 : RecordRef;
+      lKeyRef@1000000002 : KeyRef;
+      lFieldRef@1000000001 : FieldRef;
+    BEGIN
+      //DOC NH2016.14 - Processing code field with relation
+      //  -> pCode: The code
+      //  -> pRelatedTableId: Related table ID
+      //  -> pRelatedNameFieldId: Related name field ID
+      //  <- The code returned back
+
+      IF (pCode = '') THEN
+        EXIT;
+
+      lRecordRef.OPEN(pRelatedTableId);
+      lKeyRef := lRecordRef.KEYINDEX(1);
+      lFieldRef := lKeyRef.FIELDINDEX(1);
+      lFieldRef.SETRANGE(pCode);
+      IF (lRecordRef.ISEMPTY()) THEN
+      BEGIN
+        lFieldRef.SETRANGE();
+        lRecordRef.INIT();
+        lFieldRef.VALIDATE(pCode);
+        IF (pRelatedNameFieldId <> 0) THEN
+        BEGIN
+          lFieldRef := lRecordRef.FIELD(pRelatedNameFieldId);
+          lFieldRef.VALIDATE(ImportToolkit.GetNewRecordDescription(pCode));
+        END;
+        lRecordRef.INSERT(TRUE);
+        CreateLogEntryForRecordRef(lRecordRef);
+      END;
+
+      lRecordRef.CLOSE();
+
+      EXIT(pCode);
+    END;
+
+    LOCAL PROCEDURE "--- Specific ---"@1000000003();
+    BEGIN
+    END;
+
+    PROCEDURE CheckDimensionValue@1000000054(pDimensionNumber@1000000000 : Integer;pDimensionValueCode@1000000001 : Code[20];pCreateAutomatically@1000000003 : Boolean);
+    VAR
+      lDimensionValue@1000000004 : Record 349;
+      lDimensionCode@1000000002 : Code[20];
+      eUnknownDimension@1000000006 : TextConst 'ENU=Unknown dimension number %1.;ENG=Unknown dimension number %1.';
+      eDimensionValueDoesntExist@1000000005 : TextConst 'ENU=Dimension "%1" value "%2" doesn''t exist.;ENG=Dimension "%1" value "%2" doesn''t exist.';
+    BEGIN
+      //DOC NH2016.14 - Checking if dimension (with given number) value exists
+      //  -> pDimensionNumber: Dimension number
+      //  -> pDimensionValueCode: Dimension value code
+      //  -> pCreateAutomatically: Flag to create automatically
+      //The function logs an error if dimension value code is not empty, but dimension with given number can't be found.
+      //The function ignore the check if the batch will create dimension values automatically.
+      //Otherwise the function logs an error if the dimension value can't be found.
+
+      IF (pDimensionValueCode = '') THEN
+        EXIT;
+
+      lDimensionCode := ImportToolkit.GetDimensionCode(pDimensionNumber);
+      IF (lDimensionCode = '') THEN
+        CreateError(STRSUBSTNO(eUnknownDimension, pDimensionNumber));
+
+      IF ( NOT (pCreateAutomatically)) THEN
+        IF ( NOT (lDimensionValue.GET(lDimensionCode, pDimensionValueCode))) THEN
+          CreateError(STRSUBSTNO(eDimensionValueDoesntExist, lDimensionCode, pDimensionValueCode));
+    END;
+
+    PROCEDURE ProcessDimensionValue@1000000044(pDimensionNumber@1000000003 : Integer;pDimensionValueCode@1000000002 : Code[20];pCreateAutomatically@1000000004 : Boolean) : Code[10];
+    VAR
+      lDimensionValue@1000000001 : Record 349;
+      lDimensionCode@1000000000 : Code[20];
+      eUnknownDimension@1000000005 : TextConst 'ENU=Unknown dimension number %1.;ENG=Unknown dimension number %1.';
+    BEGIN
+      //DOC NH2016.14 - Updating dimension value - creating if it doesn't exist
+      //  -> pDimensionNumber: Dimension number
+      //  -> pDimensionValueCode: Dimension value code
+      //  -> pCreateAutomatically: Flag to create automatically
+      //  <- Dimension value code returned back
+
+      IF (pDimensionValueCode = '') THEN
+        EXIT;
+
+      lDimensionCode := ImportToolkit.GetDimensionCode(pDimensionNumber);
+      IF (lDimensionCode = '') THEN
+        CreateError(STRSUBSTNO(eUnknownDimension, pDimensionNumber));
+
+      IF ( NOT (pCreateAutomatically)) THEN
+        IF ( NOT (lDimensionValue.GET(lDimensionCode, pDimensionValueCode))) THEN
+        BEGIN
+          CLEAR(lDimensionValue);
+          lDimensionValue.INIT();
+          lDimensionValue.VALIDATE("Dimension Code", lDimensionCode);
+          lDimensionValue.VALIDATE(Code, pDimensionValueCode);
+          lDimensionValue.VALIDATE(Name, ImportToolkit.GetNewRecordDescription(pDimensionValueCode));
+          lDimensionValue.INSERT(TRUE);
+          CreateLogEntry(lDimensionValue);
+        END;
+
+      EXIT(pDimensionValueCode);
+    END;
+
+    PROCEDURE UpdateDefaultDimension@1000000052(pTableId@1000000005 : Integer;pNo@1000000006 : Code[20];pDimensionNumber@1000000000 : Integer;pDimensionValueCode@1000000001 : Code[20];pCreateDimensionValueAutomatically@1000000007 : Boolean);
+    VAR
+      lDefaultDimension@1000000003 : Record 352;
+      lDimensionCode@1000000004 : Code[20];
+      lModify@1000000002 : Boolean;
+    BEGIN
+      //DOC NH2016.14 - Updating default dimension
+      //  -> pTableId: Table ID
+      //  -> pNo: No. (of the master record)
+      //  -> pDimensionNumber: Dimension number (between 1 and 8)
+      //  -> pDimensionValueCode: Dimension value code
+      //  -> pCreateDimensionValueAutomatically: Flag to create dimension value automatically
+      //The dimension itself has to exist; if it doesn't - an error is raised
+
+      IF (pDimensionValueCode = '') THEN
+        EXIT;
+
+      lDimensionCode := ImportToolkit.GetDimensionCode(pDimensionNumber);
+      IF (lDimensionCode = '') THEN
+        EXIT;
+
+      ProcessDimensionValue(pDimensionNumber, pDimensionValueCode, pCreateDimensionValueAutomatically);
+
+      IF ( NOT (lDefaultDimension.GET(pTableId, pNo, lDimensionCode))) THEN
+      BEGIN
+        CLEAR(lDefaultDimension);
+        lDefaultDimension.INIT();
+        lDefaultDimension.VALIDATE("Table ID", pTableId);
+        lDefaultDimension.VALIDATE("No.", pNo);
+        lDefaultDimension.VALIDATE("Dimension Code", lDimensionCode);
+        lDefaultDimension.INSERT(TRUE);
+        CreateLogEntry(lDefaultDimension);
+      END;
+
+      IF (lDefaultDimension."Dimension Value Code" <> pDimensionValueCode) THEN
+      BEGIN
+        lDefaultDimension.VALIDATE("Dimension Value Code", pDimensionValueCode);
+        lModify := TRUE;
+      END;
+
+      IF (lModify) THEN
+        lDefaultDimension.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Miscellaneous ---"@1000000008();
+    BEGIN
+    END;
+
+    PROCEDURE CheckWorkflows@1000000048(pTableId@1000000002 : Integer);
+    VAR
+      lEnhancedWorkflow@1000000000 : Record 9062258;
+      eErrorMessage@1000000001 : TextConst 'ENU=Active workflow(s) attached to "%1" table exist.;ENG=Active workflow(s) attached to "%1" table exist.';
+    BEGIN
+      //DOC NH2016.14 - Checking if there are enabled workflows defined for the given table
+      //  -> pTableId: The table ID
+
+      lEnhancedWorkflow.RESET;
+      lEnhancedWorkflow.SETRANGE("Table ID", DATABASE::Customer);
+      lEnhancedWorkflow.SETRANGE(Enabled, TRUE);
+      IF ( NOT (lEnhancedWorkflow.ISEMPTY())) THEN
+        CreateWarning(STRSUBSTNO(eErrorMessage, ObjectFieldToolkit.GetTableName(ImportLineRecordRef.NUMBER)));
+    END;
+
+    LOCAL PROCEDURE "--- Internal ---"@1000000001();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CreateError@1000000000(pMessage@1000000000 : Text);
+    BEGIN
+      //DOC NH2016.14 - Creating error
+      //  -> pMessage: Message
+
+      ImportErrorManagement.CreateErrorOrWarning(ImportLineRecordRef.NUMBER, ImportLineRecordRef.GETPOSITION(FALSE), ImportErrorLine.Type::Error, pMessage);
+    END;
+
+    LOCAL PROCEDURE CreateWarning@1000000012(pMessage@1000000000 : Text);
+    BEGIN
+      //DOC NH2016.14 - Creating warning
+      //  -> pMessage: Message
+
+      ImportErrorManagement.CreateErrorOrWarning(ImportLineRecordRef.NUMBER, ImportLineRecordRef.GETPOSITION(FALSE), ImportErrorLine.Type::Warning, pMessage);
+    END;
+
+    LOCAL PROCEDURE CreateErrorOrWarning@1000000013(pMessage@1000000001 : Text;pWarning@1000000000 : Boolean);
+    BEGIN
+      //DOC NH2016.14 - Creating error or warning
+      //  -> pMessage: Message
+      //  -> pWarning: TRUE = Warning, FALSE = Error
+
+      IF (pWarning) THEN
+        CreateWarning(pMessage)
+      ELSE
+        CreateError(pMessage);
+    END;
+
+    LOCAL PROCEDURE CreateLogEntry@1000000005(pRecord@1000000000 : Variant);
+    VAR
+      lRecordRef@1000000001 : RecordRef;
+    BEGIN
+      //DOC NH2016.14 - Creating log entry for specified record
+      //  -> pRecord: The record
+
+      lRecordRef.GETTABLE(pRecord);
+      CreateLogEntryForRecordRef(lRecordRef);
+    END;
+
+    LOCAL PROCEDURE CreateLogEntryForRecordRef@1000000055(pRecordRef@1000000000 : RecordRef);
+    BEGIN
+      //DOC NH2016.14 - Creating log entry for specified record
+      //  -> pRecordRef: The record reference
+
+      ImportToolkit.CreateLogEntry(pRecordRef, ImportBatchNo, ImportHeaderTableId, ImportLineRecordRef);
+    END;
+
+    BEGIN
+    {
+      //DOC NH2016.14 JH 07/03/2016 - Created
+      //DOC NH2016.14 JH 23/03/2016 - New functions, bugfixes
+      //DOC NH2016.14 JH 29/03/2016 - Bug fixes
+    }
+    END.
+  }
+}
+

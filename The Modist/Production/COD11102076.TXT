@@ -1,0 +1,150 @@
+OBJECT Codeunit 11102076 OM - Test Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/10/12;
+    Time=12:00:00 PM;
+    Version List=OMA9.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE ExecuteTests@1(VAR Test@1000 : Record 11102089);
+    VAR
+      MessageText@1001 : Text;
+      NoFailed@1002 : Integer;
+      NoSucceeded@1003 : Integer;
+      ctTestFailed@1004 : TextConst 'DEU=%1 test failed.;ENU=%1 test failed.;ESP=%1 test failed.;FRA=%1 test failed.;NLD=%1 test mislukt.;DEA=%1 test failed.';
+      ctTestsFailed@1005 : TextConst 'DEU=%1 tests failed.;ENU=%1 tests failed.;ESP=%1 tests failed.;FRA=%1 tests failed.;NLD=%1 tests mislukt.;DEA=%1 tests failed.';
+      ctTestsSucceeded@1006 : TextConst 'DEU=%1 tests succeeded.;ENU=%1 tests succeeded.;ESP=%1 tests succeeded.;FRA=%1 tests succeeded.;NLD=%1 testen geslaagd.;DEA=%1 tests succeeded.';
+      ctTestSucceeded@1007 : TextConst 'DEU=%1 test succeeded.;ENU=%1 test succeeded.;ESP=%1 test succeeded.;FRA=%1 test succeeded.;NLD=%1 test geslaagd.;DEA=%1 test succeeded.';
+    BEGIN
+      WITH Test DO
+        IF FINDSET THEN
+          REPEAT
+            ExecuteTest(Test);
+            COMMIT;
+            IF "Last Test Succeeded" THEN
+              NoSucceeded += 1
+            ELSE
+              NoFailed += 1;
+          UNTIL NEXT = 0;
+
+      CASE NoSucceeded OF
+        0 : ;
+        1 :
+          MessageText := STRSUBSTNO(ctTestSucceeded, 1);
+        ELSE
+          MessageText := STRSUBSTNO(ctTestsSucceeded, NoSucceeded);
+      END;
+
+      IF (NoSucceeded > 0) AND (NoFailed > 0) THEN
+        MessageText += '\';
+
+      CASE NoFailed OF
+        0 : ;
+        1 :
+          MessageText += STRSUBSTNO(ctTestFailed, 1);
+        ELSE
+          MessageText += STRSUBSTNO(ctTestsFailed, NoFailed);
+      END;
+
+      MESSAGE(MessageText);
+    END;
+
+    PROCEDURE ExecuteTest@2(VAR Test@1000 : Record 11102089);
+    VAR
+      TestParameter@1001 : Record 11102090;
+      TestParameterMgt@1002 : Codeunit 11102077;
+      StartTime@1003 : DateTime;
+      Duration@1004 : Integer;
+      Succeeded@1005 : Boolean;
+      ctCodeunitFailed@1006 : TextConst 'DEU=Codeunit returned error: %1;ENU=Codeunit returned error: %1;ESP=Codeunit returned error: %1;FRA=Codeunit returned error: %1;NLD=Codeunit geeft foutmelding: %1;DEA=Codeunit returned error: %1';
+      ctDuration@1007 : TextConst 'DEU=Duration of test was %1 ms.;ENU=Duration of test was %1 ms.;ESP=Duration of test was %1 ms.;FRA=Duration of test was %1 ms.;NLD=Duur van test was %1 ms.;DEA=Duration of test was %1 ms.';
+      ctSucceeded@1008 : TextConst 'DEU=Test succeeded.;ENU=Test succeeded.;ESP=Test succeeded.;FRA=Test succeeded.;NLD=Test geslaagd.;DEA=Test succeeded.';
+      ctWrongOutputValue@1009 : TextConst 'DEU=Parameter ''%1'' returned ''%2''. Must be ''%3''.;ENU=Parameter ''%1'' returned ''%2''. Must be ''%3''.;ESP=Parameter ''%1'' returned ''%2''. Must be ''%3''.;FRA=Parameter ''%1'' returned ''%2''. Must be ''%3''.;NLD=Parameter ''%1'' geeft ''%2''. Moet ''%3'' zijn.;DEA=Parameter ''%1'' returned ''%2''. Must be ''%3''.';
+    BEGIN
+      WITH Test DO BEGIN
+
+        CLEARLASTERROR;
+
+        TestParameter.SETRANGE("Test Type", Type);
+        TestParameter.SETRANGE("Test No.", "No.");
+        TestParameter.SETRANGE("Test Line No.", "Line No.");
+        TestParameter.SETRANGE(Type, TestParameter.Type::Input);
+        IF TestParameter.FINDSET THEN
+          REPEAT
+            TestParameterMgt.SetParameter(TestParameter.Name, TestParameter.Value);
+          UNTIL TestParameter.NEXT = 0;
+
+        StartTime := CURRENTDATETIME;
+        Succeeded := CODEUNIT.RUN("Codeunit No.");
+        Duration := CURRENTDATETIME - StartTime;
+
+        IF Succeeded THEN BEGIN
+
+          IF "Maximum Duration (ms)" > 0 THEN
+            IF Duration > "Maximum Duration (ms)" THEN BEGIN
+              Succeeded := FALSE;
+              LogResults(Test, Duration, FALSE, STRSUBSTNO(ctDuration, Duration));
+            END;
+
+          TestParameter.SETRANGE(Type, TestParameter.Type::Output);
+          IF TestParameter.FINDSET THEN
+            REPEAT
+              IF TestParameterMgt.GetParameter(TestParameter.Name) <> TestParameter.Value THEN BEGIN
+                Succeeded := FALSE;
+                LogResults(
+                  Test, Duration, FALSE,
+                  STRSUBSTNO(
+                    ctWrongOutputValue,
+                    TestParameter.Name,
+                    TestParameterMgt.GetParameter(TestParameter.Name), TestParameter.Value));
+              END;
+
+            UNTIL TestParameter.NEXT = 0;
+
+          IF Succeeded THEN
+            LogResults(Test, Duration, TRUE, ctSucceeded);
+
+        END ELSE
+          LogResults(Test, Duration, FALSE, STRSUBSTNO(ctCodeunitFailed, GETLASTERRORTEXT));
+
+      END;
+    END;
+
+    LOCAL PROCEDURE LogResults@3(VAR Test@1000 : Record 11102089;Duration@1001 : Integer;Succeeded@1002 : Boolean;Result@1003 : Text);
+    VAR
+      TestLog@1004 : Record 11102091;
+      Mgt@1005 : Codeunit 11102035;
+    BEGIN
+      Test."Last Test Date" := TODAY;
+      Test."Last Test Time" := TIME;
+      Test."Last Duration (ms)" := Duration;
+      Test."Last Test Succeeded" := Succeeded;
+      Test."Last Test Result" := Result;
+      Test.MODIFY;
+
+      TestLog.Type := Test.Type;
+      TestLog."No." := Test."No.";
+      TestLog."Line No." := Test."Line No.";
+      TestLog."Executed By" := Mgt.ShortUserId;
+      TestLog."Test Date" := Test."Last Test Date";
+      TestLog."Test Time" := Test."Last Test Time";
+      TestLog."Duration (ms)" := Duration;
+      TestLog.Succeeded := Succeeded;
+      TestLog.Result := Result;
+      TestLog.INSERT;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

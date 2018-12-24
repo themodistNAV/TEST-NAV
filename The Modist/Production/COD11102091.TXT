@@ -1,0 +1,506 @@
+OBJECT Codeunit 11102091 OM - Split File
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            ImExportMgt@1000 : Codeunit 11102043;
+            CommonDialog@1001 : Codeunit 11102059;
+            FileHandler@1002 : Codeunit 11102097;
+            ClientFileName@1003 : Text;
+            Extension@1004 : Text;
+            ServerFileName@1005 : Text;
+            ctExtAll@1006 : TextConst 'DEU="Object Manager Files|*.txt;*.fib;*.fld";ENU="Object Manager Files|*.txt;*.fib;*.fld";ESP="Object Manager Files|*.txt;*.fib;*.fld";FRA="Object Manager Files|*.txt;*.fib;*.fld";NLD="Object Manager Files|*.txt;*.fib;*.fld";DEA="Object Manager Files|*.txt;*.fib;*.fld"';
+            ctInvalidFile@1007 : TextConst 'DEU=File not valid.;ENU=File not valid.;ESP=File not valid.;FRA=File not valid.;NLD=Geen geldig bestand.;DEA=File not valid.';
+          BEGIN
+            FileHandler.ErrorIfWebClient;
+
+            CommonDialog.AddExtension(ctExtAll, '');
+
+            CommonDialog.AddKnownExtension('txt-o');
+            CommonDialog.AddKnownExtension('txt-t');
+            CommonDialog.AddKnownExtension('fib');
+            CommonDialog.AddKnownExtension('fld');
+
+            IF ClientFileName = '' THEN BEGIN
+              CommonDialog.GetOpenFileName(ClientFileName, FALSE);
+              IF ClientFileName = '' THEN
+                EXIT;
+            END;
+
+            ServerFileName := FileHandler.UploadToServer(ClientFileName, '');
+
+            Extension := CommonDialog.GetExtension;
+            IF Extension = '' THEN
+              Extension := FileHandler.GetExtension(ClientFileName);
+
+            CASE Extension OF
+              'fib' : SplitFibFile(ClientFileName, ServerFileName);
+              'txt-o' : SplitObjectFile(ClientFileName, ServerFileName);
+              'txt-t' : SplitTranslationFile(ClientFileName, ServerFileName);
+
+              'txt' :
+                CASE TRUE OF
+                  ImExportMgt.IsObjectFile(ServerFileName) :
+                    SplitObjectFile(ClientFileName, ServerFileName);
+
+                  ImExportMgt.IsTranslationFile(ServerFileName) :
+                    SplitTranslationFile(ClientFileName, ServerFileName);
+
+                  ELSE
+                    ERROR(ctInvalidFile);
+                END;
+
+              'fld' : SplitFieldFile(ClientFileName, ServerFileName);
+
+              ELSE
+                ERROR(ctInvalidFile);
+
+            END;
+          END;
+
+  }
+  CODE
+  {
+
+    LOCAL PROCEDURE SplitObjectFile@3(ClientFileName@1000 : Text;ServerFileName@1001 : Text);
+    VAR
+      Setup@1002 : Record 11102035;
+      TmpObject@1003 : TEMPORARY Record 2000000001;
+      Mgt@1004 : Codeunit 11102035;
+      ImExportMgt@1005 : Codeunit 11102043;
+      Progressbar@1006 : Codeunit 11102044;
+      FileHandler@1007 : Codeunit 11102097;
+      FileNameMgt@1008 : Codeunit 11102107;
+      SourceFile@1009 : File;
+      TargetFile@1010 : File;
+      ObjectDate@1011 : Date;
+      ObjectTime@1012 : Time;
+      DestDirectory@1013 : Text;
+      ObjectLine@1014 : ARRAY [50] OF Text[30];
+      PropertyValue@1015 : Text;
+      TargetClientFileName@1016 : Text;
+      TargetServerFileName@1017 : Text;
+      TextLine@1018 : Text;
+      ReadChar@1019 : Char;
+      WriteChar@1020 : Char;
+      i@1021 : Integer;
+      LineCounter@1022 : Integer;
+      EndOfLine@1023 : Boolean;
+      TargetFileOpen@1024 : Boolean;
+      WriteLine@1025 : Boolean;
+      ctDateProperty@1026 : TextConst 'DEU=Date;ENU=Date;ESP=Date;FRA=Date;NLD=Date;DEA=Date';
+      ctSplitTextFile@1027 : TextConst 'DEU=Splitting text file...;ENU=Splitting text file...;ESP=Splitting text file...;FRA=Splitting text file...;NLD=Tekstbestand splitsen...;DEA=Splitting text file...';
+      ctTimeProperty@1028 : TextConst 'DEU=Time;ENU=Time;ESP=Time;FRA=Time;NLD=Time;DEA=Time';
+    BEGIN
+      Setup.CustomGet;
+
+      DestDirectory := CreateSplitDirectory(ClientFileName);
+
+      SourceFile.OPEN(ServerFileName);
+
+      Progressbar.Open(ctSplitTextFile, 1);
+      Progressbar.Text1 := '';
+      Progressbar.BarSize := SourceFile.LEN;
+
+      WHILE SourceFile.READ(ReadChar) > 0 DO BEGIN
+
+        IF SourceFile.POS MOD 250 = 0 THEN
+          Progressbar.BarPosition := SourceFile.POS + 1;
+
+        CASE ReadChar OF
+          13, 10 :
+            BEGIN
+
+              WriteLine := TRUE;
+
+              IF DELSTR(TextLine, 7) = 'OBJECT' THEN BEGIN
+
+                LineCounter := 1;
+
+                ImExportMgt.Split(TextLine, ' ', ObjectLine);
+
+                IF NOT EVALUATE(TmpObject.Type, ObjectLine[2]) THEN
+                  TmpObject.Type := Mgt.ObjectTypeNo(ObjectLine[2]);
+
+                IF EVALUATE(TmpObject.ID, ObjectLine[3]) THEN
+                  ;
+
+                IF EVALUATE(TmpObject.Name, COPYSTR(TextLine, STRLEN(ObjectLine[1] + ObjectLine[2] + ObjectLine[3]) + 4)) THEN
+                  ;
+
+                Progressbar.Text1 := FORMAT(TmpObject.Type) + ' ' + COPYSTR(TextLine, STRLEN(ObjectLine[1] + ObjectLine[2]) + 3);
+
+                IF TargetFileOpen THEN BEGIN
+                  TargetFile.CLOSE;
+                  IF (ObjectDate <> 0D) AND (ObjectTime <> 0T) THEN
+                    SETSTAMP(TargetServerFileName, ObjectDate, ObjectTime);
+                  FileHandler.DownloadToClient(TargetServerFileName, TargetClientFileName, '');
+                END;
+
+                TargetClientFileName := DestDirectory +
+                  FileNameMgt.FileNameUnknownObject(TmpObject.Type, ObjectLine[2], ObjectLine[3], TmpObject.Name, 'txt');
+
+                TargetServerFileName := FileHandler.CreateServerFileName(TargetClientFileName, '');
+
+                IF EXISTS(TargetServerFileName) THEN
+                  ERASE(TargetServerFileName);
+
+                TargetFile.TEXTMODE(FALSE);
+                TargetFile.WRITEMODE(TRUE);
+                TargetFile.CREATE(TargetServerFileName);
+
+                TargetFileOpen := TRUE;
+
+              END ELSE
+                LineCounter += 1;
+
+              IF LineCounter IN [5..7] THEN BEGIN
+                IF ctDateProperty <> '' THEN BEGIN
+                  PropertyValue := GetPropertyValue(TextLine, ctDateProperty);
+                  IF PropertyValue <> '' THEN
+                    IF EVALUATE(ObjectDate, PropertyValue) THEN
+                      ;
+                END;
+
+                IF ctTimeProperty <> '' THEN BEGIN
+                  PropertyValue := GetPropertyValue(TextLine, ctTimeProperty);
+                  IF PropertyValue <> '' THEN
+                    IF EVALUATE(ObjectTime, DELCHR(PropertyValue, '<>', '[] ')) THEN
+                      ;
+                END;
+              END;
+
+              IF WriteLine THEN BEGIN
+                FOR i := 1 TO STRLEN(TextLine) DO BEGIN
+                  WriteChar := TextLine[i];
+                  TargetFile.WRITE(WriteChar);
+                END;
+                TargetFile.WRITE(ReadChar);
+              END;
+
+              SourceFile.READ(ReadChar);
+              IF ReadChar IN [10, 13] THEN BEGIN
+                IF WriteLine THEN
+                  TargetFile.WRITE(ReadChar);
+              END ELSE
+                SourceFile.SEEK(SourceFile.POS - 1);
+
+              TextLine := '';
+            END;
+          ELSE BEGIN
+            TextLine += FORMAT(ReadChar);
+            IF STRLEN(TextLine) = 1024 THEN BEGIN
+              IF WriteLine THEN
+                FOR i := 1 TO STRLEN(TextLine) DO BEGIN
+                  WriteChar := TextLine[i];
+                  TargetFile.WRITE(WriteChar);
+                END;
+              REPEAT
+                SourceFile.READ(ReadChar);
+                EndOfLine := ReadChar IN [10, 13];
+                IF WriteLine THEN
+                  TargetFile.WRITE(ReadChar);
+              UNTIL EndOfLine;
+
+              SourceFile.READ(ReadChar);
+              IF ReadChar IN [10, 13] THEN BEGIN
+                IF WriteLine THEN
+                  TargetFile.WRITE(ReadChar);
+              END ELSE
+                SourceFile.SEEK(SourceFile.POS - 1);
+
+              TextLine := '';
+            END;
+          END;
+
+        END;
+      END;
+
+      IF TargetFileOpen THEN BEGIN
+        TargetFile.CLOSE;
+        IF (ObjectDate <> 0D) AND (ObjectTime <> 0T) THEN
+          SETSTAMP(TargetServerFileName, ObjectDate, ObjectTime);
+        FileHandler.DownloadToClient(TargetServerFileName, TargetClientFileName, '');
+      END;
+
+      SourceFile.CLOSE;
+    END;
+
+    LOCAL PROCEDURE SplitTranslationFile@4(ClientFileName@1000 : Text;ServerFileName@1001 : Text);
+    VAR
+      Setup@1002 : Record 11102035;
+      CurrentObject@1003 : Record 2000000001;
+      OpenObject@1004 : Record 2000000001;
+      Progressbar@1005 : Codeunit 11102044;
+      TranslationMgt@1006 : Codeunit 11102051;
+      FileHandler@1007 : Codeunit 11102097;
+      FileNameMgt@1008 : Codeunit 11102107;
+      SourceFile@1009 : File;
+      TargetFile@1010 : File;
+      DestDirectory@1011 : Text;
+      TargetClientFileName@1012 : Text;
+      TargetServerFileName@1013 : Text;
+      TextLine@1014 : Text[1024];
+      LineCounter@1015 : Integer;
+      Pos@1016 : Integer;
+      TargetFileOpen@1017 : Boolean;
+      ctInvalidTranslationFile@1018 : TextConst 'DEU=Invalid translation file.;ENU=Invalid translation file.;ESP=Invalid translation file.;FRA=Invalid translation file.;NLD=Ongeldig bestand.;DEA=Invalid translation file.';
+      ctSplitTextFile@1019 : TextConst 'DEU=Splitting text file...;ENU=Splitting text file...;ESP=Splitting text file...;FRA=Splitting text file...;NLD=Tekstbestand splitsen...;DEA=Splitting text file...';
+    BEGIN
+      Setup.CustomGet;
+
+      DestDirectory := CreateSplitDirectory(ClientFileName);
+
+      SourceFile.TEXTMODE(TRUE);
+      SourceFile.OPEN(ServerFileName);
+
+      Progressbar.Open(ctSplitTextFile, 1);
+      Progressbar.Text1 := '';
+      Progressbar.BarSize := SourceFile.LEN;
+
+      WHILE SourceFile.POS < SourceFile.LEN DO BEGIN
+
+        SourceFile.READ(TextLine);
+
+        Progressbar.BarPosition := SourceFile.POS + 1;
+
+        CurrentObject.Type := TranslationMgt.ObjectTypeOfCharacter(FORMAT(TextLine[1]));
+        Pos := STRPOS(TextLine, '-');
+        IF Pos = 0 THEN
+          ERROR(ctInvalidTranslationFile);
+        IF NOT EVALUATE(CurrentObject.ID, COPYSTR(TextLine, 2, Pos - 2)) THEN
+          ERROR(ctInvalidTranslationFile);
+
+        IF (CurrentObject.Type <> OpenObject.Type) OR (CurrentObject.ID <> OpenObject.ID) THEN BEGIN
+          LineCounter := 1;
+
+          OpenObject := CurrentObject;
+          IF NOT OpenObject.FIND('=') THEN
+            OpenObject.Name := '';
+
+          Progressbar.Text1Object := OpenObject;
+
+          IF TargetFileOpen THEN BEGIN
+            TargetFile.CLOSE;
+            FileHandler.DownloadToClient(TargetServerFileName, TargetClientFileName, '');
+          END;
+
+          TargetClientFileName := DestDirectory + FileNameMgt.FileName(OpenObject.Type, OpenObject.ID, OpenObject.Name);
+          TargetServerFileName := FileHandler.CreateServerFileName(TargetClientFileName, '');
+
+          IF EXISTS(TargetServerFileName) THEN
+            ERASE(TargetServerFileName);
+
+          TargetFile.TEXTMODE(TRUE);
+          TargetFile.WRITEMODE(TRUE);
+          TargetFile.CREATE(TargetServerFileName);
+
+          TargetFileOpen := TRUE;
+        END;
+
+        TargetFile.WRITE(TextLine);
+
+        TextLine := '';
+      END;
+
+      IF TargetFileOpen THEN BEGIN
+        TargetFile.CLOSE;
+        FileHandler.DownloadToClient(TargetServerFileName, TargetClientFileName, '');
+      END;
+
+      SourceFile.CLOSE;
+    END;
+
+    LOCAL PROCEDURE GetPropertyValue@5(TextLine@1000 : Text;PropertyName@1001 : Text) : Text;
+    BEGIN
+      IF PropertyName <> '' THEN
+        IF STRPOS(TextLine, PropertyName + '=') > 0 THEN BEGIN
+          TextLine := COPYSTR(TextLine, STRPOS(TextLine, '=') + 1);
+          EXIT(DELSTR(TextLine, STRLEN(TextLine)));
+        END;
+    END;
+
+    LOCAL PROCEDURE SplitFibFile@6(ClientFileName@1000 : Text;ServerFileName@1001 : Text);
+    VAR
+      Setup@1002 : Record 11102035;
+      Transport@1003 : Record 11102043;
+      TmpSection@1004 : TEMPORARY Record 2000000001;
+      Progressbar@1005 : Codeunit 11102044;
+      ImportTransport@1006 : Codeunit 11102087;
+      FileHandler@1007 : Codeunit 11102097;
+      TargetFile@1008 : File;
+      InStr@1009 : InStream;
+      OutStr@1010 : OutStream;
+      DestDirectory@1011 : Text;
+      TargetClientFileName@1012 : Text;
+      TargetServerFileName@1013 : Text;
+      ctSplitFibFile@1014 : TextConst 'DEU=Splitting fib file...;ENU=Splitting fib file...;ESP=Splitting fib file...;FRA=Splitting fib file...;NLD=Tekstbestand splitsen...;DEA=Splitting fib file...';
+    BEGIN
+      Setup.CustomGet;
+
+      DestDirectory := CreateSplitDirectory(ClientFileName);
+
+      Progressbar.Open(ctSplitFibFile, 1);
+      Progressbar.Text1 := '';
+
+      IF NOT ImportTransport.GetContent(ServerFileName, Transport, TmpSection, FALSE) THEN
+        EXIT;
+
+      IF TmpSection.FINDSET THEN
+        REPEAT
+
+          CASE TmpSection."Company Name" OF
+            'FAB AFTER' :
+              TargetClientFileName := DestDirectory + 'fab-after.fab';
+            'FAB BEFORE' :
+              TargetClientFileName := DestDirectory + 'fab-before.fab';
+            'FOB BEFORE' :
+              TargetClientFileName := DestDirectory + 'objects-before.fob';
+            'FOB' :
+              TargetClientFileName := DestDirectory + 'objects.fob';
+            'TXTOBJECTS' :
+              TargetClientFileName := DestDirectory + 'objects.txt';
+            ELSE
+              TargetClientFileName := DestDirectory + TmpSection."Company Name" + '.txt';
+          END;
+
+          TargetServerFileName := FileHandler.CreateServerFileName(TargetClientFileName, '');
+
+          IF EXISTS(TargetServerFileName) THEN
+            ERASE(TargetServerFileName);
+
+          TargetFile.WRITEMODE(TRUE);
+          TargetFile.CREATE(TargetServerFileName);
+          TargetFile.CREATEOUTSTREAM(OutStr);
+
+          TmpSection.CALCFIELDS("BLOB Reference");
+          TmpSection."BLOB Reference".CREATEINSTREAM(InStr);
+
+          COPYSTREAM(OutStr, InStr);
+
+          TargetFile.CLOSE;
+
+          FileHandler.DownloadToClient(TargetServerFileName, TargetClientFileName, '');
+
+        UNTIL TmpSection.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE SplitFieldFile@7(ClientFileName@1000 : Text;ServerFileName@1001 : Text);
+    VAR
+      Setup@1002 : Record 11102035;
+      CurrentObject@1003 : Record 2000000001;
+      OpenObject@1004 : Record 2000000001;
+      Progressbar@1005 : Codeunit 11102044;
+      FileHandler@1006 : Codeunit 11102097;
+      FileNameMgt@1007 : Codeunit 11102107;
+      SourceFile@1008 : File;
+      TargetFile@1009 : File;
+      DestDirectory@1010 : Text;
+      TargetClientFileName@1011 : Text;
+      TargetServerFileName@1012 : Text;
+      TextLine@1013 : Text[1024];
+      Char@1014 : Char;
+      LineCounter@1015 : Integer;
+      TargetFileOpen@1016 : Boolean;
+      ctInvalidFieldsFile@1017 : TextConst 'DEU=Invalid fields file.;ENU=Invalid fields file.;ESP=Invalid fields file.;FRA=Invalid fields file.;NLD=Ongeldig bestand.;DEA=Invalid fields file.';
+      ctSplitTextFile@1018 : TextConst 'DEU=Splitting fields file...;ENU=Splitting fields file...;ESP=Splitting fields file...;FRA=Splitting fields file...;NLD=Veldenbestand splitsen...;DEA=Splitting fields file...';
+    BEGIN
+      Setup.CustomGet;
+
+      DestDirectory := CreateSplitDirectory(ClientFileName);
+
+      SourceFile.OPEN(ServerFileName);
+
+      Progressbar.Open(ctSplitTextFile, 1);
+      Progressbar.Text1 := '';
+      Progressbar.BarSize := SourceFile.LEN;
+
+      WHILE SourceFile.POS < SourceFile.LEN DO BEGIN
+
+        SourceFile.READ(Char);
+        CASE Char OF
+          13 :
+            BEGIN
+
+              Progressbar.BarPosition := SourceFile.POS + 1;
+
+              CurrentObject.Type := CurrentObject.Type::Table;
+              IF NOT EVALUATE(CurrentObject.ID, DELCHR(COPYSTR(TextLine, 1, 11))) THEN
+                ERROR(ctInvalidFieldsFile);
+
+              IF CurrentObject.ID <> OpenObject.ID THEN BEGIN
+                LineCounter := 1;
+
+                OpenObject := CurrentObject;
+                OpenObject.Name := DELCHR(COPYSTR(TextLine, 13, 30), '>');
+
+                Progressbar.Text1Object := OpenObject;
+
+                IF TargetFileOpen THEN BEGIN
+                  TargetFile.CLOSE;
+                  FileHandler.DownloadToClient(TargetServerFileName, TargetClientFileName, '');
+                END;
+
+                TargetClientFileName := DestDirectory + FileNameMgt.ObjectFileName(OpenObject, 'fld');
+                TargetServerFileName := FileHandler.CreateServerFileName(TargetClientFileName, '');
+
+                IF EXISTS(TargetServerFileName) THEN
+                  ERASE(TargetServerFileName);
+
+                TargetFile.TEXTMODE(TRUE);
+                TargetFile.WRITEMODE(TRUE);
+                TargetFile.CREATE(TargetServerFileName);
+
+                TargetFileOpen := TRUE;
+              END;
+
+              TargetFile.WRITE(TextLine);
+
+              TextLine := '';
+
+            END;
+          10 :
+            ;
+          ELSE
+            TextLine := TextLine + FORMAT(Char);
+        END;
+
+      END;
+
+      IF TargetFileOpen THEN BEGIN
+        TargetFile.CLOSE;
+        FileHandler.DownloadToClient(TargetServerFileName, TargetClientFileName, '');
+      END;
+
+      SourceFile.CLOSE;
+    END;
+
+    LOCAL PROCEDURE CreateSplitDirectory@8(VAR FileName@1000 : Text[1024]) ExitValue : Text[1024];
+    VAR
+      FileHandler@1001 : Codeunit 11102097;
+      i@1002 : Integer;
+    BEGIN
+      ExitValue := FileName;
+
+      FOR i := STRLEN(ExitValue) DOWNTO 1 DO
+        IF ExitValue[i] = '.' THEN BEGIN
+          ExitValue := DELSTR(ExitValue, i);
+          i := 0;
+        END;
+      ExitValue := DELCHR(ExitValue, '>', '.');
+      ExitValue += '\';
+
+      FileHandler.CheckCreateClientDirectory(ExitValue);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

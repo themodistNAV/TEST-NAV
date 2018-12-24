@@ -1,0 +1,336 @@
+OBJECT Report 9062349 ILE to Item Budget
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.15;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=ILE to Item Budget;
+               ENG=ILE to Item Budget];
+    ProcessingOnly=Yes;
+    OnPostReport=BEGIN
+                   ConvertToRealIBE;
+                 END;
+
+  }
+  DATASET
+  {
+    { 1000000001;0;DataItem;                 ;
+               DataItemTable=Table32;
+               DataItemTableView=WHERE(Entry Type=CONST(Sale),
+                                       Location Code=FILTER(<>''));
+               OnPreDataItem=BEGIN
+                               "Item Ledger Entry".SETFILTER("Posting Date",GetDateFilter(Input_StartDate,Input_EndDate));
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  OutputDate@1000000000 : Date;
+                                  Item@1000000001 : Record 27;
+                                  Location@1000000002 : Record 14;
+                                BEGIN
+                                  WITH "Item Ledger Entry" DO BEGIN
+                                    IF NOT Item.GET("Item No.") THEN CurrReport.SKIP;
+                                    //IF NOT Item."Demo Data" THEN CurrReport.SKIP;
+
+                                    //Location.GET("Location Code");
+                                    ///IF Location.Store <> (Item."Purchased At" = Item."Purchased At"::Store) THEN CurrReport.SKIP;
+
+
+                                    CASE Output_Type OF
+                                      Output_Type::"Week for Week" :
+                                        BEGIN
+                                          OutputDate := GetWeekStart(Output_StartDate + ("Posting Date" - Input_StartDate))
+                                        END;
+                                      Output_Type::"Weekly Average" :
+                                        BEGIN
+                                          OutputDate := DMY2DATE(1,1,2000);
+                                        END;
+                                    END;
+
+                                    Temp_IBE.SETRANGE("Item No.","Item No.");
+                                    Temp_IBE.SETRANGE("Source Type","Source Type");
+                                    Temp_IBE.SETRANGE("Source No.","Source No.");
+                                    Temp_IBE.SETRANGE("Location Code","Location Code");
+                                    Temp_IBE.SETRANGE(Date,OutputDate);
+                                    IF NOT Temp_IBE.FINDFIRST THEN BEGIN
+                                      EntryNo += 1;
+                                      Temp_IBE.INIT;
+                                      Temp_IBE.VALIDATE("Budget Name",DestBudgetName);
+                                      Temp_IBE.VALIDATE("Entry No.",EntryNo);
+                                      Temp_IBE.VALIDATE("Item No.","Item No.");
+                                      Temp_IBE.VALIDATE("Source Type","Source Type");
+                                      Temp_IBE.VALIDATE("Source No.","Source No.");
+                                      Temp_IBE.VALIDATE(Date,OutputDate);
+                                      Temp_IBE.VALIDATE(Quantity,-Quantity);
+                                      Temp_IBE.VALIDATE("Location Code","Location Code");
+                                      Temp_IBE.INSERT(TRUE);
+                                    END ELSE BEGIN
+                                      Temp_IBE.VALIDATE(Quantity,Temp_IBE.Quantity + (-Quantity));
+                                      Temp_IBE.MODIFY(TRUE);
+                                    END;
+                                  END;
+                                END;
+
+               ReqFilterFields=Source No.,Global Dimension 1 Code,Global Dimension 2 Code,Item Category Code,Product Group Code }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      OnInit=BEGIN
+               InitReport;
+             END;
+
+    }
+    CONTROLS
+    {
+      { 1000000000;;Container;
+                  ContainerType=ContentArea }
+
+      { 1100710000;1;Field  ;
+                  CaptionML=ENU=Output Type;
+                  SourceExpr=Output_Type }
+
+      { 1000000002;1;Group  ;
+                  CaptionML=ENU=Input;
+                  GroupType=Group }
+
+      { 1000000003;2;Field  ;
+                  CaptionML=ENU=Start;
+                  SourceExpr=Input_StartDate;
+                  OnValidate=BEGIN
+                               Validate_Input_StartDate;
+                             END;
+                              }
+
+      { 1000000004;2;Field  ;
+                  CaptionML=ENU=End;
+                  SourceExpr=Input_EndDate;
+                  OnValidate=BEGIN
+                               Validate_Input_EndDate;
+                             END;
+                              }
+
+      { 1000000009;2;Field  ;
+                  CaptionML=ENU=No. Weeks;
+                  SourceExpr=Input_NoWeeks;
+                  Editable=FALSE }
+
+      { 1000000001;1;Group  ;
+                  CaptionML=ENU=Output;
+                  GroupType=Group }
+
+      { 1000000005;2;Field  ;
+                  CaptionML=ENU=Budget Name;
+                  SourceExpr=DestBudgetName;
+                  TableRelation="Item Budget Name".Name }
+
+      { 1000000006;2;Field  ;
+                  CaptionML=ENU=Start;
+                  SourceExpr=Output_StartDate;
+                  OnValidate=BEGIN
+                               Validate_Output_StartDate;
+                             END;
+                              }
+
+      { 1000000007;2;Field  ;
+                  CaptionML=ENU=End;
+                  SourceExpr=Output_EndDate;
+                  OnValidate=BEGIN
+                               Validate_Output_EndDate;
+                             END;
+                              }
+
+      { 1000000010;2;Field  ;
+                  CaptionML=ENU=No. Weeks;
+                  SourceExpr=Output_NoWeeks;
+                  Editable=FALSE }
+
+      { 1000000011;2;Field  ;
+                  CaptionML=ENU=Change %;
+                  SourceExpr=QtyChangePercentage }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      DestBudgetName@1000000004 : Code[10];
+      Input_StartDate@1000000003 : Date;
+      Input_EndDate@1000000001 : Date;
+      Input_NoWeeks@1000000008 : Decimal;
+      Output_StartDate@1000000005 : Date;
+      Output_EndDate@1000000006 : Date;
+      Output_NoWeeks@1000000009 : Decimal;
+      Output_Type@1000000007 : 'Week for Week,Weekly Average';
+      Temp_IBE@1000000000 : TEMPORARY Record 7134;
+      Temp_IBE_Output@1000000010 : TEMPORARY Record 7134;
+      EntryNo@1000000002 : Integer;
+      QtyChangePercentage@1000000011 : Decimal;
+
+    LOCAL PROCEDURE ConvertToRealIBE@1000000000();
+    VAR
+      WeekCounter@1000000003 : Integer;
+      EntryNo2@1000000002 : Integer;
+      IBE@1000000000 : Record 7134;
+      AddedCounter@1000000001 : Integer;
+      eDescription@1000000004 : TextConst 'ENU=From History;ENG=From History';
+      eFinalMessage@1000000005 : TextConst 'ENU=Added %1 budget entries;ENG=Added %1 budget entries';
+    BEGIN
+      Temp_IBE.RESET;
+
+      CASE Output_Type OF
+        Output_Type::"Week for Week" :
+          BEGIN
+            Temp_IBE_Output.COPY(Temp_IBE,TRUE);
+          END;
+        Output_Type::"Weekly Average" :
+          BEGIN
+            Temp_IBE.RESET;
+            IF Temp_IBE.FINDSET THEN BEGIN
+              REPEAT
+                WeekCounter := 0;
+                REPEAT
+                  WeekCounter += 1;
+                  EntryNo2 += 1;
+                  Temp_IBE_Output.INIT;
+                  Temp_IBE_Output.TRANSFERFIELDS(Temp_IBE);
+                  Temp_IBE_Output.VALIDATE("Entry No.",EntryNo2);
+                  Temp_IBE_Output.VALIDATE(Date,CALCDATE('+' + FORMAT(WeekCounter,0,9) + 'W',GetWeekStart(Output_StartDate)));
+                  //Temp_IBE_Output.VALIDATE(Quantity,ROUND(Temp_IBE.Quantity / Input_NoWeeks,1));
+                  Temp_IBE_Output.VALIDATE(Quantity,ROUND(Temp_IBE.Quantity / Input_NoWeeks,0.001));
+                  IF Temp_IBE_Output.Quantity <> 0 THEN Temp_IBE_Output.INSERT(TRUE);
+                UNTIL WeekCounter >= Output_NoWeeks;
+              UNTIL Temp_IBE.NEXT = 0;
+            END;
+          END;
+      END;
+
+      Temp_IBE_Output.RESET;
+      IF Temp_IBE_Output.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(IBE);
+          IBE.INIT;
+          IBE.TRANSFERFIELDS(Temp_IBE_Output);
+          IF QtyChangePercentage <> 0 THEN IBE.VALIDATE(Quantity,IBE.Quantity * QtyChangePercentage);
+          IBE.VALIDATE(Description,eDescription);
+          IBE."Entry No." := 0;
+          IBE.INSERT(TRUE);
+          AddedCounter +=1;
+        UNTIL Temp_IBE_Output.NEXT = 0;
+      END;
+
+      MESSAGE(eFinalMessage,AddedCounter);
+    END;
+
+    LOCAL PROCEDURE GetWeekStart@1000000001(TheDate@1000000000 : Date) WeekStartDate : Date;
+    BEGIN
+      EXIT(CALCDATE('CD-CW',TheDate));
+    END;
+
+    LOCAL PROCEDURE InitReport@1000000003();
+    BEGIN
+      Output_Type := Output_Type::"Week for Week";
+      Input_EndDate := TODAY;
+      Input_StartDate := CALCDATE('-6W',Input_EndDate);
+
+      Output_StartDate := TODAY + 1;
+      Output_EndDate := CALCDATE('+6W',Output_StartDate);
+
+      Validate_Input_StartDate;
+      //Validate_Output_StartDate;
+    END;
+
+    LOCAL PROCEDURE GetDateFilter@1000000002(StartDate@1000000000 : Date;EndDate@1000000001 : Date) DateFilter : Text;
+    BEGIN
+      IF StartDate <> 0D THEN DateFilter += FORMAT(StartDate);
+      DateFilter += '..';
+      IF EndDate <> 0D THEN DateFilter += FORMAT(EndDate);
+
+      IF DateFilter = '..' THEN DateFilter := '';
+    END;
+
+    LOCAL PROCEDURE Validate_Input_StartDate@1000000004();
+    BEGIN
+      IF Input_EndDate < Input_StartDate THEN Input_EndDate := Input_StartDate;
+      Input_NoWeeks := Input_EndDate - Input_StartDate;
+      IF Input_NoWeeks <> 0 THEN Input_NoWeeks := Input_NoWeeks / 7;
+
+      CASE Output_Type OF
+        Output_Type::"Week for Week" :
+          BEGIN
+            Output_EndDate := CALCDATE('+' + FORMAT(Input_NoWeeks*7,0,9) + 'D',Output_StartDate);
+            IF Output_NoWeeks <> Input_NoWeeks THEN Validate_Output_EndDate;
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE Validate_Input_EndDate@1000000005();
+    BEGIN
+      IF Input_EndDate < Input_StartDate THEN Input_StartDate := Input_EndDate;
+      Input_NoWeeks := Input_EndDate - Input_StartDate;
+      IF Input_NoWeeks <> 0 THEN Input_NoWeeks := Input_NoWeeks / 7;
+
+      CASE Output_Type OF
+        Output_Type::"Week for Week" :
+          BEGIN
+            Output_EndDate := CALCDATE('+' + FORMAT(Input_NoWeeks*7,0,9) + 'D',Output_StartDate);
+            IF Output_NoWeeks <> Input_NoWeeks THEN Validate_Output_EndDate;
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE Validate_Output_StartDate@1000000007();
+    BEGIN
+      IF Output_EndDate < Output_StartDate THEN Output_EndDate := Output_StartDate;
+
+      Output_NoWeeks := Output_EndDate - Output_StartDate;
+      IF Output_NoWeeks <> 0 THEN Output_NoWeeks := Output_NoWeeks / 7;
+
+      CASE Output_Type OF
+        Output_Type::"Week for Week" :
+          BEGIN
+            Input_StartDate := CALCDATE('-' + FORMAT(Output_NoWeeks*7,0,9) + 'D',Input_EndDate);
+            IF Input_NoWeeks <> Output_NoWeeks THEN Validate_Input_StartDate;
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE Validate_Output_EndDate@1000000006();
+    BEGIN
+      IF Output_EndDate < Output_StartDate THEN Output_StartDate := Output_EndDate;
+      Output_NoWeeks := Output_EndDate - Output_StartDate;
+      IF Output_NoWeeks <> 0 THEN Output_NoWeeks := Output_NoWeeks / 7;
+
+      CASE Output_Type OF
+        Output_Type::"Week for Week" :
+          BEGIN
+            Input_StartDate := CALCDATE('-' + FORMAT(Output_NoWeeks*7,0,9) + 'D',Input_EndDate);
+            IF Input_NoWeeks <> Output_NoWeeks THEN Validate_Input_StartDate;
+          END;
+      END;
+    END;
+
+    PROCEDURE SetDestBudget@1000000008(pName@1000000000 : Code[10]);
+    BEGIN
+      DestBudgetName := pName;
+    END;
+
+    BEGIN
+    {
+      //DOC NH2016.15 JH 25/04/2016 - CfMD Amendments
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

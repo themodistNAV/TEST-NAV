@@ -1,0 +1,978 @@
+OBJECT Codeunit 9062702 Item Import
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/04/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.14;
+  }
+  PROPERTIES
+  {
+    TableNo=9062839;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ConfigTemplateHeader@1000000021 : Record 8618;
+      EnhancedRapidStartSetup@1000000027 : Record 9062844;
+      Item@1000000004 : Record 27;
+      ItemImportWorksheetHeader@1000000000 : Record 9062839;
+      ItemImportWorksheetLine@1000000001 : Record 9062840;
+      ImportErrorLine@1000000030 : Record 9062842;
+      ImportLog@1000000024 : Record 9062843;
+      ConfigTemplateManagement@1000000020 : Codeunit 8612;
+      Convert@1000000019 : Codeunit 9062683;
+      ImportErrorManagement@1000000003 : Codeunit 9062708;
+      ImportToolkit@1000000022 : Codeunit 9062701;
+      ImportValidation@1000000002 : Codeunit 9062707;
+      ObjectFieldToolkit@1000000028 : Codeunit 9062343;
+      RecordRefManagement@1000000018 : Codeunit 9062241;
+      String@1000000014 : Codeunit 9062236;
+      TnpToolkit@1000000005 : Codeunit 9062230;
+      tDialogTitle@1000000011 : TextConst 'ENU=Importing items...;ENG=Importing items...';
+      tAlreadyExists@1000000031 : TextConst 'ENU=%1 exists already.;ENG=%1 exists already.';
+      tRecordDoesntExist@1000000015 : TextConst 'ENU="""%1"" ''%2'' doesn''t exist";ENG="""%1"" ''%2'' doesn''t exist"';
+      tCantCreateForEmpty@1000000017 : TextConst 'ENU=Can''t create "%1" ''%2'' for empty "%3".;ENG=Can''t create "%1" ''%2'' for empty "%3".';
+      tDoesntExistFor@1000000016 : TextConst 'ENU="""%1"" ''%2'' doesn''t exist for ""%3"" ''%4''.";ENG="""%1"" ''%2'' doesn''t exist for ""%3"" ''%4''."';
+      tUnknownDimension@1000000025 : TextConst 'ENU=Dimension number %1 is unknown.;ENG=Dimension number %1 is unknown.';
+      tIsEmpty@1000000029 : TextConst 'ENU="""%1"" is empty.";ENG="""%1"" is empty."';
+
+    LOCAL PROCEDURE "--- General ---"@1000000004();
+    BEGIN
+    END;
+
+    PROCEDURE CheckBatch@1000000015(VAR pItemImportWorksheetHeader@1000000000 : Record 9062839;pInteraction@1000000001 : Boolean) : Boolean;
+    VAR
+      lResult@1000000002 : Integer;
+      eFinalMessageIfSuccess@1000000003 : TextConst 'ENU=All lines have been checked and they are OK.;ENG=All lines have been checked and they are OK.';
+      eFinalMessageIfErrors@1000000004 : TextConst 'ENU=Lines checking resulted with errorrs. Please examine the lines for details.;ENG=Lines checking resulted with errorrs. Please examine the lines for details.';
+      lMessage@1000000005 : Text;
+      eFinalMessageIfWarnings@1000000006 : TextConst 'ENU=Lines checking resulted with warnings. You can still process the lines, but you can examine the lines for details before.;ENG=Lines checking resulted with warnings. You can still process the lines, but you can examine the lines for details before.';
+    BEGIN
+      //DOC NH2016.14 - Checking batch (function to be called from outside)
+      //  <> pItemImportWorksheetHeader: Item import worksheet header (its status is changed inside this codeunit)
+      //  -> pInteraction: User interaction flag (is forced to FALSE for non-GUI processing)
+      //  <- TRUE = Checked, FALSE = Cancelled
+      //The function doesn't return check result; you can ivestigate it using item import worksheet header status
+
+      ItemImportWorksheetHeader := pItemImportWorksheetHeader;
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+      lResult := CheckBatchInternal();
+      IF (pInteraction) THEN
+      BEGIN
+        CASE (lResult) OF
+          EnhancedRapidStartSetup."Check Result"::Warnings: lMessage := eFinalMessageIfWarnings;
+          EnhancedRapidStartSetup."Check Result"::Errors: lMessage := eFinalMessageIfErrors;
+          ELSE lMessage := eFinalMessageIfSuccess;
+        END;
+        MESSAGE(lMessage);
+      END;
+      pItemImportWorksheetHeader := ItemImportWorksheetHeader;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ProcessBatch@1000000006(VAR pItemImportWorksheetHeader@1000000000 : Record 9062839;pInteraction@1000000001 : Boolean) : Boolean;
+    VAR
+      eConfirmation@1000000002 : TextConst 'ENU=Do you want to process the worksheet?;ENG=Do you want to process the worksheet?';
+      eFinalMessageIfSuccess@1000000003 : TextConst 'ENU=Processing has been finished with success.;ENG=Processing has been finished with success.';
+      eFinalMessageIfFailure@1000000004 : TextConst 'ENU=Processing has been finished with errors. Please examine the lines for details.;ENG=Processing has been finished with errors. Please examine the lines for details.';
+      lResult@1000000005 : Boolean;
+    BEGIN
+      //DOC NH2016.14 - Processing batch (function to be called from outside)
+      //  <> pItemImportWorksheetHeader: Item import worksheet header (its status is changed inside this codeunit)
+      //  -> pInteraction: User interaction flag (is forced to FALSE for non-GUI processing)
+      //  <- TRUE = Processed, FALSE = Cancelled
+      //The function doesn't return processing result; you can ivestigate it using item import worksheet header status
+
+      ItemImportWorksheetHeader := pItemImportWorksheetHeader;
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+      IF (pInteraction) THEN
+        IF ( NOT (CONFIRM(eConfirmation, TRUE))) THEN
+          EXIT(FALSE);
+      lResult := ProcessBatchInternal();
+      IF (pInteraction) THEN
+        MESSAGE(TnpToolkit.IIFText(lResult, eFinalMessageIfSuccess, eFinalMessageIfFailure));
+      pItemImportWorksheetHeader := ItemImportWorksheetHeader;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE UndoInserts@1000000042(VAR pItemImportWorksheetHeader@1000000000 : Record 9062839;pInteraction@1000000001 : Boolean) : Boolean;
+    VAR
+      eConfirmation@1000000002 : TextConst 'ENU=Do you want to delete undo inserts?;ENG=Do you want to delete undo inserts?';
+      eFinalMessage@1000000003 : TextConst 'ENU=All inserts have been undone.;ENG=All inserts have been undone.';
+    BEGIN
+      //DOC NH2016.14 - Undoing inserts (deleting existing records registared in import log)
+      //  <> pItemImportWorksheetHeader: Item import worksheet header (its status is changed inside this codeunit)
+      //  -> pInteraction: User interaction flag (is forced to FALSE for non-GUI processing)
+      //  <- TRUE = Records deleted, FALSE = Operation cancelled
+
+      ItemImportWorksheetHeader := pItemImportWorksheetHeader;
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+      IF (pInteraction) THEN
+        IF ( NOT (CONFIRM(eConfirmation, FALSE))) THEN
+          EXIT(FALSE);
+
+      ImportLog.RESET();
+      ImportLog.SETCURRENTKEY("Import Header Table ID", "Batch No");
+      ImportLog.SETRANGE("Import Header Table ID", DATABASE::"Item Import Worksheet Header");
+      ImportLog.SETRANGE("Batch No", pItemImportWorksheetHeader."Batch No.");
+      ImportToolkit.ReverseLogEntry(ImportLog);
+
+      ItemImportWorksheetLine.RESET();
+      ItemImportWorksheetLine.SETRANGE("Batch No.", ItemImportWorksheetHeader."Batch No.");
+      ItemImportWorksheetLine.MODIFYALL(Status, ItemImportWorksheetLine.Status::Loaded, TRUE);
+      ItemImportWorksheetHeader.GET(ItemImportWorksheetHeader."Batch No.");
+
+      IF (pInteraction) THEN
+        MESSAGE(eFinalMessage);
+
+      pItemImportWorksheetHeader := ItemImportWorksheetHeader;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE DeleteAllItems@1000000043(VAR pItemImportWorksheetHeader@1000000001 : Record 9062839;pInteraction@1000000000 : Boolean) : Boolean;
+    VAR
+      eConfirmation@1000000003 : TextConst 'ENU=Do you want to delete all items?;ENG=Do you want to delete all items?';
+      eConfirmation2@1000000004 : TextConst 'ENU=Are you absolutely SURE you want to delete all items?;ENG=Are you absolutely SURE you want to delete all items?';
+      eFinalMessage@1000000002 : TextConst 'ENU=All items have been deleted.;ENG=All items have been deleted.';
+    BEGIN
+      //DOC NH2016.14 - Deleting all items created by the batch
+      //  <> pItemImportWorksheetHeader: Item import worksheet header (its status is changed inside this codeunit)
+      //  -> pInteraction: User interaction flag (is forced to FALSE for non-GUI processing)
+      //  <- TRUE = Deleted, FALSE = Operation cancelled
+
+      ItemImportWorksheetHeader := pItemImportWorksheetHeader;
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+      IF (pInteraction) THEN
+      BEGIN
+        IF ( NOT (CONFIRM(eConfirmation, FALSE))) THEN
+          EXIT(FALSE);
+        IF ( NOT (CONFIRM(eConfirmation2, FALSE))) THEN
+          EXIT(FALSE);
+      END;
+
+      Item.DELETEALL(TRUE);
+
+      IF (pInteraction) THEN
+        MESSAGE(eFinalMessage);
+
+      pItemImportWorksheetHeader := ItemImportWorksheetHeader;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CreateImportTemplate@1000000047();
+    VAR
+      lField@1000000000 : Record 2000000041;
+    BEGIN
+      //DOC NH2016.14 - Creating import template
+
+      ItemImportWorksheetLine.FilterSimpleFields(lField);
+      ImportToolkit.CreateImportTemplateAdv(DATABASE::"Item Import Worksheet Line", DATABASE::"Item Import Worksheet Line", lField, TRUE);
+    END;
+
+    PROCEDURE ResetAllLines@1000000002(pItemImportWorksheetHeader@1000000002 : Record 9062839;pInteraction@1000000000 : Boolean) : Boolean;
+    VAR
+      eConfirmation@1000000003 : TextConst 'ENU=Do you want to reset status of all lines?;ENG=Do you want to reset status of all lines?';
+    BEGIN
+      //DOC NH2016.14 - Resetting all lines
+      //  -> pItemImportWorksheetHeader: The import header
+      //  -> pInteraction: Interaction flag
+      //  <- TRUE = Done, FALSE = Cancelled
+
+      ItemImportWorksheetHeader := pItemImportWorksheetHeader;
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+      IF (pInteraction) THEN
+        IF ( NOT (CONFIRM(eConfirmation, FALSE))) THEN
+          EXIT(FALSE);
+
+      ItemImportWorksheetLine.RESET();
+      ItemImportWorksheetLine.SETRANGE("Batch No.", ItemImportWorksheetHeader."Batch No.");
+      IF (ItemImportWorksheetLine.FINDSET(TRUE)) THEN
+      REPEAT
+        ItemImportWorksheetLine.VALIDATE(Status, ItemImportWorksheetLine.Status::Loaded);
+        ItemImportWorksheetLine.MODIFY(TRUE);
+        ImportErrorManagement.DeleteErrorsAndWarnings(DATABASE::"Item Import Worksheet Line", ItemImportWorksheetLine.GETPOSITION(FALSE));
+      UNTIL (ItemImportWorksheetLine.NEXT() = 0);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Internal ---"@1000000001();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CheckBatchInternal@1000000003() : Integer;
+    VAR
+      lResult@1000000001 : Integer;
+    BEGIN
+      //DOC NH2016.14 - Checking batch (internal version)
+      //  <- Checking result
+
+      lResult := EnhancedRapidStartSetup."Check Result"::OK;
+      EnhancedRapidStartSetup.VerifyAndGet();
+      ImportToolkit.InitaliseDialog(tDialogTitle);
+      ImportToolkit.SetDialogCheckingActivity();
+
+      ItemImportWorksheetLine.RESET();
+      ItemImportWorksheetLine.SETRANGE("Batch No.", ItemImportWorksheetHeader."Batch No.");
+      ItemImportWorksheetLine.SETFILTER(Status, '%1|%2|%3|%4', ItemImportWorksheetLine.Status::" ", ItemImportWorksheetLine.Status::Loaded,
+        ItemImportWorksheetLine.Status::Warning, ItemImportWorksheetLine.Status::Error);
+      ImportToolkit.SetDialogCount(ItemImportWorksheetLine.COUNT());
+      IF (ItemImportWorksheetLine.FINDSET(TRUE)) THEN
+      REPEAT
+        ImportToolkit.SetDialogCurrent(ItemImportWorksheetLine."No.");
+        CheckLine(lResult);
+      UNTIL (ItemImportWorksheetLine.NEXT() = 0);
+
+      ImportToolkit.FinaliseDialog();
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE CheckLine@1000000049(VAR pResult@1000000000 : Integer);
+    VAR
+      lItemImportWorksheetLine@1000000002 : Record 9062840;
+      lModify@1000000001 : Boolean;
+      lStatus@1000000003 : Integer;
+    BEGIN
+      //DOC NH2016.14 - Checking line
+      //  <> pResult: Target result
+
+      ImportErrorManagement.DeleteErrorsAndWarnings(DATABASE::"Item Import Worksheet Line", ItemImportWorksheetLine.GETPOSITION(FALSE));
+      ImportValidation.SetRecord(DATABASE::"Item Import Worksheet Header", ItemImportWorksheetLine, ItemImportWorksheetLine.FIELDNO("Batch No."),
+        ItemImportWorksheetHeader."Configuration Template Code");
+
+      lModify := FALSE;
+
+      CheckItem();
+
+      ImportValidation.CheckIfFieldNotEmpty(ItemImportWorksheetLine.FIELDNO("No."), Item.FIELDNO("No."), FALSE);
+      ImportValidation.CheckIfFieldNotEmpty(ItemImportWorksheetLine.FIELDNO(Description), Item.FIELDNO(Description), FALSE);
+      ImportValidation.CheckFieldLength(ItemImportWorksheetLine.FIELDNO(Description), Item.FIELDNO(Description), MAXSTRLEN(Item.Description), FALSE);
+
+      CheckUnitOfMeasure(ItemImportWorksheetLine."Base Unit of Measure Code", ItemImportWorksheetLine.FIELDNO("Base Unit of Measure Code"), lModify);
+      CheckUnitOfMeasure(ItemImportWorksheetLine."Unit of Measure 2 Code", ItemImportWorksheetLine.FIELDNO("Unit of Measure 2 Code"), lModify);
+      CheckUnitOfMeasure(ItemImportWorksheetLine."Unit of Measure 3 Code", ItemImportWorksheetLine.FIELDNO("Unit of Measure 3 Code"), lModify);
+      CheckInventoryPostingGroup(ItemImportWorksheetLine."Inventory Posting Group", lModify);
+      CheckItemDiscountGroup(ItemImportWorksheetLine."Item Discount Group Code", lModify);
+      CheckGenProductPostingGroup(ItemImportWorksheetLine."Gen. Prod. Posting Group", lModify);
+      CheckVatProductPostingGroup(ItemImportWorksheetLine."VAT Prod. Posting Group", lModify);
+      CheckVendor(ItemImportWorksheetLine."Vendor No.", lModify);
+      CheckItemCategory(ItemImportWorksheetLine."Item Category Code", lModify);
+      CheckProductGroup(ItemImportWorksheetLine."Item Category Code", ItemImportWorksheetLine."Product Group Code", lModify);
+      CheckItemTrackingCode(ItemImportWorksheetLine."Item Tracking Code", lModify);
+      CheckTariffNumber(ItemImportWorksheetLine."Tariff No.", lModify);
+      CheckCostingMethod(ItemImportWorksheetLine."Costing Method", lModify);
+
+      ImportValidation.CheckDimensionValue(1, ItemImportWorksheetLine."Global Dimension 1 Code", ItemImportWorksheetHeader."Create Dimension Values");
+      ImportValidation.CheckDimensionValue(2, ItemImportWorksheetLine."Global Dimension 2 Code", ItemImportWorksheetHeader."Create Dimension Values");
+      ImportValidation.CheckDimensionValue(3, ItemImportWorksheetLine."Shortcut Dimension 3 Code", ItemImportWorksheetHeader."Create Dimension Values");
+      ImportValidation.CheckDimensionValue(4, ItemImportWorksheetLine."Shortcut Dimension 4 Code", ItemImportWorksheetHeader."Create Dimension Values");
+      ImportValidation.CheckDimensionValue(5, ItemImportWorksheetLine."Shortcut Dimension 5 Code", ItemImportWorksheetHeader."Create Dimension Values");
+      ImportValidation.CheckDimensionValue(6, ItemImportWorksheetLine."Shortcut Dimension 6 Code", ItemImportWorksheetHeader."Create Dimension Values");
+      ImportValidation.CheckDimensionValue(7, ItemImportWorksheetLine."Shortcut Dimension 7 Code", ItemImportWorksheetHeader."Create Dimension Values");
+      ImportValidation.CheckDimensionValue(8, ItemImportWorksheetLine."Shortcut Dimension 8 Code", ItemImportWorksheetHeader."Create Dimension Values");
+
+      ImportValidation.CheckWorkflows(DATABASE::Item);
+
+      IF (lModify) THEN
+        ItemImportWorksheetLine.MODIFY(TRUE);
+
+      lItemImportWorksheetLine.GET(ItemImportWorksheetLine."Batch No.", ItemImportWorksheetLine."No.");
+      lItemImportWorksheetLine.CALCFIELDS("No. of Errors", "No. of Warnings");
+      IF (lItemImportWorksheetLine."No. of Errors" > 0) THEN
+        lStatus := lItemImportWorksheetLine.Status::Error
+      ELSE IF (lItemImportWorksheetLine."No. of Warnings" > 0) THEN
+        lStatus := lItemImportWorksheetLine.Status::Warning
+      ELSE
+        lStatus := lItemImportWorksheetLine.Status::Ready;
+      lItemImportWorksheetLine.SetSystemActivity(TRUE);
+      lItemImportWorksheetLine.VALIDATE(Status, lStatus);
+      lItemImportWorksheetLine.MODIFY(TRUE);
+      lItemImportWorksheetLine.SetSystemActivity(FALSE);
+
+      CASE (lItemImportWorksheetLine.Status) OF
+        lItemImportWorksheetLine.Status::Error:
+          pResult := EnhancedRapidStartSetup."Check Result"::Errors;
+        lItemImportWorksheetLine.Status::Warning:
+          IF (pResult <> EnhancedRapidStartSetup."Check Result"::Errors) THEN
+            pResult := EnhancedRapidStartSetup."Check Result"::Warnings;
+      END;
+    END;
+
+    LOCAL PROCEDURE ProcessBatchInternal@1000000012() : Boolean;
+    VAR
+      lItemImportWorksheetLine@1000000004 : Record 9062840;
+      lProcessingResult@1000000000 : Boolean;
+      lResult@1000000002 : Boolean;
+      eErrorsDetected@1000000003 : TextConst 'ENU=Some lines checking resulted in errors. Please correct them before processing.;ENG=Some lines checking resulted in errors. Please correct them before processing.';
+      lItemInserted@1000000005 : Boolean;
+      lErrorMessage@1000000006 : Text;
+    BEGIN
+      //DOC NH2016.14 - Processing batch (internal version)
+      //  <- Processing result
+
+      EnhancedRapidStartSetup.VerifyAndGet();
+
+      ItemImportWorksheetLine.RESET();
+      ItemImportWorksheetLine.SETRANGE("Batch No.", ItemImportWorksheetHeader."Batch No.");
+      ItemImportWorksheetLine.SETFILTER(Status, '%1|%2|%3', ItemImportWorksheetLine.Status::" ", ItemImportWorksheetLine.Status::Loaded, ItemImportWorksheetLine.Status::Error);
+      IF ( NOT (ItemImportWorksheetLine.ISEMPTY())) THEN
+      BEGIN
+        CheckBatchInternal();
+        COMMIT;
+      END;
+
+      ItemImportWorksheetLine.RESET();
+      ItemImportWorksheetLine.SETRANGE("Batch No.", ItemImportWorksheetHeader."Batch No.");
+      ItemImportWorksheetLine.SETRANGE(Status, ItemImportWorksheetLine.Status::Error);
+      ItemImportWorksheetLine.SETFILTER("No. of Errors", '<>0');
+      IF ( NOT (ItemImportWorksheetLine.ISEMPTY())) THEN
+        ERROR(eErrorsDetected);
+
+      lResult := TRUE;
+      ImportToolkit.InitaliseDialog(tDialogTitle);
+      ImportToolkit.SetDialogProcessingActivity();
+      IF ((ItemImportWorksheetHeader."Configuration Template Code" = '') OR ( NOT (ConfigTemplateHeader.GET(ItemImportWorksheetHeader."Configuration Template Code")))) THEN
+        CLEAR(ConfigTemplateHeader);
+
+      ItemImportWorksheetLine.RESET();
+      ItemImportWorksheetLine.SETRANGE("Batch No.", ItemImportWorksheetHeader."Batch No.");
+      ItemImportWorksheetLine.SETFILTER(Status, '%1|%2', ItemImportWorksheetLine.Status::Ready, ItemImportWorksheetLine.Status::Warning);
+      ImportToolkit.SetDialogCount(ItemImportWorksheetLine.COUNT());
+      IF (ItemImportWorksheetLine.FINDSET()) THEN
+      REPEAT
+        ImportToolkit.SetDialogCurrent(ItemImportWorksheetLine."No.");
+        ImportErrorManagement.DeleteErrors(DATABASE::"Item Import Worksheet Line", ItemImportWorksheetLine.GETPOSITION(FALSE));
+
+        CLEARLASTERROR();
+        lProcessingResult := ProcessLine(lItemInserted);
+        IF ( NOT (lProcessingResult)) THEN
+        BEGIN
+          lErrorMessage := GETLASTERRORTEXT();
+          IF (lItemInserted) THEN
+            IF ( NOT (Item.DELETE(TRUE))) THEN
+              lErrorMessage := lErrorMessage + '; ' + GETLASTERRORTEXT();
+          CreateError(lErrorMessage);
+          lResult := FALSE;
+        END;
+
+        lItemImportWorksheetLine.GET(ItemImportWorksheetLine."Batch No.", ItemImportWorksheetLine."No.");
+        lItemImportWorksheetLine.SetSystemActivity(TRUE);
+        lItemImportWorksheetLine.VALIDATE(Status, TnpToolkit.IIFInteger(lProcessingResult, lItemImportWorksheetLine.Status::Processed, lItemImportWorksheetLine.Status::Error));
+        lItemImportWorksheetLine.MODIFY(TRUE);
+        lItemImportWorksheetLine.SetSystemActivity(FALSE);
+
+        IF (lItemImportWorksheetLine.Status = lItemImportWorksheetLine.Status::Processed) THEN
+          ImportErrorManagement.DeleteErrorsAndWarnings(DATABASE::"Item Import Worksheet Line", lItemImportWorksheetLine.GETPOSITION(FALSE));
+      UNTIL (ItemImportWorksheetLine.NEXT() = 0);
+
+      ImportToolkit.FinaliseDialog();
+      EXIT(lResult);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ProcessLine@1000000009(VAR pItemInserted@1000000000 : Boolean);
+    BEGIN
+      //DOC NH2016.14 - Processing one line (with error trapping)
+      //  <> pItemInserted: Target item inserted flag
+
+      ImportValidation.SetRecord(DATABASE::"Item Import Worksheet Header", ItemImportWorksheetLine, ItemImportWorksheetLine.FIELDNO("Batch No."), ConfigTemplateHeader.Code);
+
+      UpdateItem(pItemInserted);
+
+      UpdateItemUnitOfMeasure(ItemImportWorksheetLine."Base Unit of Measure Code", 1);
+      UpdateItemUnitOfMeasure(ItemImportWorksheetLine."Unit of Measure 2 Code", ItemImportWorksheetLine."Qty per Unit of Measure 2");
+      UpdateItemUnitOfMeasure(ItemImportWorksheetLine."Unit of Measure 3 Code", ItemImportWorksheetLine."Qty per Unit of Measure 3");
+
+      UpdateDefaultDimension(1, ItemImportWorksheetLine."Global Dimension 1 Code");
+      UpdateDefaultDimension(2, ItemImportWorksheetLine."Global Dimension 2 Code");
+      UpdateDefaultDimension(3, ItemImportWorksheetLine."Shortcut Dimension 3 Code");
+      UpdateDefaultDimension(4, ItemImportWorksheetLine."Shortcut Dimension 4 Code");
+      UpdateDefaultDimension(5, ItemImportWorksheetLine."Shortcut Dimension 5 Code");
+      UpdateDefaultDimension(6, ItemImportWorksheetLine."Shortcut Dimension 6 Code");
+      UpdateDefaultDimension(7, ItemImportWorksheetLine."Shortcut Dimension 7 Code");
+      UpdateDefaultDimension(8, ItemImportWorksheetLine."Shortcut Dimension 8 Code");
+
+      UpdateSalesPrice(ItemImportWorksheetLine."Base Unit of Measure Code", ItemImportWorksheetLine."Unit Price (Base UoM)");
+      UpdateSalesPrice(ItemImportWorksheetLine."Unit of Measure 2 Code", ItemImportWorksheetLine."Unit Price (UoM 2)");
+      UpdateSalesPrice(ItemImportWorksheetLine."Unit of Measure 3 Code", ItemImportWorksheetLine."Unit Price (UoM 3)");
+
+      UpdateItemVendor(ItemImportWorksheetLine."Vendor No.", ItemImportWorksheetLine."Vendor Item No.");
+
+      UpdateItemBarcode(ItemImportWorksheetLine."Base Unit of Measure Code", ItemImportWorksheetLine."Barcode 1 No.");
+      UpdateItemBarcode(ItemImportWorksheetLine."Base Unit of Measure Code", ItemImportWorksheetLine."Barcode 2 No.");
+      UpdateItemBarcode(ItemImportWorksheetLine."Base Unit of Measure Code", ItemImportWorksheetLine."Barcode 3 No.");
+    END;
+
+    LOCAL PROCEDURE "--- Checking ---"@1000000031();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CheckItem@1000000044();
+    BEGIN
+      //DOC NH2016.14 - Checking if the item exists already
+
+      IF (Item.GET(ItemImportWorksheetLine."No.")) THEN
+        CreateWarning(STRSUBSTNO(tAlreadyExists, Item.TABLECAPTION));
+    END;
+
+    LOCAL PROCEDURE CheckUnitOfMeasure@1000000016(VAR pCode@1000000001 : Code[10];pFieldId@1000000002 : Integer;VAR pModify@1000000000 : Boolean);
+    VAR
+      lBaseUnitOfMeasure@1000000003 : Boolean;
+      lDefaultUnitOfMeasure@1000000004 : Code[10];
+    BEGIN
+      //DOC NH2016.14 - Checking unit of measure
+      //  <> pCode: The code (can be changed)
+      //  -> pFieldId: Field ID
+      //  <> pModify: Target "Modify" flag
+
+      lBaseUnitOfMeasure := (pFieldId = ItemImportWorksheetLine.FIELDNO("Base Unit of Measure Code"));
+      lDefaultUnitOfMeasure := TnpToolkit.IIFText(lBaseUnitOfMeasure, EnhancedRapidStartSetup."Def. Unit of Measure Code", '');
+      ImportValidation.CheckCodeFieldWithRelationAdv(pCode, lDefaultUnitOfMeasure,
+        TRUE, ItemImportWorksheetHeader."Create Units of Measure",
+        ObjectFieldToolkit.GetFieldName(DATABASE::"Item Import Worksheet Line", pFieldId),
+        TnpToolkit.IIFInteger(lBaseUnitOfMeasure, Item.FIELDNO("Base Unit of Measure"), 0), DATABASE::"Unit of Measure",
+        TnpToolkit.IIFInteger(lBaseUnitOfMeasure, ImportErrorLine.Type::Error, ImportErrorLine.Type::" "), pModify);
+    END;
+
+    LOCAL PROCEDURE CheckInventoryPostingGroup@1000000040(VAR pCode@1000000000 : Code[10];VAR pModify@1000000002 : Boolean);
+    BEGIN
+      //DOC NH2016.14 - Checking if inventory posting group with given code exists
+      //  <> pCode: The code (can be changed)
+      //  <> pModify: Target "Modify" flag
+
+      ImportValidation.CheckCodeFieldWithRelationAdv(pCode, EnhancedRapidStartSetup."Def. Inventory Posting Group",
+        TRUE, ItemImportWorksheetHeader."Create InventoryPosting Gr.",
+        ItemImportWorksheetLine.FIELDCAPTION("Inventory Posting Group"), Item.FIELDNO("Inventory Posting Group"),
+        DATABASE::"Inventory Posting Group", ImportErrorLine.Type::Warning, pModify);
+    END;
+
+    LOCAL PROCEDURE CheckItemDiscountGroup@1000000039(VAR pCode@1000000000 : Code[10];VAR pModify@1000000003 : Boolean) : Code[10];
+    BEGIN
+      //DOC NH2016.14 - Checking if item discount group with given code exists
+      //  <> pCode: The code (can be changed)
+      //  <> pModify: Target "Modify" flag
+
+      ImportValidation.CheckCodeFieldWithRelation(pCode, TRUE, ItemImportWorksheetHeader."Create Item Discount Groups",
+        ItemImportWorksheetLine.FIELDCAPTION("Item Discount Group Code"), Item.FIELDNO("Item Disc. Group"),
+        DATABASE::"Item Discount Group", ImportErrorLine.Type::" ", pModify);
+    END;
+
+    LOCAL PROCEDURE CheckGenProductPostingGroup@1000000038(VAR pCode@1000000000 : Code[10];VAR pModify@1000000003 : Boolean);
+    BEGIN
+      //DOC NH2016.14 - Checking if general product posting group with given code exists
+      //  <> pCode: The code (can be changed)
+      //  <> pModify: Target "Modify" flag
+
+      ImportValidation.CheckCodeFieldWithRelationAdv(pCode, EnhancedRapidStartSetup."Def. Gen. Prod. Posting Group",
+        TRUE, ItemImportWorksheetHeader."Create Gen. Prod. Posting Gr.",
+        ItemImportWorksheetLine.FIELDCAPTION("Gen. Prod. Posting Group"), Item.FIELDNO("Gen. Prod. Posting Group"),
+        DATABASE::"Gen. Product Posting Group", ImportErrorLine.Type::Warning, pModify);
+    END;
+
+    LOCAL PROCEDURE CheckVatProductPostingGroup@1000000037(VAR pCode@1000000000 : Code[10];VAR pModify@1000000002 : Boolean);
+    BEGIN
+      //DOC NH2016.14 - Checking if VAT product posting group with given code exists
+      //  <> pCode: The code (can be changed)
+      //  <> pModify: Target "Modify" flag
+
+      ImportValidation.CheckCodeFieldWithRelationAdv(pCode, EnhancedRapidStartSetup."Def. VAT Prod. Posting Group",
+        TRUE, ItemImportWorksheetHeader."Create VAT Prod. Posting Gr.",
+        ItemImportWorksheetLine.FIELDCAPTION("VAT Prod. Posting Group"), Item.FIELDNO("VAT Prod. Posting Group"),
+        DATABASE::"VAT Product Posting Group", ImportErrorLine.Type::Warning, pModify);
+    END;
+
+    LOCAL PROCEDURE CheckVendor@1000000036(pNo@1000000001 : Code[20];VAR pModify@1000000002 : Boolean);
+    BEGIN
+      //DOC NH2016.14 - Checking if vendor with given no. exists
+      //  -> pNo: The vendor no.
+      //  <> pModify: Target "Modify" flag
+
+      ImportValidation.CheckCodeFieldWithRelation(pNo, FALSE, ItemImportWorksheetHeader."Create Vendors",
+        ItemImportWorksheetLine.FIELDCAPTION("Vendor No."), Item.FIELDNO("Vendor No."),
+        DATABASE::Vendor, ImportErrorLine.Type::" ", pModify);
+    END;
+
+    LOCAL PROCEDURE CheckItemCategory@1000000035(VAR pCode@1000000000 : Code[20];VAR pModify@1000000002 : Boolean);
+    VAR
+      lItemCategory@1000000001 : Record 5722;
+    BEGIN
+      //DOC NH2016.14 - Checking if item category with given code exists
+      //  <> pCode: The code (can be changed)
+      //  <> pModify: Target "Modify" flag
+
+      ImportValidation.CheckCodeFieldWithRelation(pCode, TRUE, ItemImportWorksheetHeader."Create Item Categories",
+        ItemImportWorksheetLine.FIELDCAPTION("Item Category Code"), Item.FIELDNO("Item Category Code"),
+        DATABASE::"Item Category", ImportErrorLine.Type::Warning, pModify);
+    END;
+
+    LOCAL PROCEDURE CheckProductGroup@1000000034(pItemCategoryCode@1000000000 : Code[20];pCode@1000000001 : Code[20];VAR pModify@1000000004 : Boolean);
+    VAR
+      lItemCategory@1000000003 : Record 5722;
+      lProductGroup@1000000002 : Record 5723;
+      lPreviousCode@1000000005 : Code[20];
+    BEGIN
+      //DOC NH2016.14 - Checking if product group with given code exists for given item category
+      //  -> pItemCategoryCode: Item category code
+      //  -> pCode: The code
+
+      IF ((pItemCategoryCode = '') AND (pCode <> '')) THEN
+        CreateError(STRSUBSTNO(tCantCreateForEmpty, lProductGroup.TABLECAPTION(), pCode, lItemCategory.TABLECAPTION()));
+      lPreviousCode := pCode;
+      IF (pCode = '') THEN
+        pCode := ImportToolkit.GetConfigTemplateTextValue(ConfigTemplateHeader.Code, Item.FIELDNO("Product Group Code"));
+      IF (pCode = '') THEN
+        CreateWarning(STRSUBSTNO(tIsEmpty, ItemImportWorksheetLine.FIELDCAPTION("Product Group Code")));
+      IF (pCode <> '') THEN
+        IF ( NOT (lProductGroup.GET(pItemCategoryCode, pCode))) THEN
+          IF ( NOT (ItemImportWorksheetHeader."Create Product Groups")) THEN
+            CreateError(STRSUBSTNO(tRecordDoesntExist, lProductGroup.TABLECAPTION, pCode));
+      IF (pCode <> lPreviousCode) THEN
+        pModify := TRUE;
+    END;
+
+    LOCAL PROCEDURE CheckItemTrackingCode@1000000033(VAR pCode@1000000000 : Code[10];VAR pModify@1000000002 : Boolean);
+    BEGIN
+      //DOC NH2016.14 - Checking if item tracking code with given code exists
+      //  <> pCode: The code (can be changed)
+      //  <> pModify: Target "Modify" flag
+
+      ImportValidation.CheckCodeFieldWithRelation(pCode, TRUE, ItemImportWorksheetHeader."Create Item Tracking Codes",
+        ItemImportWorksheetLine.FIELDCAPTION("Item Tracking Code"), Item.FIELDNO("Item Tracking Code"),
+        DATABASE::"Item Tracking Code", ImportErrorLine.Type::" ", pModify);
+    END;
+
+    LOCAL PROCEDURE CheckTariffNumber@1000000032(VAR pNo@1000000000 : Code[10];VAR pModify@1000000002 : Boolean);
+    BEGIN
+      //DOC NH2016.14 - Checking if tariff number exists
+      //  <> pNo: The tariff number (can be changed)
+      //  <> pModify: Target "Modify" flag
+
+      ImportValidation.CheckCodeFieldWithRelation(pNo, TRUE, ItemImportWorksheetHeader."Create Tariff Nos.",
+        ItemImportWorksheetLine.FIELDCAPTION("Tariff No."), Item.FIELDNO("Tariff No."),
+        DATABASE::"Tariff Number", ImportErrorLine.Type::" ", pModify);
+    END;
+
+    LOCAL PROCEDURE CheckCostingMethod@1000000050(VAR pCostingMethod@1000000000 : Option;VAR pModify@1000000001 : Boolean);
+    VAR
+      lPreviousCostingMethod@1000000002 : Integer;
+    BEGIN
+      //DOC NH2016.14 - Appllying default costing method
+      //  <> pCostingMethod: Source / target costing method
+      //  <> pModify: Modify flag for the target record
+
+      lPreviousCostingMethod := pCostingMethod;
+      IF (pCostingMethod = ItemImportWorksheetLine."Costing Method"::" ") THEN
+        pCostingMethod := EnhancedRapidStartSetup."Default Costing Method" + 1;
+      IF (pCostingMethod <> lPreviousCostingMethod) THEN
+        pModify := TRUE;
+    END;
+
+    LOCAL PROCEDURE "--- Updating ---"@1000000048();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE UpdateItem@1000000008(VAR pItemInserted@1000000005 : Boolean);
+    VAR
+      lType@1000000001 : Integer;
+      lUnitCost@1000000002 : Decimal;
+      lTransferResult@1000000003 : Integer;
+      lItemVariant@1000000004 : Variant;
+    BEGIN
+      //DOC NH2016.14 - Function updating an item (and insterting it if necessary)
+      //  <> pItemInserted: Target item inserted flag
+
+      pItemInserted := InsertItem();
+
+      Item.VALIDATE(Description, ItemImportWorksheetLine.Description);
+      Item.VALIDATE("Base Unit of Measure", ProcessUnitOfMeasure(ItemImportWorksheetLine."Base Unit of Measure Code"));
+      Item.VALIDATE("Inventory Posting Group", ProcessInventoryPostingGroup(ItemImportWorksheetLine."Inventory Posting Group"));
+      Item.VALIDATE(Type, TnpToolkit.IIFInteger(ItemImportWorksheetLine."Is Service", Item.Type::Service, Item.Type::Inventory));
+      Item.VALIDATE("Item Disc. Group", ProcessItemDiscountGroup(ItemImportWorksheetLine."Item Discount Group Code"));
+      Item.VALIDATE("Gen. Prod. Posting Group", ProcessGenProductPostingGroup(ItemImportWorksheetLine."Gen. Prod. Posting Group"));
+      Item.VALIDATE("VAT Prod. Posting Group", ProcessVatProductPostingGroup(ItemImportWorksheetLine."VAT Prod. Posting Group"));
+      Item.VALIDATE("Unit Price", ItemImportWorksheetLine."Unit Price (Base UoM)");
+      Item.VALIDATE("Vendor No.", ProcessVendor(ItemImportWorksheetLine."Vendor No."));
+      Item.VALIDATE("Vendor Item No.", ItemImportWorksheetLine."Vendor Item No.");
+      Item.VALIDATE("Gross Weight", ItemImportWorksheetLine."Gross Weight");
+      Item.VALIDATE("Net Weight", ItemImportWorksheetLine."Net Weight");
+      Item.VALIDATE("Item Category Code", ProcessItemCategory(ItemImportWorksheetLine."Item Category Code"));
+      Item.VALIDATE("Product Group Code", ProcessProductGroup(ItemImportWorksheetLine."Item Category Code", ItemImportWorksheetLine."Product Group Code"));
+      Item.VALIDATE("Item Tracking Code", ProcessItemTrackingCode(ItemImportWorksheetLine."Item Tracking Code"));
+      Item.VALIDATE("Tariff No.", ProcessTariffNumber(ItemImportWorksheetLine."Tariff No."));
+      Item.VALIDATE("Costing Method", ItemImportWorksheetLine."Costing Method" - 1);
+      Item.VALIDATE("Global Dimension 1 Code", ProcessDimensionValue(1, ItemImportWorksheetLine."Global Dimension 1 Code"));
+      Item.VALIDATE("Global Dimension 2 Code", ProcessDimensionValue(2, ItemImportWorksheetLine."Global Dimension 2 Code"));
+      SetItemUnitCost(ItemImportWorksheetLine."Unit Cost");
+      Item.MODIFY(TRUE);
+
+      lItemVariant := Item;
+      lTransferResult := ImportToolkit.TransferEnhancedFields(ItemImportWorksheetLine, lItemVariant);
+      Item := lItemVariant;
+    END;
+
+    LOCAL PROCEDURE InsertItem@1000000030() : Boolean;
+    VAR
+      lRecordRef@1000000001 : RecordRef;
+      lResult@1000000000 : Boolean;
+    BEGIN
+      //DOC NH2016.14 - Inserting a new item (with application of configuration template if present
+      //  <- TRUE = Item inserted, FALSE = Item already there
+
+      lResult := FALSE;
+
+      IF ( NOT (Item.GET(ItemImportWorksheetLine."No."))) THEN
+      BEGIN
+        CLEAR(Item);
+        Item.INIT();
+        Item.VALIDATE("No.", ItemImportWorksheetLine."No.");
+        Item.INSERT(TRUE);
+        lRecordRef.GETTABLE(Item);
+        IF (ImportToolkit.ApplyConfigTemplate(ItemImportWorksheetHeader."Configuration Template Code", lRecordRef)) THEN
+        BEGIN
+          lRecordRef.SETTABLE(Item);
+          Item.MODIFY(TRUE);
+        END;
+        CreateLogEntry(Item);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE GetItemUnitCost@1000000013() : Decimal;
+    BEGIN
+      //DOC NH2016.14 - Returning item cost depending on item costing
+      //  <- The cost
+
+      IF (Item."Costing Method" = Item."Costing Method"::Standard) THEN
+        EXIT(Item."Standard Cost")
+      ELSE
+        EXIT(Item."Unit Cost");
+    END;
+
+    LOCAL PROCEDURE SetItemUnitCost@1000000014(pUnitCost@1000000000 : Decimal);
+    BEGIN
+      //DOC NH2016.14 - Setting item cost depending on item costing
+      //  -> pUnitCost: The cost
+
+      Item.VALIDATE("Unit Cost", pUnitCost);
+      IF (Item."Costing Method" = Item."Costing Method"::Standard) THEN
+        Item.VALIDATE("Standard Cost", pUnitCost);
+      Item.VALIDATE("Last Direct Cost", pUnitCost);
+    END;
+
+    LOCAL PROCEDURE UpdateItemUnitOfMeasure@1000000000(pUnitOfMeasureCode@1000000000 : Code[10];pQuantityPerUnitOfMeasure@1000000001 : Decimal);
+    VAR
+      lItemUnitOfMeasure@1000000002 : Record 5404;
+      lModify@1000000003 : Boolean;
+    BEGIN
+      //DOC NH2016.14 - Updating item unit of measure (and creates it if it doesn't exist)
+      //  -> pUnitOfMeasureCode: The unit of measure code
+      //  -> pQuantityPerUnitOfMeasure: Quantity per unit of measure coefficient
+
+      IF (pUnitOfMeasureCode = '') THEN
+        EXIT;
+
+      ProcessUnitOfMeasure(pUnitOfMeasureCode);
+
+      IF ( NOT (lItemUnitOfMeasure.GET(Item."No.", pUnitOfMeasureCode))) THEN
+      BEGIN
+        CLEAR(lItemUnitOfMeasure);
+        lItemUnitOfMeasure.INIT();
+        lItemUnitOfMeasure.VALIDATE("Item No.", Item."No.");
+        lItemUnitOfMeasure.VALIDATE(Code, pUnitOfMeasureCode);
+        lItemUnitOfMeasure.INSERT(TRUE);
+        CreateLogEntry(lItemUnitOfMeasure);
+      END;
+
+      IF (lItemUnitOfMeasure."Qty. per Unit of Measure" <> pQuantityPerUnitOfMeasure) THEN
+      BEGIN
+        lItemUnitOfMeasure.VALIDATE("Qty. per Unit of Measure", pQuantityPerUnitOfMeasure);
+        lModify := TRUE;
+      END;
+
+      IF (lModify) THEN
+        lItemUnitOfMeasure.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE UpdateDefaultDimension@1000000010(pDimensionNumber@1000000000 : Integer;pDimensionValueCode@1000000001 : Code[20]);
+    BEGIN
+      //DOC NH2016.14 - Updating default dimension (and creates it if it doesn't exist)
+      //  -> pDimensionNumber: Dimension number (between 1 and 8)
+      //  -> pDimensionValueCode: Dimension value code
+
+      ImportValidation.UpdateDefaultDimension(DATABASE::Item, Item."No.", pDimensionNumber, pDimensionValueCode,
+        ItemImportWorksheetHeader."Create Dimension Values");
+    END;
+
+    LOCAL PROCEDURE UpdateSalesPrice@1000000041(pUnitOfMeasureCode@1000000000 : Code[10];pUnitPrice@1000000001 : Decimal);
+    VAR
+      lSalesPrice@1000000002 : Record 7002;
+      lModify@1000000003 : Boolean;
+    BEGIN
+      //DOC NH2016.14 - Updating sales price (creating it if it doesn't exist)
+      //  -> pUnitOfMeasureCode: Unit of measure to create the price for
+      //  -> pUnitPrice: The price (in local currency)
+
+      IF ((pUnitOfMeasureCode = '') OR (pUnitPrice = 0)) THEN
+        EXIT;
+
+      IF ( NOT (lSalesPrice.GET(Item."No.", lSalesPrice."Sales Type"::"All Customers", '', 0D, '', '', pUnitOfMeasureCode, 0))) THEN
+      BEGIN
+        CLEAR(lSalesPrice);
+        lSalesPrice.INIT();
+        lSalesPrice.VALIDATE("Item No.", Item."No.");
+        lSalesPrice.VALIDATE("Sales Type", lSalesPrice."Sales Type"::"All Customers");
+        lSalesPrice.VALIDATE("Unit of Measure Code", pUnitOfMeasureCode);
+        lSalesPrice.INSERT(TRUE);
+        CreateLogEntry(lSalesPrice);
+      END;
+
+      IF (lSalesPrice."Unit Price" <> pUnitPrice) THEN
+      BEGIN
+        lSalesPrice.VALIDATE("Unit Price", pUnitPrice);
+        lModify := TRUE;
+      END;
+
+      IF (lModify) THEN
+        lSalesPrice.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE UpdateItemVendor@1000000046(pVendorNo@1000000000 : Code[20];pVendorItemNo@1000000001 : Text[20]);
+    VAR
+      lItemVendor@1000000002 : Record 99;
+      lModify@1000000003 : Boolean;
+    BEGIN
+      //DOC NH2016.14 - Updating item vendor (creating it if it doesn't exist)
+      //  -> pVendorNo: Vendor number
+      //  -> pVendorItemNo: Vendor item number
+
+      IF (pVendorNo = '') THEN
+        EXIT;
+
+      IF ( NOT (lItemVendor.GET(pVendorNo, Item."No.", ''))) THEN
+      BEGIN
+        CLEAR(lItemVendor);
+        lItemVendor.INIT();
+        lItemVendor.VALIDATE("Vendor No.", pVendorNo);
+        lItemVendor.VALIDATE("Item No.", Item."No.");
+        lItemVendor.INSERT(TRUE);
+        CreateLogEntry(lItemVendor);
+      END;
+
+      IF (lItemVendor."Vendor Item No." <> pVendorItemNo) THEN
+      BEGIN
+        lItemVendor.VALIDATE("Vendor Item No.", pVendorItemNo);
+        lModify := TRUE;
+      END;
+
+      IF (lModify) THEN
+        lItemVendor.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE UpdateItemBarcode@1000000011(pUnitOfMeasure@1000000001 : Code[10];pBarcode@1000000000 : Code[20]);
+    VAR
+      lItemCrossReference@1000000002 : Record 5717;
+    BEGIN
+      //DOC NH2016.14 - Updating item barcode - item cross reference with "Bar Code" type (creating it if it doesn't exist)
+      //  -> pUnitOfMeasure: Unit of measure
+      //  -> pBarcode: The barcode
+
+      IF (pBarcode = '') THEN
+        EXIT;
+
+      IF ( NOT (lItemCrossReference.GET(Item."No.", '', pUnitOfMeasure, lItemCrossReference."Cross-Reference Type"::"Bar Code", '', pBarcode))) THEN
+      BEGIN
+        CLEAR(lItemCrossReference);
+        lItemCrossReference.INIT();
+        lItemCrossReference.VALIDATE("Item No.", Item."No.");
+        lItemCrossReference.VALIDATE("Unit of Measure", pUnitOfMeasure);
+        lItemCrossReference.VALIDATE("Cross-Reference Type", lItemCrossReference."Cross-Reference Type"::"Bar Code");
+        lItemCrossReference.VALIDATE("Cross-Reference No.", pBarcode);
+        lItemCrossReference.INSERT(TRUE);
+        CreateLogEntry(lItemCrossReference);
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Processing ---"@1000000020();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ProcessUnitOfMeasure@1000000027(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lUnitOfMeasure@1000000001 : Record 204;
+    BEGIN
+      //DOC NH2016.14 - Processing unit of measure - creating if it doesn't exist
+      //  -> pCode: The code
+      //  <- The code returned back
+
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Unit of Measure", lUnitOfMeasure.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessInventoryPostingGroup@1000000019(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lInventoryPostingGroup@1000000001 : Record 94;
+    BEGIN
+      //DOC NH2016.14 - Processing inventory posting group - creating if it doesn't exist
+      //  -> pCode: The code
+      //  <- The code returned back
+
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Inventory Posting Group", lInventoryPostingGroup.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessItemDiscountGroup@1000000017(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lItemDiscountGroup@1000000001 : Record 341;
+    BEGIN
+      //DOC NH2016.14 - Processing item discount group - creating if it doesn't exist
+      //  -> pCode: The code
+      //  <- The code returned back
+
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Item Discount Group", lItemDiscountGroup.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessGenProductPostingGroup@1000000022(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lGenProductPostingGroup@1000000001 : Record 251;
+    BEGIN
+      //DOC NH2016.14 - Processing general product posting group - creating if it doesn't exist
+      //  -> pCode: The code
+      //  <- The code returned back
+
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Gen. Product Posting Group", lGenProductPostingGroup.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessVatProductPostingGroup@1000000021(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lVatProductPostingGroup@1000000001 : Record 324;
+    BEGIN
+      //DOC NH2016.14 - Processing VAT product posting group - creating if it doesn't exist
+      //  -> pCode: The code
+      //  <- The code returned back
+
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"VAT Product Posting Group", lVatProductPostingGroup.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessVendor@1000000026(pNo@1000000001 : Code[20]) : Code[20];
+    VAR
+      lVendor@1000000000 : Record 23;
+    BEGIN
+      //DOC NH2016.14 - Processing vendor - creating if it doesn't exist
+      //  -> pNo: The number
+      //  <- The number returned back
+
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pNo, DATABASE::Vendor, lVendor.FIELDNO(Name)));
+    END;
+
+    LOCAL PROCEDURE ProcessItemCategory@1000000023(pCode@1000000000 : Code[20]) : Code[20];
+    VAR
+      lItemCategory@1000000001 : Record 5722;
+    BEGIN
+      //DOC NH2016.14 - Processing item category - creating if it doesn't exist
+      //  -> pCode: The code
+      //  <- The code returned back
+
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Item Category", lItemCategory.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessProductGroup@1000000024(pItemCategoryCode@1000000000 : Code[20];pProductGroupCode@1000000001 : Code[20]) : Code[20];
+    VAR
+      lProductGroup@1000000002 : Record 5723;
+    BEGIN
+      //DOC NH2016.14 - Processing product group - creating if it doesn't exist
+      //  -> pItemCategoryCode: Item category code
+      //  -> pProductGroupCode: Product group code
+      //  <- Product group code returned back
+
+      IF (pProductGroupCode = '') THEN
+        EXIT;
+
+      ProcessItemCategory(pItemCategoryCode);
+
+      IF ( NOT (lProductGroup.GET(pItemCategoryCode, pProductGroupCode))) THEN
+      BEGIN
+        CLEAR(lProductGroup);
+        lProductGroup.INIT();
+        lProductGroup.VALIDATE("Item Category Code", pItemCategoryCode);
+        lProductGroup.VALIDATE(Code, pProductGroupCode);
+        lProductGroup.VALIDATE(Description, ImportToolkit.GetNewRecordDescription(pProductGroupCode));
+        lProductGroup.INSERT(TRUE);
+        CreateLogEntry(lProductGroup);
+      END;
+
+      EXIT(pProductGroupCode);
+    END;
+
+    LOCAL PROCEDURE ProcessItemTrackingCode@1000000018(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lItemTrackingCode@1000000001 : Record 6502;
+    BEGIN
+      //DOC NH2016.14 - Processing item tracking code - creating if it doesn't exist
+      //  -> pCode: The code
+      //  <- The code returned back
+
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Item Tracking Code", lItemTrackingCode.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessTariffNumber@1000000025(pNo@1000000000 : Code[10]) : Code[10];
+    VAR
+      lTariffNumber@1000000001 : Record 260;
+    BEGIN
+      //DOC NH2016.14 - Processing tariff number - creating if it doesn't exist
+      //  -> pNo: The number
+      //  <- The number returned back
+
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pNo, DATABASE::"Tariff Number", lTariffNumber.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessDimensionValue@1000000005(pDimensionNumber@1000000001 : Integer;pDimensionValueCode@1000000000 : Code[20]) : Code[20];
+    BEGIN
+      EXIT(ImportValidation.ProcessDimensionValue(pDimensionNumber, pDimensionValueCode, ItemImportWorksheetHeader."Create Dimension Values"));
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@1000000028();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CreateError@1000000051(pMessage@1000000000 : Text);
+    BEGIN
+      //DOC NH2016.14 - Creating an error entry with specified error message
+      //  -> pMessage: The error message
+
+      ImportErrorManagement.CreateErrorOrWarning(DATABASE::"Item Import Worksheet Line", ItemImportWorksheetLine.GETPOSITION(FALSE), ImportErrorLine.Type::Error, pMessage);
+    END;
+
+    LOCAL PROCEDURE CreateWarning@1000000029(pMessage@1000000000 : Text);
+    BEGIN
+      //DOC NH2016.14 - Creating a warning entry with specified error message
+      //  -> pMessage: The error message
+
+      ImportErrorManagement.CreateErrorOrWarning(DATABASE::"Item Import Worksheet Line", ItemImportWorksheetLine.GETPOSITION(FALSE), ImportErrorLine.Type::Warning, pMessage);
+    END;
+
+    LOCAL PROCEDURE CreateLogEntry@1000000055(pRecord@1000000000 : Variant);
+    VAR
+      lRecordRef@1000000001 : RecordRef;
+    BEGIN
+      //DOC NH2016.14 - Creating log entry for specified record
+      //  -> pRecord: The record
+
+      lRecordRef.GETTABLE(pRecord);
+      ImportToolkit.CreateLogEntry(lRecordRef, ItemImportWorksheetHeader."Batch No.", DATABASE::"Item Import Worksheet Header", ItemImportWorksheetLine);
+    END;
+
+    BEGIN
+    {
+      //DOC NH2016.14 JH 07/03/2016 - Created
+      //DOC NH2016.14 JH 23/03/2016 - Bugfixes
+      //DOC NH2016.14 JH 29/03/2016 - Bugfixes
+    }
+    END.
+  }
+}
+

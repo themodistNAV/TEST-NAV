@@ -1,0 +1,187 @@
+OBJECT Codeunit 9062537 Quick Report Operations
+{
+  OBJECT-PROPERTIES
+  {
+    Date=27/01/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.12;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      QuickReportHeader@1000000009 : Record 9062697;
+      QuickReportHeaderSaved@1000000002 : Record 9062697;
+      CriteriaManagement@1000000001 : Codeunit 9062462;
+      TnpToolkit@1000000003 : Codeunit 9062230;
+
+    PROCEDURE "--- General ---"@1000000026();
+    BEGIN
+    END;
+
+    PROCEDURE NewQuickReport@1000000028(pUserId@1000000000 : Code[50];pTemporary@1000000006 : Boolean;VAR pQuickReportHeader@1000000001 : Record 9062697);
+    VAR
+      lQuickReportHeader@1000000002 : Record 9062697;
+      lUserReportSequence@1000000003 : Integer;
+      lUserReportSequenceText@1000000004 : Code[10];
+      lCode@1000000005 : Code[60];
+    BEGIN
+      //DOC NA2015.7 - Creating a new quick report (for user)
+      //  -> pUserId: User ID
+      //  -> pTemporary: Temporary flag
+      //  <> pQuickReportHeader: Target quick report header
+
+      lQuickReportHeader.RESET();
+      lQuickReportHeader.SETCURRENTKEY("Temporary", "User ID", "User Report Sequence");
+      lQuickReportHeader.SETFILTER("Temporary", '<>%1', lQuickReportHeader."Temporary"::"0");
+      lQuickReportHeader.SETRANGE("User ID", pUserId);
+      IF (lQuickReportHeader.FINDLAST()) THEN
+        lUserReportSequence := lQuickReportHeader."User Report Sequence" + 1
+      ELSE
+        lUserReportSequence := 1;
+
+      lUserReportSequenceText := TnpToolkit.IntegerWithLeadingZeros(lUserReportSequence, MAXSTRLEN(lUserReportSequenceText));
+      lCode := pUserId + lUserReportSequenceText;
+
+      CLEAR(lQuickReportHeader);
+      lQuickReportHeader.INIT();
+      lQuickReportHeader.VALIDATE(Code, lCode);
+      lQuickReportHeader.VALIDATE(Name, '');
+      lQuickReportHeader.VALIDATE("Temporary", pTemporary);
+      lQuickReportHeader.VALIDATE("User ID", pUserId);
+      lQuickReportHeader.VALIDATE("User Report Sequence", lUserReportSequence);
+      lQuickReportHeader.INSERT(TRUE);
+
+      pQuickReportHeader := lQuickReportHeader;
+    END;
+
+    PROCEDURE OpenQuickReport@1000000025(pUserId@1000000001 : Code[50];pTemporary@1000000004 : Boolean;pFromQuickReportHeader@1000000000 : Record 9062697;VAR pToQuickReportHeader@1000000002 : Record 9062697);
+    BEGIN
+      //DOC NA2015.7 - Opening a quick report (copying into user one)
+      //  -> pUserId: User ID
+      //  -> pTemporary: Temporary flag (FALSE = Manual, TRUE = Temporary)
+      //  -> pFromQuickReportHeader: Source quick report header
+      //  <> pToQuickReportHeader: Target quick report header
+
+      NewQuickReport(pUserId, pTemporary, pToQuickReportHeader);
+      CopyQuickReport(pFromQuickReportHeader, pToQuickReportHeader, TRUE);
+    END;
+
+    PROCEDURE CopyQuickReport@1000000023(pFromQuickReportHeader@1000000000 : Record 9062697;VAR pToQuickReportHeader@1000000004 : Record 9062697;pUpdateOpenedCode@1000000002 : Boolean);
+    VAR
+      lFromQuickReportField@1000000009 : Record 9062698;
+      lToQuickReportField@1000000008 : Record 9062698;
+      lCriteria@1000000006 : Record 9062626;
+      lCriteriaId@1000000007 : Integer;
+    BEGIN
+      //DOC NA2016.12 - Copying quick report
+      //  -> pFromQuickReportHeader: Source quick report
+      //  <> pToQuickReportHeader: Target quick report
+      //  -> pUpdateOpenedCode: Flag to update "Opened Code"
+
+      SecureQuickReport(pToQuickReportHeader);
+      pToQuickReportHeader.TRANSFERFIELDS(pFromQuickReportHeader, FALSE);
+      RetrieveQuickReport(pToQuickReportHeader);
+      IF (pUpdateOpenedCode) THEN
+        pToQuickReportHeader."Copied From" := pFromQuickReportHeader.Code;
+      IF (pFromQuickReportHeader."Criteria ID" <> 0) THEN
+      BEGIN
+        IF (lCriteria.GET(pFromQuickReportHeader."Criteria ID")) THEN
+          lCriteriaId := CriteriaManagement.CloneCriteriaAttached(lCriteria, DATABASE::"Quick Report Header",
+            pToQuickReportHeader.GETPOSITION(FALSE), pToQuickReportHeader.FIELDNO("Criteria ID"))
+        ELSE
+          lCriteriaId := 0;
+      END;
+      pToQuickReportHeader.VALIDATE("Criteria ID", lCriteriaId);
+      pToQuickReportHeader.MODIFY(TRUE);
+
+      lToQuickReportField.RESET();
+      lToQuickReportField.SETRANGE("Quick Report Code", pToQuickReportHeader.Code);
+      lToQuickReportField.SETRANGE("System Activity", TRUE);
+      lToQuickReportField.DELETEALL(TRUE);
+      lToQuickReportField.SETRANGE("System Activity", FALSE);
+
+      lFromQuickReportField.RESET();
+      lFromQuickReportField.SETRANGE("Quick Report Code", pFromQuickReportHeader.Code);
+      IF (lFromQuickReportField.FINDSET()) THEN
+      REPEAT
+        lToQuickReportField.SETRANGE("System Activity", TRUE);
+        lToQuickReportField := lFromQuickReportField;
+        lToQuickReportField."Quick Report Code" := pToQuickReportHeader.Code;
+        lToQuickReportField."Field Filter ID" := 0;
+        lToQuickReportField.INSERT(TRUE);
+        IF (lFromQuickReportField."Field Filter ID" <> 0) THEN
+        BEGIN
+          IF (lCriteria.GET(lFromQuickReportField."Field Filter ID")) THEN
+            lCriteriaId := CriteriaManagement.CloneCriteriaAttached(lCriteria, DATABASE::"Quick Report Field",
+              lToQuickReportField.GETPOSITION(FALSE), lToQuickReportField.FIELDNO("Field Filter ID"))
+          ELSE
+            lCriteriaId := 0;
+          lToQuickReportField.VALIDATE("Field Filter ID", lCriteriaId);
+          lToQuickReportField.MODIFY(TRUE);
+        END;
+        lToQuickReportField.SETRANGE("System Activity", FALSE);
+      UNTIL (lFromQuickReportField.NEXT() = 0);
+    END;
+
+    PROCEDURE ClearQuickReport@1000000007(VAR pQuickReportHeader@1000000000 : Record 9062697);
+    VAR
+      lQuickReportField@1000000001 : Record 9062698;
+    BEGIN
+      //DOC NA2015.7 - Clearing quick report
+      //  <> pQuickReportHeader: The quick report header
+
+      lQuickReportField.RESET();
+      lQuickReportField.SETRANGE("Quick Report Code", pQuickReportHeader.Code);
+      lQuickReportField.SETRANGE("System Activity", TRUE);
+      lQuickReportField.DELETEALL(TRUE);
+      lQuickReportField.SETRANGE("System Activity", FALSE);
+
+      CriteriaManagement.DeleteCriteria(pQuickReportHeader."Criteria ID");
+      pQuickReportHeader.VALIDATE("Criteria ID", 0);
+
+      SecureQuickReport(pQuickReportHeader);
+      pQuickReportHeader.INIT();
+      RetrieveQuickReport(pQuickReportHeader);
+      pQuickReportHeader.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Internal ---"@1000000018();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE SecureQuickReport@1000000019(pQuickReportHeader@1000000000 : Record 9062697);
+    BEGIN
+      //DOC NA2015.7 - Securing quick report (into a global variable)
+      //  -> pQuickReportHeader: The quick report
+
+      QuickReportHeaderSaved := pQuickReportHeader;
+    END;
+
+    LOCAL PROCEDURE RetrieveQuickReport@1000000024(VAR pQuickReportHeader@1000000000 : Record 9062697);
+    BEGIN
+      //DOC NA2015.7 - Retrieving quick report (from a global variable)
+      //  <> pQuickReportHeader: Target quick report
+
+      pQuickReportHeader."Temporary" := QuickReportHeaderSaved."Temporary";
+      pQuickReportHeader."User ID" := QuickReportHeaderSaved."User ID";
+      pQuickReportHeader."User Report Sequence" := QuickReportHeaderSaved."User Report Sequence";
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.7  JH 15/05/2015 - Created
+      //DOC NA2016.7  JH 28/08/2015 - Upgraded to 2016
+      //DOC NA2016.12 AZ 17/12/2015 - Criteria management switched to use Criteria Id instead of "attached-to record" fields
+      //DOC NA2016.12 JH 27/12/2015 - Criteria references changed
+      //DOC NA2016.12 JH 22/01/2016 - Field filter added
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,885 @@
+OBJECT Codeunit 50037 3PL Inventory Import XML SC
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/06/18;
+    Time=[ 1:50:36 PM];
+    Modified=Yes;
+    Version List=OP9031,TM0001;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            //1. import the xml inventory data
+            ImportXML;
+            //2. Now we have imported into the staging table we will apply validation
+            ValidateData;
+            //3. Create the journals for all staging records that have no errors
+            CreateJournals;
+            //4. Process Transfer Orders.. if there are any
+            //ProcessTransferOrders;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ERRLOCATION@1000000000 : TextConst 'ENU=%1\Codeunit 50014;ENG=%1\Codeunit 50014';
+      Err001@1000000001 : TextConst 'ENU="%1 %2 requires warehouse shipment and is not compatible with the GAC integration. "';
+      Filename@1000000002 : Text;
+      WebIntMgmnt@1000000003 : Codeunit 50100;
+
+    PROCEDURE ImportXML@1000000001();
+    VAR
+      XMLDoc@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XmlItems@1000000001 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      XmlItem@1000000002 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      IntegrationProcessingGroup@1000000003 : Record 50007;
+      ModistSetup@1000000004 : Record 50000;
+      i@1000000005 : Integer;
+      j@1000000013 : Integer;
+      FileRec@1000000008 : Record 2000000022;
+      FileMgmnt@1000000009 : Codeunit 419;
+      Filename@1000000010 : Text;
+      DocNo@1000000011 : Code[20];
+      ShipmentNo@1000000012 : Code[35];
+      XmlLineItems@1000000014 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      LineNo@1000000015 : Integer;
+      ItemCode@1000000016 : Code[20];
+      VariantCode@1000000017 : Code[10];
+      QtyReceived@1000000019 : Decimal;
+      IntegrationFunctions@1000000020 : Codeunit 50008;
+      IntegrationJournalStaging@1000000018 : Record 50014;
+      SKUNumber@1000000006 : Text[31];
+      ItemJournalLineNo@1000000007 : Integer;
+      ReclassJournalLineNo@1000000021 : Integer;
+      PhysInvJournalLineNo@1000000022 : Integer;
+      LOGTEXT@1000000023 : TextConst 'ENU=Transfer Type : %1 Processed as : %2;ENG=Transfer Type : %1 Processed as : %2';
+      IntegrationLogText@1000000024 : Text;
+      List@1000000026 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      element@1000000025 : Text;
+    BEGIN
+      ItemJournalLineNo := 0;
+      ReclassJournalLineNo := 0;
+      PhysInvJournalLineNo:= 0;
+
+      ModistSetup.GET;
+      IntegrationProcessingGroup.GET(ModistSetup."3PL Integration Type",ModistSetup."3PL Inventory Group");
+
+      {
+      IF IntegrationProcessingGroup."Enable SFTP Connect" THEN
+        DownloadftpFiles(IntegrationProcessingGroup);
+      }
+
+      //iterate through the files in a working location
+      FileRec.SETRANGE(Path,'F:\MODIST\Live\StockCount');
+      FileRec.SETRANGE("Is a file",TRUE);
+      FileRec.SETFILTER(Name,'%1','*.xml');
+      IF FileRec.FINDSET THEN BEGIN
+        List := List.List();
+        REPEAT
+          ClearLastErrors(IntegrationProcessingGroup."Platform Code",IntegrationProcessingGroup.Code,FileRec.Name);
+          IntegrationLogText:='';
+          CLEAR(XMLDoc);
+          Filename:='';
+
+          Filename:=FileMgmnt.CombinePath('F:\MODIST\Live\StockCount',FileRec.Name);
+          XMLDoc :=XMLDoc.XmlDocument();
+          XMLDoc.Load(Filename);
+          XmlItems := XMLDoc.SelectNodes('//StockMovements/StockMovement');
+
+          FOR i := 0 TO XmlItems.Count - 1 DO BEGIN
+            CLEAR(IntegrationJournalStaging);
+            IntegrationJournalStaging.INIT;
+            IntegrationJournalStaging.Filename := FileRec.Name;
+            IntegrationJournalStaging."Integration Type" := ModistSetup."3PL Integration Type";
+            IntegrationJournalStaging."Integration Group Code" := ModistSetup."3PL Inventory Group";
+            IntegrationJournalStaging."Posting Date" := TODAY;
+            SKUNumber := IntegrationFunctions.RetrieveElement(XmlItems,'SKUNumber',i);
+            IntegrationFunctions.SplitSKUno(SKUNumber,ItemCode,VariantCode);
+            IntegrationJournalStaging."Item No" := ItemCode;
+            IntegrationJournalStaging."Variant Code" := VariantCode;
+            IntegrationJournalStaging."From Location" := IntegrationFunctions.RetrieveElement(XmlItems,'FromLocation',i);
+            IntegrationJournalStaging."From Bin" := IntegrationFunctions.RetrieveElement(XmlItems,'FromBin',i);
+            IntegrationJournalStaging."To Location" := IntegrationFunctions.RetrieveElement(XmlItems,'ToLocation',i);
+            IntegrationJournalStaging."To Bin" := IntegrationFunctions.RetrieveElement(XmlItems,'ToBin',i);
+            IntegrationJournalStaging.Quantity := IntegrationFunctions.RetrieveElementAsDecimal(XmlItems,'Quantity',i);
+            IntegrationJournalStaging.Type := UPPERCASE(IntegrationFunctions.RetrieveElement(XmlItems,'Type',i));
+            IntegrationJournalStaging.Reference := IntegrationFunctions.RetrieveElement(XmlItems,'TransferRef',i);
+            IntegrationJournalStaging.Reference := '';
+            IntegrationJournalStaging.Reason := IntegrationFunctions.RetrieveElement(XmlItems,'Reason',i);
+            CASE UPPERCASE(IntegrationJournalStaging.Type) OF
+              'INVENTORY' : BEGIN
+                 IntegrationJournalStaging."Journal Type" := IntegrationJournalStaging."Journal Type"::"Physical Inventory";
+                 IntegrationJournalStaging."Journal Batch Name" := ModistSetup."3PL Physical Inv Journal Batch";
+                 IntegrationJournalStaging."Journal Template Name" := 'PHYS. INV.';
+                 IncrementLineNo(PhysInvJournalLineNo);
+                 IntegrationJournalStaging."Journal Line No." := PhysInvJournalLineNo;
+                 IntegrationLogText:=STRSUBSTNO(LOGTEXT,UPPERCASE(IntegrationJournalStaging.Type),'Physical Inventory Journal');
+               END;
+               'TRANSFER' : BEGIN
+                 IF IntegrationJournalStaging.Reference <> '' THEN BEGIN //Document No. supplied to update transfer order
+                    IntegrationJournalStaging."Document Type":=IntegrationJournalStaging."Document Type"::"Transfer Order";
+                    IntegrationJournalStaging."Document No.":= IntegrationJournalStaging.Reference;
+                    IntegrationJournalStaging."Document Line No." := IntegrationFunctions.RetrieveElementAsInteger(XmlItems,'SourceLineNo',i);
+                    IntegrationLogText:=STRSUBSTNO(LOGTEXT,UPPERCASE(IntegrationJournalStaging.Type),'Transfer Order');
+                    IntegrationJournalStaging.Processed := TRUE; //DOC TM0001 AW 05/03/2018 - Skip Processing TOs
+                 END ELSE BEGIN  // no doc no se we will create a reclass journal
+                   IntegrationJournalStaging."Journal Type" := IntegrationJournalStaging."Journal Type"::"Item Reclass";
+                   IntegrationJournalStaging."Journal Batch Name" := ModistSetup."3PL Item Reclass Journal Batch";
+                   IntegrationJournalStaging."Journal Template Name" := 'RECLASS';
+                   IncrementLineNo(ReclassJournalLineNo);
+                   IntegrationJournalStaging."Journal Line No." := ReclassJournalLineNo;
+                   IntegrationLogText:=STRSUBSTNO(LOGTEXT,UPPERCASE(IntegrationJournalStaging.Type),'Reclassification Journal');
+                 END
+               END;
+               'IN','OUT' : BEGIN
+                 IntegrationJournalStaging."Journal Type" := IntegrationJournalStaging."Journal Type"::Item;
+                 IntegrationJournalStaging."Journal Batch Name" := ModistSetup."3PL Item Journal Batch";
+                 IntegrationJournalStaging."Journal Template Name" := 'ITEM';
+                 IncrementLineNo(ItemJournalLineNo);
+                 IntegrationJournalStaging."Journal Line No." := ItemJournalLineNo;
+
+                 IF UPPERCASE(IntegrationJournalStaging.Type) = 'IN' THEN
+                   IntegrationLogText:=STRSUBSTNO(LOGTEXT,UPPERCASE(IntegrationJournalStaging.Type),'Item Journal , Positive Adjustment');
+
+                IF UPPERCASE(IntegrationJournalStaging.Type) = 'OUT' THEN
+                   IntegrationLogText:=STRSUBSTNO(LOGTEXT,UPPERCASE(IntegrationJournalStaging.Type),'Item Journal , Negative Adjustment');
+               END;
+            END;
+            IntegrationJournalStaging.INSERT;
+          END;
+
+          //those files that are not in error will be recorded in an list
+          IF IntegrationFunctions.GetNumIntegrationErrors(ModistSetup."3PL Integration Type",ModistSetup."3PL Inventory Group",FileRec.Name) = 0 THEN BEGIN
+            List.Add(FileMgmnt.CombinePath(FileRec.Path, FileRec.Name));
+            //Log integration
+            IntegrationFunctions.Log3PLInventoryImport(FileRec.Path + FileRec.Name,IntegrationLogText);
+          END;
+        UNTIL FileRec.NEXT = 0;
+        //iterate through our list and move the files to the archive
+        Filename:='';
+        FOREACH element IN List DO BEGIN
+          Filename := FileMgmnt.GetFileName(element);
+          IntegrationFunctions.MoveFile(FileMgmnt.CombinePath('F:\MODIST\Live\StockCount', Filename),FileMgmnt.CombinePath(IntegrationProcessingGroup."Archive Location",Filename));
+        END;
+        List.Clear;
+        CLEAR(List);
+      END;
+    END;
+
+    LOCAL PROCEDURE DownloadftpFiles@1000000002(VAR IntegrationProcGroup@1000000001 : Record 50007);
+    VAR
+      WebIntegrationManagement@1000000000 : Codeunit 50100;
+      ModSetup@1000000002 : Record 50000;
+    BEGIN
+      ModSetup.GET;
+      IF NOT WebIntegrationManagement.DownloadftpFiles(IntegrationProcGroup."Working Location",ModSetup."Demandware Import SFTP Server",IntegrationProcGroup."FTP Folder") THEN
+        ERROR(GETLASTERRORTEXT);
+      CLEAR(WebIntegrationManagement);
+      IF NOT WebIntegrationManagement.DownloadftpFiles(IntegrationProcGroup."Working Location",ModSetup."Demandware Import SFTP Server",'/public/production/from-gac/transfer-order') THEN
+        ERROR(GETLASTERRORTEXT);
+    END;
+
+    LOCAL PROCEDURE IncrementLineNo@1000000005(VAR LineNo@1000000000 : Integer);
+    BEGIN
+      LineNo := LineNo + 10000;
+    END;
+
+    PROCEDURE ValidateData@1000000003();
+    VAR
+      ModistSetup@1000000006 : Record 50000;
+      JrnlStaging@1000000005 : Record 50014;
+      ErrorHandler@1000000002 : Codeunit 50007;
+      ErrorMessage@1000000003 : Text;
+      ItemRec@1000000004 : Record 27;
+      VendorNo@1000000000 : Code[20];
+      Vend@1000000001 : Record 23;
+      IntegrationErrorLog@1000000007 : Record 50011;
+      tmpLen@1000000008 : Integer;
+      ErrorCode@1000000009 : Text;
+      FileMgmnt@1000000010 : Codeunit 419;
+      FileName@1000000011 : Text;
+    BEGIN
+      ModistSetup.GET;
+      JrnlStaging.SETCURRENTKEY("Integration Type","Integration Group Code",Processed);
+      JrnlStaging.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+      JrnlStaging.SETRANGE("Integration Group Code",ModistSetup."3PL Inventory Group");
+      JrnlStaging.SETRANGE(Processed,FALSE);
+
+      IF JrnlStaging.FINDSET THEN BEGIN
+        //Cleardown existing errors ahead of validation
+        IntegrationErrorLog.SETCURRENTKEY("Integration Type","Integration Process Group");
+        IntegrationErrorLog.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+        IntegrationErrorLog.SETRANGE("Integration Process Group",ModistSetup."3PL Inventory Group");
+        IF IntegrationErrorLog.FINDSET THEN
+           IntegrationErrorLog.DELETEALL;
+
+        REPEAT
+          //1 Validate Item & Variant
+          //1.1 Item Exists
+          CLEAR(ItemRec);
+          ErrorMessage := '';
+          ErrorCode:='';
+          FileName:=FileMgmnt.GetFileName(JrnlStaging.Filename);
+          IF NOT ErrorHandler.ItemExists(JrnlStaging."Item No", ErrorMessage,ErrorCode) THEN BEGIN
+            LogError(JrnlStaging."Entry No.",ErrorMessage,STRSUBSTNO(ERRLOCATION,'ValidateData'),ErrorCode,FileName);
+          END ELSE BEGIN
+            ItemRec.GET(JrnlStaging."Item No");
+            VendorNo := ItemRec."Vendor No.";
+            //1.2 Item Blocked
+            ErrorMessage := '';
+            ErrorCode:='';
+            IF NOT ErrorHandler.ItemBlocked(ItemRec, ErrorMessage,ErrorCode) THEN
+              LogError(JrnlStaging."Entry No.",ErrorMessage,STRSUBSTNO(ERRLOCATION,'ValidateData'),ErrorCode,FileName);
+
+            //1.3 Item Variant Exists
+            ErrorMessage := '';
+            ErrorCode:='';
+            IF JrnlStaging."Variant Code" <> '' THEN
+              IF NOT ErrorHandler.ItemVariantExists(JrnlStaging."Item No",JrnlStaging."Variant Code", ErrorMessage,ErrorCode) THEN
+                LogError(JrnlStaging."Entry No.",ErrorMessage,STRSUBSTNO(ERRLOCATION,'ValidateData'),ErrorCode,FileName);
+
+            //1.4 Check item has inventory posting group
+            ErrorMessage := '';
+            ErrorCode:='';
+            IF NOT ErrorHandler.ItemHasInventoryPostingGroup(ItemRec, ErrorMessage,ErrorCode) THEN
+              LogError(JrnlStaging."Entry No.",ErrorMessage,STRSUBSTNO(ERRLOCATION,'ValidateData'),ErrorCode,FileName);
+
+            //1.5 Check item has Gen Product Posting Group
+            ErrorMessage := '';
+            ErrorCode:='';
+            IF NOT ErrorHandler.ItemHasGenProdPostingGroup(ItemRec, ErrorMessage,ErrorCode) THEN
+              LogError(JrnlStaging."Entry No.",ErrorMessage,STRSUBSTNO(ERRLOCATION,'ValidateData'),ErrorCode,FileName);
+
+            //1.6 Check item has VAT Product Posting Group
+            ErrorMessage := '';
+            ErrorCode:='';
+            IF NOT ErrorHandler.ItemHasVATProdPostingGroup(ItemRec, ErrorMessage,ErrorCode) THEN
+               LogError(JrnlStaging."Entry No.",ErrorMessage,STRSUBSTNO(ERRLOCATION,'ValidateData'),ErrorCode,FileName);
+
+            //1.7 Check the From Location
+            ErrorMessage := '';
+            ErrorCode:='';
+            IF NOT ErrorHandler.LocationExists(JrnlStaging."From Location", ErrorMessage,ErrorCode) THEN BEGIN
+               LogError(JrnlStaging."Entry No.",ErrorMessage,STRSUBSTNO(ERRLOCATION,'ValidateData'),ErrorCode,FileName);
+            END ELSE BEGIN
+              //1.7.1 Check there is an inventory posting setup
+              ErrorMessage := '';
+              ErrorCode:='';
+              IF NOT ErrorHandler.InventoryPostingSetupExists(JrnlStaging."From Location",ItemRec."Inventory Posting Group", ErrorMessage,ErrorCode) THEN
+                 LogError(JrnlStaging."Entry No.",ErrorMessage,STRSUBSTNO(ERRLOCATION,'ValidateData'),ErrorCode,FileName);
+
+              //1.7.2 If a From Bin is provided check it exists
+              IF STRLEN(JrnlStaging."From Bin") > 0 THEN BEGIN
+              //IF DELCHR(JrnlStaging."From Bin",'<>') <> '' THEN
+                ErrorMessage := '';
+                ErrorCode:='';
+                IF NOT ErrorHandler.BinExists(JrnlStaging."From Location",JrnlStaging."From Bin", ErrorMessage,ErrorCode) THEN
+                    LogError(JrnlStaging."Entry No.",ErrorMessage,STRSUBSTNO(ERRLOCATION,'ValidateData'),ErrorCode,FileName);
+              END;
+
+              //1.7.3 If the movement is a Transfer Check that there is sufficient quantity of stock to move
+              IF JrnlStaging.Type IN ['TRANSFER','OUT'] THEN BEGIN
+                ErrorMessage := '';
+                ErrorCode:='';
+                IF NOT ErrorHandler.QuantityOnInventory(JrnlStaging."Item No",JrnlStaging."Variant Code",JrnlStaging."From Location",JrnlStaging.Quantity, ErrorMessage,ErrorCode) THEN
+                  LogError(JrnlStaging."Entry No.",ErrorMessage,STRSUBSTNO(ERRLOCATION,'ValidateData'),ErrorCode,FileName);
+              END;
+            END;
+
+            //2.   Check posting setup
+            IF VendorNo <> '' THEN
+              IF Vend.GET(VendorNo) THEN BEGIN
+
+                 //2.1 Check General Posting Setup exists
+                 ErrorMessage := '';
+                 ErrorCode:='';
+                 IF NOT ErrorHandler.GenPostingSetupExists(Vend."Gen. Bus. Posting Group",ItemRec."Gen. Prod. Posting Group", ErrorMessage,ErrorCode) THEN
+                   LogError(JrnlStaging."Entry No.",ErrorMessage,STRSUBSTNO(ERRLOCATION,'ValidateData'),ErrorCode,FileName);
+
+                 //2.2 Check VAT Posting Setup exists
+                 ErrorMessage := '';
+                 ErrorCode:='';
+                 IF NOT ErrorHandler.VATPostingSetupExists(Vend."VAT Bus. Posting Group",ItemRec."VAT Prod. Posting Group", ErrorMessage,ErrorCode) THEN
+                   LogError(JrnlStaging."Entry No.",ErrorMessage,STRSUBSTNO(ERRLOCATION,'ValidateData'),ErrorCode,FileName);
+              END;
+          END;
+        UNTIL JrnlStaging.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE LogError@1000000015(EntryNo@1000000001 : Integer;ErrMessage@1000000002 : Text;ErrorLocation@1000000004 : Text;ErrCode@1000000005 : Text;FileName@1000000006 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+    BEGIN
+      //This function facilitates the logging of an error in the error log table by deriving the default values
+      //and applying the variable values
+      ModistSetup.GET;
+      ErrorHandler.LogError(ModistSetup."3PL Integration Type",
+                            ModistSetup."3PL Inventory Group",
+                            '',
+                            DATABASE::"Item Journal Line",
+                            '',
+                            0,
+                            ErrMessage,
+                            ErrorLocation,
+                            EntryNo,
+                            ErrCode,
+                            FileName);
+    END;
+
+    PROCEDURE CreateJournals@1000000004();
+    VAR
+      JrnlStaging@1000000000 : Record 50014;
+      ModistSetup@1000000001 : Record 50000;
+      ItemJournalLine@1000000002 : Record 83;
+      ItemJnlDocNo@1000000003 : Code[20];
+      ReclassJnlDocNo@1000000004 : Code[20];
+      PhysInvJnlDocNo@1000000005 : Code[20];
+      FileMgmnt@1000000006 : Codeunit 419;
+      FileName@1000000007 : Text;
+    BEGIN
+      //This function handles the creation of the various item journals
+      ItemJnlDocNo:=WebIntMgmnt.ItemJnlDocumentNo;
+      ReclassJnlDocNo:=WebIntMgmnt.ReclassJnlDocumentNo;
+      PhysInvJnlDocNo:=WebIntMgmnt.PhysInvJnlDocumentNo;
+
+      ModistSetup.GET;
+      JrnlStaging.SETCURRENTKEY("Integration Type","Integration Group Code","Journal Type",Processed);
+      JrnlStaging.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+      JrnlStaging.SETRANGE("Integration Group Code",ModistSetup."3PL Inventory Group");
+      JrnlStaging.SETRANGE(Processed,FALSE);
+      JrnlStaging.SETRANGE("Journal Type",JrnlStaging."Journal Type"::"Physical Inventory");
+
+      IF JrnlStaging.FINDSET THEN BEGIN
+        REPEAT
+          FileName := FileMgmnt.GetFileName(JrnlStaging.Filename);
+          JrnlStaging.CALCFIELDS("No. Errors");
+          IF JrnlStaging."No. Errors" = 0 THEN BEGIN
+
+            CASE JrnlStaging."Journal Type" OF
+
+              JrnlStaging."Journal Type"::Item : BEGIN
+                CLEARLASTERROR;
+                IF NOT InsertItemJournalLine(JrnlStaging,ItemJnlDocNo) THEN BEGIN
+                  LogError(JrnlStaging."Entry No.",GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'InsertItemJournalLine'),GETLASTERRORCODE,FileName);
+                END ELSE BEGIN
+                  JrnlStaging."Journal Document No." := ItemJnlDocNo;
+                  JrnlStaging.MODIFY;
+                  MarkStagingEntryAsProcessed(JrnlStaging);
+                END;
+              END;
+
+              JrnlStaging."Journal Type"::"Item Reclass" : BEGIN
+                CLEARLASTERROR;
+                IF NOT InsertItemReclassJournalLine(JrnlStaging,ReclassJnlDocNo) THEN BEGIN
+                  LogError(JrnlStaging."Entry No.",GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'InsertItemReclassJournalLine'),GETLASTERRORCODE,FileName);
+                END ELSE BEGIN
+                  JrnlStaging."Journal Document No." := ItemJnlDocNo;
+                  JrnlStaging.MODIFY;
+                  MarkStagingEntryAsProcessed(JrnlStaging);
+                END;
+              END;
+
+              JrnlStaging."Journal Type"::"Physical Inventory" : BEGIN
+                CLEARLASTERROR;
+                IF NOT InsertPhysicalInventoryJournalLine(JrnlStaging,PhysInvJnlDocNo) THEN BEGIN
+                  LogError(JrnlStaging."Entry No.",GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'InsertPhysicalInventoryJournalLine'),GETLASTERRORCODE,FileName);
+                END;
+              END;
+            END; //CASE
+          END; //No. Errors
+        UNTIL JrnlStaging.NEXT = 0;
+        //Post journals
+        PostJournals();
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE InsertItemJournalLine@1000000006(VAR IntgJournalStaging@1000000003 : Record 50014;VAR DocNo@1000000007 : Code[20]);
+    VAR
+      ModistSetup@1000000001 : Record 50000;
+      ItemJournalLine@1000000002 : Record 83;
+      ItemJnlPostLine@1000000000 : Codeunit 22;
+      ItemJournalBatch@1000000004 : Record 233;
+      NoSeriesManagement@1000000005 : Codeunit 396;
+    BEGIN
+      //This function creates an itemjournal line
+
+      ModistSetup.GET;
+
+      ItemJournalLine.VALIDATE("Journal Template Name",IntgJournalStaging."Journal Template Name");
+      ItemJournalLine.VALIDATE("Journal Batch Name",ModistSetup."3PL Item Journal Batch");
+      ItemJournalLine.VALIDATE("Line No.",NextJournalLineNo(ItemJournalLine."Journal Template Name",ItemJournalLine."Journal Batch Name"));
+      ItemJournalLine.SetUpNewLine(ItemJournalLine);
+      ItemJournalLine.VALIDATE("Document No.",DocNo);
+      ItemJournalLine.INSERT;
+      IF UPPERCASE(IntgJournalStaging.Type) = 'IN' THEN
+        ItemJournalLine.VALIDATE("Entry Type",ItemJournalLine."Entry Type"::"Positive Adjmt.");
+      IF UPPERCASE(IntgJournalStaging.Type) = 'OUT' THEN
+        ItemJournalLine.VALIDATE("Entry Type",ItemJournalLine."Entry Type"::"Negative Adjmt.");
+      ItemJournalLine.VALIDATE("Posting Date",TODAY);
+      ItemJournalLine.VALIDATE("Item No.",IntgJournalStaging."Item No");
+      IF IntgJournalStaging."Variant Code" <> '' THEN
+        ItemJournalLine.VALIDATE("Variant Code",IntgJournalStaging."Variant Code");
+      ItemJournalLine.VALIDATE("Location Code",IntgJournalStaging."From Location");
+      IF IntgJournalStaging."From Bin" <> '' THEN
+        ItemJournalLine.VALIDATE("Bin Code",IntgJournalStaging."From Bin");
+      ItemJournalLine.VALIDATE(Quantity,IntgJournalStaging.Quantity);
+      ItemJournalLine.VALIDATE("Source Code",ModistSetup."3PL Source Code");
+      IF IntgJournalStaging.Reference <> '' THEN
+        ItemJournalLine."External Document No."  := IntgJournalStaging.Reference;
+      ItemJournalLine.MODIFY;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE InsertItemReclassJournalLine@1000000014(VAR IntgJournalStaging@1000000003 : Record 50014;VAR DocNo@1000000000 : Code[20]);
+    VAR
+      ModistSetup@1000000001 : Record 50000;
+      ItemJournalLine@1000000002 : Record 83;
+    BEGIN
+      //This function creates an Item Reclassification Journal line
+      ModistSetup.GET;
+
+      ItemJournalLine.VALIDATE("Journal Template Name",IntgJournalStaging."Journal Template Name");
+      ItemJournalLine.VALIDATE("Journal Batch Name",ModistSetup."3PL Item Journal Batch");
+      ItemJournalLine.VALIDATE("Line No.",NextJournalLineNo(ItemJournalLine."Journal Template Name",ItemJournalLine."Journal Batch Name"));
+      //ItemJournalLine.SetUpNewLine(ItemJournalLine);
+      ItemJournalLine.VALIDATE("Document No.",DocNo);
+      ItemJournalLine.INSERT;
+
+      ItemJournalLine.VALIDATE("Entry Type",ItemJournalLine."Entry Type"::Transfer);
+      ItemJournalLine.VALIDATE("Posting Date",TODAY);
+      ItemJournalLine.VALIDATE("Item No.",IntgJournalStaging."Item No");
+      IF IntgJournalStaging."Variant Code" <> '' THEN
+        ItemJournalLine.VALIDATE("Variant Code",IntgJournalStaging."Variant Code");
+
+      //from
+      ItemJournalLine.VALIDATE("Location Code",IntgJournalStaging."From Location");
+      IF IntgJournalStaging."From Bin" <> '' THEN
+        ItemJournalLine.VALIDATE("Bin Code",IntgJournalStaging."From Bin");
+
+      //to
+      ItemJournalLine.VALIDATE("New Location Code",IntgJournalStaging."To Location");
+      IF IntgJournalStaging."To Bin" <> '' THEN
+        ItemJournalLine.VALIDATE("New Bin Code",IntgJournalStaging."To Bin");
+
+      ItemJournalLine.VALIDATE(Quantity,IntgJournalStaging.Quantity);
+      ItemJournalLine.VALIDATE("Source Code",ModistSetup."3PL Source Code");
+      IF IntgJournalStaging.Reference <> '' THEN
+        ItemJournalLine."External Document No."  := IntgJournalStaging.Reference;
+      ItemJournalLine.MODIFY;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE InsertPhysicalInventoryJournalLine@1000000016(VAR IntgJournalStaging@1000000003 : Record 50014;VAR DocNo@1000000006 : Code[20]);
+    VAR
+      ModistSetup@1000000001 : Record 50000;
+      ItemJournalLine@1000000002 : Record 83;
+      ItemVariant@1000000000 : Record 5401;
+      Item@1000000004 : Record 27;
+      QtyCalculated@1000000005 : Decimal;
+    BEGIN
+      //This function creates a physical inventory journal line
+      ModistSetup.GET;
+      QtyCalculated:=0;
+
+      Item.RESET;
+      Item.SETRANGE("No.",IntgJournalStaging."Item No");
+      Item.SETRANGE("Location Filter",IntgJournalStaging."From Location");
+      IF IntgJournalStaging."Variant Code" <> '' THEN
+        Item.SETRANGE("Variant Filter",IntgJournalStaging."Variant Code");
+      Item.SETRANGE("Date Filter",010100D,310518D);
+      IF Item.FINDFIRST THEN BEGIN
+        Item.CALCFIELDS(Inventory,"Net Change");
+        QtyCalculated := Item."Net Change";
+      END;
+
+      ItemJournalLine.VALIDATE("Journal Template Name",IntgJournalStaging."Journal Template Name");
+      ItemJournalLine.VALIDATE("Journal Batch Name",ModistSetup."3PL Physical Inv Journal Batch");
+      ItemJournalLine.VALIDATE("Line No.",NextJournalLineNo(ItemJournalLine."Journal Template Name",ItemJournalLine."Journal Batch Name"));
+      ItemJournalLine.VALIDATE("Document No.",DocNo);
+
+      //IF ItemJournalLine.Quantity <> 0 THEN
+      //  ItemJournalLine.INSERT;
+
+      ItemJournalLine.VALIDATE("Posting Date",310518D);
+      ItemJournalLine.VALIDATE("Item No.",IntgJournalStaging."Item No");
+      IF IntgJournalStaging."Variant Code" <> '' THEN
+        ItemJournalLine.VALIDATE("Variant Code",IntgJournalStaging."Variant Code");
+
+      ItemJournalLine.VALIDATE("Location Code",IntgJournalStaging."From Location");
+
+      IF IntgJournalStaging."From Bin" <> '' THEN
+        ItemJournalLine.VALIDATE("Bin Code",IntgJournalStaging."From Bin");
+
+      ItemJournalLine.VALIDATE("Source Code",ModistSetup."3PL Source Code");
+      ItemJournalLine."Phys. Inventory" := TRUE;
+      ItemJournalLine.VALIDATE("Qty. (Phys. Inventory)",IntgJournalStaging.Quantity);
+      ItemJournalLine.VALIDATE("Qty. (Calculated)",QtyCalculated);
+      IF IntgJournalStaging.Reference <> '' THEN
+        ItemJournalLine."External Document No."  := IntgJournalStaging.Reference;
+
+      //IF QtyCalculated <> 0 THEN
+      //  ItemJournalLine.MODIFY;
+
+      IF ItemJournalLine.Quantity <> 0 THEN
+        ItemJournalLine.INSERT;
+    END;
+
+    LOCAL PROCEDURE MarkStagingEntriesProcessed@1000000008(TemplateName@1000000000 : Code[10];BatchName@1000000002 : Code[10]);
+    VAR
+      IntegrationJournalStaging@1000000001 : Record 50014;
+      IntegrationJournalStagingToUpdate@1000000003 : Record 50014;
+    BEGIN
+      IntegrationJournalStaging.RESET;
+      IntegrationJournalStaging.SETRANGE("Journal Template Name",TemplateName);
+      IntegrationJournalStaging.SETRANGE("Journal Batch Name",BatchName);
+      IntegrationJournalStaging.SETRANGE(Processed,FALSE);
+
+      IF IntegrationJournalStaging.FINDSET THEN BEGIN
+        REPEAT
+          IntegrationJournalStaging.CALCFIELDS("No. Errors");
+          IF (IntegrationJournalStaging."No. Errors" = 0) THEN BEGIN
+            IF IntegrationJournalStagingToUpdate.GET(IntegrationJournalStaging."Entry No.") THEN BEGIN
+              IntegrationJournalStagingToUpdate.Processed:=TRUE;
+              IntegrationJournalStagingToUpdate."Processed Date" := TODAY;
+              IntegrationJournalStagingToUpdate."Processed By" := USERID;
+              IntegrationJournalStagingToUpdate.MODIFY;
+            END;
+          END;
+        UNTIL IntegrationJournalStaging.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE PostJournals@1000000007();
+    VAR
+      ModistSetup@1000000000 : Record 50000;
+    BEGIN
+      ModistSetup.GET;
+      //Post any item journals
+      CLEARLASTERROR;
+      IF NOT PostItemJournal THEN BEGIN
+        LogError(0,GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'PostItemJournal'),GETLASTERRORCODE,'');
+      END ELSE BEGIN
+        //Mark staging entries as processed
+        MarkStagingEntriesProcessed('ITEM',ModistSetup."3PL Item Journal Batch");
+      END;
+
+      //Post reclass Journal
+      CLEARLASTERROR;
+      IF NOT PostReclassJournal THEN BEGIN
+        LogError(0,GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'PostReclassJournal'),GETLASTERRORCODE,'');
+      END ELSE BEGIN
+        //Mark staging entries as processed
+        MarkStagingEntriesProcessed('RECLASS',ModistSetup."3PL Item Reclass Journal Batch");
+      END;
+
+      //Post Physical Inventory Journal
+      CLEARLASTERROR;
+      IF NOT PostPhysicalInventoryJournal THEN BEGIN
+        LogError(0,GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'PostPhysicalInventoryJournal'),GETLASTERRORCODE,'');
+      END ELSE BEGIN
+        //Mark staging entries as processed
+        MarkStagingEntriesProcessed('PHYS. INV.',ModistSetup."3PL Physical Inv Journal Batch");
+      END;
+    END;
+
+    LOCAL PROCEDURE PostItemJournal@1000000009() : Boolean;
+    VAR
+      ModistSetup@1000000000 : Record 50000;
+      ItemJournalLine@1000000001 : Record 83;
+      success@1000000002 : Boolean;
+    BEGIN
+      //This function is used TO Post an Item Journal
+      success:=FALSE;
+      ModistSetup.GET;
+      IF ModistSetup."Post 3PL Item Journal" THEN BEGIN
+        ItemJournalLine.SETRANGE("Journal Template Name",'ITEM');
+        ItemJournalLine.SETRANGE("Journal Batch Name",ModistSetup."3PL Item Journal Batch");
+        IF ItemJournalLine.FINDSET THEN BEGIN
+          COMMIT;
+          CODEUNIT.RUN(CODEUNIT::"Item Jnl.-Post Batch",ItemJournalLine);
+        END ELSE BEGIN
+          //return true as there were no records to process therefore no errors!
+          success:=TRUE;
+        END;
+      END;
+      EXIT(success);
+    END;
+
+    LOCAL PROCEDURE NextJournalLineNo@1000000012(TemplateName@1000000000 : Code[10];BatchName@1000000001 : Code[10]) : Integer;
+    VAR
+      ItemJournalLine@1000000002 : Record 83;
+      NextLineNo@1000000003 : Integer;
+    BEGIN
+      //This function returns the next item journal line no based on the template and batch
+
+      ItemJournalLine.SETRANGE("Journal Template Name",TemplateName);
+      ItemJournalLine.SETRANGE("Journal Batch Name",BatchName);
+      IF ItemJournalLine.FINDLAST THEN
+          NextLineNo := 10000 + ItemJournalLine."Line No."
+      ELSE
+        NextLineNo := 10000;
+
+      EXIT(NextLineNo);
+    END;
+
+    LOCAL PROCEDURE PostReclassJournal@1000000011() : Boolean;
+    VAR
+      ModistSetup@1000000000 : Record 50000;
+      ItemJournalLine@1000000001 : Record 83;
+      success@1000000002 : Boolean;
+    BEGIN
+      //This function is used to Post an Item reclass Journal
+      success:=FALSE;
+      ModistSetup.GET;
+      IF ModistSetup."Post 3PL Reclass Journal" THEN BEGIN
+        ItemJournalLine.SETRANGE("Journal Template Name",'RECLASS');
+        ItemJournalLine.SETRANGE("Journal Batch Name",ModistSetup."3PL Item Reclass Journal Batch");
+        IF ItemJournalLine.FINDSET THEN BEGIN
+          COMMIT;
+          success := CODEUNIT.RUN(CODEUNIT::"Item Jnl.-Post Batch",ItemJournalLine);
+        END ELSE BEGIN
+          //return true as there were no records to process therefore no errors!
+          success:=TRUE;
+        END;
+      END;
+      EXIT(success);
+    END;
+
+    LOCAL PROCEDURE PostPhysicalInventoryJournal@1000000019() : Boolean;
+    VAR
+      ModistSetup@1000000000 : Record 50000;
+      ItemJournalLine@1000000001 : Record 83;
+      success@1000000002 : Boolean;
+    BEGIN
+      //This function is used to Post a Physical Inventory Journal
+      success:=FALSE;
+      ModistSetup.GET;
+      IF ModistSetup."Post 3PL Phys Inv Journal" THEN BEGIN
+        ItemJournalLine.SETRANGE("Journal Template Name",'PHYS. INV.');
+        ItemJournalLine.SETRANGE("Journal Batch Name",ModistSetup."3PL Physical Inv Journal Batch");
+        IF ItemJournalLine.FINDSET THEN BEGIN
+          COMMIT;
+          CODEUNIT.RUN(CODEUNIT::"Item Jnl.-Post Batch",ItemJournalLine);
+        END ELSE BEGIN
+          //return true as there were no records to process therefore no errors!
+          success:=TRUE;
+        END;
+      END ELSE
+        success:=TRUE;
+
+      EXIT(success);
+    END;
+
+    PROCEDURE ProcessTransferOrders@1000000018();
+    VAR
+      TransferHeader@1000000000 : Record 5740;
+      JrnlStaging@1000000003 : Record 50014;
+      ModistSetup@1000000002 : Record 50000;
+      Location@1000000007 : Record 14;
+      TransferOrderList@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      element@1000000004 : Text;
+      TransferPostShipment@1000000005 : Codeunit 5704;
+      TransferPostReceipt@1000000008 : Codeunit 5705;
+      ReleaseTransferDoc@1000000006 : Codeunit 5708;
+    BEGIN
+      //this function process any transfer order receipt confirmations
+      EXIT;
+      ModistSetup.GET;
+      JrnlStaging.SETCURRENTKEY("Integration Type","Integration Group Code","Journal Type",Processed,"Document Type");
+      JrnlStaging.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+      JrnlStaging.SETRANGE("Integration Group Code",ModistSetup."3PL Inventory Group");
+      JrnlStaging.SETRANGE(Processed,FALSE);
+      JrnlStaging.SETRANGE("Document Type",JrnlStaging."Document Type"::"Transfer Order");
+
+      TransferOrderList := TransferOrderList.List();
+
+      IF JrnlStaging.FINDSET THEN BEGIN
+        REPEAT //Create a distinct list of Transfer Order Nos
+          IF NOT TransferOrderList.Contains(JrnlStaging."Document No.") THEN
+           TransferOrderList.Add(JrnlStaging."Document No.");
+        UNTIL JrnlStaging.NEXT=0;
+      END;
+
+      //iterate through the list to post shipments
+      IF TransferOrderList.Count > 0 THEN BEGIN
+        FOREACH element IN TransferOrderList DO
+          BEGIN
+            //post shipment
+            CLEAR(TransferHeader);
+            IF TransferHeader.GET(element) THEN BEGIN
+              CLEARLASTERROR;
+              //DOC OP9031 MOD001 -
+              Location.GET(TransferHeader."Transfer-from Code");
+              IF Location.RequireShipment(TransferHeader."Transfer-from Code") THEN
+                LogError(0,STRSUBSTNO(Err001,TransferHeader.FIELDCAPTION("Transfer-from Code"),TransferHeader."No."),STRSUBSTNO(ERRLOCATION,'ProcessTransferOrders\PostTransferShipment'),GETLASTERRORCODE,'')
+              ELSE BEGIN
+              //DOC OP9031 MOD001 +
+                IF PostTransferShipment(TransferHeader) THEN BEGIN
+                  //Create warehouse receipt
+                  CLEARLASTERROR;
+                  CLEAR(TransferHeader);
+                  TransferHeader.GET(element);
+                  IF TransferHeader.Status = TransferHeader.Status::Open THEN
+                    ReleaseTransferDoc.RUN(TransferHeader);
+                  //DOC OP9031 MOD001 -
+                  Location.GET(TransferHeader."Transfer-to Code");
+                  IF Location.RequireReceive(TransferHeader."Transfer-to Code") THEN BEGIN
+                  //DOC OP9031 MOD001 +
+                    IF NOT CreateWarehouseReceipt(TransferHeader) THEN BEGIN
+                      LogError(0,GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ProcessTransferOrders\CreateWarehouseReceipt'),GETLASTERRORCODE,'');
+                    END ELSE BEGIN
+                    //If we successfully create a warehouse receipt we will update the quantity to recieve with the actuals and post
+                      CLEARLASTERROR;
+                      IF NOT ProcessWarehouseReceipt(TransferHeader."No.") THEN BEGIN
+                        LogError(0,GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ProcessTransferOrders\ProcessWarehouseReceipt'),GETLASTERRORCODE,'')
+                      END ELSE BEGIN
+                        //mark as processed
+                      END;
+                    END;
+                  //DOC OP9031 MOD001 -
+                  END ELSE BEGIN
+                    IF NOT TransferPostReceipt.RUN(TransferHeader) THEN BEGIN
+                      LogError(0,GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ProcessTransferOrders\ProcessWarehouseReceipt'),GETLASTERRORCODE,'')
+                    END ELSE BEGIN
+                      //mark as processed
+                    END;
+                  END;
+                  //DOC OP9031 MOD001 +
+                END ELSE BEGIN
+                  LogError(0,GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ProcessTransferOrders\PostTransferShipment'),GETLASTERRORCODE,'');
+                END;
+              END;  //DOC OP9031 MOD001
+            END;
+          END;
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE PostTransferShipment@1000000024(TransHeader@1000000000 : Record 5740);
+    VAR
+      TransferPostShipment@1000000001 : Codeunit 5704;
+    BEGIN
+      TransferPostShipment.SetHideValidationDialog(TRUE);
+      TransferPostShipment.RUN(TransHeader);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE CreateWarehouseReceipt@1000000031(TransHeader@1000000001 : Record 5740);
+    VAR
+      GetSourceDocInbound@1000000000 : Codeunit 5751;
+    BEGIN
+      GetSourceDocInbound.CreateFromInbndTransferOrderHideDialog(TransHeader);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ProcessWarehouseReceipt@1000000036(SourceDocNo@1000000000 : Code[20]);
+    VAR
+      WarehouseReceiptHeader@1000000001 : Record 7316;
+      WarehouseReceiptLine@1000000002 : Record 7317;
+      JrnlStaging@1000000003 : Record 50014;
+      ModistSetup@1000000004 : Record 50000;
+      WhsRecptNo@1000000005 : Code[20];
+      WhsePostReceipt@1000000006 : Codeunit 5760;
+    BEGIN
+      ModistSetup.GET;
+      WhsRecptNo:='';
+      JrnlStaging.SETCURRENTKEY("Integration Type","Integration Group Code","Journal Type",Processed,"Document Type");
+      JrnlStaging.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+      JrnlStaging.SETRANGE("Integration Group Code",ModistSetup."3PL Inventory Group");
+      JrnlStaging.SETRANGE(Processed,FALSE);
+      JrnlStaging.SETRANGE("Document Type",JrnlStaging."Document Type"::"Transfer Order");
+      JrnlStaging.SETRANGE("Document No.",SourceDocNo);
+      IF JrnlStaging.FINDSET THEN BEGIN
+        REPEAT  //iterate through the warehouse receipt lines and update the quantity to recieve with the actual quantities
+          WarehouseReceiptLine.RESET;
+          WarehouseReceiptLine.SETRANGE("Source Document",WarehouseReceiptLine."Source Document"::"Inbound Transfer");
+          WarehouseReceiptLine.SETRANGE("Source No.",SourceDocNo);
+          WarehouseReceiptLine.SETRANGE("Source Line No.",JrnlStaging."Document Line No.");
+          IF WarehouseReceiptLine.FINDFIRST THEN BEGIN
+            IF WhsRecptNo = '' THEN
+              WhsRecptNo:=WarehouseReceiptLine."No.";
+            WarehouseReceiptLine.VALIDATE("Qty. to Receive",JrnlStaging.Quantity);
+            WarehouseReceiptLine.MODIFY;
+          END;
+        UNTIL JrnlStaging.NEXT=0;
+        //post the warehouse receipt
+        WarehouseReceiptLine.RESET;
+        WarehouseReceiptLine.SETRANGE("No.",WhsRecptNo);
+        WarehouseReceiptLine.SETRANGE("Source Document",WarehouseReceiptLine."Source Document"::"Inbound Transfer");
+        WarehouseReceiptLine.SETRANGE("Source No.",SourceDocNo);
+        IF WarehouseReceiptLine.FINDSET THEN BEGIN
+           WhsePostReceipt.SetHideValidationDialog(TRUE);
+           WhsePostReceipt.RUN(WarehouseReceiptLine);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE MarkStagingEntriesProcessedByDocumentNo@1000000010(DocNo@1000000000 : Code[20]);
+    VAR
+      IntegrationJournalStaging@1000000001 : Record 50014;
+      IntegrationJournalStagingToUpdate@1000000003 : Record 50014;
+    BEGIN
+      IntegrationJournalStaging.RESET;
+      IntegrationJournalStaging.SETRANGE("Document No.",DocNo);
+      IntegrationJournalStaging.SETRANGE(Processed,FALSE);
+      //check if there are any errors for the doc. if yes then do not mark any as processed
+      IF IntegrationJournalStaging.FINDSET THEN BEGIN
+        REPEAT
+          IntegrationJournalStaging.CALCFIELDS("No. Errors");
+          IF (IntegrationJournalStaging."No. Errors" = 0) THEN BEGIN
+            IF IntegrationJournalStagingToUpdate.GET(IntegrationJournalStaging."Entry No.") THEN BEGIN
+              IntegrationJournalStagingToUpdate.Processed:=TRUE;
+              IntegrationJournalStagingToUpdate."Processed Date" := TODAY;
+              IntegrationJournalStagingToUpdate."Processed By" := USERID;
+              IntegrationJournalStagingToUpdate.MODIFY;
+            END;
+          END;
+        UNTIL IntegrationJournalStaging.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE MarkStagingEntryAsProcessed@1000000013(IntegrationJournalStaging@1000000002 : Record 50014);
+    VAR
+      IntegrationJournalStagingToUpdate@1000000003 : Record 50014;
+    BEGIN
+      IF IntegrationJournalStagingToUpdate.GET(IntegrationJournalStaging."Entry No.") THEN BEGIN
+        IntegrationJournalStagingToUpdate.Processed:=TRUE;
+        IntegrationJournalStagingToUpdate."Processed Date" := TODAY;
+        IntegrationJournalStagingToUpdate."Processed By" := USERID;
+        IntegrationJournalStagingToUpdate.MODIFY;
+      END;
+    END;
+
+    LOCAL PROCEDURE ClearLastErrors@1000000021(IntegrationType@1000000004 : Code[10];IntegrationGroup@1000000005 : Code[10];FileName@1000000002 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+      IntegrationErrorLog@1000000001 : Record 50011;
+    BEGIN
+      //This function deletes all previous errors for the integration type and group
+      ModistSetup.GET;
+      IntegrationErrorLog.SETRANGE("Integration Type",IntegrationType);
+      IntegrationErrorLog.SETRANGE("Integration Process Group",IntegrationGroup);
+      IF FileName <> '' THEN
+        IntegrationErrorLog.SETRANGE(FileName,FileName);
+
+      IF IntegrationErrorLog.FINDSET THEN
+        IntegrationErrorLog.DELETEALL;
+    END;
+
+    BEGIN
+    {
+      //This codeunit contains functionality used to import Inventory transactions from 3PL into NAV
+      //The transactions include Stock Takes, Stock Transfers and adjustments
+      //DOC OP9031 MOD001 PCM 10/01/17 - Amended transfer order processing to validate whether locations require receive/shipment.
+      //DOC TM0001 AW 05/03/2018 - Transfer Order processing stopped - having a seperate CU
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,1155 @@
+OBJECT Codeunit 9062264 File System
+{
+  OBJECT-PROPERTIES
+  {
+    Date=21/07/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.16.1;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      FileManagement@1000000002 : Codeunit 419;
+      String@1000000009 : Codeunit 9062236;
+      TnpUtils@9062231 : Codeunit 9062229;
+      TnpToolkit@9062230 : Codeunit 9062230;
+      DirectoryS@1000000000 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+      DirectoryC@1000000003 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory" RUNONCLIENT;
+      FileS@1000000005 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+      FileC@1000000006 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File" RUNONCLIENT;
+      PathS@1000000001 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Path";
+      PathC@1000000004 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Path" RUNONCLIENT;
+      MagicPath@1000000007 : Text[1024];
+      txtFileExists@9062229 : TextConst 'ENU=File %1 already exists.;ENG=File %1 already exists.;ENC=File %1 already exists.';
+      tPathsTheSame@1000000008 : TextConst 'ENU=Source and destination paths are the same.;ENG=Source and destination paths are the same.';
+
+    PROCEDURE "--- General Functions ---"@1000000015();
+    BEGIN
+    END;
+
+    PROCEDURE Client@1000000016() : Boolean;
+    VAR
+      lActiveSession@9062230 : Record 2000000110;
+      lClientType@9062229 : Integer;
+    BEGIN
+      //DOC NA2016.10 - Returning if we are working on client side at the moment
+      //  <- TRUE = client side, FALSE = server side
+
+      lClientType := TnpToolkit.GetClientType();
+
+      EXIT(lClientType IN [lActiveSession."Client Type"::"Windows Client", lActiveSession."Client Type"::Desktop, lActiveSession."Client Type"::"Web Client",
+        lActiveSession."Client Type"::Tablet, lActiveSession."Client Type"::Phone]);
+    END;
+
+    PROCEDURE "--- Folders ---"@1000000004();
+    BEGIN
+    END;
+
+    PROCEDURE ToFolderName@1000000050(pName@1000000000 : Text) : Text;
+    BEGIN
+      //DOC NA2016.11 - Converting name to folder name
+      //  -> pName: Name
+      //  <- Folder name
+
+      EXIT(CONVERTSTR(pName, '<>:"/\|?*', '_________'));
+    END;
+
+    PROCEDURE GetFolders@1000000058(pClient@1000000005 : Boolean;pPath@1000000000 : Text;pSearchPattern@1000000002 : Text;VAR pFolderBuffer@1000000001 : Record 9062386);
+    VAR
+      lEnumeratorS@1000000004 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.IEnumerator`1";
+      lEnumeratorC@1000000007 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.IEnumerator`1" RUNONCLIENT;
+      lIterating@1000000003 : Boolean;
+      lPath@1000000006 : Text[1024];
+      lFolderBufferId@1000000008 : Integer;
+    BEGIN
+      //DOC NA2016.11 - Returning listing of folders
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: Path to start with
+      //  -> pSearchPattern: Search pattern
+      //  <> pFolderBuffer: Target buffer
+
+      IF (pSearchPattern = '') THEN
+        pSearchPattern := '*';
+
+      pFolderBuffer.RESET();
+      pFolderBuffer.DELETEALL();
+      CLEAR(lFolderBufferId);
+
+      IF (pClient) THEN
+        lEnumeratorC := DirectoryC.EnumerateDirectories(pPath, pSearchPattern).GetEnumerator()
+      ELSE
+        lEnumeratorS := DirectoryS.EnumerateDirectories(pPath, pSearchPattern).GetEnumerator();
+
+      IF (pClient) THEN
+        lIterating := lEnumeratorC.MoveNext()
+      ELSE
+        lIterating := lEnumeratorS.MoveNext();
+      WHILE (lIterating) DO
+      BEGIN
+        IF (pClient) THEN
+          lPath := lEnumeratorC.Current()
+        ELSE
+          lPath := lEnumeratorS.Current();
+        GetFolderInfo(pClient, lPath, pFolderBuffer);
+        lFolderBufferId += 1;
+        pFolderBuffer.ID := lFolderBufferId;
+        pFolderBuffer.INSERT();
+        IF (pClient) THEN
+          lIterating := lEnumeratorC.MoveNext()
+        ELSE
+          lIterating := lEnumeratorS.MoveNext();
+      END;
+    END;
+
+    PROCEDURE GetFolderInfo@1000000000(pClient@1000000005 : Boolean;pPath@1000000000 : Text[1024];VAR pFolderBuffer@1000000001 : Record 9062386);
+    VAR
+      lDirectoryInfoC@1000000002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.DirectoryInfo" RUNONCLIENT;
+      lDirectoryInfoS@1000000003 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.DirectoryInfo";
+    BEGIN
+      //DOC NA2016.16.1 - Returning folder info
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: Folder path
+      //  <> pFolderBuffer: Target folder buffer
+
+      IF (pClient) THEN
+      BEGIN
+        lDirectoryInfoC := lDirectoryInfoC.DirectoryInfo(pPath);
+        FillFileSystemBuffer(pFolderBuffer.Type::Folder, lDirectoryInfoC.FullName, lDirectoryInfoC.Name, lDirectoryInfoC.CreationTime,
+          lDirectoryInfoC.LastAccessTime, lDirectoryInfoC.LastWriteTime, 0, pFolderBuffer);
+      END
+      ELSE
+      BEGIN
+        lDirectoryInfoS := lDirectoryInfoS.DirectoryInfo(pPath);
+        FillFileSystemBuffer(pFolderBuffer.Type::Folder, lDirectoryInfoS.FullName, lDirectoryInfoS.Name, lDirectoryInfoS.CreationTime,
+          lDirectoryInfoS.LastAccessTime, lDirectoryInfoS.LastWriteTime, 0, pFolderBuffer);
+      END;
+    END;
+
+    PROCEDURE FolderExists@1000000009(pClient@1000000002 : Boolean;pPath@1000000000 : Text[1024]) : Boolean;
+    BEGIN
+      //DOC NA2016.11 - Returning if folder exists
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: Folder path
+      //  <- Folder exists / not
+
+      IF (pClient) THEN
+        EXIT(DirectoryC.Exists(pPath))
+      ELSE
+        EXIT(DirectoryS.Exists(pPath));
+    END;
+
+    PROCEDURE CreateFolder@1000000006(pClient@1000000002 : Boolean;pPath@1000000000 : Text[1024]);
+    BEGIN
+      //DOC NA2016.11 - Creating a folder
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: Folder path
+
+      IF (pClient) THEN
+        DirectoryC.CreateDirectory(pPath)
+      ELSE
+        DirectoryS.CreateDirectory(pPath);
+    END;
+
+    PROCEDURE CreateFolderStructure@1000000001(pClient@1000000003 : Boolean;pPath@1000000001 : Text[1024]);
+    VAR
+      lParentFolder@1000000002 : Text[250];
+    BEGIN
+      //DOC NA2016.11 - Creating folder structure
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: Folder structure to create
+
+      lParentFolder := GetParentFolder(pClient, pPath);
+      IF (lParentFolder <> '') THEN
+        IF (FolderExists(pClient, lParentFolder)) THEN
+        BEGIN
+          IF ( NOT (FolderExists(pClient, pPath))) THEN
+            CreateFolder(pClient, pPath);
+        END
+        ELSE
+          CreateFolderStructure(pClient, lParentFolder);
+    END;
+
+    PROCEDURE DeleteFolder@1000000007(pClient@1000000003 : Boolean;pPath@1000000000 : Text[1024];pRecursive@1000000001 : Boolean);
+    BEGIN
+      //DOC NA2016.11 - Deleting a folder
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: Folder path
+      //  -> pRecursive: Recursive delete
+
+      IF (pClient) THEN
+        DirectoryC.Delete(pPath, pRecursive)
+      ELSE
+        DirectoryS.Delete(pPath, pRecursive);
+    END;
+
+    PROCEDURE DeleteFolderIfExists@1000000038(pClient@1000000003 : Boolean;pPath@1000000000 : Text[1024];pRecursive@1000000001 : Boolean) : Boolean;
+    BEGIN
+      //DOC NA2016.11 - Deleting a folder if it exists
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: Folder path
+      //  -> pRecursive: Recursive delete
+      //  <- TRUE: Folder deleted, FALSE: Folder not found
+
+      IF ( NOT (FolderExists(pClient, pPath))) THEN
+        EXIT(FALSE);
+
+      IF (pClient) THEN
+        DirectoryC.Delete(pPath, pRecursive)
+      ELSE
+        DirectoryS.Delete(pPath, pRecursive);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE MoveFolder@1000000008(pClient@1000000004 : Boolean;pSourcePath@1000000000 : Text[1024];pDestPath@1000000001 : Text[1024]);
+    BEGIN
+      //DOC NA2016.11 - Moving a folder
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pSourcePath: Source path
+      //  -> pDestPath: Destination path
+
+      IF (pClient) THEN
+        DirectoryC.Move(pSourcePath, pDestPath)
+      ELSE
+        DirectoryS.Move(pSourcePath, pDestPath);
+    END;
+
+    PROCEDURE GetParentFolder@1000000003(pClient@1000000004 : Boolean;pPath@1000000000 : Text[1024]) : Text[1024];
+    VAR
+      lDirectoryInfoC@1000000003 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.DirectoryInfo" RUNONCLIENT;
+      lDirectoryInfoS@1000000002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.DirectoryInfo";
+      lParentPath@1000000001 : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Returning parent folder
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: Path to start with
+      //  <- Parent folder or '' if no parent folder exists
+
+      IF (pClient) THEN BEGIN
+        lDirectoryInfoC := DirectoryC.GetParent(pPath);
+        IF ( NOT (ISNULL(lDirectoryInfoC))) THEN
+          lParentPath := lDirectoryInfoC.FullName
+        ELSE
+          lParentPath := '';
+      END ELSE BEGIN
+        lDirectoryInfoS := DirectoryS.GetParent(pPath);
+        IF ( NOT (ISNULL(lDirectoryInfoS))) THEN
+          lParentPath := lDirectoryInfoS.FullName
+        ELSE
+          lParentPath := '';
+      END;
+
+      EXIT(lParentPath);
+    END;
+
+    PROCEDURE GetMagicPath@6() : Text[1024];
+    VAR
+      lFile@1004 : File;
+      lInStream@1000 : InStream;
+      lPath@1000000000 : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Returning magic path
+      //  <- The magic path
+
+      IF (MagicPath = '') THEN
+      BEGIN
+        lFile.CREATETEMPFILE();
+        lFile.CREATEINSTREAM(lInStream);
+        DOWNLOADFROMSTREAM(lInStream, '', '<TEMP>', '', lPath);
+        lFile.CLOSE();
+        DeleteFile(TRUE, lPath);
+        MagicPath := GetFolderName(TRUE, lPath);
+      END;
+
+      EXIT(MagicPath);
+    END;
+
+    PROCEDURE CopyFolder@1000000065(pClient@1000000002 : Boolean;pSourcePath@1000000000 : Text;pDestinationPath@1000000001 : Text);
+    VAR
+      lFolderBuffer@1000000003 : TEMPORARY Record 9062386;
+      lFileBuffer@1000000004 : TEMPORARY Record 9062386;
+      lSourcePath@1000000005 : Text;
+      lDestinationPath@1000000006 : Text;
+    BEGIN
+      //DOC NA2016.11 - Copying folder (with its entire structure)
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pSourcePath: Source path
+      //  -> pDestinationPath: Destination path
+
+      IF (pSourcePath = pDestinationPath) THEN
+        ERROR(tPathsTheSame);
+
+      IF ( NOT (FolderExists(pClient, pDestinationPath))) THEN
+        CreateFolder(pClient, pDestinationPath);
+
+      GetFolders(pClient, pDestinationPath, '', lFolderBuffer);
+      IF (lFolderBuffer.FINDSET()) THEN
+      REPEAT
+        lSourcePath := Combine(pClient, pSourcePath, lFolderBuffer.Name);
+        lDestinationPath := Combine(pClient, pDestinationPath, lFolderBuffer.Name);
+        CopyFolder(pClient, lSourcePath, lDestinationPath);
+      UNTIL (lFolderBuffer.NEXT() = 0);
+
+      GetFiles(FALSE, pDestinationPath, '', lFileBuffer);
+      IF (lFileBuffer.FINDSET()) THEN
+      REPEAT
+        lSourcePath := Combine(TRUE, pSourcePath, lFileBuffer.Name);
+        lDestinationPath := Combine(FALSE, pDestinationPath, lFileBuffer.Name);
+        CopyFile(pClient, lSourcePath, lDestinationPath);
+      UNTIL (lFileBuffer.NEXT() = 0);
+    END;
+
+    PROCEDURE "--- Files ---"@1000000005();
+    BEGIN
+    END;
+
+    PROCEDURE ToFileName@1000000052(pName@1000000000 : Text) : Text;
+    BEGIN
+      //DOC NA2016.11 - Converting name to file name
+      //  -> pName: Name
+      //  <- File name
+
+      EXIT(CONVERTSTR(pName, '<>:"/\|?*', '_________'));
+    END;
+
+    PROCEDURE GetFiles@1000000023(pClient@1000000008 : Boolean;pPath@1000000000 : Text;pSearchPattern@1000000002 : Text;VAR pFileBuffer@1000000001 : Record 9062386);
+    VAR
+      lEnumeratorS@1000000004 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.IEnumerator`1";
+      lEnumeratorC@1000000007 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.IEnumerator`1" RUNONCLIENT;
+      lIterating@1000000003 : Boolean;
+      lPath@1000000006 : Text[1024];
+      lFileBufferId@1000000005 : Integer;
+    BEGIN
+      //DOC NA2015.1 - Returning listing of files
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: Path to start with
+      //  -> pSearchPattern: Search pattern
+      //  <> pFileBuffer: Target file buffer
+
+      IF (pSearchPattern = '') THEN
+        pSearchPattern := '*';
+
+      pFileBuffer.RESET();
+      pFileBuffer.DELETEALL();
+      CLEAR(lFileBufferId);
+
+      IF (pClient) THEN
+        lEnumeratorC := DirectoryC.EnumerateFiles(pPath, pSearchPattern).GetEnumerator()
+      ELSE
+        lEnumeratorS := DirectoryS.EnumerateFiles(pPath, pSearchPattern).GetEnumerator();
+
+      IF (pClient) THEN
+        lIterating := lEnumeratorC.MoveNext()
+      ELSE
+        lIterating := lEnumeratorS.MoveNext();
+      WHILE (lIterating) DO
+      BEGIN
+        IF (pClient) THEN
+          lPath := lEnumeratorC.Current()
+        ELSE
+          lPath := lEnumeratorS.Current();
+        GetFileInfo(pClient, lPath, pFileBuffer);
+        lFileBufferId += 1;
+        pFileBuffer.ID := lFileBufferId;
+        pFileBuffer.INSERT();
+        IF (pClient) THEN
+          lIterating := lEnumeratorC.MoveNext()
+        ELSE
+          lIterating := lEnumeratorS.MoveNext();
+      END;
+    END;
+
+    PROCEDURE GetFileInfo@1000000021(pClient@1000000006 : Boolean;pPath@1000000000 : Text;VAR pFileBuffer@1000000001 : Record 9062386);
+    VAR
+      lFileInfoC@1000000002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileInfo" RUNONCLIENT;
+      lFileInfoS@1000000003 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileInfo";
+    BEGIN
+      //DOC NA2016.16.1 - Returning file info
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: File path
+      //  <> pFileBuffer: Target file buffer
+
+      IF (pClient) THEN
+      BEGIN
+        lFileInfoC := lFileInfoC.FileInfo(pPath);
+        FillFileSystemBuffer(pFileBuffer.Type::File, pPath, lFileInfoC.Name, lFileInfoC.CreationTime,
+          lFileInfoC.LastAccessTime, lFileInfoC.LastWriteTime, lFileInfoC.Length, pFileBuffer);
+      END
+      ELSE
+      BEGIN
+        lFileInfoS := lFileInfoS.FileInfo(pPath);
+        FillFileSystemBuffer(pFileBuffer.Type::File, pPath, lFileInfoS.Name, lFileInfoS.CreationTime,
+          lFileInfoS.LastAccessTime, lFileInfoS.LastWriteTime, lFileInfoS.Length, pFileBuffer);
+      END;
+    END;
+
+    PROCEDURE FileExists@1000000020(pClient@1000000002 : Boolean;pPath@1000000000 : Text[1024]) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Returning if file exists
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: File path
+      //  <- File exists / not
+
+      IF (pClient) THEN
+        EXIT(FileC.Exists(pPath))
+      ELSE
+        EXIT(FileS.Exists(pPath));
+    END;
+
+    PROCEDURE CreateFile@1000000019(pClient@1000000002 : Boolean;pPath@1000000000 : Text[1024]);
+    BEGIN
+      //DOC NA2015.1 - Creating a file
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: File path
+
+      IF (pClient) THEN
+        FileC.Create(pPath)
+      ELSE
+        FileS.Create(pPath);
+    END;
+
+    PROCEDURE DeleteFile@1000000018(pClient@1000000002 : Boolean;pPath@1000000000 : Text[1024]);
+    BEGIN
+      //DOC NA2015.1 - Deleting a file
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: File path
+
+      IF (pClient) THEN
+        FileC.Delete(pPath)
+      ELSE
+        FileS.Delete(pPath);
+    END;
+
+    PROCEDURE DeleteFileIfExists@1000000027(pClient@1000000002 : Boolean;pPath@1000000000 : Text) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Deleting a file if it exists
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: File path
+      //  <- TRUE: File deleted, FALSE: File not found
+
+      IF ( NOT (FileExists(pClient, pPath))) THEN
+        EXIT(FALSE);
+
+      IF (pClient) THEN
+        FileC.Delete(pPath)
+      ELSE
+        FileS.Delete(pPath);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CopyFile@1000000026(pClient@1000000004 : Boolean;pSourcePath@1000000000 : Text[1024];pDestPath@1000000001 : Text[1024]);
+    BEGIN
+      //DOC NA2015.1 - Copying a file
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pSourcePath: Source path
+      //  -> pDestPath: Destination path
+
+      IF (pClient) THEN
+        FileC.Copy(pSourcePath, pDestPath)
+      ELSE
+        FileS.Copy(pSourcePath, pDestPath);
+    END;
+
+    PROCEDURE CopyFileExt@9062229(pClient@1000000004 : Boolean;pSourcePath@1000000000 : Text[1024];pDestPath@1000000001 : Text[1024];pOverwrite@9062229 : Boolean);
+    BEGIN
+      //DOC NA2016.10 - Copying a file
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pSourcePath: Source path
+      //  -> pDestPath: Destination path
+      //  -> pOverwrite: Overwrite existing file
+
+      IF NOT FolderExists(pClient,GetFolderName(pClient,pDestPath)) THEN
+        CreateFolder(pClient,GetFolderName(pClient,pDestPath));
+
+      IF (FileExists(pClient, pDestPath)) AND (NOT pOverwrite) THEN
+          ERROR(txtFileExists, pDestPath);
+
+      IF (pClient) THEN
+        FileC.Copy(pSourcePath, pDestPath)
+      ELSE
+        FileS.Copy(pSourcePath, pDestPath);
+    END;
+
+    PROCEDURE MoveFile@1000000017(pClient@1000000004 : Boolean;pSourcePath@1000000000 : Text[1024];pDestPath@1000000001 : Text[1024]);
+    VAR
+      Recursive@1000000002 : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Moving a file
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pSourcePath: Source path
+      //  -> pDestPath: Destination path
+
+      IF (pClient) THEN BEGIN
+        IF NOT FolderExists(pClient,GetFolderName(pClient,pDestPath)) THEN
+          CreateFolder(pClient,GetFolderName(pClient,pDestPath));
+        FileC.Move(pSourcePath, pDestPath);
+      END ELSE BEGIN
+        IF NOT FolderExists(pClient,GetFolderName(pClient,pDestPath)) THEN
+          CreateFolder(pClient,GetFolderName(pClient,pDestPath));
+        FileS.Move(pSourcePath, pDestPath);
+      END;
+    END;
+
+    PROCEDURE GetFileCreatedDateTime@1000000049(pClient@1000000006 : Boolean;pPath@1000000000 : Text[1024]) CreatedDateTime : DateTime;
+    VAR
+      lFileInfoC@1000000002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileInfo" RUNONCLIENT;
+      lFileInfoS@1000000003 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileInfo";
+      lFileInfo@1000000004 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileInfo";
+    BEGIN
+      //DOC NA2015.1 - Returning file created DateTime
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: File path
+
+      IF (pClient) THEN
+        lFileInfo := lFileInfoC.FileInfo(pPath)
+      ELSE
+        lFileInfo := lFileInfoS.FileInfo(pPath);
+
+      CreatedDateTime := CREATEDATETIME(DT2DATE(lFileInfo.CreationTime),DT2TIME(lFileInfo.CreationTime));
+    END;
+
+    PROCEDURE GetFileLastModifiedDateTime@1000000051(pClient@1000000006 : Boolean;pPath@1000000000 : Text) CreatedDateTime : DateTime;
+    VAR
+      lFileInfoC@1000000002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileInfo" RUNONCLIENT;
+      lFileInfoS@1000000003 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileInfo";
+      lFileInfo@1000000004 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileInfo";
+    BEGIN
+      //DOC NA2015.1 - Returning file Last Modified DateTime
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: File path
+
+      IF (pClient) THEN
+        lFileInfo := lFileInfoC.FileInfo(pPath)
+      ELSE
+        lFileInfo := lFileInfoS.FileInfo(pPath);
+
+      CreatedDateTime := CREATEDATETIME(DT2DATE(lFileInfo.LastWriteTime),DT2TIME(lFileInfo.LastWriteTime));
+    END;
+
+    PROCEDURE "--- Path ---"@1000000012();
+    BEGIN
+    END;
+
+    PROCEDURE GetFolderName@1000000030(pClient@1000000002 : Boolean;pPath@1000000000 : Text) : Text;
+    BEGIN
+      //DOC NA2015.1 - Returning folder name
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: Path of the file
+      //  <- Folder name
+
+      EXIT(PathS.GetDirectoryName(pPath));
+    END;
+
+    PROCEDURE GetFileName@1000000013(pClient@1000000002 : Boolean;pPath@1000000000 : Text) : Text;
+    BEGIN
+      //DOC NA2015.1 - Returning file name
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: Path of the file
+      //  <- File name
+
+      EXIT(PathS.GetFileName(pPath));
+    END;
+
+    PROCEDURE GetFileNameWithoutExtension@1000000028(pClient@1000000002 : Boolean;pPath@1000000000 : Text) : Text;
+    BEGIN
+      //DOC NA2015.1 - Returning file name without extension
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: Path of the file
+      //  <- File name without extension
+
+      EXIT(PathS.GetFileNameWithoutExtension(pPath));
+    END;
+
+    PROCEDURE GetExtension@1000000014(pClient@1000000002 : Boolean;pPath@1000000000 : Text[1024]) : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Returning file extension
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: Path of the file
+      //  <- Extension
+
+      EXIT(PathS.GetExtension(pPath));
+    END;
+
+    PROCEDURE GetRandomFileName@1000000034(pClient@1000000000 : Boolean) : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Returning random file name
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  <- Random file name
+
+      IF (pClient) THEN
+        EXIT(PathC.GetRandomFileName())
+      ELSE
+        EXIT(PathS.GetRandomFileName());
+    END;
+
+    PROCEDURE GetTempFileName@1000000033(pClient@1000000000 : Boolean) : Text[1024];
+    VAR
+      lTempPath@1000000001 : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Returning temporary file name (including path)
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  <- Temporary file name (including path)
+
+      lTempPath := GetTempPath(pClient);
+      lTempPath := String.Replace(lTempPath, ',', '');
+
+      IF (pClient) THEN
+        EXIT(PathC.Combine(lTempPath, PathC.GetRandomFileName()))
+      ELSE
+        EXIT(PathS.Combine(lTempPath, PathS.GetRandomFileName()));
+    END;
+
+    PROCEDURE GetTempPath@1000000032(pClient@1000000000 : Boolean) : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Returning temporary path
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  <- Temporary path
+
+      IF (pClient) THEN
+        EXIT(PathC.GetTempPath())
+      ELSE
+        EXIT(PathS.GetTempPath());
+    END;
+
+    PROCEDURE GetTempPathForFile@1000000022(pClient@1000000000 : Boolean;pFileName@1000000001 : Text[250]) : Text[1024];
+    VAR
+      lTempPath@1000000002 : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Returning temporary path using the file name passed
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pFileName: The file name
+      //  <- Temporary path
+
+      pFileName := String.Replace(pFileName,',','');
+
+      lTempPath := GetTempPath(pClient);
+      lTempPath := Combine(pClient, lTempPath, pFileName);
+
+      EXIT(lTempPath);
+    END;
+
+    PROCEDURE GetTempPathForExtension@1000000046(pClient@1000000000 : Boolean;pExtension@1000000001 : Text[1024]) : Text[1024];
+    VAR
+      lTempPath@1000000002 : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Returning temporary path using the extension passed
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pExtension: The extension
+      //  <- Temporary path
+
+      lTempPath := GetTempFileName(pClient);
+      lTempPath := ChangeExtension(pClient, lTempPath, pExtension);
+
+      EXIT(lTempPath);
+    END;
+
+    PROCEDURE ChangeExtension@1000000036(pClient@1000000003 : Boolean;pPath@1000000000 : Text[1024];pExtension@1000000001 : Text[1024]) : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Changing file extension
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath: Path of the file
+      //  -> pExtension: New extension
+      //  <- File path with extension changed
+
+      EXIT(PathS.ChangeExtension(pPath, pExtension));
+    END;
+
+    PROCEDURE Combine@1000000037(pClient@1000000002 : Boolean;pPath1@1000000000 : Text[1024];pPath2@1000000001 : Text[1024]) : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Combining two paths
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pPath1: Path 1
+      //  -> pPath2: Path 2
+      //  <- Combined path
+
+      EXIT(PathS.Combine(pPath1, pPath2));
+    END;
+
+    PROCEDURE "--- Download and Upload ---"@1000000024();
+    BEGIN
+    END;
+
+    PROCEDURE NoPromptFolder@9() : Text;
+    VAR
+      eNoPromptFolder@1000000000 : TextConst 'ENU=<TEMP>;ENG=<TEMP>';
+    BEGIN
+      //DOC NA2015.1 - No-prompt folder for interaction upload / download functions
+      //  <- The directory
+
+      EXIT(eNoPromptFolder);
+    END;
+
+    PROCEDURE UploadWithInteraction@21(pClient@1000000000 : Boolean;pSourceFilePath@1000000001 : Text;VAR pDestinationFilePath@1000000003 : Text[1024];pDialogTitle@1003 : Text[250];pFilter@1000000002 : Text[1024]);
+    BEGIN
+      //DOC NA2015.8 - Uploading a file with interaction
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pSourceFilePath: Source file path
+      //  <> pDestinationFilePath: Destination file path
+      //  -> pDialogTitle: Dialog title
+      //  -> pFilter: Filter
+
+      UploadInternal(pClient, pSourceFilePath, pDestinationFilePath, TRUE, pDialogTitle, pFilter);
+    END;
+
+    PROCEDURE UploadSilent@1040000(pClient@1000000002 : Boolean;pSourceFilePath@1040000 : Text[1024];VAR pDestinationFilePath@1040001 : Text[1024]);
+    BEGIN
+      //DOC NA2015.1 - Uploading a file without interaction
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pSourceFilePath: Source file path
+      //  -> pDestinationFilePath: Destination file path
+
+      UploadInternal(pClient, pSourceFilePath, pDestinationFilePath, FALSE, '', '');
+    END;
+
+    LOCAL PROCEDURE UploadInternal@1000000025(pClient@1000000000 : Boolean;pSourceFilePath@1000000001 : Text[1024];VAR pDestinationFilePath@1000000002 : Text[1024];pInteraction@1000000005 : Boolean;pDialogTitle@1000000004 : Text[250];pFilter@1000000003 : Text[1024]);
+    VAR
+      xPathsTheSame@1000000008 : TextConst 'ENU="Source and destination paths are the same; the file can''t be uploaded.";ENG="Source and destination paths are the same; the file can''t be uploaded."';
+      lSourceFolder@9062230 : Text;
+      lSourceTemporaryFilePath@9062229 : Text;
+      lMagicPath@9062231 : Text;
+    BEGIN
+      //DOC NA2016.10 - Uploading a file (internal function)
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pSourceFilePath: Source file path
+      //  <> pDestinationFilePath: Destination file path
+      //  -> pInteraction: TRUE = with interaction (dialog), FALSE = silent
+      //  -> pDialogTitle: Dialog title
+      //  -> pFilter: Filter
+
+      IF (pClient) THEN
+      BEGIN
+        IF ( NOT (pInteraction)) THEN
+        BEGIN
+          lMagicPath := GetMagicPath();
+          lSourceFolder := GetFolderName(pClient, pSourceFilePath);
+          IF (lSourceFolder <> lMagicPath) THEN
+          BEGIN
+            lSourceTemporaryFilePath := Combine(pClient, lMagicPath, GetFileName(pClient, pSourceFilePath));
+            DeleteFileIfExists(pClient, lSourceTemporaryFilePath);
+            CopyFile(pClient, pSourceFilePath, lSourceTemporaryFilePath);
+          END;
+        END;
+        UPLOAD(pDialogTitle, DefaultFolder(pInteraction), DefaultFilter(pFilter, pSourceFilePath),
+          pSourceFilePath, pDestinationFilePath);
+        IF (lSourceTemporaryFilePath <> '') THEN
+          DeleteFileIfExists(pClient, lSourceTemporaryFilePath);
+      END
+      ELSE
+      BEGIN
+        IF (pSourceFilePath <> pDestinationFilePath) THEN
+          CopyFile(pClient, pSourceFilePath, pDestinationFilePath);
+      END;
+    END;
+
+    PROCEDURE DownloadWithInteraction@1000000040(pClient@1000000005 : Boolean;pSourceFilePath@1000000004 : Text;pDestinationFilePath@1000000003 : Text;pDialogTitle@1000000001 : Text;pFilter@1000000000 : Text) : Text;
+    BEGIN
+      //DOC NA2015.8 - Downloading a file with interaction
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pSourceFilePath: Source file path
+      //  -> pDestinationFilePath: Destination file path
+      //  -> pDialogTitle: Dialog title
+      //  -> pFilter: Filter
+      //  <- Actual destination file path
+
+      EXIT(DownloadInternal(pClient, pSourceFilePath, pDestinationFilePath, TRUE, pDialogTitle, pFilter));
+    END;
+
+    PROCEDURE DownloadSilent@1000000039(pClient@1000000005 : Boolean;pSourceFilePath@1000000004 : Text;pDestinationFilePath@1000000003 : Text) : Text;
+    BEGIN
+      //DOC NA2015.8 - Downloading a file without interaction
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pSourceFilePath: Source file path
+      //  -> pDestinationFilePath: Destination file path
+      //  <- Actual destination file path
+
+      EXIT(DownloadInternal(pClient, pSourceFilePath, pDestinationFilePath, FALSE, '', ''));
+    END;
+
+    PROCEDURE DownloadInternal@1000000041(pClient@1000000006 : Boolean;pSourceFilePath@1000000005 : Text;pDestinationFilePath@1000000004 : Text;pInteraction@1000000003 : Boolean;pDialogTitle@1000000002 : Text;pFilter@1000000001 : Text) : Text;
+    VAR
+      xPathsTheSame@1000000000 : TextConst 'ENU="Source and destination paths are the same; the file can''t be downloaded.";ENG="Source and destination paths are the same; the file can''t be downloaded."';
+      lDestinationFilePath@1000000007 : Text;
+    BEGIN
+      //DOC NA2015.8 - Downloading a file (internal function)
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pSourceFilePath: Source file path
+      //  -> pDestinationFilePath: Destination file path
+      //  -> pInteraction: TRUE = with interaction (dialog), FALSE = silent
+      //  -> pDialogTitle: Dialog title
+      //  -> pFilter: Filter
+      //  <- Actual destination file path
+
+      IF (pClient) THEN
+      BEGIN
+        lDestinationFilePath := pDestinationFilePath;
+        DOWNLOAD(pSourceFilePath, pDialogTitle, DefaultFolder(pInteraction), DefaultFilter(pFilter, pSourceFilePath), lDestinationFilePath);
+        IF ((pDestinationFilePath <> '') AND (pDestinationFilePath <> lDestinationFilePath) AND ( NOT (pInteraction))) THEN
+          MoveFile(pClient, lDestinationFilePath, pDestinationFilePath)
+        ELSE
+          pDestinationFilePath := lDestinationFilePath;
+      END
+      ELSE
+      BEGIN
+        IF (pSourceFilePath = pDestinationFilePath) THEN
+          ERROR(xPathsTheSame);
+        CopyFile(pClient, pSourceFilePath, pDestinationFilePath);
+      END;
+
+      EXIT(pDestinationFilePath);
+    END;
+
+    LOCAL PROCEDURE "--- Folder Download and Upload ---"@1000000054();
+    BEGIN
+    END;
+
+    PROCEDURE UploadFolder@1000000056(pClient@1000000004 : Boolean;pSourcePath@1000000000 : Text;pDestinationPath@1000000001 : Text);
+    VAR
+      lFolderName@1000000007 : Text;
+    BEGIN
+      //DOC NA2016.11 - Uploading entire folder
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pSourcePath: Source (client) path
+      //  -> pDestinationPath: Destination (server) path
+
+      IF (pClient) THEN
+      BEGIN
+        IF (GetParentFolder(TRUE, pSourcePath) <> '') THEN
+          lFolderName := GetFileName(TRUE, pSourcePath);
+        IF (lFolderName <> '') THEN
+          pDestinationPath := Combine(TRUE, pDestinationPath, lFolderName);
+        UploadFolderInternal(pClient, pSourcePath, pDestinationPath);
+      END
+      ELSE
+        CopyFolder(pClient, pSourcePath, pDestinationPath);
+    END;
+
+    LOCAL PROCEDURE UploadFolderInternal@1000000002(pClient@1000000004 : Boolean;pSourcePath@1000000000 : Text;pDestinationPath@1000000001 : Text);
+    VAR
+      lFolderBuffer@1000000002 : TEMPORARY Record 9062386;
+      lFileBuffer@1000000003 : TEMPORARY Record 9062386;
+      lSourcePath@1000000005 : Text;
+      lDestinationPath@1000000006 : Text;
+    BEGIN
+      //DOC NA2016.11 - Uploading entire folder (internal version)
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pSourcePath: Source (client) path
+      //  -> pDestinationPath: Destination (server) path
+
+      IF (pClient) THEN
+      BEGIN
+        IF ( NOT (FolderExists(FALSE, pDestinationPath))) THEN
+          CreateFolder(FALSE, pDestinationPath);
+
+        GetFolders(TRUE, pSourcePath, '', lFolderBuffer);
+        IF (lFolderBuffer.FINDSET()) THEN
+        REPEAT
+          lSourcePath := Combine(TRUE, pSourcePath, lFolderBuffer.Name);
+          lDestinationPath := Combine(FALSE, pDestinationPath, lFolderBuffer.Name);
+          UploadFolderInternal(pClient, lSourcePath, lDestinationPath);
+        UNTIL (lFolderBuffer.NEXT() = 0);
+
+        GetFiles(TRUE, pSourcePath, '', lFileBuffer);
+        IF (lFileBuffer.FINDSET()) THEN
+        REPEAT
+          lSourcePath := Combine(TRUE, pSourcePath, lFileBuffer.Name);
+          lDestinationPath := Combine(FALSE, pDestinationPath, lFileBuffer.Name);
+          UploadSilent(pClient, lSourcePath, lDestinationPath);
+        UNTIL (lFileBuffer.NEXT() = 0);
+      END
+      ELSE
+        CopyFolder(pClient, pSourcePath, pDestinationPath);
+    END;
+
+    PROCEDURE DownloadFolder@1000000053(pClient@1000000002 : Boolean;pSourcePath@1000000001 : Text;pDestinationPath@1000000000 : Text);
+    VAR
+      lFolderName@1000000007 : Text;
+    BEGIN
+      //DOC NA2016.11 - Downloading entire folder
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pSourcePath: Source (server) path
+      //  -> pDestinationPath: Destination (client) path
+
+      IF (pClient) THEN
+      BEGIN
+        IF (GetParentFolder(FALSE, pSourcePath) <> '') THEN
+          lFolderName := GetFileName(FALSE, pSourcePath);
+        IF (lFolderName <> '') THEN
+          pDestinationPath := Combine(FALSE, pDestinationPath, lFolderName);
+        DownloadFolderInternal(pClient, pSourcePath, pDestinationPath);
+      END
+      ELSE
+        CopyFolder(pClient, pSourcePath, pDestinationPath);
+    END;
+
+    LOCAL PROCEDURE DownloadFolderInternal@1000000055(pClient@1000000002 : Boolean;pSourcePath@1000000001 : Text;pDestinationPath@1000000000 : Text);
+    VAR
+      lFolderBuffer@1000000006 : TEMPORARY Record 9062386;
+      lFileBuffer@1000000005 : TEMPORARY Record 9062386;
+      lSourcePath@1000000004 : Text;
+      lDestinationPath@1000000003 : Text;
+    BEGIN
+      //DOC NA2016.11 - Downloading entire folder (internal version)
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pSourcePath: Source (server) path
+      //  -> pDestinationPath: Destination (client) path
+
+      IF (pClient) THEN
+      BEGIN
+        IF ( NOT (FolderExists(TRUE, pDestinationPath))) THEN
+          CreateFolder(TRUE, pDestinationPath);
+
+        GetFolders(FALSE, pSourcePath, '', lFolderBuffer);
+        IF (lFolderBuffer.FINDSET()) THEN
+        REPEAT
+          lSourcePath := Combine(FALSE, pSourcePath, lFolderBuffer.Name);
+          lDestinationPath := Combine(TRUE, pDestinationPath, lFolderBuffer.Name);
+          DownloadFolderInternal(pClient, lSourcePath, lDestinationPath);
+        UNTIL (lFolderBuffer.NEXT() = 0);
+
+        GetFiles(FALSE, pSourcePath, '', lFileBuffer);
+        IF (lFileBuffer.FINDSET()) THEN
+        REPEAT
+          lSourcePath := Combine(FALSE, pSourcePath, lFileBuffer.Name);
+          lDestinationPath := Combine(TRUE, pDestinationPath, lFileBuffer.Name);
+          DownloadSilent(pClient, lSourcePath, lDestinationPath);
+        UNTIL (lFileBuffer.NEXT() = 0);
+      END
+      ELSE
+        CopyFolder(pClient, pSourcePath, pDestinationPath);
+    END;
+
+    PROCEDURE "--- BLOBs ---"@1000000035();
+    BEGIN
+    END;
+
+    PROCEDURE ImportFileToBlob@1000000042(pClient@1000000004 : Boolean;VAR pFilePath@1000000003 : Text[1024];VAR pBlob@1000000002 : TEMPORARY Record 99008535;pWindowTitle@1000000001 : Text[250];pFilter@1000000000 : Text[1024]);
+    BEGIN
+      //DOC NA2015.1 - Importing a file to a BLOB with interaction
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  <> pFilePath: File path
+      //  <> pBlob: Target BLOB
+      //  -> pDialogTitle: Dialog title
+      //  -> pFilter: Filter
+
+      ImportFileToBlobInternal(pClient, pFilePath, pBlob, TRUE, pWindowTitle, pFilter);
+    END;
+
+    PROCEDURE ImportFileToBlobSilent@1000000031(pClient@1000000007 : Boolean;pFilePath@1000000006 : Text[1024];VAR pBlob@1000000005 : TEMPORARY Record 99008535);
+    VAR
+      lFileName@1000000003 : Text[250];
+      lFile@1000000000 : File;
+      lInStream@1001 : InStream;
+      lOutStream@1004 : OutStream;
+    BEGIN
+      //DOC NA2015.1 - Importing a file to a BLOB without interaction
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pFilePath: File path
+      //  <> pBlob: Target BLOB
+
+      ImportFileToBlobInternal(pClient, pFilePath, pBlob, FALSE, '', '');
+    END;
+
+    PROCEDURE ImportFileToBlobInternal@1000000043(pClient@1000000002 : Boolean;VAR pFilePath@1000000001 : Text[1024];VAR pBlob@1000000000 : TEMPORARY Record 99008535;pInteraction@1000000005 : Boolean;pDialogTitle@1000000004 : Text[250];pFilter@1000000003 : Text[1024]);
+    VAR
+      lOutStream@1000000006 : OutStream;
+      lInStream@1000000007 : InStream;
+      lFile@1000000009 : File;
+      lFileName@1000000008 : Text[1024];
+      lTemporaryFilePath@1000000010 : Text[1024];
+      lConfirmed@1000000011 : Boolean;
+    BEGIN
+      //DOC NA2015.8 - Importing a file to a BLOB (internal function)
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  <> pFilePath: File path
+      //  <> pBlob: Target BLOB
+      //  -> pInteraction: Interaction mode flag
+      //  -> pDialogTitle: Dialog title (only for interaction mode)
+      //  -> pFilter: Filter (only for interaction mode)
+
+      CLEAR(pBlob);
+      pBlob.Blob.CREATEOUTSTREAM(lOutStream);
+
+      IF (pClient) THEN
+      BEGIN
+        IF ( NOT (pInteraction)) THEN
+        BEGIN
+          lFileName := GetFileName(pClient, pFilePath);
+          lTemporaryFilePath := Combine(pClient, GetMagicPath(), lFileName);
+          DeleteFileIfExists(pClient, lTemporaryFilePath);
+          CopyFile(pClient, pFilePath, lTemporaryFilePath);
+        END;
+        lConfirmed := UPLOADINTOSTREAM(pDialogTitle, DefaultFolder(pInteraction), DefaultFilter(pFilter, pFilePath),
+          lFileName, lInStream);
+        IF (pInteraction) THEN
+          pFilePath := lFileName;
+      END
+      ELSE
+      BEGIN
+        lFile.WRITEMODE(FALSE);
+        lFile.TEXTMODE(FALSE);
+        lFile.OPEN(pFilePath);
+        lFile.CREATEINSTREAM(lInStream);
+        lConfirmed := TRUE;
+      END;
+
+      IF (lConfirmed) THEN
+        COPYSTREAM(lOutStream, lInStream);
+
+      IF ( NOT (pClient)) THEN
+        lFile.CLOSE();
+    END;
+
+    PROCEDURE ExportBlobToFile@1000000044(pClient@1000000005 : Boolean;pBlob@1000000004 : TEMPORARY Record 99008535;VAR pFilePath@1000000003 : Text[1024];pDialogTitle@1000000001 : Text[250];pFilter@1000000000 : Text[1024]);
+    BEGIN
+      //DOC NA2015.1 - Exporting a BLOB to a file with interaction
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pBlob: BLOB to export
+      //  <> pFilePath: File path
+      //  -> pDialogTitle: Dialog title
+      //  -> pFilter: Filter
+
+      ExportBlobToFileInternal(pClient, pBlob, pFilePath, TRUE, pDialogTitle, pFilter);
+    END;
+
+    PROCEDURE ExportBlobToFileSilent@1000000029(pClient@1000000003 : Boolean;pBlob@1002 : Record 99008535;VAR pFilePath@1000000007 : Text[1024]);
+    VAR
+      lInStream@1003 : InStream;
+      lOutStream@1000000002 : OutStream;
+      lFile@1000000001 : File;
+    BEGIN
+      //DOC NA2015.1 - Exporting a BLOB to a file without interaction
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pBlob: BLOB to export
+      //  <> pFilePath: File path
+
+      ExportBlobToFileInternal(pClient, pBlob, pFilePath, FALSE, '', '');
+    END;
+
+    LOCAL PROCEDURE ExportBlobToFileInternal@1000000045(pClient@1000000002 : Boolean;pBlob@1000000001 : TEMPORARY Record 99008535;VAR pFilePath@1000000000 : Text[1024];pInteraction@1000000005 : Boolean;pDialogTitle@1000000004 : Text[250];pFilter@1000000003 : Text[1024]);
+    VAR
+      lInStream@1000000007 : InStream;
+      lFile@1000000006 : File;
+      lOutStream@1000000009 : OutStream;
+      lFilePath@1000000008 : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Exporting a BLOB to a file (internal function)
+      //  -> pClient: TRUE = client side, FALSE = server side
+      //  -> pBlob: BLOB to export
+      //  <> pFilePath: File path (can be modified in interaction mode)
+      //  -> pInteraction: Interaction mode flag
+      //  -> pDialogTitle: Dialog title (only for interaction mode)
+      //  -> pFilter: Filter (only for interaction mode)
+
+      pInteraction := ((pInteraction) AND (pClient));
+
+      DeleteFileIfExists(pClient, pFilePath);
+      pBlob.Blob.CREATEINSTREAM(lInStream);
+
+      IF (pClient) THEN
+      BEGIN
+        IF (pInteraction) THEN
+          lFilePath := GetFileName(pClient, pFilePath)
+        ELSE
+          lFilePath := pFilePath;
+        DOWNLOADFROMSTREAM(lInStream, pDialogTitle, DefaultFolder(pInteraction),
+          DefaultFilter(pFilter, pFilePath), lFilePath);
+        IF ( NOT (pInteraction)) THEN
+          MoveFile(pClient, lFilePath, pFilePath);
+      END
+      ELSE
+      BEGIN
+        lFile.WRITEMODE(TRUE);
+        lFile.TEXTMODE(FALSE);
+        lFile.CREATE(pFilePath);
+        lFile.CREATEOUTSTREAM(lOutStream);
+        COPYSTREAM(lOutStream, lInStream);
+        lFile.CLOSE();
+      END;
+    END;
+
+    PROCEDURE "--- Tools ---"@1000000010();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE FillFileSystemBuffer@1000000011(pType@1000000007 : Integer;pPath@1000000000 : Text;pName@1000000005 : Text;pCreationDateTime@1000000006 : DateTime;pLastAccessDateTime@1000000009 : DateTime;pLastWriteDateTime@1000000010 : DateTime;pSize@1000000008 : BigInteger;VAR pFileSystemBuffer@1000000001 : Record 9062386);
+    VAR
+      lDirectoryInfoC@1000000002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.DirectoryInfo" RUNONCLIENT;
+      lDirectoryInfoS@1000000003 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.DirectoryInfo";
+      lDirectoryInfo@1000000004 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.DirectoryInfo";
+    BEGIN
+      //DOC NA2016.16.1 - Converting directory info to file system buffer
+      //  -> pType: Type
+      //  -> pPath: Path
+      //  -> pName: Name
+      //  -> pCreationDateTime: Creation date & time
+      //  -> pLastAccessDateTime: Last access date & time
+      //  -> pLastWriteDateTime: Last write date & time
+      //  -> pSize: Size
+      //  <> pFileSystemBuffer: Target buffer
+
+      CLEAR(pFileSystemBuffer);
+      pFileSystemBuffer.INIT();
+      pFileSystemBuffer.Type := pType;
+      pFileSystemBuffer.SetPath(pPath);
+      pFileSystemBuffer.Name := COPYSTR(pName, 1, MAXSTRLEN(pFileSystemBuffer.Name));
+      pFileSystemBuffer."Creation Date Time" := pCreationDateTime;
+      pFileSystemBuffer."Last Access Data Time" := pLastAccessDateTime;
+      pFileSystemBuffer."Last Write Date Time" := pLastWriteDateTime;
+      pFileSystemBuffer.Size := pSize;
+    END;
+
+    PROCEDURE DefaultFolder@1000000048(pInteraction@1000000000 : Boolean) : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Returning default folder depending on interaction / no interaction flag
+      //  -> pInteraction: Interaction flag
+      //  <- Default folder
+
+      IF (pInteraction) THEN
+        EXIT('')
+      ELSE
+        EXIT(NoPromptFolder());
+    END;
+
+    PROCEDURE DefaultFilter@1000000047(pFilter@1000000000 : Text[1024];pFilePath@1000000001 : Text[1024]) : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Returning default filter based on the current filter and passed file extension
+      //  -> pFilter: Current filter
+      //  -> pFilePath: File path
+      //  <- Default filter
+
+      IF (pFilter = '') THEN
+        pFilter := FileManagement.GetToFilterText('', pFilePath);
+
+      EXIT(pFilter);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  JH 31/08/2012 - Created
+      //DOC NA2015.1  JH 30/08/2013 - Fixes
+      //DOC NA2015.1  PC 26/03/2014 - Added GetFileCreatedDateTime and GetFileLastModifiedDateTime functions
+      //DOC NA2015.1  PC 08/04/2014 - Fixed issue with DownloadSilent function
+      //DOC NA2015.1  PC 03/06/2014 - Changed "Client" function to return true only if using Windows client
+      //DOC NA2015.1  PC 03/06/2014 - Changes to UploadSilent : DestinationPath is now Var
+      //DOC NA2015.4  PC 09/01/2015 - Added code to GetTempFileName and GetTempPathForFile to removed ',' characters from outputted File Names
+      //DOC NA2015.4  JH 17/02/2015 - "TryToDeleteFile" added
+      //DOC NA2015.5  AP 12/03/2015 - Create Directory on MoveFile function if it does not exists
+      //DOC NA2015.8  JH 01/07/2015 - Fixes
+      //DOC NA2015.8  JH 27/07/2015 - Fixes
+      //DOC NA2016.10 JH 26/08/2015 - Upgraded to 2016
+      //DOC NA2016.10 AZ 15/09/2015 - CopyFileExt function added
+      //DOC NA2016.11 JH 26/11/2015 - New functions "ToDirectoryName", "ToFileName", "CopyDirectory", "DownloadDirectory", "UploadDirectory"
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit used
+      //DOC NA2016.16.1 JH 19/07/2016 - "Last Access DateTime", "Last Write DateTime" added to folder / file info
+    }
+    END.
+  }
+}
+

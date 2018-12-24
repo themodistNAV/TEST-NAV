@@ -1,0 +1,317 @@
+OBJECT Codeunit 50018 3PL Transfer Order Export XML
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/04/18;
+    Time=11:45:07 AM;
+    Modified=Yes;
+    Version List=OP9031,TM0001;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            ClearLastErrors;
+            //IF NOT ExportXML(Filename) THEN //DOC TM0001 AW 19/11/2017 -+
+            //IF NOT ExportXML2(Filename) THEN //DOC TM0001 AW 12/03/2018 -+
+            IF NOT ExportXML3(Filename) THEN //DOC TM0001 AW 12/03/2018 -+
+              LogError(GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ExportXML'),GETLASTERRORCODE,Filename);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ERRLOCATION@1000000000 : TextConst 'ENU=%1\Codeunit 50018;ENG=%1\Codeunit 50018';
+      Filename@1000000001 : Text;
+
+    [TryFunction]
+    LOCAL PROCEDURE ExportXML3@1000000003(VAR pFilename@1000000000 : Text);
+    VAR
+      XMLDoc@1000000011 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLWriter@1000000010 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlWriter";
+      ModistSetup@1000000009 : Record 50000;
+      WebIntegrationManagement@1000000008 : Codeunit 50100;
+      IntegrationProcessStaging@1000000007 : Record 50004;
+      IntegrationProcessStagingToUpdate@1000000006 : Record 50004;
+      IntegrationProcessingGroup@1000000005 : Record 50007;
+      FileName@1000000004 : Text;
+      TransferHeader@1000000003 : Record 5740;
+      TransferLine@1000000002 : Record 5741;
+      IntegrationFunctions@1000000001 : Codeunit 50008;
+    BEGIN
+      //DOC TM0001 AW 12/03/2018
+      ModistSetup.GET;
+      IntegrationProcessStaging.RESET;
+      IntegrationProcessStaging.SETCURRENTKEY("Integration Type","Group Code",Processed);
+      IntegrationProcessStaging.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+      IntegrationProcessStaging.SETRANGE("Group Code",ModistSetup."3PL Transfer Order Group");
+      IntegrationProcessStaging.SETRANGE(Processed,FALSE);
+
+      IF IntegrationProcessStaging.FINDSET THEN BEGIN
+        IntegrationProcessingGroup.GET(ModistSetup."3PL Integration Type",ModistSetup."3PL Transfer Order Group");
+
+        REPEAT
+          FileName := '';
+          IF TransferHeader.GET(IntegrationProcessStaging."Document No.") THEN BEGIN
+            FileName := WebIntegrationManagement.Nav3PLTransferOrderFileName;
+            pFilename := FileName;
+
+            XMLWriter := XMLWriter.Create(FileName);
+            XMLWriter.WriteStartElement('TransferOrders');
+            XMLWriter.WriteStartElement('TransferOrder');
+              XMLWriter.WriteElementString('OrderNo',TransferHeader."No.");
+              XMLWriter.WriteElementString('CustomerNo','TRANSFER');
+              XMLWriter.WriteElementString('FromLocation',TransferHeader."Transfer-from Code");
+              XMLWriter.WriteElementString('ToLocation',TransferHeader."Transfer-to Code");
+              TransferLine.RESET;
+              TransferLine.SETRANGE("Document No.",TransferHeader."No.");
+              TransferLine.SETRANGE("Derived From Line No.",0);
+              TransferLine.SETRANGE("Completely Shipped",FALSE);
+              TransferLine.SETRANGE("Completely Received",FALSE);
+              IF TransferLine.FINDSET THEN BEGIN
+                XMLWriter.WriteStartElement('TransferOrderLines');
+                REPEAT
+                  XMLWriter.WriteStartElement('Product');
+                    XMLWriter.WriteElementString('SKUNumber',IntegrationFunctions.BuildSKUnumber(TransferLine."Item No.",TransferLine."Variant Code"));
+                    XMLWriter.WriteElementString('SourceLineNo',FORMAT(TransferLine."Line No."));
+                    XMLWriter.WriteElementString('Quantity',FORMAT(TransferLine.Quantity));
+                  XMLWriter.WriteEndElement; //Product
+                UNTIL TransferLine.NEXT = 0;
+                XMLWriter.WriteEndElement; //TransferOrderLines
+              END;
+            XMLWriter.WriteEndElement; //TransferOrder
+            XMLWriter.WriteEndElement; //TransferOrders
+            XMLWriter.Flush;
+            XMLWriter.Close;
+
+            IntegrationProcessStagingToUpdate.GET(IntegrationProcessStaging."Entry No.");
+            IntegrationProcessStagingToUpdate.Processed := TRUE;
+            IntegrationProcessStagingToUpdate."File Name" := FileName;
+            IntegrationProcessStagingToUpdate.MODIFY;
+          END;
+        UNTIL IntegrationProcessStaging.NEXT = 0;
+
+
+        //upload to SFTP server
+        IF IntegrationProcessingGroup."Enable SFTP Connect" THEN BEGIN //if we are ready to connect to sftp
+          WebIntegrationManagement.TransferFTPfiles(IntegrationProcessingGroup."Working Location",IntegrationProcessingGroup."Archive Location",'.xml',ModistSetup."FTP temporary file extension",
+                                                  ModistSetup."Demandware Export SFTP Server",IntegrationProcessingGroup."FTP Folder",IntegrationProcessingGroup."FTP Archive Folder",TRUE);
+        END;
+
+        //Log integration
+        IntegrationFunctions.Log3PLTransferOrderUpload(FileName,'');
+      END ELSE BEGIN
+        IF GUIALLOWED THEN
+          MESSAGE('Nothing to process');
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ExportXML2@1000000000(VAR pFilename@1000000000 : Text);
+    VAR
+      XMLDoc@1000000011 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLWriter@1000000010 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlWriter";
+      ModistSetup@1000000009 : Record 50000;
+      WebIntegrationManagement@1000000008 : Codeunit 50100;
+      IntegrationProcessStaging@1000000007 : Record 50004;
+      IntegrationProcessStagingToUpdate@1000000006 : Record 50004;
+      IntegrationProcessingGroup@1000000005 : Record 50007;
+      FileName@1000000004 : Text;
+      TransferHeader@1000000003 : Record 5740;
+      TransferLine@1000000002 : Record 5741;
+      IntegrationFunctions@1000000001 : Codeunit 50008;
+    BEGIN
+      //DOC TM0001 AW 19/11/2017
+      ModistSetup.GET;
+      IntegrationProcessStaging.RESET;
+      IntegrationProcessStaging.SETCURRENTKEY("Integration Type","Group Code",Processed);
+      IntegrationProcessStaging.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+      IntegrationProcessStaging.SETRANGE("Group Code",ModistSetup."3PL Transfer Order Group"); //denotes 3PL ASN
+      IntegrationProcessStaging.SETRANGE(Processed,FALSE);
+
+      IF IntegrationProcessStaging.FINDSET THEN BEGIN
+        IntegrationProcessingGroup.GET(ModistSetup."3PL Integration Type",ModistSetup."3PL Transfer Order Group");
+
+        FileName := WebIntegrationManagement.Nav3PLTransferOrderFileName;
+        pFilename := FileName;
+
+        XMLWriter := XMLWriter.Create(FileName);
+        XMLWriter.WriteStartElement('TransferOrders');
+        REPEAT
+          IF TransferHeader.GET(IntegrationProcessStaging."Document No.") THEN BEGIN
+            XMLWriter.WriteStartElement('TransferOrder');
+              XMLWriter.WriteElementString('OrderNo',TransferHeader."No.");
+              XMLWriter.WriteElementString('CustomerNo','TRANSFER');
+              XMLWriter.WriteElementString('FromLocation',TransferHeader."Transfer-from Code");
+              XMLWriter.WriteElementString('ToLocation',TransferHeader."Transfer-to Code");
+              TransferLine.RESET;
+              TransferLine.SETRANGE("Document No.",TransferHeader."No.");
+              TransferLine.SETRANGE("Completely Shipped",FALSE);
+              TransferLine.SETRANGE("Completely Received",FALSE);
+              IF TransferLine.FINDSET THEN BEGIN
+                XMLWriter.WriteStartElement('TransferOrderLines');
+                REPEAT
+                  XMLWriter.WriteStartElement('Product');
+                    XMLWriter.WriteElementString('SKUNumber',IntegrationFunctions.BuildSKUnumber(TransferLine."Item No.",TransferLine."Variant Code"));
+                    XMLWriter.WriteElementString('SourceLineNo',FORMAT(TransferLine."Line No."));
+                    XMLWriter.WriteElementString('Quantity',FORMAT(TransferLine.Quantity));
+                  XMLWriter.WriteEndElement; //Product
+                UNTIL TransferLine.NEXT = 0;
+                XMLWriter.WriteEndElement; //TransferOrderLines
+              END;
+            XMLWriter.WriteEndElement;
+
+            IntegrationProcessStagingToUpdate.GET(IntegrationProcessStaging."Entry No.");
+            IntegrationProcessStagingToUpdate.Processed := TRUE;
+            IntegrationProcessStagingToUpdate.MODIFY;
+          END;
+        UNTIL IntegrationProcessStaging.NEXT = 0;
+
+        XMLWriter.WriteEndElement;
+        XMLWriter.Flush;
+        XMLWriter.Close;
+
+      {
+        //upload to SFTP server
+        IF IntegrationProcessingGroup."Enable SFTP Connect" THEN BEGIN //if we are ready to connect to sftp
+          WebIntegrationManagement.TransferFTPfiles(IntegrationProcessingGroup."Working Location",IntegrationProcessingGroup."Archive Location",'.xml',ModistSetup."FTP temporary file extension",
+                                                  ModistSetup."Demandware Export SFTP Server",IntegrationProcessingGroup."FTP Folder",IntegrationProcessingGroup."FTP Archive Folder",TRUE);
+        END;
+       }
+        //Log integration
+        IntegrationFunctions.Log3PLTransferOrderUpload(FileName,'');
+      END ELSE BEGIN
+        IF GUIALLOWED THEN
+          MESSAGE('Nothing to process');
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ExportXML@1000000001(VAR pFilename@1000000003 : Text);
+    VAR
+      XMLDoc@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLWriter@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlWriter";
+      ModistSetup@1000000002 : Record 50000;
+      WebIntegrationManagement@1000000005 : Codeunit 50100;
+      IntegrationProcessStaging@1000000014 : Record 50004;
+      IntegrationProcessStagingToUpdate@1000000008 : Record 50004;
+      IntegrationProcessingGroup@1000000010 : Record 50007;
+      FileName@1000000009 : Text;
+      TransferOrder@1000000011 : Record 5740;
+      TransferLine@1000000012 : Record 5741;
+      IntegrationFunctions@1000000013 : Codeunit 50008;
+    BEGIN
+      ModistSetup.GET;
+
+      //iterate through unprocessed documents in new process table
+      IntegrationProcessStaging.RESET;
+      IntegrationProcessStaging.SETCURRENTKEY("Integration Type","Group Code",Processed);
+      IntegrationProcessStaging.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+      IntegrationProcessStaging.SETRANGE("Group Code",ModistSetup."3PL Transfer Order Group"); //denotes 3PL ASN
+      IntegrationProcessStaging.SETRANGE(Processed,FALSE);
+
+      IF IntegrationProcessStaging.FINDSET THEN BEGIN
+        IntegrationProcessingGroup.GET(ModistSetup."3PL Integration Type",ModistSetup."3PL Transfer Order Group");
+
+        FileName := WebIntegrationManagement.Nav3PLTransferOrderFileName;
+        pFilename := FileName;
+
+        XMLWriter := XMLWriter.Create(FileName);
+        XMLWriter.WriteStartElement('StockMovements');
+        REPEAT
+          IF TransferOrder.GET(IntegrationProcessStaging."Document No.") THEN BEGIN
+            TransferLine.RESET;
+            TransferLine.SETRANGE("Document No.",IntegrationProcessStaging."Document No.");
+            TransferLine.SETRANGE("Completely Shipped",FALSE);
+            TransferLine.SETRANGE("Completely Received",FALSE);
+            IF TransferLine.FINDSET THEN BEGIN
+              REPEAT
+                XMLWriter.WriteStartElement('StockMovement');
+                  XMLWriter.WriteElementString('SKUNumber',IntegrationFunctions.BuildSKUnumber(TransferLine."Item No.",TransferLine."Variant Code"));
+                  XMLWriter.WriteElementString('SourceLineNo',FORMAT(TransferLine."Line No."));
+                  XMLWriter.WriteElementString('FromLocation',TransferLine."Transfer-from Code");
+                  IF TransferLine."Transfer-from Bin Code" <> '' THEN
+                    XMLWriter.WriteElementString('FromBin',TransferLine."Transfer-from Bin Code");
+                  XMLWriter.WriteElementString('ToLocation',TransferLine."Transfer-to Code");
+                  IF TransferLine."Transfer-To Bin Code" <> '' THEN
+                    XMLWriter.WriteElementString('ToBin',TransferLine."Transfer-To Bin Code");
+                  XMLWriter.WriteElementString('Quantity',FORMAT(TransferLine.Quantity));
+                  XMLWriter.WriteElementString('Type','TRANSFER');
+                  XMLWriter.WriteElementString('TransferRef',TransferLine."Document No.");
+                XMLWriter.WriteEndElement; // </StockMovement>
+              UNTIL TransferLine.NEXT = 0;
+            END;
+
+            //Mark the staging record as processed
+            IntegrationProcessStagingToUpdate.GET(IntegrationProcessStaging."Entry No.");
+            IntegrationProcessStagingToUpdate.Processed := TRUE;
+            IntegrationProcessStagingToUpdate.MODIFY;
+          END;
+        UNTIL IntegrationProcessStaging.NEXT = 0;
+
+        XMLWriter.WriteEndElement; // </StockMovements>
+        XMLWriter.Flush;
+        XMLWriter.Close;
+
+
+        //upload to SFTP server
+        IF IntegrationProcessingGroup."Enable SFTP Connect" THEN BEGIN //if we are ready to connect to sftp
+          WebIntegrationManagement.TransferFTPfiles(IntegrationProcessingGroup."Working Location",IntegrationProcessingGroup."Archive Location",'.xml',ModistSetup."FTP temporary file extension",
+                                                  ModistSetup."Demandware Export SFTP Server",IntegrationProcessingGroup."FTP Folder",IntegrationProcessingGroup."FTP Archive Folder",TRUE);
+        END;
+
+        //Log integration
+        IntegrationFunctions.Log3PLTransferOrderUpload(FileName,'');
+
+      END ELSE BEGIN
+        IF GUIALLOWED THEN
+          MESSAGE('Nothing to process');
+      END;
+    END;
+
+    LOCAL PROCEDURE LogError@1000000015(ErrMessage@1000000002 : Text;ErrorLocation@1000000004 : Text;ErrCode@1000000005 : Text;Filename@1000000001 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+    BEGIN
+      //This function facilitates the logging of an error in the error log table by deriving the default values
+      //and applying the variable values
+      ModistSetup.GET;
+      ErrorHandler.LogError(ModistSetup."3PL Integration Type",
+                            ModistSetup."3PL Transfer Order Group",
+                            '',
+                            0,
+                            '',
+                            0,
+                            ErrMessage,
+                            ErrorLocation,
+                            0,
+                            ErrCode,
+                            Filename);
+    END;
+
+    LOCAL PROCEDURE ClearLastErrors@1000000008();
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+      IntegrationErrorLog@1000000001 : Record 50011;
+    BEGIN
+      //This function deletes all previous errors for the integration type and group
+      ModistSetup.GET;
+      IntegrationErrorLog.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+      IntegrationErrorLog.SETRANGE("Integration Process Group",ModistSetup."3PL Transfer Order Group");
+      IF IntegrationErrorLog.FINDSET THEN
+        IntegrationErrorLog.DELETEALL;
+
+      CLEARLASTERROR;
+    END;
+
+    BEGIN
+    {
+      //DOC TM0001 AW 19/11/2017 - Transfer Order EDI
+      //DOC TM0001 AW 12/03/2018 - As per GAC request, NAV should export one file for each Transfer Order.
+    }
+    END.
+  }
+}
+

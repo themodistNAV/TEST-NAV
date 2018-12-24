@@ -1,0 +1,2216 @@
+OBJECT Codeunit 11102050 OM - Source Control
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE ImportTextFile@1(FileName@1000 : Text;ShowProgressbar@1001 : Boolean);
+    VAR
+      CALHistoryImport@1002 : Record 11102051;
+      CALHistoryObject@1003 : Record 11102052;
+      CALHistoryLine@1004 : Record 11102053;
+      Mgt@1005 : Codeunit 11102035;
+      ImExportMgt@1006 : Codeunit 11102043;
+      Progressbar@1007 : Codeunit 11102044;
+      ctImportingFile@1008 : TextConst 'DEU=Importing file...;ENU=Importing file...;ESP=Importing file...;FRA=Importing file...;NLD=Bestand importeren...;DEA=Importing file...';
+    BEGIN
+      CALHistoryImport."Import Date" := TODAY;
+      CALHistoryImport."Import Time" := TIME;
+      CALHistoryImport."Imported By" := Mgt.ShortUserId;
+      SplitPathFileName(FileName, CALHistoryImport.Path, CALHistoryImport."File Name");
+      CALHistoryImport.INSERT(TRUE);
+
+      IF ShowProgressbar THEN BEGIN
+        Progressbar.Open(ctImportingFile, 1);
+        Progressbar.BarSize := ImExportMgt.LengthOfFile(FileName);
+      END;
+
+      ImportTextFile2(FileName, 1, Progressbar, CALHistoryImport."Entry No.", CALHistoryObject, CALHistoryLine, FALSE);
+
+      IF ShowProgressbar THEN
+        Progressbar.Close;
+    END;
+
+    PROCEDURE ImportTextFile2@2(FileName@1000 : Text;WriteToProgressBar@1001 : Integer;VAR Progressbar@1002 : Codeunit 11102044;ImportEntryNo@1003 : Integer;VAR CALHistoryObject@1004 : Record 11102052;VAR CALHistoryLine@1005 : Record 11102053;TemporaryRecords@1006 : Boolean);
+    VAR
+      Object@1007 : Record 2000000001;
+      ImExportMgt@1008 : Codeunit 11102043;
+      oFile@1009 : File;
+      DateText@1010 : Text;
+      Line@1011 : Text[250];
+      ModifiedString@1012 : Text;
+      TimeText@1013 : Text;
+      VersionListString@1014 : Text;
+      ReadChar@1015 : Char;
+      CharacterCounter@1016 : Integer;
+      CodeLineCounter@1017 : Integer;
+      LineCharacterCounter@1018 : Integer;
+      SubLineCounter@1019 : Integer;
+      ObjectPropertiesOpen@1020 : Boolean;
+      QuestionAsked@1021 : Boolean;
+      ctConfirmDate@1022 : TextConst 'DEU=Date ''%1'' is not valid.\Continue?;ENU=Date ''%1'' is not valid.\Continue?;ESP=Date ''%1'' is not valid.\Continue?;FRA=Date ''%1'' is not valid.\Continue?;NLD=Datum ''%1'' niet geldig.\Doorgaan?;DEA=Date ''%1'' is not valid.\Continue?';
+      ctDateProperty@1023 : TextConst 'DEU=Date;ENU=Date;ESP=Date;FRA=Date;NLD=Date;DEA=Date';
+      ctInvalidFile@1024 : TextConst 'DEU=Invalid object file.;ENU=Invalid object file.;ESP=Invalid object file.;FRA=Invalid object file.;NLD=Geen geldig objectbestand.;DEA=Invalid object file.';
+      ctModifiedProperty@1025 : TextConst 'DEU=Modified;ENU=Modified;ESP=Modified;FRA=Modified;NLD=Modified;DEA=Modified';
+      ctTimeProperty@1026 : TextConst 'DEU=Time;ENU=Time;ESP=Time;FRA=Time;NLD=Time;DEA=Time';
+      ctVersionList@1027 : TextConst 'DEU=Version List;ENU=Version List;ESP=Version List;FRA=Version List;NLD=Version List;DEA=Version List';
+    BEGIN
+      IF NOT ImExportMgt.IsObjectFile(FileName) THEN
+        ERROR(ctInvalidFile);
+
+      oFile.OPEN(FileName);
+
+      SubLineCounter := 1;
+      CodeLineCounter := 1;
+
+      WHILE oFile.READ(ReadChar) > 0 DO BEGIN
+
+        CharacterCounter += 1;
+
+        CASE ReadChar OF
+          13, 10 :
+            BEGIN
+
+              IF WriteToProgressBar > 0 THEN
+                Progressbar.AddToBar(CharacterCounter);
+
+              CharacterCounter := 0;
+
+              IF DELSTR(Line, 7) = 'OBJECT' THEN BEGIN
+
+                CALHistoryObject.INIT;
+                IF TemporaryRecords THEN
+                  CALHistoryObject."Entry No." += 1
+                ELSE
+                  CALHistoryObject."Entry No." := 0;
+                CALHistoryObject."Import Entry No." := ImportEntryNo;
+
+                GetObjectProperties(Object, Line);
+                CALHistoryObject.FillFieldsFromObject(Object);
+
+                CALHistoryObject."Action Type" := CALHistoryObject."Action Type"::Import;
+                CALHistoryObject.INSERT(TRUE);
+                CodeLineCounter := 1;
+                CASE WriteToProgressBar OF
+                  1 : Progressbar.Text1Object := Object;
+                  2 : Progressbar.Text2Object := Object;
+                END;
+                ObjectPropertiesOpen := FALSE;
+              END;
+
+              IF Line = '  OBJECT-PROPERTIES' THEN
+                ObjectPropertiesOpen := TRUE;
+              IF Line = '  }' THEN
+                ObjectPropertiesOpen := FALSE;
+
+              IF ObjectPropertiesOpen THEN BEGIN
+
+                IF COPYSTR(Line, 5, STRLEN(ctDateProperty)) = ctDateProperty THEN BEGIN
+                  DateText := COPYSTR(Line, 6 + STRLEN(ctDateProperty));
+                  DateText := DELSTR(DateText, STRLEN(DateText));
+                  DateText := DELCHR(DateText, '<>', '[]');
+                  IF DateText <> '' THEN
+                    IF NOT EVALUATE(CALHistoryObject."Object Date", DateText) THEN
+                      IF NOT QuestionAsked THEN BEGIN
+                        IF NOT CONFIRM(ctConfirmDate, FALSE, DateText) THEN
+                          ERROR('');
+                        QuestionAsked := TRUE;
+                      END;
+
+                  CALHistoryObject.MODIFY;
+                END;
+
+                IF COPYSTR(Line, 5, STRLEN(ctTimeProperty)) = ctTimeProperty THEN BEGIN
+                  TimeText := COPYSTR(Line, 6 + STRLEN(ctTimeProperty));
+                  CALHistoryObject."Object Time" := ParseTime(TimeText);
+                  CALHistoryObject.MODIFY;
+                END;
+
+                IF (CALHistoryObject."Object Date" <> 0D) AND (CALHistoryObject."Object Time" <> 0T) THEN BEGIN
+                  CALHistoryObject."Object Date Time" := CREATEDATETIME(CALHistoryObject."Object Date", CALHistoryObject."Object Time");
+                  CALHistoryObject.MODIFY;
+                END;
+
+                IF COPYSTR(Line, 5, STRLEN(ctModifiedProperty)) = ctModifiedProperty THEN BEGIN
+                  ModifiedString := COPYSTR(Line, STRLEN(ctModifiedProperty) + 6);
+                  ModifiedString := DELSTR(ModifiedString, STRLEN(ModifiedString));
+                  CALHistoryObject.Modified := ModifiedString[1] <> 'N';
+                  CALHistoryObject.MODIFY;
+                END;
+
+                IF COPYSTR(Line, 5, STRLEN(ctVersionList)) = ctVersionList THEN BEGIN
+                  VersionListString := COPYSTR(Line, STRLEN(ctVersionList) + 6);
+                  VersionListString := DELSTR(VersionListString, STRLEN(VersionListString));
+                  VersionListString := DELCHR(VersionListString, '<>', '[]');
+                  CALHistoryObject."Version List" := VersionListString;
+                  CALHistoryObject.MODIFY;
+                END;
+
+              END;
+
+              CALHistoryLine."Entry No." := CALHistoryObject."Entry No.";
+              CALHistoryLine."Line No." := CodeLineCounter;
+              CALHistoryLine."Sub Line No." := SubLineCounter;
+              CALHistoryLine.Code := Line;
+              CALHistoryLine.INSERT;
+
+              Line := '';
+              CodeLineCounter += 1;
+
+              IF ReadChar = 13 THEN
+                oFile.READ(ReadChar);
+              CharacterCounter += 1;
+              LineCharacterCounter := 0;
+              SubLineCounter := 1;
+            END;
+          ELSE BEGIN
+            LineCharacterCounter += 1;
+            IF LineCharacterCounter MOD 245 = 0 THEN BEGIN
+              CALHistoryLine."Entry No." := CALHistoryObject."Entry No.";
+              CALHistoryLine."Line No." := CodeLineCounter;
+              CALHistoryLine."Sub Line No." := SubLineCounter;
+              CALHistoryLine.Code := Line;
+              CALHistoryLine.INSERT;
+              Line := '';
+              SubLineCounter += 1;
+            END;
+            Line += FORMAT(ReadChar);
+          END;
+        END;
+      END;
+
+      oFile.CLOSE;
+    END;
+
+    PROCEDURE GetObjectProperties@3(VAR Object@1000 : Record 2000000001;FirstLine@1001 : Text);
+    VAR
+      ObjectLine@1002 : ARRAY [20] OF Text[30];
+      ObjectName@1003 : Text;
+    BEGIN
+      Split(FirstLine, ' ', ObjectLine);
+      ObjectLine[2] := DELCHR(ObjectLine[2], '=', '[');
+      IF NOT EVALUATE(Object.Type, ObjectLine[2]) THEN
+        CASE ObjectLine[2] OF
+          'TableData' : Object.Type := 0;
+          'Table' : Object.Type := 1;
+          'Form' : Object.Type := 2;
+          'Report' : Object.Type := 3;
+          'Dataport' : Object.Type := 4;
+          'Codeunit' : Object.Type := 5;
+          'XMLport' : Object.Type := 6;
+          'MenuSuite' : Object.Type := 7;
+          'Page' : Object.Type := 8;
+          'Query' : Object.Type := 9;
+          ELSE
+            Object.Type := 99;
+        END;
+      EVALUATE(Object.ID, ObjectLine[3]);
+
+      ObjectName := COPYSTR(FirstLine, STRLEN(ObjectLine[1] + ObjectLine[2] + ObjectLine[3]) + 4);
+      Object.Name := COPYSTR(ObjectName, 1, MAXSTRLEN(Object.Name));
+    END;
+
+    PROCEDURE Compare@4(VAR LeftSideHistoryObject@1000 : Record 11102052;VAR RightSideHistoryObject@1001 : Record 11102052);
+    VAR
+      FileHandler@1002 : Codeunit 11102097;
+      FileNameMgt@1003 : Codeunit 11102107;
+      Directory@1004 : Text;
+      LeftClientFileName@1005 : Text;
+      LeftFileName@1006 : Text;
+      RightClientFileName@1007 : Text;
+      RightFileName@1008 : Text;
+    BEGIN
+      FileHandler.ErrorIfWebClient;
+
+      Directory := FileHandler.TempDirectory;
+
+      FileHandler.TestServerDirectory(Directory);
+
+      LeftFileName := 'Old ' + ' ' +
+        FileNameMgt.FileNameExtension(LeftSideHistoryObject."Object Type", LeftSideHistoryObject."Object No.", LeftSideHistoryObject."Object Name", 'editor');
+      RightFileName := 'New ' + ' ' +
+        FileNameMgt.FileNameExtension(RightSideHistoryObject."Object Type", RightSideHistoryObject."Object No.", RightSideHistoryObject."Object Name", 'editor');
+
+      ExportObjectToFile(LeftSideHistoryObject, Directory, LeftFileName);
+      ExportObjectToFile(RightSideHistoryObject, Directory, RightFileName);
+
+      LeftClientFileName := FileHandler.DownloadToClient(Directory + LeftFileName, '', '');
+      RightClientFileName := FileHandler.DownloadToClient(Directory + RightFileName, '', '');
+
+      StartCompareToolFile(LeftClientFileName, RightClientFileName);
+    END;
+
+    PROCEDURE MergeInto@5(VAR CALHistoryObject@1000 : Record 11102052;IntoNew@1001 : Boolean);
+    VAR
+      TmpCALHistoryObjectLeftSide@1002 : TEMPORARY Record 11102052;
+      TmpCALHistoryObjectRightSide@1003 : TEMPORARY Record 11102052;
+      Object@1004 : Record 2000000001;
+      TmpObject@1005 : TEMPORARY Record 2000000001;
+      FileHandler@1006 : Codeunit 11102097;
+      FileNameMgt@1007 : Codeunit 11102107;
+      ClientLeftFileName@1008 : Text;
+      ClientRightFileName@1009 : Text;
+      Directory@1010 : Text;
+      FileName@1011 : Text;
+      ServerLeftFileName@1012 : Text;
+      ServerRightFileName@1013 : Text;
+      ctEditObjects@1014 : TextConst 'DEU=Merge Objects;ENU=Merge Objects;ESP=Merge Objects;FRA=Merge Objects;NLD=Objecten mergen;DEA=Merge Objects';
+      ctQuestion@1015 : TextConst 'DEU=Merge the objects in the external editor and press OK.;ENU=Merge the objects in the external editor and press OK.;ESP=Merge the objects in the external editor and press OK.;FRA=Merge the objects in the external editor and press OK.;NLD=Merge de objecten in de externe tekst-editor en kies OK.;DEA=Merge the objects in the external editor and press OK.';
+    BEGIN
+      FileHandler.ErrorIfWebClient;
+
+      CALHistoryObject.SETRANGE("C/AL Code Present", TRUE);
+      IF CALHistoryObject.FINDSET THEN
+        REPEAT
+          IF Object.GET(CALHistoryObject."Object Type", '', CALHistoryObject."Object No.") THEN
+            IF NOT TmpObject.GET(CALHistoryObject."Object Type", '', CALHistoryObject."Object No.") THEN BEGIN
+              TmpObject := Object;
+              TmpObject.INSERT;
+            END;
+        UNTIL CALHistoryObject.NEXT = 0;
+
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          CALHistoryObject.SETRANGE("Object Type", TmpObject.Type);
+          CALHistoryObject.SETRANGE("Object No.", TmpObject.ID);
+          CALHistoryObject.SETRANGE("C/AL Code Present", TRUE);
+
+          CALHistoryObject.FINDFIRST;
+          CALHistoryObject.AddToTempRecord(TmpCALHistoryObjectLeftSide);
+
+          CALHistoryObject.FINDLAST;
+          CALHistoryObject.AddToTempRecord(TmpCALHistoryObjectRightSide);
+
+        UNTIL TmpObject.NEXT = 0;
+
+      Directory := FileHandler.TempDirectory;
+
+      ServerLeftFileName := Directory + 'Old ' + ' ' +
+        FileNameMgt.FileNameExtension(
+          TmpCALHistoryObjectLeftSide."Object Type",
+          TmpCALHistoryObjectLeftSide."Object No.",
+          TmpCALHistoryObjectLeftSide."Object Name",
+          'editor');
+      ExportRangeToFile(TmpCALHistoryObjectLeftSide, ServerLeftFileName);
+      ClientLeftFileName := FileHandler.DownloadToClient(ServerLeftFileName, '', '');
+
+      ServerRightFileName := Directory + 'New ' + ' ' +
+        FileNameMgt.FileNameExtension(
+          TmpCALHistoryObjectRightSide."Object Type",
+          TmpCALHistoryObjectRightSide."Object No.",
+          TmpCALHistoryObjectRightSide."Object Name",
+          'editor');
+      ExportRangeToFile(TmpCALHistoryObjectRightSide, ServerRightFileName);
+      ClientRightFileName := FileHandler.DownloadToClient(ServerRightFileName, '', '');
+
+      StartCompareToolFile(ClientLeftFileName, ClientRightFileName);
+
+      IF IntoNew THEN
+        FileName := ClientRightFileName
+      ELSE
+        FileName := ClientLeftFileName;
+
+      OpenEditFileDialog(ctEditObjects, ctQuestion, FileName, TmpObject, '');
+    END;
+
+    PROCEDURE ShowChangesRangeHistoryVersion@6(VAR CALHistoryObjectLeftSide@1000 : Record 11102052;VAR CALHistoryObjectRightSide@1001 : Record 11102052;OneFile@1002 : Boolean);
+    VAR
+      FileHandler@1003 : Codeunit 11102097;
+      ClientDirectory@1004 : Text;
+      ClientLeftFileName@1005 : Text;
+      ClientRightFileName@1006 : Text;
+      ServerDirectory@1007 : Text;
+      ServerLeftFileName@1008 : Text;
+      ServerRightFileName@1009 : Text;
+    BEGIN
+      FileHandler.ErrorIfWebClient;
+
+      IF OneFile THEN BEGIN
+
+        ServerDirectory := FileHandler.TempDirectory;
+
+        ServerLeftFileName := ServerDirectory + 'left.txt';
+        ServerRightFileName := ServerDirectory + 'right.txt';
+
+        ExportRangeToFile(CALHistoryObjectLeftSide, ServerLeftFileName);
+        ExportRangeToFile(CALHistoryObjectRightSide, ServerRightFileName);
+
+        ClientLeftFileName := FileHandler.DownloadToClient(ServerLeftFileName, '', '');
+        ClientRightFileName := FileHandler.DownloadToClient(ServerRightFileName, '', '');
+
+        StartCompareToolFile(ClientLeftFileName, ClientRightFileName);
+
+      END ELSE BEGIN
+
+        ServerDirectory := FileHandler.CreateServerDirectory;
+
+        FileHandler.CheckCreateServerDirectory(ServerDirectory + 'left\');
+        FileHandler.CheckCreateServerDirectory(ServerDirectory + 'right\');
+
+        ExportRangeToDirectory(CALHistoryObjectLeftSide, ServerDirectory + 'left\');
+        ExportRangeToDirectory(CALHistoryObjectRightSide, ServerDirectory + 'right\');
+
+        ClientDirectory := FileHandler.DownloadDirectoryToClient(ServerDirectory, '');
+
+        StartCompareToolDirectory(ClientDirectory + 'left\', ClientDirectory + 'right\');
+      END;
+    END;
+
+    PROCEDURE ShowChangesRangeModifications@7(VAR Modification@1000 : Record 11102042;OneFile@1001 : Boolean);
+    VAR
+      TmpCALHistoryObjectLeftSide@1002 : TEMPORARY Record 11102052;
+      TmpCALHistoryObjectRightSide@1003 : TEMPORARY Record 11102052;
+      TmpLeftObject@1004 : TEMPORARY Record 2000000001;
+      TmpRightObject@1005 : TEMPORARY Record 2000000001;
+    BEGIN
+      WITH Modification DO
+        IF FINDSET THEN
+          REPEAT
+            IF NOT TmpLeftObject.GET("Object Type", '', "Object No.") THEN BEGIN
+              TmpLeftObject.Type := "Object Type";
+              TmpLeftObject.ID := "Object No.";
+              TmpLeftObject.Date := "Object Date";
+              TmpLeftObject.Time := "Object Time";
+              TmpLeftObject.INSERT;
+              TmpRightObject := TmpLeftObject;
+              TmpRightObject.INSERT;
+            END ELSE BEGIN
+              IF CREATEDATETIME("Object Date", "Object Time") < CREATEDATETIME(TmpLeftObject.Date, TmpLeftObject.Time) THEN BEGIN
+                TmpLeftObject.Date := "Object Date";
+                TmpLeftObject.Time := "Object Time";
+                TmpLeftObject.MODIFY;
+              END;
+              TmpRightObject.GET("Object Type", '', "Object No.");
+              IF CREATEDATETIME("Object Date", "Object Time") > CREATEDATETIME(TmpRightObject.Date, TmpRightObject.Time) THEN BEGIN
+                TmpRightObject.Date := "Object Date";
+                TmpRightObject.Time := "Object Time";
+                TmpRightObject.MODIFY;
+              END;
+            END;
+          UNTIL NEXT = 0;
+
+      IF TmpLeftObject.FINDSET THEN
+        REPEAT
+
+          TmpRightObject.GET(TmpLeftObject.Type, '', TmpLeftObject.ID);
+
+          GetCALHistoryFromTill(
+            TmpLeftObject.Type, TmpLeftObject.ID,
+            TmpLeftObject.Date, TmpLeftObject.Time, TmpRightObject.Date, TmpRightObject.Time,
+            TmpCALHistoryObjectLeftSide, TmpCALHistoryObjectRightSide, FALSE);
+
+        UNTIL TmpLeftObject.NEXT = 0;
+
+      ShowChangesRangeHistoryVersion(TmpCALHistoryObjectLeftSide, TmpCALHistoryObjectRightSide, OneFile);
+    END;
+
+    PROCEDURE ExportHistoryImportToFile@8(VAR CALHistoryImport@1000 : Record 11102051;FileName@1001 : Text);
+    VAR
+      CALHistoryObject@1002 : Record 11102052;
+      Progressbar@1003 : Codeunit 11102044;
+      FileHandler@1004 : Codeunit 11102097;
+      oFile@1005 : File;
+      ctExportingFile@1006 : TextConst 'DEU=Exporting file...;ENU=Exporting file...;ESP=Exporting file...;FRA=Exporting file...;NLD=Bestand importeren...;DEA=Exporting file...';
+    BEGIN
+      FileHandler.QueryReplace(FileName);
+
+      oFile.TEXTMODE(TRUE);
+      oFile.CREATE(FileName);
+
+      Progressbar.Open(ctExportingFile, 1);
+
+      IF CALHistoryImport.FINDSET THEN
+        REPEAT
+          CALHistoryObject.SETCURRENTKEY("Import Entry No.");
+          CALHistoryObject.SETRANGE("Import Entry No.", CALHistoryImport."Entry No.");
+          Progressbar.BarSize := Progressbar.GetBarSize + CALHistoryObject.COUNT;
+        UNTIL CALHistoryImport.NEXT = 0;
+
+      IF CALHistoryImport.FINDSET THEN
+        REPEAT
+          CALHistoryObject.SETCURRENTKEY("Import Entry No.");
+          CALHistoryObject.SETRANGE("Import Entry No.", CALHistoryImport."Entry No.");
+          CALHistoryObject.SETRANGE("C/AL Code Present", TRUE);
+          IF CALHistoryObject.FINDSET THEN
+            REPEAT
+
+              Progressbar.Text1 :=
+                FORMAT(CALHistoryObject."Object Type") + ' ' +
+                FORMAT(CALHistoryObject."Object No.") + ' ' + CALHistoryObject."Object Name";
+              Progressbar.AddToBar(1);
+
+              AppendHistoryObjectToFile(oFile, CALHistoryObject."Entry No.");
+            UNTIL CALHistoryObject.NEXT = 0;
+        UNTIL CALHistoryImport.NEXT = 0;
+      oFile.CLOSE;
+
+      Progressbar.Close;
+    END;
+
+    PROCEDURE ExportRangeToDirectory@9(VAR CALHistoryObject@1000 : Record 11102052;Directory@1001 : Text);
+    VAR
+      Object@1002 : Record 2000000001;
+      FileNameMgt@1003 : Codeunit 11102107;
+      FileName@1004 : Text;
+      ObjectName@1005 : Text;
+    BEGIN
+      IF CALHistoryObject.FINDSET THEN
+        REPEAT
+          ObjectName := CALHistoryObject."Object Name";
+          IF Object.GET(CALHistoryObject."Object Type", '', CALHistoryObject."Object No.") THEN
+            ObjectName := Object.Name;
+
+          FileName := FileNameMgt.FileNameExtension(CALHistoryObject."Object Type", CALHistoryObject."Object No.", ObjectName, 'editor');
+
+          ExportObjectToFile(CALHistoryObject, Directory, FileName);
+        UNTIL CALHistoryObject.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE ExportObjectToFile@10(CALHistoryObject@1000 : Record 11102052;Directory@1001 : Text;FileName@1002 : Text);
+    VAR
+      oFile@1003 : File;
+    BEGIN
+      oFile.TEXTMODE(TRUE);
+      oFile.CREATE(Directory + FileName);
+      AppendHistoryObjectToFile(oFile, CALHistoryObject."Entry No.");
+      oFile.CLOSE;
+
+      SetStampToFile(Directory + FileName, CALHistoryObject."Object Date", CALHistoryObject."Object Time");
+    END;
+
+    PROCEDURE AppendHistoryObjectToFile@11(VAR oFile@1000 : File;EntryNo@1001 : Integer);
+    VAR
+      CALHistoryLine@1002 : Record 11102053;
+    BEGIN
+      CALHistoryLine.SETRANGE("Entry No.", EntryNo);
+      AppendHistoryLinesToFile(oFile, CALHistoryLine);
+    END;
+
+    PROCEDURE SetModifyFlagInObject@12(VAR Object@1000 : Record 2000000001;NewDate@1001 : Date;NewTime@1002 : Time);
+    VAR
+      ObjectMgt@1003 : Codeunit 11102046;
+      FileHandler@1004 : Codeunit 11102097;
+      oFile@1005 : File;
+      oFile2@1006 : File;
+      InStr@1007 : InStream;
+      OutStr@1008 : OutStream;
+      CALLine@1009 : Text;
+      FileName@1010 : Text;
+      FileName2@1011 : Text;
+      LineNo@1012 : Integer;
+      ModifyFlagFound@1013 : Boolean;
+      ctFileName@1014 : TextConst 'DEU=setmodifyflag.txt;ENU=setmodifyflag.txt;ESP=setmodifyflag.txt;FRA=setmodifyflag.txt;NLD=setmodifyflag.txt;DEA=setmodifyflag.txt';
+      ctFileName2@1015 : TextConst 'DEU=setmodifyflag2.txt;ENU=setmodifyflag2.txt;ESP=setmodifyflag2.txt;FRA=setmodifyflag2.txt;NLD=setmodifyflag2.txt;DEA=setmodifyflag2.txt';
+    BEGIN
+      FileName := FileHandler.TempDirectory + ctFileName;
+      FileName2 := FileHandler.TempDirectory + ctFileName2;
+
+      IF EXISTS(FileName) THEN
+        ERASE(FileName);
+
+      ObjectMgt.ExportObject(Object, FileName);
+
+      IF EXISTS(FileName2) THEN
+        ERASE(FileName2);
+
+      oFile2.TEXTMODE(TRUE);
+      oFile2.CREATE(FileName2);
+      oFile2.CREATEOUTSTREAM(OutStr);
+
+      oFile.OPEN(FileName);
+      oFile.CREATEINSTREAM(InStr);
+
+      FOR LineNo := 1 TO 8 DO BEGIN
+        InStr.READTEXT(CALLine);
+
+        CASE DELSTR(CALLine, 10) OF
+
+          '    Date=' :
+            CALLine := '    Date=' + FORMAT(NewDate) + ';';
+
+          '    Time=' :
+            CALLine := '    Time=' + FORMAT(NewTime, 0, '<Hours24>:<Minutes,2>:<Seconds,2>') + ';';
+
+          '    Modif' :
+            ModifyFlagFound := TRUE;
+
+          '    Versi' :
+            IF NOT ModifyFlagFound THEN BEGIN
+              OutStr.WRITETEXT('    Modified=1;');
+              OutStr.WRITETEXT;
+            END;
+
+        END;
+        OutStr.WRITETEXT(CALLine);
+        OutStr.WRITETEXT;
+
+      END;
+      COPYSTREAM(OutStr, InStr);
+
+      oFile.CLOSE;
+      oFile2.CLOSE;
+
+      ObjectMgt.ImportObject(FileName2);
+      ObjectMgt.CompileObject(Object);
+    END;
+
+    PROCEDURE SetModifyFlagInHistoryLines@13(VAR CALHistoryLine@1000 : Record 11102053;NewDate@1001 : Date;NewTime@1002 : Time);
+    VAR
+      LineCounter@1003 : Integer;
+      ModifiedLineNo@1004 : Integer;
+      ModifyFlagFound@1005 : Boolean;
+    BEGIN
+      IF CALHistoryLine.FINDSET THEN BEGIN
+        CALHistoryLine.NEXT(4);
+        REPEAT
+
+          CASE DELSTR(CALHistoryLine.Code, 10) OF
+
+            '    Date=' :
+              BEGIN
+                CALHistoryLine.Code := '    Date=' + FORMAT(NewDate) + ';';
+                CALHistoryLine.MODIFY;
+              END;
+
+            '    Time=' :
+              BEGIN
+                CALHistoryLine.Code := '    Time=' + FORMAT(NewTime, 0, '<Hours24>:<Minutes,2>:<Seconds,2>') + ';';
+                CALHistoryLine.MODIFY;
+              END;
+
+            '    Modif' :
+              ModifyFlagFound := TRUE;
+
+            '    Versi' :
+              IF NOT ModifyFlagFound THEN BEGIN
+
+                ModifiedLineNo := CALHistoryLine."Line No.";
+                CALHistoryLine.SETFILTER("Line No.", '>=%1', CALHistoryLine."Line No.");
+                IF CALHistoryLine.FINDLAST THEN
+                  REPEAT
+                    CALHistoryLine.DELETE;
+                    CALHistoryLine."Line No." += 1;
+                    CALHistoryLine.INSERT;
+                  UNTIL CALHistoryLine.NEXT(-1) = 0;
+
+                CALHistoryLine.SETRANGE("Line No.");
+                CALHistoryLine."Line No." := ModifiedLineNo;
+                CALHistoryLine."Sub Line No." := 1;
+                CALHistoryLine.Code := '    Modified=1;';
+                CALHistoryLine.INSERT;
+
+                ModifyFlagFound := TRUE;
+              END;
+
+          END;
+          LineCounter += 1;
+
+        UNTIL (CALHistoryLine.NEXT = 0) OR (LineCounter > 3);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetDateTimeFromHistoryLines@14(VAR CALHistoryLine@1000 : Record 11102053;VAR ObjectDate@1001 : Date;VAR ObjectTime@1002 : Time);
+    BEGIN
+      ObjectDate := 0D;
+      ObjectTime := 0T;
+
+      IF CALHistoryLine.FINDSET THEN BEGIN
+        CALHistoryLine.NEXT(3);
+        REPEAT
+
+          CASE DELSTR(CALHistoryLine.Code, 10) OF
+
+            '    Date=' :
+              IF EVALUATE(ObjectDate, DELCHR(COPYSTR(CALHistoryLine.Code, 10), '<>', '[] ;')) THEN
+                ;
+
+            '    Time=' :
+              IF EVALUATE(ObjectTime, DELCHR(COPYSTR(CALHistoryLine.Code, 10), '<>', '[] ;')) THEN
+                ;
+          END;
+
+        UNTIL (CALHistoryLine.NEXT = 0) OR (CALHistoryLine."Line No." >= 7);
+      END;
+    END;
+
+    PROCEDURE AppendHistoryLinesToFile@15(VAR oFile@1000 : File;VAR CALHistoryLine@1001 : Record 11102053);
+    VAR
+      PrevLineNo@1002 : Integer;
+    BEGIN
+      IF CALHistoryLine.FINDSET THEN
+        REPEAT
+          IF CALHistoryLine."Line No." = PrevLineNo THEN
+            oFile.SEEK(oFile.POS - 2);
+          oFile.WRITE(CALHistoryLine.Code);
+          PrevLineNo := CALHistoryLine."Line No.";
+        UNTIL CALHistoryLine.NEXT = 0;
+    END;
+
+    PROCEDURE MergeExtraHistoryLines@16(VAR CALHistoryLine@1000 : Record 11102053;VAR ExtraCALHistoryLine@1001 : Record 11102053);
+    VAR
+      LinesPassed@1002 : Integer;
+    BEGIN
+      IF ExtraCALHistoryLine.FINDSET THEN
+        REPEAT
+
+          CALHistoryLine.SETFILTER("Line No.", '>=%1', ExtraCALHistoryLine."Line No." + LinesPassed);
+          IF CALHistoryLine.FINDLAST THEN
+            REPEAT
+              CALHistoryLine.DELETE;
+              CALHistoryLine."Line No." += 1;
+              CALHistoryLine.INSERT;
+            UNTIL CALHistoryLine.NEXT(-1) = 0;
+          CALHistoryLine.SETRANGE("Line No.");
+
+          CALHistoryLine := ExtraCALHistoryLine;
+          CALHistoryLine."Line No." += LinesPassed;
+          CALHistoryLine.INSERT;
+
+          LinesPassed += 1;
+
+        UNTIL ExtraCALHistoryLine.NEXT = 0;
+    END;
+
+    PROCEDURE AppendObjectToStream@17(VAR OutStr@1000 : OutStream;EntryNo@1001 : Integer);
+    VAR
+      CALHistoryLine@1002 : Record 11102053;
+      CrLf@1003 : Text;
+      PrevLineNo@1004 : Integer;
+    BEGIN
+      CrLf[1] := 13;
+      CrLf[2] := 10;
+
+      CALHistoryLine.SETRANGE("Entry No.", EntryNo);
+      IF CALHistoryLine.FINDSET THEN
+        REPEAT
+          IF CALHistoryLine."Line No." <> PrevLineNo THEN
+            OutStr.WRITETEXT(CrLf);
+          OutStr.WRITETEXT(CALHistoryLine.Code);
+          PrevLineNo := CALHistoryLine."Line No.";
+        UNTIL CALHistoryLine.NEXT = 0;
+
+      OutStr.WRITETEXT(CrLf);
+    END;
+
+    PROCEDURE SetStampToFile@18(FileName@1000 : Text;NewDate@1001 : Date;NewTime@1002 : Time);
+    BEGIN
+      IF (NewDate <> 0D) AND (NewTime <> 0T) THEN
+        SETSTAMP(FileName, NewDate, NewTime);
+    END;
+
+    PROCEDURE ExportTextFile@19(FileName@1000 : Text;VAR CALHistoryLine@1001 : Record 11102053);
+    VAR
+      oFile@1002 : File;
+      ObjectDate@1003 : Date;
+      ObjectTime@1004 : Time;
+    BEGIN
+      IF EXISTS(FileName) THEN
+        ERASE(FileName);
+
+      oFile.TEXTMODE(TRUE);
+      oFile.CREATE(FileName);
+
+      AppendHistoryLinesToFile(oFile, CALHistoryLine);
+      GetDateTimeFromHistoryLines(CALHistoryLine, ObjectDate, ObjectTime);
+
+      oFile.CLOSE;
+    END;
+
+    PROCEDURE ShowChangesProject@20(VAR Project@1000 : Record 11102036;OneFile@1001 : Boolean);
+    VAR
+      ProjectObject@1002 : Record 11102037;
+      Modification@1003 : Record 11102042;
+      TmpCALHistoryObjectLeftSide@1004 : TEMPORARY Record 11102052;
+      TmpCALHistoryObjectRightSide@1005 : TEMPORARY Record 11102052;
+      FromDate@1006 : Date;
+      TillDate@1007 : Date;
+      FromTime@1008 : Time;
+      TillTime@1009 : Time;
+    BEGIN
+      ProjectObject.SETRANGE("Project No.", Project."No.");
+      IF ProjectObject.FINDSET THEN
+        REPEAT
+
+          Modification.SETCURRENTKEY("Assigned to Project No.", "Object Type", "Object No.", "Object Date", "Object Time");
+          Modification.SETRANGE("Assigned to Project No.", Project."No.");
+          Modification.SETRANGE("Object Type", ProjectObject."Object Type");
+          Modification.SETRANGE("Object No.", ProjectObject."Object No.");
+          IF Modification.FINDFIRST THEN BEGIN
+
+            FromDate := Modification."Object Date";
+            FromTime := Modification."Object Time";
+
+            Modification.FINDLAST;
+            TillDate := Modification."Object Date";
+            TillTime := Modification."Object Time";
+
+            GetCALHistoryFromTill(
+              ProjectObject."Object Type", ProjectObject."Object No.",
+              FromDate, FromTime, TillDate, TillTime,
+              TmpCALHistoryObjectLeftSide, TmpCALHistoryObjectRightSide, FALSE);
+
+          END;
+
+        UNTIL ProjectObject.NEXT = 0;
+
+      ShowChangesRangeHistoryVersion(TmpCALHistoryObjectLeftSide, TmpCALHistoryObjectRightSide, OneFile);
+    END;
+
+    PROCEDURE ShowChangesTransport@21(VAR Transport@1000 : Record 11102043;OneFile@1001 : Boolean);
+    VAR
+      ProjectObject@1002 : Record 11102037;
+      Modification@1003 : Record 11102042;
+      TmpCALHistoryObjectLeftSide@1004 : TEMPORARY Record 11102052;
+      TmpCALHistoryObjectRightSide@1005 : TEMPORARY Record 11102052;
+      TmpObject@1006 : TEMPORARY Record 2000000001;
+      FromDate@1007 : Date;
+      TillDate@1008 : Date;
+      FromTime@1009 : Time;
+      TillTime@1010 : Time;
+    BEGIN
+      ProjectObject.SETCURRENTKEY("Transport No.");
+      ProjectObject.SETRANGE("Transport No.", Transport."No.");
+      IF ProjectObject.FINDSET THEN
+        REPEAT
+          IF NOT TmpObject.GET(ProjectObject."Object Type", '', ProjectObject."Object No.") THEN BEGIN
+            TmpObject.Type := ProjectObject."Object Type";
+            TmpObject.ID := ProjectObject."Object No.";
+            TmpObject.INSERT;
+          END;
+        UNTIL ProjectObject.NEXT = 0;
+
+      IF TmpObject.FINDSET THEN
+        REPEAT
+
+          Modification.SETCURRENTKEY("Transport No.", "Object Type", "Object No.", "Object Date", "Object Time");
+          Modification.SETRANGE("Transport No.", Transport."No.");
+          Modification.SETRANGE("Object Type", TmpObject.Type);
+          Modification.SETRANGE("Object No.", TmpObject.ID);
+          IF Modification.FINDFIRST THEN BEGIN
+
+            FromDate := Modification."Object Date";
+            FromTime := Modification."Object Time";
+
+            Modification.FINDLAST;
+            TillDate := Modification."Object Date";
+            TillTime := Modification."Object Time";
+
+            GetCALHistoryFromTill(
+              TmpObject.Type, TmpObject.ID,
+              FromDate, FromTime, TillDate, TillTime,
+              TmpCALHistoryObjectLeftSide, TmpCALHistoryObjectRightSide, FALSE);
+
+          END;
+
+        UNTIL TmpObject.NEXT = 0;
+
+      ShowChangesRangeHistoryVersion(TmpCALHistoryObjectLeftSide, TmpCALHistoryObjectRightSide, OneFile);
+    END;
+
+    PROCEDURE ExportRangeToFile@22(VAR CALHistoryObject@1000 : Record 11102052;FileName@1001 : Text);
+    VAR
+      oFile@1002 : File;
+    BEGIN
+      IF EXISTS(FileName) THEN
+        ERASE(FileName);
+
+      oFile.TEXTMODE(TRUE);
+      oFile.CREATE(FileName);
+
+      CALHistoryObject.SETCURRENTKEY("Object Type", "Object No.");
+      IF CALHistoryObject.FINDSET THEN
+        REPEAT
+          AppendHistoryObjectToFile(oFile, CALHistoryObject."Entry No.");
+        UNTIL CALHistoryObject.NEXT = 0;
+      oFile.CLOSE;
+    END;
+
+    LOCAL PROCEDURE Split@23(String@1000 : Text;SplitCharacter@1001 : Text;VAR IntoArray@1002 : ARRAY [20] OF Text[30]);
+    VAR
+      i@1003 : Integer;
+      NoOfEntries@1004 : Integer;
+      PrevSplitPos@1005 : Integer;
+    BEGIN
+      CLEAR(IntoArray);
+
+      FOR i := 1 TO STRLEN(String) DO
+        IF String[i] = SplitCharacter[1] THEN BEGIN
+          NoOfEntries += 1;
+          IntoArray[NoOfEntries] := COPYSTR(String, PrevSplitPos + 1, i - PrevSplitPos - 1);
+          PrevSplitPos := i;
+        END;
+
+      NoOfEntries += 1;
+      IntoArray[NoOfEntries] := COPYSTR(String, PrevSplitPos + 1, STRLEN(String) - PrevSplitPos);
+    END;
+
+    LOCAL PROCEDURE SplitPathFileName@24(PathFileName@1000 : Text;VAR Path@1001 : Text;VAR FileName@1002 : Text);
+    VAR
+      i@1003 : Integer;
+      SlashPos@1004 : Integer;
+    BEGIN
+      FOR i := 1 TO STRLEN(PathFileName) DO
+        IF PathFileName[i] = '\' THEN
+          SlashPos := i;
+
+      IF i = 0 THEN
+        FileName := PathFileName
+      ELSE BEGIN
+        Path := DELSTR(PathFileName, SlashPos + 1);
+        FileName := COPYSTR(PathFileName, SlashPos + 1);
+      END;
+    END;
+
+    PROCEDURE AddObjects@25(VAR Object@1000 : Record 2000000001;ActionType@1001 : Option;OnlyIfOutdated@1002 : Boolean;DoCommit@1003 : Boolean;GuiType@1004 : ' ,Error,Message,Confirm';CompiledOny@1005 : Boolean);
+    VAR
+      Progressbar@1006 : Codeunit 11102044;
+      ctUpdatingCALHistory@1007 : TextConst 'DEU=Updating C/AL history...;ENU=Updating C/AL history...;ESP=Updating C/AL history...;FRA=Updating C/AL history...;NLD=C/AL Historie bijwerken...;DEA=Updating C/AL history...';
+    BEGIN
+      Progressbar.Open(ctUpdatingCALHistory, 1);
+      Progressbar.BarSize := Object.COUNT;
+
+      IF Object.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+          Progressbar.Text1Object := Object;
+          AddObject(Object, ActionType, OnlyIfOutdated, DoCommit, GuiType, CompiledOny);
+          COMMIT;
+        UNTIL Object.NEXT = 0;
+
+      Progressbar.Close;
+    END;
+
+    PROCEDURE AddObject@26(VAR Object@1000 : Record 2000000001;ActionType@1001 : Option;OnlyIfOutdated@1002 : Boolean;DoCommit@1003 : Boolean;GuiType@1004 : ' ,Error,Message,Confirm';CompiledOnly@1005 : Boolean) : Boolean;
+    VAR
+      CALHistoryObject@1006 : Record 11102052;
+      CALHistoryLine@1007 : Record 11102053;
+      ObjectLock@1008 : Record 11102054;
+      KnownObjectExportError@1009 : Record 11102073;
+      Object2@1010 : Record 2000000001;
+      Mgt@1011 : Codeunit 11102035;
+      ObjectMgt@1012 : Codeunit 11102046;
+      FileHandler@1013 : Codeunit 11102097;
+      FileNameMgt@1014 : Codeunit 11102107;
+      oFile@1015 : File;
+      Directory@1016 : Text;
+      Line@1017 : Text[250];
+      TxtFileName@1018 : Text;
+      ReadChar@1019 : Char;
+      CodeLineCounter@1020 : Integer;
+      LineCharacterCounter@1021 : Integer;
+      SubLineCounter@1022 : Integer;
+      SaveCALCode@1023 : Boolean;
+      ctExpOfObjectFailedContinue@1024 : TextConst 'DEU=Exporting of object %1 %2 - %3 failed:\%4\\Do you want to continue?;ENU=Exporting of object %1 %2 - %3 failed:\%4\\Do you want to continue?;ESP=Exporting of object %1 %2 - %3 failed:\%4\\Do you want to continue?;FRA=Exporting of object %1 %2 - %3 failed:\%4\\Do you want to continue?;NLD=Exporteren van object %1 %2 - %3 mislukt.\%4\\Wilt u doorgaan?;DEA=Exporting of object %1 %2 - %3 failed:\%4\\Do you want to continue?';
+      ctExportingOfObjectFailed@1025 : TextConst 'DEU=Exporting of object %1 %2 - %3 failed:\%4;ENU=Exporting of object %1 %2 - %3 failed:\%4;ESP=Exporting of object %1 %2 - %3 failed:\%4;FRA=Exporting of object %1 %2 - %3 failed:\%4;NLD=Exporteren van object %1 %2 - %3 mislukt.\%4;DEA=Exporting of object %1 %2 - %3 failed:\%4';
+    BEGIN
+      IF OnlyIfOutdated THEN
+        IF NOT ObjectHeaderIsOutdated(Object, FALSE) THEN
+          EXIT;
+
+      Directory := FileHandler.TempDirectory;
+
+      TxtFileName := FileNameMgt.ObjectFileName(Object, 'txt');
+
+      IF EXISTS(Directory + TxtFileName) THEN
+        ERASE(Directory + TxtFileName);
+
+      SaveCALCode := TRUE;
+
+      IF DoCommit THEN
+        COMMIT;
+
+      CASE GuiType OF
+        GuiType::Error :
+          ObjectMgt.SetErrorHandling(FALSE);
+
+        GuiType::Message, GuiType::Confirm :
+          ObjectMgt.SetErrorHandling(TRUE);
+
+      END;
+
+      IF CompiledOnly THEN
+        ObjectMgt.SetErrorHandling(TRUE);
+
+      ObjectMgt.ExportObject(Object, Directory + TxtFileName);
+
+      CASE GuiType OF
+        GuiType::Error :
+          IF ObjectMgt.GetErrorOccured THEN
+            ERROR(ObjectMgt.GetLastError);
+
+        GuiType::Message :
+          IF ObjectMgt.GetErrorOccured THEN
+            IF NOT KnownObjectExportError.GET(Object.Type, Object.ID) THEN BEGIN
+              MESSAGE(ctExportingOfObjectFailed, Object.Type, Object.ID, Object.Name, ObjectMgt.GetLastError);
+              EXIT;
+            END;
+
+        GuiType::Confirm :
+          IF ObjectMgt.GetErrorOccured THEN BEGIN
+            IF NOT CONFIRM(ctExpOfObjectFailedContinue, TRUE, Object.Type, Object.ID, Object.Name, ObjectMgt.GetLastError) THEN
+              ERROR('');
+            EXIT;
+          END;
+
+      END;
+
+      IF CompiledOnly THEN
+        IF ObjectMgt.GetErrorOccured THEN
+          SaveCALCode := FALSE;
+
+      Object2.GET(Object.Type, '', Object.ID);
+
+      CLEAR(CALHistoryObject."Entry No.");
+      CALHistoryObject."Import Entry No." := 0;
+      CALHistoryObject.FillFieldsFromObject(Object2);
+
+      CALHistoryObject."Added By" := Mgt.ShortUserId;
+      CALHistoryObject."Added Date" := TODAY;
+      CALHistoryObject."Added Time" := TIME;
+      CALHistoryObject."Added Date Time" := CURRENTDATETIME;
+
+      IF ActionType = 0 THEN
+        CALHistoryObject."Action Type" := CALHistoryObject."Action Type"::"Update C/AL History"
+      ELSE
+        CALHistoryObject."Action Type" := ActionType;
+
+      IF ObjectLock.GET(Object2.Type, Object2.ID) THEN
+        CALHistoryObject."Locked By" := ObjectLock.ShortLockedBy;
+
+      CALHistoryObject."BLOB Reference Present" := TRUE;
+      CALHistoryObject."C/AL Code Present" := FALSE;
+      CALHistoryObject.INSERT(TRUE);
+
+      //Object2.CALCFIELDS("BLOB Reference");
+
+      SaveFob(Object, CALHistoryObject."Entry No.");
+
+      IF NOT EXISTS(Directory + TxtFileName) THEN
+        EXIT(FALSE);
+
+      IF SaveCALCode THEN BEGIN
+
+        SubLineCounter := 1;
+        CodeLineCounter := 1;
+        oFile.OPEN(Directory + TxtFileName);
+
+        WHILE oFile.READ(ReadChar) > 0 DO
+
+          CASE ReadChar OF
+            13, 10 :
+              BEGIN
+
+                IF CodeLineCounter < 9 THEN
+                  IF DELSTR(Line, 18) = '    Version List=' THEN BEGIN
+                    Line := Mgt.Replace(Line, 'LOCKED', '');
+                    WHILE COPYSTR(Line, 18, 1) IN [',', '#'] DO
+                      Line := DELSTR(Line, 18, 1);
+                  END;
+
+                CALHistoryLine."Entry No." := CALHistoryObject."Entry No.";
+                CALHistoryLine."Line No." := CodeLineCounter;
+                CALHistoryLine."Sub Line No." := SubLineCounter;
+                CALHistoryLine.Code := Line;
+                CALHistoryLine.INSERT;
+
+                Line := '';
+                CodeLineCounter += 1;
+                IF ReadChar = 13 THEN
+                  oFile.READ(ReadChar);
+                LineCharacterCounter := 0;
+                SubLineCounter := 1;
+              END;
+            ELSE BEGIN
+              LineCharacterCounter += 1;
+              IF LineCharacterCounter MOD 245 = 0 THEN BEGIN
+
+                CALHistoryLine."Entry No." := CALHistoryObject."Entry No.";
+                CALHistoryLine."Line No." := CodeLineCounter;
+                CALHistoryLine."Sub Line No." := SubLineCounter;
+                CALHistoryLine.Code := Line;
+                CALHistoryLine.INSERT;
+
+                SubLineCounter += 1;
+                Line := '';
+              END;
+              Line += FORMAT(ReadChar);
+            END;
+          END;
+
+        oFile.CLOSE;
+
+        ERASE(Directory + TxtFileName);
+
+        CALHistoryObject."C/AL Code Present" := TRUE;
+        CALHistoryObject.MODIFY(TRUE);
+
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE SaveFob@27(VAR Object@1000 : Record 2000000001;EntryNo@1001 : Integer);
+    VAR
+      CALHistoryCompiled@1002 : Record 11102077;
+      ObjectMgt@1003 : Codeunit 11102046;
+      FileHandler@1004 : Codeunit 11102097;
+      FileNameMgt@1005 : Codeunit 11102107;
+      oFile@1006 : File;
+      InStr@1007 : InStream;
+      OutStr@1008 : OutStream;
+      Directory@1009 : Text;
+      FileNameFob@1010 : Text;
+    BEGIN
+      Directory := FileHandler.TempDirectory;
+
+      FileNameFob := FileNameMgt.ObjectFileName(Object, 'fob');
+
+      ObjectMgt.ExportObject(Object, Directory + FileNameFob);
+      oFile.OPEN(Directory + FileNameFob);
+      oFile.CREATEINSTREAM(InStr);
+      CALHistoryCompiled."Entry No." := EntryNo;
+      CALHistoryCompiled."BLOB Reference".CREATEOUTSTREAM(OutStr);
+      CALHistoryCompiled.Type := CALHistoryCompiled.Type::Fob;
+      COPYSTREAM(OutStr, InStr);
+      CALHistoryCompiled.INSERT;
+      oFile.CLOSE;
+
+      ERASE(Directory + FileNameFob);
+    END;
+
+    PROCEDURE ObjectHeaderIsOutdated@28(VAR Object@1000 : Record 2000000001;CheckWhereUsed@1001 : Boolean) : Boolean;
+    VAR
+      CALHistoryObject@1002 : Record 11102052;
+      WhereUsedObject@1003 : Record 11102057;
+      VersionControl@1004 : Codeunit 11102040;
+      HistoryDateTime@1005 : DateTime;
+      ObjectDateTime@1006 : DateTime;
+    BEGIN
+      CALHistoryObject.SETCURRENTKEY("Object Type", "Object No.");
+      CALHistoryObject.SETRANGE("Object Type", Object.Type);
+      CALHistoryObject.SETRANGE("Object No.", Object.ID);
+      CALHistoryObject.SETRANGE("C/AL Code Present", TRUE);
+      IF NOT CALHistoryObject.FINDLAST THEN
+        EXIT(TRUE);
+
+      ObjectDateTime := CreateDateTime2(Object.Date, Object.Time);
+      HistoryDateTime := CreateDateTime2(CALHistoryObject."Object Date", CALHistoryObject."Object Time");
+
+      IF CALHistoryObject."Action Type" = CALHistoryObject."Action Type"::Import THEN BEGIN
+        IF (ABS(ObjectDateTime - HistoryDateTime) > 1000) OR
+           (Object.Name <> CALHistoryObject."Object Name") OR
+           (Object.Modified <> CALHistoryObject.Modified)
+        THEN
+          EXIT(TRUE);
+      END ELSE BEGIN
+        IF (ABS(ObjectDateTime - HistoryDateTime) > 1000) OR
+           (Object.Name <> CALHistoryObject."Object Name") OR
+           (Object.Compiled <> CALHistoryObject.Compiled) OR
+           (Object.Modified <> CALHistoryObject.Modified)
+        THEN
+          EXIT(TRUE);
+
+        Object."Version List" := VersionControl.CleanUpVersionList(Object."Version List");
+        IF Object."Version List" <> CALHistoryObject."Version List" THEN
+          EXIT(TRUE);
+
+      END;
+
+      IF CheckWhereUsed THEN
+        IF WhereUsedObject.GET(Object.Type, Object.ID) THEN
+          EXIT(WhereUsedObject."C/AL Changed");
+    END;
+
+    PROCEDURE LatestHistoryIsOutdated@29(VAR Object@1000 : Record 2000000001) : Boolean;
+    VAR
+      CALHistoryObject@1001 : Record 11102052;
+      CALHistoryLine@1002 : Record 11102053;
+    BEGIN
+      CALHistoryObject.SETCURRENTKEY("Object Type", "Object No.");
+      CALHistoryObject.SETRANGE("Object Type", Object.Type);
+      CALHistoryObject.SETRANGE("Object No.", Object.ID);
+      CALHistoryObject.SETRANGE("C/AL Code Present", TRUE);
+      IF NOT CALHistoryObject.FINDLAST THEN
+        EXIT(TRUE);
+
+      CALHistoryLine.SETRANGE("Entry No.", CALHistoryObject."Entry No.");
+      EXIT(CALIsOutdated(Object, CALHistoryLine));
+    END;
+
+    PROCEDURE CALIsOutdated@30(VAR Object@1000 : Record 2000000001;VAR CALHistoryLine@1001 : Record 11102053) : Boolean;
+    VAR
+      TmpCALHistoryLine@1002 : TEMPORARY Record 11102053;
+      ObjectMgt@1003 : Codeunit 11102046;
+      FileHandler@1004 : Codeunit 11102097;
+      FileNameMgt@1005 : Codeunit 11102107;
+      oFile@1006 : File;
+      Directory@1007 : Text;
+      FileName@1008 : Text;
+      Line@1009 : Text[250];
+      ReadChar@1010 : Char;
+      CodeLineCounter@1011 : Integer;
+      LineCharacterCounter@1012 : Integer;
+      SubLineCounter@1013 : Integer;
+    BEGIN
+      Directory := FileHandler.TempDirectory;
+      FileName := FileNameMgt.ObjectFileName(Object, 'txt');
+
+      IF EXISTS(Directory + FileName) THEN
+        ERASE(Directory + FileName);
+
+      ObjectMgt.SetErrorHandling(TRUE);
+      ObjectMgt.ExportObject(Object, Directory + FileName);
+      IF ObjectMgt.GetErrorOccured THEN
+        EXIT(TRUE);
+
+      oFile.OPEN(Directory + FileName);
+
+      CodeLineCounter := 1;
+      SubLineCounter := 1;
+
+      WHILE oFile.READ(ReadChar) > 0 DO
+
+        CASE ReadChar OF
+          13, 10 :
+            BEGIN
+
+              TmpCALHistoryLine."Line No." := CodeLineCounter;
+              TmpCALHistoryLine."Sub Line No." := SubLineCounter;
+              TmpCALHistoryLine.Code := Line;
+              TmpCALHistoryLine.INSERT;
+
+              Line := '';
+              IF ReadChar = 13 THEN
+                oFile.READ(ReadChar);
+
+              CodeLineCounter += 1;
+              LineCharacterCounter := 0;
+              SubLineCounter := 1;
+            END;
+
+          ELSE BEGIN
+            LineCharacterCounter += 1;
+            IF LineCharacterCounter MOD 245 = 0 THEN BEGIN
+              TmpCALHistoryLine."Line No." := CodeLineCounter;
+              TmpCALHistoryLine."Sub Line No." := SubLineCounter;
+              TmpCALHistoryLine.Code := Line;
+              TmpCALHistoryLine.INSERT;
+              SubLineCounter += 1;
+              Line := '';
+            END;
+            Line += FORMAT(ReadChar);
+          END;
+        END;
+
+      oFile.CLOSE;
+
+      ERASE(Directory + FileName);
+
+      TrimLines(TmpCALHistoryLine);
+      TrimLines(CALHistoryLine);
+
+      IF TmpCALHistoryLine.COUNT <> CALHistoryLine.COUNT THEN
+        EXIT(TRUE);
+
+      IF TmpCALHistoryLine.FINDSET THEN BEGIN
+        CALHistoryLine.FINDSET;
+        REPEAT
+
+          IF DELCHR(TmpCALHistoryLine.Code, '>') <> DELCHR(CALHistoryLine.Code, '>') THEN
+            IF STRPOS(CALHistoryLine.Code, 'Version List=') <> 5 THEN
+              EXIT(TRUE);
+
+          CALHistoryLine.NEXT;
+        UNTIL TmpCALHistoryLine.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE RestoreObjects@31(VAR CALHistoryObject@1000 : Record 11102052) : Boolean;
+    VAR
+      CALHistoryObject2@1001 : Record 11102052;
+      ObjectLock@1002 : Record 11102054;
+      CALHistoryCompiled@1003 : Record 11102077;
+      Object@1004 : Record 2000000001;
+      VersionControl@1005 : Codeunit 11102040;
+      ObjectMgt@1006 : Codeunit 11102046;
+      SourceControl@1007 : Codeunit 11102050;
+      FileHandler@1008 : Codeunit 11102097;
+      oFile@1009 : File;
+      InStr@1010 : InStream;
+      OutStr@1011 : OutStream;
+      FileName@1012 : Text[1024];
+      NewVersionList@1013 : Text;
+      LastEntryNo@1014 : Integer;
+      InsertObject@1015 : Boolean;
+      ObjectLocked@1016 : Boolean;
+      ObjectLockRecord@1017 : Boolean;
+      ObjectMarked@1018 : Boolean;
+      ctConfirmObject@1019 : TextConst 'DEU=%1 %2 %3 will be replaced.\Are you sure?;ENU=%1 %2 %3 will be replaced.\Are you sure?;ESP=%1 %2 %3 will be replaced.\Are you sure?;FRA=%1 %2 %3 will be replaced.\Are you sure?;NLD=%1 %2 %3 zal worden overschreven.\Weet u het zeker?;DEA=%1 %2 %3 will be replaced.\Are you sure?';
+      ctConfirmObjects@1020 : TextConst 'DEU=%1 objects will be replaced.\Are you sure?;ENU=%1 objects will be replaced.\Are you sure?;ESP=%1 objects will be replaced.\Are you sure?;FRA=%1 objects will be replaced.\Are you sure?;NLD=%1 objecten zullen worden overschreven.\Weet u het zeker?;DEA=%1 objects will be replaced.\Are you sure?';
+      ctEmptyObject@1021 : TextConst 'DEU=%1 %2 %3 is an empty object.\Are you sure?;ENU=%1 %2 %3 is an empty object.\Are you sure?;ESP=%1 %2 %3 is an empty object.\Are you sure?;FRA=%1 %2 %3 is an empty object.\Are you sure?;NLD=%1 %2 %3 is een leeg object.\Weet u het zeker?;DEA=%1 %2 %3 is an empty object.\Are you sure?';
+      ctNoBlobReference@1022 : TextConst 'DEU=No BLOB reference present.\Please export object in textformat and import in the Object Designer.;ENU=No BLOB reference present.\Please export object in textformat and import in the Object Designer.;ESP=No BLOB reference present.\Please export object in textformat and import in the Object Designer.;FRA=No BLOB reference present.\Please export object in textformat and import in the Object Designer.;NLD=Geen BLOB referenctie aanwezig.\Exporteer het object in tekstformaat en importeer in de Object Designer.;DEA=No BLOB reference present.\Please export object in textformat and import in the Object Designer.';
+    BEGIN
+      WITH CALHistoryObject DO
+        IF FINDSET THEN BEGIN
+
+          IF COUNT = 1 THEN BEGIN
+            IF NOT CONFIRM(ctConfirmObject, TRUE, "Object Type", "Object No.", "Object Name") THEN
+              EXIT(FALSE);
+          END ELSE
+            IF NOT CONFIRM(ctConfirmObjects, TRUE, COUNT) THEN
+              EXIT(FALSE);
+
+          REPEAT
+
+            IF NOT CALHistoryCompiled.GET("Entry No.") THEN
+              ERROR(ctNoBlobReference)
+            ELSE BEGIN
+              CALHistoryCompiled.CALCFIELDS("BLOB Reference");
+              IF NOT CALHistoryCompiled."BLOB Reference".HASVALUE THEN
+                IF NOT CONFIRM(ctEmptyObject, TRUE, "Object Type", "Object No.", "Object Name") THEN
+                  EXIT;
+            END;
+
+            ObjectLockRecord := ObjectLock.GET("Object Type", "Object No.");
+
+            InsertObject := NOT Object.GET("Object Type", '', "Object No.");
+
+            IF NOT InsertObject THEN BEGIN
+              ObjectMarked := Object."Version List"[1] = '#';
+              ObjectLocked := STRPOS(Object."Version List", 'LOCKED') > 0;
+              SourceControl.AddObject(Object, "Action Type"::Restore, TRUE, TRUE, 2, FALSE);
+            END ELSE BEGIN
+              ObjectMarked := FALSE;
+              ObjectLocked := FALSE;
+            END;
+
+            NewVersionList := VersionControl.CleanUpVersionList("Version List");
+
+            IF ObjectLocked THEN
+              IF NewVersionList = '' THEN
+                NewVersionList := 'LOCKED'
+              ELSE
+                NewVersionList := 'LOCKED,' + NewVersionList;
+
+            IF ObjectMarked THEN
+              NewVersionList := '#' + NewVersionList;
+
+            CALHistoryObject2.LOCKTABLE;
+            CALHistoryObject2.RESET;
+            CALHistoryObject2.SETCURRENTKEY("Action Type", "Object Type", "Object No.", "Entry No.");
+            CALHistoryObject2.SETRANGE("Object Type", Object.Type);
+            CALHistoryObject2.SETRANGE("Object No.", Object.ID);
+            IF CALHistoryObject2.FINDLAST THEN
+              LastEntryNo := CALHistoryObject2."Entry No."
+            ELSE
+              LastEntryNo := 0;
+
+            CASE CALHistoryCompiled.Type OF
+              CALHistoryCompiled.Type::Binary :
+                CALHistoryCompiled.FIELDERROR(Type);
+
+              CALHistoryCompiled.Type::Fob :
+                BEGIN
+
+                  FileName := FileHandler.CreateServerTempFileName('fob');
+                  oFile.CREATE(FileName);
+                  oFile.CREATEOUTSTREAM(OutStr);
+                  CALHistoryCompiled."BLOB Reference".CREATEINSTREAM(InStr);
+                  COPYSTREAM(OutStr, InStr);
+                  oFile.CLOSE;
+
+                  ObjectMgt.ImportObject(FileName);
+
+                END;
+            END;
+
+            IF ObjectLockRecord THEN BEGIN
+              SELECTLATESTVERSION;
+              IF NOT ObjectLock.GET(Object.Type, Object.ID) THEN
+                ObjectLock.INSERT;
+            END;
+
+            Object.Type := "Object Type";
+            Object.ID := "Object No.";
+            Object.Name := "Object Name";
+            Object.Modified := Modified;
+            Object.Compiled := Compiled;
+            Object."BLOB Reference" := CALHistoryCompiled."BLOB Reference";
+            Object.Date := "Object Date";
+            Object.Time := "Object Time";
+            Object."Version List" := NewVersionList;
+
+            ObjectMgt.UpdateObject(Object, FALSE);
+
+            SourceControl.AddObject(Object, "Action Type"::Restore, TRUE, TRUE, 2, FALSE);
+
+            IF LastEntryNo > 0 THEN BEGIN
+              CALHistoryObject2.SETFILTER("Entry No.", '>%1', LastEntryNo);
+              IF CALHistoryObject2.FINDLAST THEN BEGIN
+                CALHistoryObject2."Action Type" := CALHistoryObject2."Action Type"::Restore;
+                CALHistoryObject2."Restored from Entry No." := "Entry No.";
+                CALHistoryObject2.MODIFY;
+              END;
+            END;
+
+          UNTIL NEXT = 0;
+        END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ExportObjectPermission@32(VAR Object@1000 : Record 2000000001) : Boolean;
+    VAR
+      LicensePermission@1001 : Record 2000000043;
+    BEGIN
+      IF NOT LicensePermission.GET(LicensePermission."Object Type"::System, 1340) THEN
+        EXIT(FALSE);
+
+      IF LicensePermission."Execute Permission" <> LicensePermission."Execute Permission"::Yes THEN
+        EXIT(FALSE);
+
+      IF NOT LicensePermission.GET(Object.Type, Object.ID) THEN
+        EXIT(TRUE);
+
+      IF LicensePermission."Read Permission" = LicensePermission."Read Permission"::Yes THEN
+        EXIT(TRUE);
+
+      IF Object.Type = Object.Type::MenuSuite THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE ObjectChangedSinceTransport@33(VAR Object@1000 : Record 2000000001) : Boolean;
+    VAR
+      CALHistoryObject@1001 : Record 11102052;
+      VersionControl@1002 : Codeunit 11102040;
+    BEGIN
+      IF (Object.Type = Object.Type::Table) AND (Object.ID = DATABASE::"OM - Object Import Line") THEN
+        EXIT(FALSE);
+
+      CALHistoryObject.SETCURRENTKEY("Object Type", "Object No.", "Entry No.");
+      CALHistoryObject.SETRANGE("Object Type", Object.Type);
+      CALHistoryObject.SETRANGE("Object No.", Object.ID);
+      CALHistoryObject.SETFILTER("Action Type",
+        '%1|%2',
+        CALHistoryObject."Action Type"::"After Imp. Transport",
+        CALHistoryObject."Action Type"::"Confirmed in Import Sheet");
+
+      IF NOT CALHistoryObject.FINDLAST THEN BEGIN
+        CALHistoryObject.SETCURRENTKEY("Object Type", "Object No.", "Entry No.");
+        CALHistoryObject.SETRANGE("Action Type");
+        IF NOT CALHistoryObject.FINDLAST THEN
+          EXIT(TRUE);
+      END;
+
+      IF (
+         ABS(
+           CreateDateTime2(Object.Date, Object.Time) -
+           CreateDateTime2(CALHistoryObject."Object Date", CALHistoryObject."Object Time")) > 1000) OR
+         (Object.Name <> CALHistoryObject."Object Name") OR
+         (Object.Modified <> CALHistoryObject.Modified)
+      THEN
+        EXIT(TRUE);
+
+      IF VersionControl.CleanUpVersionList(Object."Version List") <> CALHistoryObject."Version List" THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE StartCompareToolFile@36(LeftFileName@1000 : Text;RightFileName@1001 : Text);
+    VAR
+      Setup@1002 : Record 11102035;
+      Mgt@1003 : Codeunit 11102035;
+      FileHandler@1004 : Codeunit 11102097;
+      ctNotFound@1005 : TextConst 'DEU=Executable ''%1'' not found.\Please enter another compare tool in the setup.;ENU=Executable ''%1'' not found.\Please enter another compare tool in the setup.;ESP=Executable ''%1'' not found.\Please enter another compare tool in the setup.;FRA=Executable ''%1'' not found.\Please enter another compare tool in the setup.;NLD=Programma ''%1'' niet gevonden.\Stel een andere vergelijkprogramma in in de setup.;DEA=Executable ''%1'' not found.\Please enter another compare tool in the setup.';
+    BEGIN
+      Setup.CustomGet;
+      Setup.TESTFIELD("Compare Tool");
+
+      IF NOT FileHandler.ClientFileNameExists(Setup."Compare Tool") THEN
+        ERROR(ctNotFound, Setup."Compare Tool");
+
+      IF STRPOS(Setup."Compare Tool", '%1') > 0 THEN
+        Mgt.RunExecutable(STRSUBSTNO(Setup."Compare Tool", LeftFileName, RightFileName), '')
+      ELSE
+        Mgt.RunExecutable(Setup."Compare Tool", '"' + LeftFileName + '" "' + RightFileName + '"');
+    END;
+
+    PROCEDURE StartThreeWayCompareToolFile@34(OriginalFileName@1000 : Text;ModifiedFileName@1001 : Text;TargetFileName@1002 : Text;ResultFileName@1003 : Text);
+    VAR
+      Setup@1004 : Record 11102035;
+      Mgt@1005 : Codeunit 11102035;
+      FileHandler@1006 : Codeunit 11102097;
+      ctNotFound@1007 : TextConst 'DEU=Executable ''%1'' not found.\Please enter another compare tool in the setup.;ENU=Executable ''%1'' not found.\Please enter another compare tool in the setup.;ESP=Executable ''%1'' not found.\Please enter another compare tool in the setup.;FRA=Executable ''%1'' not found.\Please enter another compare tool in the setup.;NLD=Programma ''%1'' niet gevonden.\Stel een andere vergelijkprogramma in in de setup.;DEA=Executable ''%1'' not found.\Please enter another compare tool in the setup.';
+    BEGIN
+      Setup.CustomGet;
+      Setup.TESTFIELD("Three Way Merge Compare Tool");
+
+      IF NOT FileHandler.ClientFileNameExists(Setup."Three Way Merge Compare Tool") THEN
+        ERROR(ctNotFound, Setup."Three Way Merge Compare Tool");
+
+      IF STRPOS(Setup."Three Way Merge Compare Tool", '%1') > 0 THEN
+        Mgt.RunExecutable(STRSUBSTNO(Setup."Three Way Merge Compare Tool", OriginalFileName, ModifiedFileName, TargetFileName, ResultFileName), '')
+      ELSE
+        Mgt.RunExecutable(Setup."Three Way Merge Compare Tool", '"' + ModifiedFileName + '" "' + TargetFileName + '" "' + OriginalFileName + '" "' + ResultFileName + '"');
+    END;
+
+    PROCEDURE StartCompareToolDirectory@37(LeftDirectory@1000 : Text;RightDirectory@1001 : Text);
+    VAR
+      Setup@1002 : Record 11102035;
+      Mgt@1003 : Codeunit 11102035;
+      FileHandler@1004 : Codeunit 11102097;
+      ctNotFound@1005 : TextConst 'DEU=Executable ''%1'' not found.\Please enter another compare tool in the setup.;ENU=Executable ''%1'' not found.\Please enter another compare tool in the setup.;ESP=Executable ''%1'' not found.\Please enter another compare tool in the setup.;FRA=Executable ''%1'' not found.\Please enter another compare tool in the setup.;NLD=Programma ''%1'' niet gevonden.\Stel een andere vergelijkprogramma in in de setup.;DEA=Executable ''%1'' not found.\Please enter another compare tool in the setup.';
+    BEGIN
+      Setup.CustomGet;
+      Setup.TESTFIELD("Compare Tool");
+
+      IF NOT FileHandler.ClientFileNameExists(Setup."Compare Tool") THEN
+        ERROR(ctNotFound, Setup."Compare Tool");
+
+      IF STRPOS(Setup."Compare Tool", '%1') > 0 THEN
+        Mgt.RunExecutable(STRSUBSTNO(Setup."Compare Tool", LeftDirectory, RightDirectory), '')
+      ELSE
+        Mgt.RunExecutable(Setup."Compare Tool", '"' + LeftDirectory + '" "' + RightDirectory + '"');
+    END;
+
+    PROCEDURE CreateDateTime2@38(DatePar@1000 : Date;TimePar@1001 : Time) : DateTime;
+    BEGIN
+      IF (DatePar <> 0D) AND (TimePar <> 0T) THEN
+        EXIT(CREATEDATETIME(DatePar, TimePar));
+
+      IF DatePar = 0D THEN
+        DatePar := 01011900D;
+      IF TimePar = 0T THEN
+        TimePar := 000000T;
+
+      EXIT(CREATEDATETIME(DatePar, TimePar));
+    END;
+
+    PROCEDURE ConfirmObjectLock@39(VAR Object@1000 : Record 2000000001) : Boolean;
+    VAR
+      Setup@1001 : Record 11102035;
+      ObjectLock@1002 : Record 11102054;
+      Mgt@1003 : Codeunit 11102035;
+      Question@1004 : Text;
+      ctConfirmLock@1005 : TextConst 'DEU="%1 %2=''%3'', %4=''%5'' is locked by ''%6''.\Are you sure?";ENU="%1 %2=''%3'', %4=''%5'' is locked by ''%6''.\Are you sure?";ESP="%1 %2=''%3'', %4=''%5'' is locked by ''%6''.\Are you sure?";FRA="%1 %2=''%3'', %4=''%5'' is locked by ''%6''.\Are you sure?";NLD="%1 %2=''%3'', %4=''%5'' is vergrendeld door ''%6''.\Weet u het zeker?";DEA="%1 %2=''%3'', %4=''%5'' is locked by ''%6''.\Are you sure?"';
+    BEGIN
+      Setup.CustomGet;
+      IF Setup."Database Locked" THEN
+        Setup.FIELDERROR("Database Locked");
+
+      IF ObjectLock.GET(Object.Type, Object.ID) THEN
+        IF NOT (ObjectLock.ShortLockedBy IN [Mgt.ShortUserId, '']) THEN BEGIN
+          Question :=
+            STRSUBSTNO(
+              ctConfirmLock, Object.TABLECAPTION, Object.FIELDCAPTION(Type),
+              Object.Type, Object.FIELDCAPTION(ID), Object.ID, ObjectLock.ShortLockedBy);
+          IF NOT CONFIRM(Question, FALSE) THEN
+            EXIT(FALSE);
+        END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE SynchronizeLocks@40();
+    VAR
+      ObjectLock@1000 : Record 11102054;
+      Object@1001 : Record 2000000001;
+    BEGIN
+      IF ObjectLock.FINDSET THEN
+        REPEAT
+          IF Object.GET(ObjectLock."Object Type", '', ObjectLock."Object No.") THEN
+            ObjectLock.TagObject
+          ELSE
+            ObjectLock.DELETE;
+        UNTIL ObjectLock.NEXT = 0;
+
+      Object.SETFILTER(Type, '<>%1', Object.Type::TableData);
+      Object.SETRANGE(Locked, TRUE);
+      IF Object.FINDSET THEN
+        REPEAT
+          IF ObjectLock.GET(Object.Type, Object.ID) THEN BEGIN
+            ObjectLock."Locked By" := Object."Locked By";
+            ObjectLock.MODIFY;
+          END ELSE BEGIN
+            ObjectLock."Object Type" := Object.Type;
+            ObjectLock."Object No." := Object.ID;
+            ObjectLock."Lock Date" := TODAY;
+            ObjectLock."Lock Time" := TIME;
+            ObjectLock."Locked By" := Object."Locked By";
+            ObjectLock.INSERT;
+          END;
+        UNTIL Object.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateObject@41(VAR Object@1000 : Record 2000000001;CheckObjectChanged@1001 : Boolean;VAR OriginalCALHistoryLine@1002 : Record 11102053;VAR CALHistoryLine@1003 : Record 11102053);
+    VAR
+      Object2@1004 : Record 2000000001;
+      ObjectMgt@1005 : Codeunit 11102046;
+      SourceControl@1006 : Codeunit 11102050;
+      FileHandler@1007 : Codeunit 11102097;
+      CompileError@1008 : Text;
+      Directory@1009 : Text;
+      FileName@1010 : Text;
+      OriginalVersionList@1011 : Text;
+      ObjectCompiled@1012 : Boolean;
+      ctObjectCannotBeModified@1013 : TextConst 'DEU=Object %1 %2 %3 cannot be updated in text format.;ENU=Object %1 %2 %3 cannot be updated in text format.;ESP=Object %1 %2 %3 cannot be updated in text format.;FRA=Object %1 %2 %3 cannot be updated in text format.;NLD=Object %1 %2 %3 kan niet worden aangepast in tekstformaat.;DEA=Object %1 %2 %3 cannot be updated in text format.';
+      ctObjectChanged@1014 : TextConst 'DEU=Object has changed.;ENU=Object has changed.;ESP=Object has changed.;FRA=Object has changed.;NLD=Object is gewijzigd.;DEA=Object has changed.';
+      ctObjectCompileError@1015 : TextConst 'DEU=Object %1 %2 %3 cannot be compiled.\\%4;ENU=Object %1 %2 %3 cannot be compiled.\\%4;ESP=Object %1 %2 %3 cannot be compiled.\\%4;FRA=Object %1 %2 %3 cannot be compiled.\\%4;NLD=Object %1 %2 %3 kan niet worden gecompileerd.\\%4;DEA=Object %1 %2 %3 cannot be compiled.\\%4';
+      ctObjectNotCompiled@1016 : TextConst 'DEU=Object %1 %2 %3 is not compiled.\Do you want to continue?;ENU=Object %1 %2 %3 is not compiled.\Do you want to continue?;ESP=Object %1 %2 %3 is not compiled.\Do you want to continue?;FRA=Object %1 %2 %3 is not compiled.\Do you want to continue?;NLD=Object %1 %2 %3 is not gecompileerd.\Wilt u doorgaan?;DEA=Object %1 %2 %3 is not compiled.\Do you want to continue?';
+      ctObjectNotOkCompile@1017 : TextConst 'DEU=Object %1 %2 %3 cannot be compiled.\Please import the file ''%4'' and compile the object to see what is wrong.;ENU=Object %1 %2 %3 cannot be compiled.\Please import the file ''%4'' and compile the object to see what is wrong.;ESP=Object %1 %2 %3 cannot be compiled.\Please import the file ''%4'' and compile the object to see what is wrong.;FRA=Object %1 %2 %3 cannot be compiled.\Please import the file ''%4'' and compile the object to see what is wrong.;NLD=Object %1 %2 %3 kan niet worden gecompileerd.\Importeer het bestand ''%4'' handmatig en compileer het object om te zien wat er mis is.;DEA=Object %1 %2 %3 cannot be compiled.\Please import the file ''%4'' and compile the object to see what is wrong.';
+      ctObjectNotOkImport@1018 : TextConst 'DEU=Object %1 %2 %3 cannot be imported.\Please import the file ''%4'' to see what is wrong.;ENU=Object %1 %2 %3 cannot be imported.\Please import the file ''%4'' to see what is wrong.;ESP=Object %1 %2 %3 cannot be imported.\Please import the file ''%4'' to see what is wrong.;FRA=Object %1 %2 %3 cannot be imported.\Please import the file ''%4'' to see what is wrong.;NLD=Object %1 %2 %3 kan niet worden geimporteerd.\Importeer het bestand ''%4'' handmatig om te zien wat er mis is.;DEA=Object %1 %2 %3 cannot be imported.\Please import the file ''%4'' to see what is wrong.';
+    BEGIN
+      Object2.GET(Object.Type, '', Object.ID);
+      ObjectCompiled := Object2.Compiled;
+
+      IF NOT ObjectCompiled THEN
+        IF NOT CONFIRM(ctObjectNotCompiled, TRUE, Object2.Type, Object2.ID, Object2.Name) THEN
+          ERROR('');
+
+      OriginalVersionList := Object2."Version List";
+
+      IF CheckObjectChanged THEN
+        IF CALIsOutdated(Object2, OriginalCALHistoryLine) THEN
+          ERROR(ctObjectChanged);
+
+      Directory := FileHandler.TempDirectory;
+      FileName := Directory + 'UpdateObject.txt';
+
+      SetModifyFlagInHistoryLines(CALHistoryLine, TODAY, TIME);
+      ExportTextFile(FileName, CALHistoryLine);
+
+      IF NOT SourceControl.ExportObjectPermission(Object) THEN
+        ERROR(ctObjectCannotBeModified);
+
+      ObjectMgt.ExportObject(Object, FileName + '.fob');
+      ObjectMgt.ImportObject(FileName);
+
+      Object2.GET(Object2.Type, '', Object2.ID);
+      IF Object2.Compiled THEN BEGIN
+        ObjectMgt.ImportObject(FileName + '.fob');
+        ERROR(ctObjectNotOkImport, Object2.Type, Object2.ID, Object2.Name, FileName);
+      END;
+
+      IF ObjectCompiled THEN BEGIN
+        ObjectMgt.CompileObject(Object2);
+        CompileError := ObjectMgt.GetLastError;
+
+        Object2.GET(Object2.Type, '', Object2.ID);
+        IF NOT Object2.Compiled THEN BEGIN
+          ObjectMgt.ImportObject(FileName + '.fob');
+
+          IF CompileError = '' THEN
+            ERROR(ctObjectNotOkCompile, Object2.Type, Object2.ID, Object2.Name, FileName)
+          ELSE
+            ERROR(ctObjectCompileError, Object2.Type, Object2.ID, Object2.Name, CompileError);
+        END;
+      END;
+
+      ERASE(FileName + '.fob');
+    END;
+
+    PROCEDURE UpdateCALHistory@42(VAR Object2@1000 : Record 2000000001;CheckWhereUsed@1001 : Boolean;WithAskSqlTrigger@1002 : Boolean);
+    VAR
+      Setup@1003 : Record 11102035;
+      WhereUsedObject@1004 : Record 11102057;
+      WhereUsedStatus@1005 : Record 11102059;
+      KnownObjectExportError@1006 : Record 11102073;
+      TmpObject@1007 : TEMPORARY Record 2000000001;
+      Progressbar@1008 : Codeunit 11102044;
+      SourceControl@1009 : Codeunit 11102050;
+      PrevUpdate@1010 : DateTime;
+      AddToProgressBar@1011 : Integer;
+      LicenseMessage@1012 : Boolean;
+      UseWhereUsedStatus@1013 : Boolean;
+      ctNotAllObjectsUpdates@1014 : TextConst 'DEU=Not all objects were updated.\Are you using the the right development license?;ENU=Not all objects were updated.\Are you using the the right development license?;ESP=Not all objects were updated.\Are you using the the right development license?;FRA=Not all objects were updated.\Are you using the the right development license?;NLD=Niet alle objecten zijn bijgewerkt.\Heeft u de goede ontwikkellicentie ge‹mporteerd?;DEA=Not all objects were updated.\Are you using the the right development license?';
+      ctUpdatingCALHistory@1015 : TextConst 'DEU=Updating C/AL history...;ENU=Updating C/AL history...;ESP=Updating C/AL history...;FRA=Updating C/AL history...;NLD=C/AL Historie bijwerken...;DEA=Updating C/AL history...';
+    BEGIN
+      Setup.CustomGet;
+      Setup.TESTFIELD("Compiler (Finsql on Server)");
+
+      IF WithAskSqlTrigger THEN
+        CASE SqlsAnswer OF
+          '0' : UseWhereUsedStatus := TRUE;
+          '1' : EXIT;
+        END;
+
+      IF UseWhereUsedStatus AND (WhereUsedStatus.COUNT < 100) THEN BEGIN
+
+        IF WhereUsedStatus.FINDSET THEN
+          REPEAT
+            IF Object2.GET(WhereUsedStatus."Object Type", '', WhereUsedStatus."Object No.") THEN
+              IF Object2.FIND('=') THEN
+                IF SourceControl.ObjectHeaderIsOutdated(Object2, CheckWhereUsed) THEN BEGIN
+                  TmpObject := Object2;
+                  TmpObject.INSERT;
+                END;
+          UNTIL WhereUsedStatus.NEXT = 0;
+
+      END ELSE
+        IF Object2.FINDSET THEN
+          REPEAT
+            TmpObject := Object2;
+            TmpObject.INSERT;
+          UNTIL Object2.NEXT = 0;
+
+      IF TmpObject.ISEMPTY THEN
+        EXIT;
+
+      Progressbar.ShowRemainingTime(FALSE);
+      Progressbar.Open(ctUpdatingCALHistory, 1);
+      Progressbar.BarSize := TmpObject.COUNT;
+
+      PrevUpdate := CURRENTDATETIME;
+
+      IF TmpObject.FINDSET THEN
+        REPEAT
+
+          AddToProgressBar += 1;
+
+          IF CURRENTDATETIME - PrevUpdate > 100 THEN BEGIN
+            Progressbar.AddToBar(AddToProgressBar);
+            AddToProgressBar := 0;
+
+            Progressbar.Text1Object := TmpObject;
+            Progressbar.UpdateBar;
+            PrevUpdate := CURRENTDATETIME;
+          END;
+
+          IF SourceControl.ObjectHeaderIsOutdated(TmpObject, CheckWhereUsed) THEN BEGIN
+            IF SourceControl.ExportObjectPermission(TmpObject) THEN BEGIN
+              Progressbar.Text1Object := TmpObject;
+              SourceControl.AddObject(TmpObject, 0, FALSE, TRUE, 2, FALSE);
+
+              IF CheckWhereUsed THEN
+                IF WhereUsedObject.GET(TmpObject.Type, TmpObject.ID) THEN
+                  IF WhereUsedObject."C/AL Changed" THEN BEGIN
+                    WhereUsedObject."C/AL Changed" := FALSE;
+                    WhereUsedObject.MODIFY;
+                  END;
+
+            END ELSE
+              IF NOT KnownObjectExportError.GET(TmpObject.Type, TmpObject.ID) THEN
+                LicenseMessage := TRUE;
+
+            COMMIT;
+
+          END;
+        UNTIL TmpObject.NEXT = 0;
+
+      Progressbar.Close;
+
+      IF LicenseMessage THEN
+        MESSAGE(ctNotAllObjectsUpdates);
+    END;
+
+    PROCEDURE CheckObjectBeforeChanging@43(VAR Object@1000 : Record 2000000001;VAR Progressbar@1001 : Codeunit 11102044) : Boolean;
+    VAR
+      Object2@1002 : Record 2000000001;
+      ObjectMgt@1003 : Codeunit 11102046;
+      FileHandler@1004 : Codeunit 11102097;
+      CompileError@1005 : Text;
+      FileNameFob@1006 : Text;
+      FileNameTxt@1007 : Text;
+      ctObjectCompileError@1008 : TextConst 'DEU=Object %1 %2 %3 cannot be compiled.\\%4;ENU=Object %1 %2 %3 cannot be compiled.\\%4;ESP=Object %1 %2 %3 cannot be compiled.\\%4;FRA=Object %1 %2 %3 cannot be compiled.\\%4;NLD=Object %1 %2 %3 kan niet worden gecompileerd.\\%4;DEA=Object %1 %2 %3 cannot be compiled.\\%4';
+      ctObjectNotOkCompile@1009 : TextConst 'DEU=Object %1 %2 %3 cannot be compiled.\Please import the file ''%4'' and compile the object to see what is wrong.;ENU=Object %1 %2 %3 cannot be compiled.\Please import the file ''%4'' and compile the object to see what is wrong.;ESP=Object %1 %2 %3 cannot be compiled.\Please import the file ''%4'' and compile the object to see what is wrong.;FRA=Object %1 %2 %3 cannot be compiled.\Please import the file ''%4'' and compile the object to see what is wrong.;NLD=Object %1 %2 %3 kan niet worden gecompileerd.\Importeer het bestand ''%4'' handmatig en compileer het object om te zien wat er mis is.;DEA=Object %1 %2 %3 cannot be compiled.\Please import the file ''%4'' and compile the object to see what is wrong.';
+      ctObjectNotOkImport@1010 : TextConst 'DEU=Object %1 %2 %3 cannot be updated.\Importing the object in text-format failed.;ENU=Object %1 %2 %3 cannot be updated.\Importing the object in text-format failed.;ESP=Object %1 %2 %3 cannot be updated.\Importing the object in text-format failed.;FRA=Object %1 %2 %3 cannot be updated.\Importing the object in text-format failed.;NLD=Object %1 %2 %3 kan niet worden bijgewerkt.\Het is niet gelukt om het object in textformaat in importeren.;DEA=Object %1 %2 %3 cannot be updated.\Importing the object in text-format failed.';
+    BEGIN
+      Progressbar.AddToBar(1);
+      Progressbar.Text2Object := Object;
+
+      IF NOT ConfirmObjectLock(Object) THEN
+        EXIT;
+
+      FileNameFob := FileHandler.CreateServerTempFileName('fob');
+      FileNameTxt := FileHandler.CreateServerTempFileName('txt');
+
+      ObjectMgt.ExportObject(Object, FileNameFob);
+
+      Progressbar.AddToBar(1);
+      ObjectMgt.ExportObject(Object, FileNameTxt);
+
+      Progressbar.AddToBar(1);
+      ObjectMgt.ImportObject(FileNameTxt);
+
+      Object2.GET(Object.Type, '', Object.ID);
+      IF Object2.Compiled THEN BEGIN
+
+        ObjectMgt.ImportObject(FileNameFob);
+
+        ERROR(ctObjectNotOkImport, Object2.Type, Object2.ID, Object2.Name);
+      END;
+
+      Progressbar.AddToBar(1);
+      ObjectMgt.CompileObject(Object2);
+
+      Object2.GET(Object.Type, '', Object.ID);
+      IF NOT Object2.Compiled THEN BEGIN
+        CompileError := ObjectMgt.GetLastError;
+        ObjectMgt.ImportObject(FileNameFob);
+
+        IF CompileError = '' THEN
+          ERROR(ctObjectNotOkCompile, Object2.Type, Object2.ID, Object2.Name, FileNameTxt)
+        ELSE
+          ERROR(ctObjectCompileError, Object2.Type, Object2.ID, Object2.Name, CompileError);
+      END;
+
+      COMMIT;
+      IF LatestHistoryIsOutdated(Object) THEN
+        AddObject(Object, 0, FALSE, FALSE, 1, FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetCALHistoryFromTill@44(ObjectType2@1000 : Option;ObjectNo@1001 : Integer;FromDate@1002 : Date;FromTime@1003 : Time;TillDate@1004 : Date;TillTime@1005 : Time;VAR TmpCALHistoryLeftSide@1006 : TEMPORARY Record 11102052;VAR TmpCALHistoryRightSide@1007 : TEMPORARY Record 11102052;InPeriod@1008 : Boolean);
+    VAR
+      CALHistoryObject@1009 : Record 11102052;
+      FromTime2@1010 : Time;
+      TillTime2@1011 : Time;
+    BEGIN
+      CALHistoryObject.SETCURRENTKEY("Object Type", "Object No.", "Object Date", "Object Time");
+      CALHistoryObject.SETRANGE("Object Type", ObjectType2);
+      CALHistoryObject.SETRANGE("Object No.", ObjectNo);
+      CALHistoryObject.SETRANGE("C/AL Code Present", TRUE);
+      IF CALHistoryObject.FINDFIRST THEN BEGIN
+
+        CALHistoryObject.SETFILTER("Object Date", '<%1', FromDate);
+        IF CALHistoryObject.FINDLAST THEN
+          ;
+
+        FromTime2 := FromTime - 1000;
+        IF FromTime2 > FromTime THEN
+          FromTime2 := 000000T;
+
+        CALHistoryObject.SETRANGE("Object Date", FromDate);
+        CALHistoryObject.SETFILTER("Object Time", '<%1', FromTime2);
+        IF CALHistoryObject.FINDLAST THEN
+          ;
+
+        CALHistoryObject.AddToTempRecord(TmpCALHistoryLeftSide);
+
+      END;
+
+      CALHistoryObject.RESET;
+      IF CALHistoryObject.TryGoToLastRecord(ObjectType2, ObjectNo) THEN BEGIN
+
+        IF InPeriod THEN BEGIN
+
+          CALHistoryObject.SETFILTER("Object Date", '<%1', TillDate);
+          IF CALHistoryObject.FINDLAST THEN
+            ;
+
+          FromTime2 := FromTime + 1000;
+          IF FromTime2 < FromTime THEN
+            FromTime2 := 235959.999T;
+
+          CALHistoryObject.SETRANGE("Object Date", TillDate);
+          CALHistoryObject.SETFILTER("Object Time", '<=%1', TillTime2);
+          IF CALHistoryObject.FINDLAST THEN
+            ;
+
+        END ELSE BEGIN
+
+          CALHistoryObject.SETFILTER("Object Date", '>%1', TillDate);
+          IF CALHistoryObject.FINDFIRST THEN
+            ;
+
+          TillTime2 := TillTime - 1000;
+          IF TillTime2 > TillTime THEN
+            TillTime2 := 000000T;
+
+          CALHistoryObject.SETRANGE("Object Date", TillDate);
+          CALHistoryObject.SETFILTER("Object Time", '>=%1', TillTime2);
+          IF CALHistoryObject.FINDFIRST THEN
+            ;
+
+        END;
+
+        CALHistoryObject.AddToTempRecord(TmpCALHistoryRightSide);
+
+      END;
+    END;
+
+    PROCEDURE EditObjectRange@45(VAR Object@1000 : Record 2000000001) : Boolean;
+    VAR
+      ImExportMgt@1001 : Codeunit 11102043;
+      FileHandler@1002 : Codeunit 11102097;
+      FileNameMgt@1003 : Codeunit 11102107;
+      ClientTempFileName@1004 : Text;
+      ServerTempFileName@1005 : Text;
+      ctDefaultFileName@1006 : TextConst 'DEU=EditObjects.;ENU=EditObjects.;ESP=EditObjects.;FRA=EditObjects.;NLD=EditObjects.;DEA=EditObjects.';
+      ctEditObjects@1007 : TextConst 'DEU=Edit Objects;ENU=Edit Objects;ESP=Edit Objects;FRA=Edit Objects;NLD=Objecten wijzigen;DEA=Edit Objects';
+      ctQuestion@1008 : TextConst 'DEU=Modify the objects in the external editor and press OK.;ENU=Modify the objects in the external editor and press OK.;ESP=Modify the objects in the external editor and press OK.;FRA=Modify the objects in the external editor and press OK.;NLD=Wijzig de objecten in de externe tekst-editor en kies OK.;DEA=Modify the objects in the external editor and press OK.';
+    BEGIN
+      ServerTempFileName := FileHandler.FileNameServerPath(ctDefaultFileName + FileNameMgt.GetEditorExtension);
+      IF EXISTS(ServerTempFileName) THEN
+        ERASE(ServerTempFileName);
+
+      ImExportMgt.ExportTextFile(Object, ServerTempFileName);
+      ClientTempFileName := FileHandler.DownloadToClient(ServerTempFileName, '', ctDefaultFileName);
+      OpenInEditor(ClientTempFileName);
+
+      EXIT(OpenEditFileDialog(ctEditObjects, ctQuestion, ClientTempFileName, Object, ''));
+    END;
+
+    PROCEDURE OpenEditFileDialog@46(Caption@1000 : Text;Question@1001 : Text;FileName@1002 : Text;VAR Object@1003 : Record 2000000001;DatabaseCode@1004 : Code[20]) : Boolean;
+    VAR
+      EditFile@1005 : Page 11102075;
+    BEGIN
+      EditFile.SetCaption(Caption);
+      EditFile.SetQuestion(Question);
+      EditFile.SetShowObjectOpions(TRUE);
+      EditFile.SetSubmitInForm(TRUE);
+      EditFile.SetObjectRange(Object);
+      EditFile.SetFileName(FileName);
+      EditFile.SetDatabaseCode(DatabaseCode);
+
+      IF EditFile.RUNMODAL IN [ACTION::OK, ACTION::Yes] THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE SubmitEditFileDialog@47(ClientFileName@1000 : Text;VAR TmpObject@1001 : TEMPORARY Record 2000000001;DoCompile@1002 : Boolean;SetModified@1003 : Boolean;DatabaseCode@1004 : Code[20]);
+    VAR
+      Setup@1005 : Record 11102035;
+      ObjectLock@1006 : Record 11102054;
+      RepositorySetup@1007 : Record 11102085;
+      Branch@1008 : Record 11102093;
+      Object@1009 : Record 2000000001;
+      Mgt@1010 : Codeunit 11102035;
+      ObjectMgt@1011 : Codeunit 11102046;
+      UpdateProperties@1012 : Codeunit 11102095;
+      FileHandler@1013 : Codeunit 11102097;
+      FileNameMgt@1014 : Codeunit 11102107;
+      ErrorMessage@1015 : Text;
+      ServerFileName@1016 : Text;
+      ctBranchWarning@1017 : TextConst 'DEU="%1 %2 %3 active in branch.\%4 %5=''%6''.\\Are you sure?";ENU="%1 %2 %3 active in branch.\%4 %5=''%6''.\\Are you sure?";ESP="%1 %2 %3 active in branch.\%4 %5=''%6''.\\Are you sure?";FRA="%1 %2 %3 active in branch.\%4 %5=''%6''.\\Are you sure?";NLD="%1 %2 %3 actief in branch.\%4 %5=''%6''.\\Weet u het zeker?";DEA="%1 %2 %3 active in branch.\%4 %5=''%6''.\\Are you sure?"';
+      ctObjectLockWarning@1018 : TextConst 'DEU=%1 %2 %3 is locked by ''%4''.\Are you sure?;ENU=%1 %2 %3 is locked by ''%4''.\Are you sure?;ESP=%1 %2 %3 is locked by ''%4''.\Are you sure?;FRA=%1 %2 %3 is locked by ''%4''.\Are you sure?;NLD=%1 %2 %3 is vergrendeld door ''%4''.\Weet u het zeker?;DEA=%1 %2 %3 is locked by ''%4''.\Are you sure?';
+      ctRepositoryWarning@1019 : TextConst 'DEU=Modification will not be noticed by repository.\Are you sure?;ENU=Modification will not be noticed by repository.\Are you sure?;ESP=Modification will not be noticed by repository.\Are you sure?;FRA=Modification will not be noticed by repository.\Are you sure?;NLD=Wijzigingen worden niet opgemerkt door de repository.\Weet u het zeker?;DEA=Modification will not be noticed by repository.\Are you sure?';
+    BEGIN
+      Setup.CustomGet;
+
+      IF Setup."Lock Object at Design" AND (DatabaseCode = '') THEN
+        IF TmpObject.FINDSET THEN
+          REPEAT
+            Object.GET(TmpObject.Type, '', TmpObject.ID);
+            ObjectLock.InsertLock(Object);
+          UNTIL TmpObject.NEXT = 0;
+
+      ServerFileName := FileHandler.UploadToServer(ClientFileName, '');
+
+      IF SetModified THEN BEGIN
+        UpdateProperties.SetUpdateDateTime(TRUE, TODAY, TIME);
+        UpdateProperties.UpdateFile(ServerFileName, 0, '', ServerFileName + '1');
+        ERASE(ServerFileName);
+        RENAME(ServerFileName + '1', ServerFileName);
+      END ELSE BEGIN
+
+        IF RepositorySetup.GET AND (DatabaseCode = '') THEN
+          IF RepositorySetup."Use Repository" THEN
+            IF NOT CONFIRM(ctRepositoryWarning, TRUE) THEN
+              ERROR('');
+
+        IF TmpObject.FINDSET AND (DatabaseCode = '') THEN
+          REPEAT
+            Object.GET(TmpObject.Type, '', TmpObject.ID);
+            IF ObjectLock.GET(Object.Type, Object.ID) THEN
+              IF ObjectLock.ShortLockedBy <> Mgt.ShortUserId THEN
+                IF ObjectLock."Branch No." <> '' THEN BEGIN
+                  IF NOT
+                     CONFIRM(
+                       ctBranchWarning, TRUE,
+                       Object.Type, Object.ID, Object.Name,
+                       Branch.TABLECAPTION, Branch.FIELDCAPTION("No."), ObjectLock."Branch No.")
+                  THEN
+                    ERROR('');
+                END ELSE
+                  IF NOT CONFIRM(ctObjectLockWarning, TRUE, ObjectLock.ShortLockedBy, Object.Type, Object.ID, Object.Name) THEN
+                    ERROR('');
+
+          UNTIL TmpObject.NEXT = 0;
+
+      END;
+
+      ObjectMgt.SetDatabaseCode(DatabaseCode);
+
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          ObjectMgt.SetErrorHandling(FALSE);
+          ObjectMgt.ExportObject(TmpObject, FileHandler.TempDirectory + FileNameMgt.ObjectFileName(TmpObject, 'fob'));
+        UNTIL TmpObject.NEXT = 0;
+
+      IF NOT SetModified THEN
+        Mgt.DisableTraceModification;
+
+      ObjectMgt.SetErrorHandling(TRUE);
+      ObjectMgt.ImportObject(ServerFileName);
+
+      IF NOT SetModified THEN
+        Mgt.EnableTraceModification;
+
+      IF ObjectMgt.GetErrorOccured THEN
+        ErrorMessage := ObjectMgt.GetLastError;
+
+      IF (ErrorMessage = '') AND DoCompile THEN
+        IF TmpObject.FINDSET THEN
+          REPEAT
+            ObjectMgt.CompileObject(TmpObject);
+            IF ObjectMgt.GetErrorOccured THEN
+              ErrorMessage := ObjectMgt.GetLastError;
+          UNTIL TmpObject.NEXT = 0;
+
+      IF ErrorMessage <> '' THEN BEGIN
+        IF TmpObject.FINDSET THEN
+          REPEAT
+            ObjectMgt.ImportObject(FileHandler.TempDirectory + FileNameMgt.ObjectFileName(TmpObject, 'fob'));
+          UNTIL TmpObject.NEXT = 0;
+        ERROR(ErrorMessage);
+      END;
+    END;
+
+    PROCEDURE OpenInEditor@48(ClientFileName@1000 : Text);
+    VAR
+      Setup@1001 : Record 11102035;
+      Mgt@1002 : Codeunit 11102035;
+      FileHandler@1003 : Codeunit 11102097;
+      ctNotFound@1004 : TextConst 'DEU=Executable ''%1'' not found.\Please enter another compare tool in the setup.;ENU=Executable ''%1'' not found.\Please enter another compare tool in the setup.;ESP=Executable ''%1'' not found.\Please enter another compare tool in the setup.;FRA=Executable ''%1'' not found.\Please enter another compare tool in the setup.;NLD=Programma ''%1'' niet gevonden.\Stel een andere vergelijkprogramma in in de setup.;DEA=Executable ''%1'' not found.\Please enter another compare tool in the setup.';
+    BEGIN
+      Setup.CustomGet;
+
+      IF Setup."C/AL Editor" = '' THEN
+        HYPERLINK(ClientFileName)
+      ELSE BEGIN
+
+        IF NOT FileHandler.ClientFileNameExists(Setup."C/AL Editor") THEN
+          ERROR(ctNotFound, Setup."C/AL Editor");
+
+        Mgt.RunExecutable(Setup."C/AL Editor", '"' + ClientFileName + '"');
+      END;
+    END;
+
+    PROCEDURE ReadLifeObject@49(VAR Object@1000 : Record 2000000001;VAR TmpCALHistoryLine@1001 : TEMPORARY Record 11102053);
+    VAR
+      ObjectMgt@1002 : Codeunit 11102046;
+      FileHandler@1003 : Codeunit 11102097;
+      oFile@1004 : File;
+      FileName@1005 : Text;
+      Line@1006 : Text[250];
+      ReadChar@1007 : Char;
+      CodeLineCounter@1008 : Integer;
+      LineCharacterCounter@1009 : Integer;
+      SubLineCounter@1010 : Integer;
+      ctFileName@1011 : TextConst 'DEU=getobject.txt;ENU=getobject.txt;ESP=getobject.txt;FRA=getobject.txt;NLD=getobject.txt;DEA=getobject.txt';
+    BEGIN
+      FileName := FileHandler.TempDirectory + ctFileName;
+
+      ObjectMgt.ExportObject(Object, FileName);
+
+      oFile.OPEN(FileName);
+
+      SubLineCounter := 1;
+      CodeLineCounter := 1;
+
+      WHILE oFile.READ(ReadChar) > 0 DO
+
+        CASE ReadChar OF
+          13, 10 :
+            BEGIN
+
+              TmpCALHistoryLine."Line No." := CodeLineCounter;
+              TmpCALHistoryLine."Sub Line No." := SubLineCounter;
+              TmpCALHistoryLine.Code := Line;
+              TmpCALHistoryLine.INSERT;
+
+              Line := '';
+              IF ReadChar = 13 THEN
+                oFile.READ(ReadChar);
+
+              CodeLineCounter += 1;
+              LineCharacterCounter := 0;
+              SubLineCounter := 1;
+
+            END;
+          ELSE BEGIN
+            LineCharacterCounter += 1;
+            IF LineCharacterCounter MOD 245 = 0 THEN BEGIN
+              TmpCALHistoryLine."Line No." := CodeLineCounter;
+              TmpCALHistoryLine."Sub Line No." := SubLineCounter;
+              TmpCALHistoryLine.Code := Line;
+              TmpCALHistoryLine.INSERT;
+
+              Line := '';
+              SubLineCounter += 1;
+            END;
+            Line += FORMAT(ReadChar);
+          END;
+        END;
+
+      oFile.CLOSE;
+    END;
+
+    PROCEDURE WriteLifeObject@50(VAR Object@1000 : Record 2000000001;VAR TmpCALHistoryLine@1001 : TEMPORARY Record 11102053);
+    VAR
+      ObjectMgt@1002 : Codeunit 11102046;
+      FileHandler@1003 : Codeunit 11102097;
+      oFile@1004 : File;
+      FileName@1005 : Text;
+      ctFileName@1006 : TextConst 'DEU=getobject.txt;ENU=getobject.txt;ESP=getobject.txt;FRA=getobject.txt;NLD=getobject.txt;DEA=getobject.txt';
+    BEGIN
+      FileName := FileHandler.TempDirectory + ctFileName;
+
+      IF EXISTS(FileName) THEN
+        ERASE(FileName);
+
+      oFile.TEXTMODE(TRUE);
+      oFile.CREATE(FileName);
+
+      AppendHistoryLinesToFile(oFile, TmpCALHistoryLine);
+
+      oFile.CLOSE;
+
+      ObjectMgt.ImportObject(FileName);
+      ObjectMgt.CompileObject(Object);
+    END;
+
+    PROCEDURE FillCALLineBufferWithLatest@51(VAR TmpCALHistoryLine@1000 : TEMPORARY Record 11102053;ObjectType2@1001 : Option;ObjectNo@1002 : Integer);
+    VAR
+      CALHistoryObject@1003 : Record 11102052;
+    BEGIN
+      CALHistoryObject.GoToLastRecord(ObjectType2, ObjectNo);
+      FillCALLineBufferWithEntryNo(TmpCALHistoryLine, CALHistoryObject."Entry No.");
+    END;
+
+    PROCEDURE FillCALLineBufferWithEntryNo@52(VAR TmpCALHistoryLine@1000 : TEMPORARY Record 11102053;EntryNo@1001 : Integer);
+    VAR
+      CALHistoryLine@1002 : Record 11102053;
+    BEGIN
+      TmpCALHistoryLine.RESET;
+      TmpCALHistoryLine.DELETEALL;
+
+      CALHistoryLine.SETRANGE("Entry No.", EntryNo);
+      IF CALHistoryLine.FINDSET THEN
+        REPEAT
+          TmpCALHistoryLine := CALHistoryLine;
+          TmpCALHistoryLine.INSERT;
+        UNTIL CALHistoryLine.NEXT = 0;
+    END;
+
+    PROCEDURE SqlsAnswer@53() : Text;
+    VAR
+      AskSQL@1000 : Record 11102075;
+    BEGIN
+      IF NOT AskSQL.LatestVersionInstalled THEN
+        EXIT('');
+
+      EXIT(AskSQL.GetAnswer(2));
+    END;
+
+    PROCEDURE ParseTime@35(TimeText@1000 : Text) ExitValue : Time;
+    VAR
+      Mgt@1001 : Codeunit 11102035;
+      PMPos@1002 : Integer;
+    BEGIN
+      TimeText := DELCHR(TimeText, '=', '[];');
+      IF EVALUATE(ExitValue, TimeText) THEN
+        EXIT;
+
+      TimeText := Mgt.Replace(TimeText, 'AM', '');
+      IF EVALUATE(ExitValue, TimeText) THEN
+        EXIT;
+
+      PMPos := STRPOS(TimeText, 'PM');
+      IF PMPos > 1 THEN BEGIN
+        TimeText := Mgt.Replace(TimeText, 'PM', '');
+        IF EVALUATE(ExitValue, TimeText) THEN
+          ExitValue += 1000 * 60 * 60 * 12;
+      END;
+    END;
+
+    PROCEDURE HistoryObjectsEqual@58(EntryNo1@1000 : Integer;EntryNo2@1001 : Integer) : Boolean;
+    VAR
+      CALHistoryLine1@1002 : Record 11102053;
+      CALHistoryLine2@1003 : Record 11102053;
+    BEGIN
+      CALHistoryLine1.SETRANGE("Entry No.", EntryNo1);
+      CALHistoryLine2.SETRANGE("Entry No.", EntryNo2);
+
+      IF CALHistoryLine1.COUNT <> CALHistoryLine2.COUNT THEN
+        EXIT(FALSE);
+
+      IF CALHistoryLine1.FINDSET THEN BEGIN
+        CALHistoryLine2.FINDSET;
+        REPEAT
+          IF CALHistoryLine1.Code <> CALHistoryLine2.Code THEN
+            EXIT(FALSE);
+
+          IF CALHistoryLine2.NEXT = 0 THEN
+            ;
+
+        UNTIL CALHistoryLine1.NEXT = 0;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE TrimLines@62(VAR CALHistoryLine@1000 : Record 11102053);
+    VAR
+      EmptyLine@1001 : Boolean;
+    BEGIN
+      REPEAT
+        EmptyLine := FALSE;
+        IF CALHistoryLine.FINDFIRST THEN
+          EmptyLine := CALHistoryLine.Code = '';
+        IF EmptyLine THEN
+          CALHistoryLine.DELETE;
+      UNTIL NOT EmptyLine;
+
+      REPEAT
+        EmptyLine := FALSE;
+        IF CALHistoryLine.FINDLAST THEN
+          EmptyLine := CALHistoryLine.Code = '';
+        IF EmptyLine THEN
+          CALHistoryLine.DELETE;
+      UNTIL NOT EmptyLine;
+    END;
+
+    PROCEDURE SetRangeOnSection@55(VAR CALHistoryLine@1000 : Record 11102053;SectionName@1001 : Text) : Boolean;
+    VAR
+      SectionEnd@1002 : Integer;
+      SectionStart@1003 : Integer;
+    BEGIN
+      WITH CALHistoryLine DO BEGIN
+        RESET;
+        SETRANGE("Entry No.", "Entry No.");
+        SETRANGE(Code, '  ' + SectionName);
+        SETRANGE("Sub Line No.", 1);
+        IF FINDFIRST THEN BEGIN
+          SectionStart := "Line No." + 2;
+          SETFILTER("Line No.", '>%1', "Line No.");
+          SETRANGE("Sub Line No.", 1);
+          SETRANGE(Code, '  }');
+          IF FINDFIRST THEN
+            SectionEnd := "Line No." - 1;
+          IF (SectionStart <> 0) AND (SectionEnd <> 0) THEN BEGIN
+            RESET;
+            SETRANGE("Entry No.", "Entry No.");
+            SETRANGE("Line No.", SectionStart, SectionEnd);
+            EXIT(TRUE);
+          END;
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

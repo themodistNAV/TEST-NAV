@@ -1,0 +1,428 @@
+OBJECT Codeunit 11102108 OM - Record Permissions Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE CreatePermissionSet@1(ProjectNo@1000 : Code[20];PermissionSetId@1001 : Code[20];PermissionSetName@1002 : Text;BasedOnPermissionSetId@1003 : Code[20];SaveToProject@1004 : Boolean;SaveToPermissionSet@1005 : Boolean);
+    VAR
+      TmpPermission@1006 : TEMPORARY Record 2000000005;
+      Progressbar@1007 : Codeunit 11102044;
+      ctReadingCodeCoverage@1008 : TextConst 'DEU=Saving recording...;ENU=Saving recording...;ESP=Saving recording...;FRA=Saving recording...;NLD=Opname opslaan...;DEA=Saving recording...';
+      ctReadingExisting@1009 : TextConst 'DEU=Reading existing permissions...;ENU=Reading existing permissions...;ESP=Reading existing permissions...;FRA=Reading existing permissions...;NLD=Bestaande permissies lezen...;DEA=Reading existing permissions...';
+      ctSavingPermissions@1010 : TextConst 'DEU=Saving permissions...;ENU=Saving permissions...;ESP=Saving permissions...;FRA=Saving permissions...;NLD=Permissies opslaan...;DEA=Saving permissions...';
+    BEGIN
+      Progressbar.Open(ctReadingCodeCoverage, 1);
+
+      Progressbar.UseRange(0, 10);
+      Progressbar.Text1 := ctReadingExisting;
+      IF BasedOnPermissionSetId <> '' THEN
+        FillPreviousPermissions(Progressbar, TmpPermission, BasedOnPermissionSetId);
+
+      Progressbar.UseRange(10, 90);
+      FillCodeCoverage(Progressbar, TmpPermission);
+
+      Progressbar.UseRange(90, 100);
+      Progressbar.Text1 := ctSavingPermissions;
+      FillPermissionSet(Progressbar, ProjectNo, PermissionSetId, PermissionSetName, TmpPermission, SaveToProject, SaveToPermissionSet);
+
+      Progressbar.Close;
+    END;
+
+    LOCAL PROCEDURE FillPreviousPermissions@2(Progressbar@1000 : Codeunit 11102044;VAR TmpPermission@1001 : TEMPORARY Record 2000000005;PermissionSetID@1002 : Code[20]);
+    VAR
+      Permission@1003 : Record 2000000005;
+    BEGIN
+      WITH TmpPermission DO BEGIN
+        Permission.SETRANGE("Role ID", PermissionSetID);
+        Progressbar.BarSize := Permission.COUNT;
+        IF Permission.FINDSET THEN
+          REPEAT
+            Progressbar.AddToBar(1);
+            Permission := TmpPermission;
+            "Role ID" := '';
+            INSERT;
+          UNTIL Permission.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE FillCodeCoverage@3(Progressbar@1000 : Codeunit 11102044;VAR TmpPermission@1001 : TEMPORARY Record 2000000005);
+    VAR
+      Object@1002 : Record 2000000001;
+      CodeCoverage@1003 : Record 2000000049;
+      CodeCoverage2@1004 : Record 2000000049;
+      TmpCodeCoverage@1005 : TEMPORARY Record 2000000049;
+    BEGIN
+      CODECOVERAGEREFRESH;
+
+      WITH CodeCoverage DO BEGIN
+
+        SETFILTER("Object ID", '<%1|>%2', DATABASE::"OM - Setup", PAGE::"OM - Renumber Objects Wizard");
+
+        Progressbar.BarSize(COUNT);
+
+        IF FINDSET THEN
+          REPEAT
+            Progressbar.AddToBar(1);
+
+            CASE "Line Type" OF
+
+              "Line Type"::Object :
+                BEGIN
+                  IF Object.GET("Object Type", '', "Object ID") THEN
+                    Progressbar.Text1Object := Object;
+                  AddObjectPermission(TmpPermission, "Object Type", "Object ID");
+                  IF "Object Type" = "Object Type"::Table THEN
+                    AddTableDataPermission(TmpPermission, "Object ID", TRUE, FALSE, FALSE, FALSE);
+                  CASE "Object Type" OF
+                    "Object Type"::Page :
+                      AddPagePermissions(TmpPermission, "Object ID");
+                  END;
+                END;
+
+              "Line Type"::Code :
+                IF "No. of Hits" > 0 THEN BEGIN
+                  CodeCoverage2.SETRANGE("Object Type", "Object Type");
+                  CodeCoverage2.SETRANGE("Object ID", "Object ID");
+                  CodeCoverage2.SETRANGE("Line Type", CodeCoverage2."Line Type"::"Trigger/Function");
+                  CodeCoverage2.SETFILTER("Line No.", '<%1', "Line No.");
+                  IF CodeCoverage2.FINDLAST THEN
+                    IF (TmpCodeCoverage."Object Type" <> CodeCoverage2."Object Type") OR
+                       (TmpCodeCoverage."Object ID" <> CodeCoverage2."Object ID") OR
+                       (TmpCodeCoverage."Line No." <> CodeCoverage2."Line No.")
+                    THEN BEGIN
+                      IF Object.GET(CodeCoverage2."Object Type", '', CodeCoverage2."Object ID") THEN
+                        Progressbar.Text1Object(Object);
+                      TmpCodeCoverage := CodeCoverage2;
+                      IF TmpCodeCoverage.INSERT THEN
+                        ProcessCodeCoverageLine(TmpCodeCoverage, TmpPermission);
+                    END;
+                END;
+
+            END;
+
+          UNTIL NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE FillPermissionSet@7(Progressbar@1000 : Codeunit 11102044;ProjectNo@1001 : Code[20];VAR PermissionSetId@1002 : Code[20];VAR PermissionSetName@1003 : Text[30];VAR TmpPermission@1004 : TEMPORARY Record 2000000005;SaveToProject@1005 : Boolean;SaveToPermissionSet@1006 : Boolean);
+    VAR
+      Project@1007 : Record 11102036;
+      ProjectPermissions@1008 : Record 11102050;
+      UserRole@1009 : Record 2000000004;
+      Permission@1010 : Record 2000000005;
+    BEGIN
+      UserRole."Role ID" := PermissionSetId;
+      UserRole.Name := PermissionSetName;
+      IF NOT UserRole.INSERT THEN
+        UserRole.MODIFY;
+
+      Progressbar.BarSize := TmpPermission.COUNT;
+
+      WITH TmpPermission DO
+        IF FINDSET THEN
+          REPEAT
+
+            Progressbar.AddToBar(1);
+
+            IF SaveToProject THEN BEGIN
+              ProjectPermissions."Project No." := ProjectNo;
+              ProjectPermissions."Role Id" := PermissionSetId;
+              ProjectPermissions."Object Type" := "Object Type";
+              ProjectPermissions."Object No." := "Object ID";
+              ProjectPermissions."Role Name" := PermissionSetName;
+              ProjectPermissions."Read Permission" := "Read Permission";
+              ProjectPermissions."Insert Permission" := "Insert Permission";
+              ProjectPermissions."Modify Permission" := "Modify Permission";
+              ProjectPermissions."Delete Permission" := "Delete Permission";
+              ProjectPermissions."Execute Permission" := "Execute Permission";
+              ProjectPermissions."Security Filter" := "Security Filter";
+              IF NOT ProjectPermissions.INSERT THEN
+                ProjectPermissions.MODIFY;
+            END;
+
+            IF SaveToPermissionSet THEN BEGIN
+              Permission := TmpPermission;
+              Permission."Role ID" := PermissionSetId;
+              IF NOT Permission.INSERT THEN
+                Permission.MODIFY;
+            END;
+
+          UNTIL NEXT = 0;
+
+      IF SaveToProject THEN
+        IF Project.GET(ProjectNo) THEN
+          Project.UpdateRepository(0);
+    END;
+
+    PROCEDURE LookupPermissionSet@13(VAR LookupText@1000 : Text) : Boolean;
+    VAR
+      PermissionSet@1001 : Record 2000000004;
+      AggregatePermissionSet@1002 : Record 2000000167;
+    BEGIN
+      AggregatePermissionSet.SETRANGE(Scope, AggregatePermissionSet.Scope::System);
+      IF PAGE.RUNMODAL(PAGE::"Permission Sets", AggregatePermissionSet) = ACTION::LookupOK THEN BEGIN
+        LookupText := AggregatePermissionSet."Role ID";
+        EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+
+      IF PAGE.RUNMODAL(0, PermissionSet) = ACTION::LookupOK THEN BEGIN
+        LookupText := PermissionSet."Role ID";
+        EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE ProcessCodeCoverageLine@8(VAR TmpCodeCoverage@1000 : TEMPORARY Record 2000000049;VAR TmpPermission@1001 : TEMPORARY Record 2000000005);
+    VAR
+      WhereUsedObjectLine@1002 : Record 11102058;
+      WhereUsedIn@1003 : Record 11102060;
+      WhereUsedCrossTable@1004 : Record 11102061;
+    BEGIN
+      IF NOT GetWhereUsedIn(TmpCodeCoverage, WhereUsedIn) THEN
+        EXIT;
+
+      WhereUsedCrossTable.SETCURRENTKEY("In Entry No.");
+      WhereUsedCrossTable.SETRANGE("In Entry No.", WhereUsedIn."Entry No.");
+      WhereUsedCrossTable.SETRANGE("Temporary Record", FALSE);
+      IF WhereUsedCrossTable.FINDSET THEN
+        REPEAT
+          IF WhereUsedObjectLine.GET(WhereUsedCrossTable."Object Entry No.") THEN
+            IF (WhereUsedObjectLine."Object Type" = WhereUsedObjectLine."Object Type"::Table) AND
+               (WhereUsedObjectLine.Type = WhereUsedObjectLine.Type::Trigger)
+            THEN
+              CASE WhereUsedObjectLine.Id OF
+                1: AddTableDataPermission(TmpPermission, WhereUsedObjectLine."Object No.", TRUE, TRUE, FALSE, FALSE);
+                2, 4: AddTableDataPermission(TmpPermission, WhereUsedObjectLine."Object No.", TRUE, FALSE, TRUE, FALSE);
+                3: AddTableDataPermission(TmpPermission, WhereUsedObjectLine."Object No.", TRUE, FALSE, FALSE, TRUE);
+                5, 6: AddTableDataPermission(TmpPermission, WhereUsedObjectLine."Object No.", TRUE, FALSE, FALSE, FALSE);
+              END;
+        UNTIL WhereUsedCrossTable.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE AddObjectPermission@9(VAR TmpPermission@1000 : TEMPORARY Record 2000000005;ObjectType2@1001 : Integer;ObjectNo@1002 : Integer);
+    BEGIN
+      WITH TmpPermission DO
+        IF GET('', ObjectType2, ObjectNo) THEN BEGIN
+          "Modify Permission" := "Modify Permission"::Yes;
+          MODIFY;
+        END ELSE BEGIN
+          INIT;
+          "Role ID" := '';
+          "Object Type" := ObjectType2;
+          "Object ID" := ObjectNo;
+          "Read Permission" := "Read Permission"::" ";
+          "Insert Permission" := "Insert Permission"::" ";
+          "Modify Permission" := "Insert Permission"::" ";
+          "Delete Permission" := "Delete Permission"::" ";
+          "Execute Permission" := "Execute Permission"::Yes;
+          INSERT;
+        END;
+    END;
+
+    LOCAL PROCEDURE AddTableDataPermission@12(VAR TmpPermission@1000 : TEMPORARY Record 2000000005;TableNo@1001 : Integer;Read2@1002 : Boolean;Insert2@1003 : Boolean;Modify2@1004 : Boolean;Delete2@1005 : Boolean);
+    BEGIN
+      WITH TmpPermission DO BEGIN
+        IF NOT GET('', "Object Type"::"Table Data", TableNo) THEN BEGIN
+          INIT;
+          "Role ID" := '';
+          "Object Type" := "Object Type"::"Table Data";
+          "Object ID" := TableNo;
+          "Read Permission" := "Read Permission"::" ";
+          "Insert Permission" := "Insert Permission"::" ";
+          "Modify Permission" := "Insert Permission"::" ";
+          "Delete Permission" := "Delete Permission"::" ";
+          "Execute Permission" := "Execute Permission"::" ";
+          INSERT;
+        END;
+        IF Read2 AND ("Read Permission" <> "Read Permission"::Yes) THEN BEGIN
+          "Read Permission" := "Read Permission"::Yes;
+          MODIFY;
+        END;
+        IF Insert2 AND ("Insert Permission" <> "Insert Permission"::Yes) THEN BEGIN
+          "Insert Permission" := "Insert Permission"::Yes;
+          MODIFY;
+        END;
+        IF Modify2 AND ("Modify Permission" <> "Modify Permission"::Yes) THEN BEGIN
+          "Modify Permission" := "Modify Permission"::Yes;
+          MODIFY;
+        END;
+        IF Delete2 AND ("Delete Permission" <> "Delete Permission"::Yes) THEN BEGIN
+          "Delete Permission" := "Delete Permission"::Yes;
+          MODIFY;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetWhereUsedIn@5(CodeCoverage@1000 : Record 2000000049;VAR WhereUsedIn@1001 : Record 11102060) : Boolean;
+    VAR
+      WhereUsedCrossTable@1002 : Record 11102061;
+      DebugMgt@1003 : Codeunit 11102065;
+      ProcedureName@1004 : Text;
+      CALLineNo@1005 : Integer;
+      Pos@1006 : Integer;
+    BEGIN
+      WhereUsedIn.SETCURRENTKEY("Object Type", "Object No.", Type, Name);
+      WhereUsedIn.SETRANGE("Object Type", CodeCoverage."Object Type");
+      WhereUsedIn.SETRANGE("Object No.", CodeCoverage."Object ID");
+      WhereUsedIn.SETRANGE(Type, WhereUsedIn.Type::Code);
+
+      ProcedureName := CodeCoverage.Line;
+      WHILE STRPOS(ProcedureName, '(') > 0 DO BEGIN
+        ProcedureName := COPYSTR(ProcedureName, 1, LastPos(ProcedureName, '(') - 1);
+        WhereUsedIn.SETRANGE(Name, ProcedureName);
+        IF WhereUsedIn.FINDFIRST THEN
+          EXIT(TRUE);
+      END;
+
+      ProcedureName := CodeCoverage.Line;
+      IF STRPOS(ProcedureName, '(') > 0 THEN
+        ProcedureName := COPYSTR(ProcedureName, 1, LastPos(ProcedureName, '(') - 1);
+
+      IF STRPOS(ProcedureName, '-') > 0 THEN BEGIN
+        Pos := LastPos(ProcedureName, ' - ');
+        ProcedureName := COPYSTR(ProcedureName, 1, Pos - 1) + '-' + COPYSTR(ProcedureName, Pos + 3);
+        WhereUsedIn.SETRANGE(Name, ProcedureName);
+        IF WhereUsedIn.FINDFIRST THEN
+          EXIT(TRUE);
+      END;
+
+      CALLineNo := DebugMgt.CALLineNoFromCodeCoverage(CodeCoverage."Object Type", CodeCoverage."Object ID", CodeCoverage."Line No.");
+      IF CALLineNo > 0 THEN BEGIN
+        WhereUsedIn.SETCURRENTKEY("Object Type", "Object No.", Type, Name);
+        WhereUsedIn.SETRANGE("Object Type", CodeCoverage."Object Type");
+        WhereUsedIn.SETRANGE("Object No.", CodeCoverage."Object ID");
+        WhereUsedIn.SETRANGE(Name);
+        IF WhereUsedIn.FINDSET THEN
+          REPEAT
+            WhereUsedCrossTable.SETCURRENTKEY("In Entry No.");
+            WhereUsedCrossTable.SETRANGE("In Entry No.", WhereUsedIn."Entry No.");
+            WhereUsedCrossTable.SETRANGE("C/AL Code Line No.", CALLineNo - 1, CALLineNo + 1);
+            IF WhereUsedCrossTable.FINDFIRST THEN
+              EXIT(TRUE);
+          UNTIL WhereUsedIn.NEXT = 0;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE AddPagePermissions@14(VAR TmpPermission@1000 : TEMPORARY Record 2000000005;PageNo@1001 : Integer);
+    VAR
+      CALHistoryObject@1002 : Record 11102052;
+      CALHistoryLine@1003 : Record 11102053;
+      WhereUsedObject@1004 : Record 11102057;
+      PageType@1005 : Text;
+      TableNo@1006 : Integer;
+      Delete2@1007 : Boolean;
+      DeleteAllowed@1008 : Boolean;
+      Editable@1009 : Boolean;
+      Insert2@1010 : Boolean;
+      InsertAllowed@1011 : Boolean;
+      Modify2@1012 : Boolean;
+      ModifyAllowed@1013 : Boolean;
+      SourceTableTemporary@1014 : Boolean;
+    BEGIN
+      IF NOT WhereUsedObject.GET(WhereUsedObject."Object Type"::Page, PageNo) THEN
+        EXIT;
+
+      IF WhereUsedObject."Table No." = 0 THEN
+        ;
+
+      TableNo := WhereUsedObject."Table No.";
+
+      IF CALHistoryObject.TryGoToLastRecord(CALHistoryObject."Object Type"::Page, PageNo) THEN BEGIN
+
+        CALHistoryLine.SETRANGE("Entry No.", CALHistoryObject."Entry No.");
+        CALHistoryLine.SETRANGE("Sub Line No.", 1);
+        PageType := 'Card';
+        CALHistoryLine.SETFILTER(Code, '%1', '    PageType=*');
+        IF CALHistoryLine.FINDFIRST THEN
+          GetPropertyValue(CALHistoryLine, PageType);
+        IF PageType IN ['Card', 'List', 'ListPart', 'Document', 'Worksheet', 'ListPlus'] THEN BEGIN
+          Modify2 := TRUE;
+          Insert2 := TRUE;
+          Delete2 := TRUE;
+        END;
+
+        ParseProperty(CALHistoryLine, 'Editable', TRUE, Editable);
+        ParseProperty(CALHistoryLine, 'InsertAllowed', TRUE, InsertAllowed);
+        ParseProperty(CALHistoryLine, 'DeleteAllowed', TRUE, DeleteAllowed);
+        ParseProperty(CALHistoryLine, 'ModifyAllowed', TRUE, ModifyAllowed);
+        ParseProperty(CALHistoryLine, 'SourceTableTemporary', FALSE, SourceTableTemporary);
+
+        IF NOT Editable OR SourceTableTemporary THEN BEGIN
+          Modify2 := FALSE;
+          Insert2 := FALSE;
+          Delete2 := FALSE;
+        END;
+
+        IF NOT ModifyAllowed THEN
+          Modify2 := FALSE;
+
+        IF NOT InsertAllowed THEN
+          Insert2 := FALSE;
+
+        IF NOT DeleteAllowed THEN
+          Delete2 := FALSE;
+
+        AddTableDataPermission(TmpPermission, TableNo, TRUE, Insert2, Modify2, Delete2);
+      END;
+    END;
+
+    LOCAL PROCEDURE ParseProperty@15(VAR CALHistoryLine@1000 : Record 11102053;PropertyName@1001 : Text;Default@1002 : Boolean;VAR PropertyValue@1003 : Boolean);
+    VAR
+      PropertyValueText@1004 : Text;
+    BEGIN
+      PropertyValue := Default;
+
+      CALHistoryLine.SETFILTER(Code, '%1', '    ' + PropertyName + '*');
+      IF CALHistoryLine.FINDFIRST THEN BEGIN
+        GetPropertyValue(CALHistoryLine, PropertyValueText);
+        CASE PropertyValueText OF
+          'Yes' : PropertyValue := TRUE;
+          'No' : PropertyValue := FALSE;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetPropertyValue@66(VAR CALHistoryLine@1000 : Record 11102053;VAR Value@1001 : Text);
+    VAR
+      Position@1002 : Integer;
+    BEGIN
+      Value := '';
+
+      Position := STRPOS(CALHistoryLine.Code, '=');
+
+      IF Position <> 0 THEN BEGIN
+        Value := COPYSTR(CALHistoryLine.Code, Position + 1);
+        IF Value[1] = '[' THEN
+          Value := DELCHR(COPYSTR(Value, 2), '>', ' ;]}')
+        ELSE
+          Value := DELCHR(Value, '>', ' ;}');
+      END;
+    END;
+
+    LOCAL PROCEDURE LastPos@6(Value@1000 : Text;SearchText@1001 : Text) : Integer;
+    VAR
+      i@1002 : Integer;
+    BEGIN
+      FOR i := STRLEN(Value) - STRLEN(SearchText) + 1 DOWNTO 1 DO
+        IF COPYSTR(Value, i, STRLEN(SearchText)) = SearchText THEN
+          EXIT(i);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

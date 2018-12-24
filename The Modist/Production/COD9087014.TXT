@@ -1,0 +1,629 @@
+OBJECT Codeunit 9087014 Item Quality Inspection Mgt
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/09/16;
+    Time=[ 5:13:48 PM];
+    Version List=NS2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ItemQualityInspectionLine@1000000002 : Record 9087040;
+      nSembleSetup@1000000003 : Record 9087000;
+      WarehouseActivityHeader@1000000006 : Record 5766;
+      WarehouseActivityLine@1000000007 : Record 5767;
+      WarehouseReceiptHeader@1000000000 : Record 7316;
+      WarehouseReceiptLine@1000000001 : Record 7317;
+      WarehouseShipmentHeader@1000000005 : Record 7320;
+      WarehouseShipmentLine@1000000004 : Record 7321;
+      errFieldValueMustBeBetween@1000000008 : TextConst 'ENU=%1 must be between %2 and %3.;ENG=%1 must be between %2 and %3.';
+      Location@1000000009 : Record 14;
+
+    PROCEDURE "--- Warehouse Receipt ---"@1000000004();
+    BEGIN
+    END;
+
+    PROCEDURE ShowForWarehouseReceipt@1000000002(pWarehouseReceiptHeader@1000000000 : Record 7316);
+    VAR
+      eNoQualityInspection@1000000001 : TextConst 'ENU=Quality inspection isn''t required for any of the warehouse receipt items.;ENG=Quality inspection isn''t required for any of the warehouse receipt items.';
+    BEGIN
+      //DOC NS2015.1 - Showing quality inspection for warehouse receipt
+      //  -> pWarehouseReceiptHeader: The receipt
+
+      WarehouseReceiptHeader := pWarehouseReceiptHeader;
+      WarehouseReceiptLine.RESET();
+      WarehouseReceiptLine.SETRANGE("No.", WarehouseReceiptHeader."No.");
+      WarehouseReceiptLine.SETRANGE("Quality Inspection Required", TRUE);
+      IF (WarehouseReceiptLine.ISEMPTY) THEN
+        ERROR(eNoQualityInspection);
+
+      CreateForWarehouseReceipt(WarehouseReceiptHeader);
+
+      ItemQualityInspectionLine.RESET();
+      ItemQualityInspectionLine.SETCURRENTKEY("Document Type", "Document No.");
+      ItemQualityInspectionLine.FILTERGROUP(2);
+      ItemQualityInspectionLine.SETRANGE("Document Type", ItemQualityInspectionLine."Document Type"::"Warehouse Receipt");
+      ItemQualityInspectionLine.SETRANGE("Document No.", WarehouseReceiptHeader."No.");
+      ItemQualityInspectionLine.FILTERGROUP(0);
+      PAGE.RUN(0, ItemQualityInspectionLine);
+    END;
+
+    PROCEDURE CreateForWarehouseReceipt@1000000001(pWarehouseReceiptHeader@1000000000 : Record 7316);
+    BEGIN
+      //DOC NS2015.1 - Creating quality inspection for warehouse receipt
+      //  -> pWarehouseReceiptHeader: The receipt
+
+      WarehouseReceiptHeader := pWarehouseReceiptHeader;
+      WarehouseReceiptLine.RESET();
+      WarehouseReceiptLine.SETRANGE("No.", WarehouseReceiptHeader."No.");
+      IF (WarehouseReceiptLine.FINDSET()) THEN
+      REPEAT
+        WhseRcptLineToQInspLine(WarehouseReceiptLine);
+      UNTIL (WarehouseReceiptLine.NEXT() = 0);
+    END;
+
+    PROCEDURE WhseRcptLineToQInspLine@1000000024(VAR WhseRcptLine@1000000000 : Record 7317);
+    VAR
+      LineExists@1000000001 : Boolean;
+    BEGIN
+      //Create/update inspection line from warehouse recept line
+
+      ItemQualityInspectionLine.RESET();
+      ItemQualityInspectionLine.SETRANGE("Document Type", ItemQualityInspectionLine."Document Type"::"Warehouse Receipt");
+      ItemQualityInspectionLine.SETRANGE("Document No.", WhseRcptLine."No.");
+      ItemQualityInspectionLine.SETRANGE("Document Line No.", WhseRcptLine."Line No.");
+      LineExists := ItemQualityInspectionLine.FINDFIRST();
+
+      IF (WhseRcptLine."Quality Inspection Required") THEN BEGIN
+        IF (NOT(LineExists)) THEN BEGIN
+          CLEAR(ItemQualityInspectionLine);
+          ItemQualityInspectionLine.INIT();
+          ItemQualityInspectionLine.VALIDATE("Document Type", ItemQualityInspectionLine."Document Type"::"Warehouse Receipt");
+          ItemQualityInspectionLine.VALIDATE("Document No.", WhseRcptLine."No.");
+          ItemQualityInspectionLine.VALIDATE("Document Line No.", WhseRcptLine."Line No.");
+          ItemQualityInspectionLine.INSERT(TRUE);
+        END;
+
+        ItemQualityInspectionLine.VALIDATE("Item No.", WhseRcptLine."Item No.");
+        ItemQualityInspectionLine.VALIDATE("Variant Code", WhseRcptLine."Variant Code");
+        ItemQualityInspectionLine.VALIDATE(Description, WhseRcptLine.Description);
+        ItemQualityInspectionLine.VALIDATE("Description 2", WhseRcptLine."Description 2");
+        ItemQualityInspectionLine.VALIDATE("Location Code", WhseRcptLine."Location Code");
+        ItemQualityInspectionLine.VALIDATE(Quantity, WhseRcptLine."Quality Inspection Quantity");
+        ItemQualityInspectionLine.MODIFY();
+      END ELSE
+        IF (LineExists) THEN
+          ItemQualityInspectionLine.DELETE();
+    END;
+
+    PROCEDURE CheckWarehouseReceiptOnPosting@1000000000(pWarehouseReceiptHeader@1000000000 : Record 7316);
+    VAR
+      eQualityInspectionNotFinished@1000000001 : TextConst 'ENU=Quality inspection hasn''t been finished for warehouse receipt "%1" line %2.;ENG=Quality inspection hasn''t been finished for warehouse receipt "%1" line %2.';
+      eQualityInspectionFailed@1000000002 : TextConst 'ENU=Quality inspection has failed for warehouse receipt "%1" line %2.;ENG=Quality inspection has failed for warehouse receipt "%1" line %2.';
+      cnfContinue@1000000003 : TextConst 'ENU=%1 Do you want to continue?;ENG=%1 Do you want to continue?';
+      lErrorText@1000000004 : Text;
+    BEGIN
+      //DOC NS2015.1 - Checking quality inspection on warehouse receipt posting
+      //  -> pWarehouseReceiptHeader: The receipt
+
+      CreateForWarehouseReceipt(pWarehouseReceiptHeader);
+
+      nSembleSetup.VerifyAndGet();
+
+      Location.GET(pWarehouseReceiptHeader."Location Code");
+
+      WarehouseReceiptHeader := pWarehouseReceiptHeader;
+      WarehouseReceiptLine.RESET();
+      WarehouseReceiptLine.SETRANGE("No.", WarehouseReceiptHeader."No.");
+      WarehouseReceiptLine.SETRANGE("Quality Inspection Required", TRUE);
+      IF (WarehouseReceiptLine.FINDSET()) THEN
+      REPEAT
+        CheckWhseRcptLineOnPosting(WarehouseReceiptLine);
+      UNTIL (WarehouseReceiptLine.NEXT() = 0);
+    END;
+
+    PROCEDURE CheckWhseRcptLineOnPosting@1000000015(VAR pWhseRcptLine@1000000000 : Record 7317);
+    VAR
+      eQualityInspectionNotFinished@1000000001 : TextConst 'ENU=Quality inspection hasn''t been finished for warehouse receipt "%1" line %2.;ENG=Quality inspection hasn''t been finished for warehouse receipt "%1" line %2.';
+      eQualityInspectionFailed@1000000002 : TextConst 'ENU=Quality inspection has failed for warehouse receipt "%1" line %2.;ENG=Quality inspection has failed for warehouse receipt "%1" line %2.';
+      cnfContinue@1000000003 : TextConst 'ENU=%1 Do you want to continue?;ENG=%1 Do you want to continue?';
+      lErrorText@1000000004 : Text;
+    BEGIN
+      IF (pWhseRcptLine."Quality Inspection Required") THEN BEGIN
+        pWhseRcptLine.CALCFIELDS("Quality Inspection Finished", "Quality Inspection Failed");
+        IF (Location.Code <> pWhseRcptLine."Location Code") THEN
+          Location.GET(pWhseRcptLine."Location Code");
+
+        IF (NOT(pWhseRcptLine."Quality Inspection Finished")) THEN BEGIN
+          lErrorText := STRSUBSTNO(eQualityInspectionNotFinished, pWhseRcptLine."No.", pWhseRcptLine."Line No.");
+          IF (Location."Inbound Insp. not Finished" = Location."Inbound Insp. not Finished"::Error) THEN
+            ERROR(lErrorText)
+          ELSE IF (Location."Inbound Insp. not Finished" = Location."Inbound Insp. not Finished"::Confirm) THEN
+            IF (NOT(CONFIRM(STRSUBSTNO(cnfContinue, lErrorText)))) THEN
+              ERROR('');
+        END;
+
+        IF (pWhseRcptLine."Quality Inspection Failed") THEN BEGIN
+          lErrorText := STRSUBSTNO(eQualityInspectionFailed, pWhseRcptLine."No.", pWhseRcptLine."Line No.");
+          IF (Location."Inbound Inspection Failed" = Location."Inbound Inspection Failed"::Error) THEN
+            ERROR(lErrorText)
+          ELSE IF (Location."Inbound Inspection Failed" = Location."Inbound Inspection Failed"::Confirm) THEN
+            IF (NOT(CONFIRM(STRSUBSTNO(cnfContinue, lErrorText)))) THEN
+              ERROR('');
+        END;
+      END;
+    END;
+
+    PROCEDURE WarehouseReceiptLineInspectionFinished@1000000003(pWarehouseReceiptLine@1000000000 : Record 7317) : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Returning if warehouse receipt line inspection has been finished
+      //  -> pWarehouseReceiptLine: The line
+      //  <- Inspection finished / not
+
+      WarehouseReceiptLine := pWarehouseReceiptLine;
+      WarehouseReceiptLine.CALCFIELDS("Quality Inspection Finished", "Quality Inspection Failed");
+      EXIT(
+        (NOT(WarehouseReceiptLine."Quality Inspection Required")) OR
+        ((WarehouseReceiptLine."Quality Inspection Finished") AND (NOT(WarehouseReceiptLine."Quality Inspection Failed"))));
+    END;
+
+    PROCEDURE "--- Warehouse Shipment ---"@1000000009();
+    BEGIN
+    END;
+
+    PROCEDURE ShowForWarehouseShipment@1000000008(pWarehouseShipmentHeader@1000000000 : Record 7320);
+    VAR
+      eNoQualityInspection@1000000001 : TextConst 'ENU=Quality inspection isn''t required for any of the warehouse shipment items.;ENG=Quality inspection isn''t required for any of the warehouse shipment items.';
+    BEGIN
+      //DOC NS2015.1 - Showing quality inspection for warehouse shipment
+      //  -> pWarehouseShipmentHeader: The shipment
+
+      WarehouseShipmentHeader := pWarehouseShipmentHeader;
+      WarehouseShipmentLine.RESET();
+      WarehouseShipmentLine.SETRANGE("No.", WarehouseShipmentHeader."No.");
+      WarehouseShipmentLine.SETRANGE("Quality Inspection Required", TRUE);
+      IF (WarehouseShipmentLine.ISEMPTY) THEN
+        ERROR(eNoQualityInspection);
+
+      CreateForWarehouseShipment(WarehouseShipmentHeader);
+
+      ItemQualityInspectionLine.RESET();
+      ItemQualityInspectionLine.SETCURRENTKEY("Document Type", "Document No.");
+      ItemQualityInspectionLine.FILTERGROUP(2);
+      ItemQualityInspectionLine.SETRANGE("Document Type", ItemQualityInspectionLine."Document Type"::"Warehouse Shipment");
+      ItemQualityInspectionLine.SETRANGE("Document No.", WarehouseShipmentHeader."No.");
+      ItemQualityInspectionLine.FILTERGROUP(0);
+      PAGE.RUN(0, ItemQualityInspectionLine);
+    END;
+
+    PROCEDURE CreateForWarehouseShipment@1000000007(pWarehouseShipmentHeader@1000000000 : Record 7320);
+    BEGIN
+      //DOC NS2015.1 - Creating quality inspection for warehouse shipment
+      //  -> pWarehouseShipmentHeader: The shipment
+
+      WarehouseShipmentHeader := pWarehouseShipmentHeader;
+      WarehouseShipmentLine.RESET();
+      WarehouseShipmentLine.SETRANGE("No.", WarehouseShipmentHeader."No.");
+      IF (WarehouseShipmentLine.FINDSET()) THEN
+      REPEAT
+        WhseShptLineToQInspLine(WarehouseShipmentLine);
+      UNTIL (WarehouseShipmentLine.NEXT() = 0);
+    END;
+
+    PROCEDURE WhseShptLineToQInspLine@1000000025(VAR WhseShptLine@1000000000 : Record 7321);
+    VAR
+      LineExists@1000000001 : Boolean;
+    BEGIN
+      //Create/update inspection line from warehouse shipment line
+
+      ItemQualityInspectionLine.RESET();
+      ItemQualityInspectionLine.SETRANGE("Document Type", ItemQualityInspectionLine."Document Type"::"Warehouse Shipment");
+      ItemQualityInspectionLine.SETRANGE("Document No.", WhseShptLine."No.");
+      ItemQualityInspectionLine.SETRANGE("Document Line No.", WhseShptLine."Line No.");
+      LineExists := ItemQualityInspectionLine.FINDFIRST();
+
+      IF (WhseShptLine."Quality Inspection Required") THEN BEGIN
+        IF (NOT(LineExists)) THEN BEGIN
+          CLEAR(ItemQualityInspectionLine);
+          ItemQualityInspectionLine.INIT();
+          ItemQualityInspectionLine.VALIDATE("Document Type", ItemQualityInspectionLine."Document Type"::"Warehouse Shipment");
+          ItemQualityInspectionLine.VALIDATE("Document No.", WhseShptLine."No.");
+          ItemQualityInspectionLine.VALIDATE("Document Line No.", WhseShptLine."Line No.");
+          ItemQualityInspectionLine.VALIDATE("Item No.", WhseShptLine."Item No.");
+          ItemQualityInspectionLine.VALIDATE("Variant Code", WhseShptLine."Variant Code");
+          ItemQualityInspectionLine.VALIDATE(Description, WhseShptLine.Description);
+          ItemQualityInspectionLine.VALIDATE("Description 2", WhseShptLine."Description 2");
+          ItemQualityInspectionLine.VALIDATE("Location Code", WhseShptLine."Location Code");
+          ItemQualityInspectionLine.INSERT(TRUE);
+        END;
+
+        ItemQualityInspectionLine.VALIDATE(Quantity, WhseShptLine."Quality Inspection Quantity");
+        ItemQualityInspectionLine.MODIFY();
+      END ELSE
+        IF (LineExists) THEN
+          ItemQualityInspectionLine.DELETE();
+    END;
+
+    PROCEDURE CheckWarehouseShipmentOnPosting@1000000006(pWarehouseShipmentHeader@1000000000 : Record 7320);
+    VAR
+      eQualityInspectionNotFinished@1000000001 : TextConst 'ENU=Quality inspection hasn''t been finished for warehouse shipment "%1" line %2.;ENG=Quality inspection hasn''t been finished for warehouse shipment "%1" line %2.';
+      eQualityInspectionFailed@1000000003 : TextConst 'ENU=Quality inspection has failed for warehouse shipment "%1" line %2.;ENG=Quality inspection has failed for warehouse shipment "%1" line %2.';
+      cnfContinue@1000000002 : TextConst 'ENU=%1 Do you want to continue?;ENG=%1 Do you want to continue?';
+      lErrorText@1000000004 : Text;
+    BEGIN
+      //DOC NS2015.1 - Checking quality inspection on warehouse shipment posting
+      //  -> pWarehouseShipmentHeader: The shipment
+
+      CreateForWarehouseShipment(pWarehouseShipmentHeader);
+
+      nSembleSetup.VerifyAndGet();
+
+      Location.GET(pWarehouseShipmentHeader."Location Code");
+
+      WarehouseShipmentHeader := pWarehouseShipmentHeader;
+      WarehouseShipmentLine.RESET();
+      WarehouseShipmentLine.SETRANGE("No.", WarehouseShipmentHeader."No.");
+      WarehouseShipmentLine.SETRANGE("Quality Inspection Required", TRUE);
+      IF (WarehouseShipmentLine.FINDSET()) THEN
+      REPEAT
+        WarehouseShipmentLine.CALCFIELDS("Quality Inspection Finished", "Quality Inspection Failed");
+
+        IF (NOT(WarehouseShipmentLine."Quality Inspection Finished")) THEN BEGIN
+          lErrorText := STRSUBSTNO(eQualityInspectionNotFinished, WarehouseShipmentLine."No.", WarehouseShipmentLine."Line No.");
+          IF (Location."Outbound Insp. not Finished" = Location."Outbound Insp. not Finished"::Error) THEN
+            ERROR(lErrorText)
+          ELSE IF (Location."Outbound Insp. not Finished" = Location."Outbound Insp. not Finished"::Confirm) THEN
+            IF (NOT(CONFIRM(STRSUBSTNO(cnfContinue, lErrorText)))) THEN
+              ERROR('');
+        END;
+
+        IF (WarehouseShipmentLine."Quality Inspection Failed") THEN BEGIN
+          lErrorText := STRSUBSTNO(eQualityInspectionFailed, WarehouseShipmentLine."No.", WarehouseShipmentLine."Line No.");
+          IF (Location."Inbound Inspection Failed" = Location."Inbound Inspection Failed"::Error) THEN
+            ERROR(lErrorText)
+          ELSE IF (Location."Inbound Inspection Failed" = Location."Inbound Inspection Failed"::Confirm) THEN
+            IF (NOT(CONFIRM(STRSUBSTNO(cnfContinue, lErrorText)))) THEN
+              ERROR('');
+        END;
+      UNTIL (WarehouseShipmentLine.NEXT() = 0);
+    END;
+
+    PROCEDURE WarehouseShipmentLineInspectionFinished@1000000005(pWarehouseShipmentLine@1000000000 : Record 7321) : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Returning if warehouse shipment line inspection has been finished
+      //  -> pWarehouseShipmentLine: The line
+      //  <- Inspection finished / not
+
+      WarehouseShipmentLine := pWarehouseShipmentLine;
+      WarehouseShipmentLine.CALCFIELDS("Quality Inspection Finished", "Quality Inspection Failed");
+      EXIT(
+        (NOT(WarehouseShipmentLine."Quality Inspection Required")) OR
+        ((WarehouseShipmentLine."Quality Inspection Finished") AND (NOT(WarehouseShipmentLine."Quality Inspection Failed"))));
+    END;
+
+    PROCEDURE "--- Warehouse Activity ---"@1000000010();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE WarehouseActivitySupported@1000000016(pWarehouseActivityHeader@1000000000 : Record 5766) : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Returnis if warehouse activity is supported
+      //  -> pWarehouseActivityHeader: The activity
+      //  <- Answer
+
+      EXIT(pWarehouseActivityHeader.Type IN [pWarehouseActivityHeader.Type::"Put-away", pWarehouseActivityHeader.Type::Pick]);
+    END;
+
+    PROCEDURE ShowForWarehouseActivity@1000000014(pWarehouseActivityHeader@1000000000 : Record 5766);
+    VAR
+      eNoQualityInspection@1000000001 : TextConst 'ENU=Quality inspection isn''t required for any of the %1 items.;ENG=Quality inspection isn''t required for any of the %1 items.';
+    BEGIN
+      //DOC NS2015.1 - Showing quality inspection for warehouse activity
+      //  -> pWarehouseActivityHeader: The activity
+
+      IF ( NOT (WarehouseActivitySupported(pWarehouseActivityHeader))) THEN
+        EXIT;
+
+      WarehouseActivityHeader := pWarehouseActivityHeader;
+      WarehouseActivityLine.RESET();
+      WarehouseActivityLine.SETRANGE("Activity Type", WarehouseActivityHeader.Type);
+      WarehouseActivityLine.SETRANGE("No.", WarehouseActivityHeader."No.");
+      WarehouseActivityLine.SETRANGE("Quality Inspection Required", TRUE);
+      IF (WarehouseActivityLine.ISEMPTY) THEN
+        ERROR(eNoQualityInspection, FORMAT(WarehouseActivityHeader.Type));
+
+      CreateForWarehouseActivity(WarehouseActivityHeader);
+
+      ItemQualityInspectionLine.RESET();
+      ItemQualityInspectionLine.FILTERGROUP(2);
+      ItemQualityInspectionLine.SETRANGE("Document Type", WhseActTypeToItemQualityInspDocType(WarehouseActivityHeader.Type));
+      ItemQualityInspectionLine.SETRANGE("Document No.", WarehouseActivityHeader."No.");
+      ItemQualityInspectionLine.FILTERGROUP(0);
+      PAGE.RUN(0, ItemQualityInspectionLine);
+    END;
+
+    PROCEDURE CreateForWarehouseActivity@1000000013(pWarehouseActivityHeader@1000000001 : Record 5766);
+    BEGIN
+      //DOC NS2015.1 - Creating quality inspection for warehouse activity
+      //  -> pWarehouseActivityHeader: The activity
+
+      IF ( NOT (WarehouseActivitySupported(pWarehouseActivityHeader))) THEN
+        EXIT;
+
+      WarehouseActivityHeader := pWarehouseActivityHeader;
+      WarehouseActivityLine.RESET();
+      WarehouseActivityLine.SETRANGE("Activity Type", WarehouseActivityHeader.Type);
+      WarehouseActivityLine.SETRANGE("No.", WarehouseActivityHeader."No.");
+      IF (WarehouseActivityLine.FINDSET(TRUE)) THEN
+      REPEAT
+        WhseActivityLineToQInspLine(WarehouseActivityLine);
+      UNTIL (WarehouseActivityLine.NEXT() = 0);
+    END;
+
+    PROCEDURE CheckWarehouseActivityOnRegistration@1000000012(pWarehouseActivityHeader@1000000002 : Record 5766);
+    VAR
+      ePickQualityInspectionNotFinished@1000000001 : TextConst 'ENU=Quality inspection hasn''t been finished for warehouse pick "%1" line %2.;ENG=Quality inspection hasn''t been finished for warehouse pick "%1" line %2.';
+      ePickQualityInspectionFailed@1000000003 : TextConst 'ENU=Quality inspection has failed for warehouse pick "%1" line %2.;ENG=Quality inspection has failed for warehouse pick "%1" line %2.';
+      ePutAwayQualityInspectionNotFinished@1000000005 : TextConst 'ENU=Quality inspection hasn''t been finished for warehouse put-away "%1" line %2.;ENG=Quality inspection hasn''t been finished for warehouse put-away "%1" line %2.';
+      ePutAwayQualityInspectionFailed@1000000004 : TextConst 'ENU=Quality inspection has failed for warehouse put-away "%1" line %2.;ENG=Quality inspection has failed for warehouse put-away "%1" line %2.';
+      cnfContinue@1000000000 : TextConst 'ENU=%1 Do you want to continue?;ENG=%1 Do you want to continue?';
+      eQualityInspectionNotFinished@1000000010 : Text;
+      eQualityInspectionFailed@1000000011 : Text;
+      lErrorText@1000000012 : Text;
+      lInboundDocument@1000000013 : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Checking quality inspection on warehouse activity registration
+      //  -> pWarehouseActivityHeader: The activity
+
+      IF ( NOT (WarehouseActivitySupported(pWarehouseActivityHeader))) THEN
+        EXIT;
+
+      WarehouseActivityHeader := pWarehouseActivityHeader;
+      CreateForWarehouseActivity(WarehouseActivityHeader);
+
+      nSembleSetup.VerifyAndGet();
+
+      CASE (pWarehouseActivityHeader.Type) OF
+        pWarehouseActivityHeader.Type::"Put-away":
+          BEGIN
+            eQualityInspectionNotFinished := ePutAwayQualityInspectionNotFinished;
+            eQualityInspectionFailed := ePutAwayQualityInspectionFailed;
+          END;
+        pWarehouseActivityHeader.Type::Pick:
+          BEGIN
+            eQualityInspectionNotFinished := ePutAwayQualityInspectionNotFinished;
+            eQualityInspectionFailed := ePutAwayQualityInspectionFailed;
+          END;
+      END;
+
+      lInboundDocument := (pWarehouseActivityHeader.Type = pWarehouseActivityHeader.Type::"Put-away");
+
+      Location.GET(pWarehouseActivityHeader."Location Code");
+
+      WarehouseActivityLine.RESET();
+      WarehouseActivityLine.SETRANGE("Activity Type", WarehouseActivityHeader.Type);
+      WarehouseActivityLine.SETRANGE("No.", WarehouseActivityHeader."No.");
+      WarehouseActivityLine.SETRANGE("Quality Inspection Required", TRUE);
+      IF (WarehouseActivityLine.FINDSET()) THEN
+      REPEAT
+        WarehouseActivityLine.CALCFIELDS("Quality Inspection Finished", "Quality Inspection Failed");
+
+        IF (NOT(WarehouseActivityLine."Quality Inspection Finished")) THEN BEGIN
+          lErrorText := STRSUBSTNO(eQualityInspectionNotFinished, WarehouseActivityLine."No.", WarehouseActivityLine."Line No.");
+          IF ((lInboundDocument) AND (Location."Inbound Insp. not Finished" = Location."Inbound Insp. not Finished"::Error)) OR
+            ((NOT(lInboundDocument)) AND (Location."Outbound Insp. not Finished" = Location."Outbound Insp. not Finished"::Error))
+          THEN
+            ERROR(lErrorText)
+          ELSE IF ((lInboundDocument) AND (Location."Inbound Insp. not Finished" = Location."Inbound Insp. not Finished"::Confirm)) OR
+            ((NOT(lInboundDocument)) AND (Location."Outbound Insp. not Finished" = Location."Outbound Insp. not Finished"::Confirm))
+          THEN
+            IF (NOT(CONFIRM(STRSUBSTNO(cnfContinue, lErrorText)))) THEN
+              ERROR('');
+        END;
+
+        IF (WarehouseActivityLine."Quality Inspection Failed") THEN BEGIN
+          lErrorText := STRSUBSTNO(eQualityInspectionFailed, WarehouseActivityLine."No.", WarehouseActivityLine."Line No.");
+          IF ((lInboundDocument) AND (Location."Inbound Inspection Failed" = Location."Inbound Inspection Failed"::Error)) OR
+            ((NOT(lInboundDocument)) AND (Location."Outbound Inspection Failed" = Location."Outbound Inspection Failed"::Error))
+          THEN
+            ERROR(lErrorText)
+          ELSE IF ((lInboundDocument) AND (Location."Inbound Inspection Failed" = Location."Inbound Inspection Failed"::Confirm)) OR
+            ((NOT(lInboundDocument)) AND (Location."Outbound Inspection Failed" = Location."Outbound Inspection Failed"::Confirm))
+          THEN
+            IF (NOT(CONFIRM(STRSUBSTNO(cnfContinue, lErrorText)))) THEN
+              ERROR('');
+        END;
+      UNTIL (WarehouseActivityLine.NEXT() = 0);
+    END;
+
+    PROCEDURE WarehouseActivityLineInspectionFinished@1000000011(pWarehouseActivityLine@1000000000 : Record 5767) : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Returning if warehouse activity line inspection has been finished
+      //  -> pWarehouseActivityLine: The activity line
+      //  <- Inspection finished / not
+
+      WarehouseActivityLine := pWarehouseActivityLine;
+      WarehouseActivityLine.CALCFIELDS("Quality Inspection Failed", "Quality Inspection Finished");
+      EXIT(
+        (NOT(WarehouseActivityLine."Quality Inspection Required")) OR
+        ((WarehouseActivityLine."Quality Inspection Finished") AND (NOT(WarehouseActivityLine."Quality Inspection Failed"))));
+    END;
+
+    PROCEDURE "--- Warehouse Activity Line ---"@1000000022();
+    BEGIN
+    END;
+
+    PROCEDURE ExistsForWarehouseActivityLine@1000000023(pWarehouseActivityLine@1000000002 : Record 5767) : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Returns if quality inspection for warehouse activity line exists
+      //  -> pWarehouseActivityLine: The line
+      //  <- Result
+
+      WarehouseActivityLine := pWarehouseActivityLine;
+      ItemQualityInspectionLine.RESET();
+      ItemQualityInspectionLine.SETCURRENTKEY("Document Type", "Document No.", "Document Line No.");
+      ItemQualityInspectionLine.SETRANGE("Document Type", WhseActTypeToItemQualityInspDocType(WarehouseActivityHeader.Type));
+      ItemQualityInspectionLine.SETRANGE("Document No.", WarehouseActivityHeader."No.");
+      ItemQualityInspectionLine.SETRANGE("Document Line No.", pWarehouseActivityLine."Line No.");
+      EXIT( NOT (ItemQualityInspectionLine.ISEMPTY));
+    END;
+
+    PROCEDURE ShowForWarehouseActivityLine@1000000017(pWarehouseActivityLine@1000000002 : Record 5767;pCreateIfNotExists@1000000000 : Boolean;pInteraction@1000000004 : Boolean);
+    VAR
+      lExists@1000000001 : Boolean;
+      eNoQualityInspection@1000000006 : TextConst 'ENU=No quaility inspection for %1 "%2" line %3?;ENG=No quaility inspection for %1 "%2" line %3?';
+    BEGIN
+      //DOC NS2015.1 - Showing quality inspection for warehouse activity line
+      //  -> pWarehouseActivityLine: The line
+      //  -> pCreateIfNotExists: Flag to create inspection if it doesn't exist
+      //  -> pInteraction: Interaction flag
+
+      WarehouseActivityHeader.GET(pWarehouseActivityLine."Activity Type", pWarehouseActivityLine."No.");
+      IF ( NOT (WarehouseActivitySupported(WarehouseActivityHeader))) THEN
+        EXIT;
+
+      WhseActivityLineToQInspLine(pWarehouseActivityLine);
+
+      IF ( NOT (ExistsForWarehouseActivityLine(pWarehouseActivityLine))) THEN
+        ERROR(eNoQualityInspection, FORMAT(pWarehouseActivityLine."Activity Type"), pWarehouseActivityLine."No.", pWarehouseActivityLine."Line No.");
+
+      ItemQualityInspectionLine.RESET();
+      ItemQualityInspectionLine.SETCURRENTKEY("Document Type", "Document No.", "Document Line No.");
+      ItemQualityInspectionLine.FILTERGROUP(2);
+      ItemQualityInspectionLine.SETRANGE("Document Type", WhseActTypeToItemQualityInspDocType(WarehouseActivityHeader.Type));
+      ItemQualityInspectionLine.SETRANGE("Document No.", WarehouseActivityHeader."No.");
+      ItemQualityInspectionLine.SETRANGE("Document Line No.", pWarehouseActivityLine."Line No.");
+      ItemQualityInspectionLine.FILTERGROUP(0);
+      PAGE.RUN(0, ItemQualityInspectionLine);
+    END;
+
+    PROCEDURE WhseActivityLineToQInspLine@1000000018(VAR WhseActivityLine@1000000001 : Record 5767);
+    VAR
+      DocumentType@1000000000 : Integer;
+      LineExists@1000000002 : Boolean;
+    BEGIN
+      //Create/update inspection line from warehouse activity line
+
+      IF (NOT(WhseActivityLine."Activity Type" IN [WhseActivityLine."Activity Type"::"Put-away", WhseActivityLine."Activity Type"::Pick])) THEN
+        EXIT;
+
+      DocumentType := WhseActTypeToItemQualityInspDocType(WhseActivityLine."Activity Type");
+
+      ItemQualityInspectionLine.RESET();
+      ItemQualityInspectionLine.SETRANGE("Document Type", DocumentType);
+      ItemQualityInspectionLine.SETRANGE("Document No.", WhseActivityLine."No.");
+      ItemQualityInspectionLine.SETRANGE("Document Line No.", WhseActivityLine."Line No.");
+      LineExists := ItemQualityInspectionLine.FINDFIRST();
+
+      IF (WhseActivityLine."Quality Inspection Required") THEN BEGIN
+        IF (NOT(LineExists)) THEN BEGIN
+          CLEAR(ItemQualityInspectionLine);
+          ItemQualityInspectionLine.INIT();
+          ItemQualityInspectionLine.VALIDATE("Document Type", DocumentType);
+          ItemQualityInspectionLine.VALIDATE("Document No.", WhseActivityLine."No.");
+          ItemQualityInspectionLine.VALIDATE("Document Line No.", WhseActivityLine."Line No.");
+          ItemQualityInspectionLine.VALIDATE("Item No.", WhseActivityLine."Item No.");
+          ItemQualityInspectionLine.VALIDATE("Variant Code", WhseActivityLine."Variant Code");
+          ItemQualityInspectionLine.VALIDATE(Description, WhseActivityLine.Description);
+          ItemQualityInspectionLine.VALIDATE("Description 2", WhseActivityLine."Description 2");
+          ItemQualityInspectionLine.VALIDATE("Location Code", WhseActivityLine."Location Code");
+          ItemQualityInspectionLine.INSERT(TRUE);
+        END;
+
+        ItemQualityInspectionLine.VALIDATE(Quantity, WhseActivityLine."Quality Inspection Quantity");
+        ItemQualityInspectionLine.MODIFY();
+      END ELSE
+        IF (LineExists) THEN
+          ItemQualityInspectionLine.DELETE();
+    END;
+
+    PROCEDURE "--- Tools ---"@1000000019();
+    BEGIN
+    END;
+
+    PROCEDURE WhseActTypeToItemQualityInspDocType@1000000020(pWhseActType@1000000000 : Integer) : Integer;
+    VAR
+      lItemQualityInspDocType@1000000001 : Integer;
+    BEGIN
+      lItemQualityInspDocType := 0;
+      CASE (pWhseActType) OF
+        WarehouseActivityHeader.Type::"Put-away":
+          lItemQualityInspDocType := ItemQualityInspectionLine."Document Type"::"Put-away";
+        WarehouseActivityHeader.Type::Pick:
+          lItemQualityInspDocType := ItemQualityInspectionLine."Document Type"::Pick;
+      END;
+      EXIT(lItemQualityInspDocType);
+    END;
+
+    PROCEDURE ItemQualityInspDocTypeToWhseActType@1000000021(pItemQualityInspDocType@1000000000 : Integer) : Integer;
+    VAR
+      lWhseActType@1000000001 : Integer;
+    BEGIN
+      lWhseActType := 0;
+      CASE (pItemQualityInspDocType) OF
+        ItemQualityInspectionLine."Document Type"::"Put-away":
+          lWhseActType := WarehouseActivityHeader.Type::"Put-away";
+        ItemQualityInspectionLine."Document Type"::Pick:
+          lWhseActType := WarehouseActivityHeader.Type::Pick;
+      END;
+      EXIT(lWhseActType);
+    END;
+
+    PROCEDURE InspectionPctToQty@1000000026(InspectionPct@1000000001 : Decimal;BaseQuantity@1000000002 : Decimal) : Decimal;
+    VAR
+      InspectionQty@1000000000 : Decimal;
+    BEGIN
+      nSembleSetup.VerifyAndGet();
+
+      InspectionQty := InspectionPct * BaseQuantity / 100;
+      IF (nSembleSetup."Quality Inspection Rounding" > 0) THEN
+        InspectionQty := ROUND(InspectionQty, nSembleSetup."Quality Inspection Rounding", '>');
+
+      IF ((InspectionPct > 0) AND (BaseQuantity > 0) AND (InspectionQty = 0)) THEN
+        InspectionQty := 1;
+
+      IF (InspectionQty > BaseQuantity) THEN
+        InspectionQty := BaseQuantity;
+
+      IF (InspectionQty < 0) THEN
+        InspectionQty := 0;
+      EXIT(InspectionQty);
+    END;
+
+    PROCEDURE InspectionQtyToPct@1000000027(InspectionQty@1000000000 : Decimal;BaseQty@1000000001 : Decimal;CheckFieldValue@1000000003 : Boolean;QuantityFieldCaption@1000000004 : Text[250]) : Decimal;
+    VAR
+      InspectionPct@1000000002 : Decimal;
+    BEGIN
+      IF ((CheckFieldValue) AND ((InspectionQty < 0) OR (InspectionQty > BaseQty))) THEN
+        ERROR(errFieldValueMustBeBetween, QuantityFieldCaption, 0, BaseQty);
+
+      IF (BaseQty > 0) THEN
+        InspectionPct := InspectionQty * 100 / BaseQty
+      ELSE
+        InspectionPct := 0;
+      IF (InspectionPct < 0) THEN
+        InspectionPct := 0;
+      IF (InspectionPct > 100) THEN
+        InspectionPct := 100;
+      EXIT(InspectionPct);
+    END;
+
+    BEGIN
+    {
+      //DOC NS2015.1  JH 07/11/2013 - Created
+      //DOC NS2015.1  AZ 28/01/2014 - Modifications
+      //DOC NS2015.1  JH 19/02/2014 - Primary key redesigned
+      //DOC NS2015.1  JH 14/03/2014 - Amendments and fixes
+      //DOC NS2016.16 JH 07/09/2016 - nSemble 2016
+    }
+    END.
+  }
+}
+

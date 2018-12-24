@@ -1,0 +1,276 @@
+OBJECT Codeunit 9062732 Budget Adj. Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE ApplyAllAdjustmentsToBudget@1000000000(VAR ItemBudgetName@1000000000 : Record 7132);
+    VAR
+      ItemBudgetAdjFactor@1000000001 : Record 9062863;
+      eNoFactors@1000000002 : TextConst 'ENU=No UnApplied Adjustment Factors were found;ENG=No UnApplied Adjustment Factors were found';
+    BEGIN
+      ItemBudgetAdjFactor.SETCURRENTKEY("Analysis Area",Name,Sequence);
+      ItemBudgetAdjFactor.ASCENDING(TRUE);
+      ItemBudgetAdjFactor.SETRANGE(ItemBudgetAdjFactor."Analysis Area",ItemBudgetName."Analysis Area");
+      ItemBudgetAdjFactor.SETRANGE(ItemBudgetAdjFactor.Name,ItemBudgetName.Name);
+      ItemBudgetAdjFactor.SETRANGE(ItemBudgetAdjFactor.Applied,FALSE);
+      IF NOT ItemBudgetAdjFactor.FINDSET THEN ERROR(eNoFactors);
+
+      REPEAT
+        ApplyAdjustmentToBudget(ItemBudgetAdjFactor);
+      UNTIL ItemBudgetAdjFactor.NEXT = 0;
+    END;
+
+    PROCEDURE ApplyAdjustmentToBudget@1000000001(VAR ItemBudgetAdjFactor@1000000000 : Record 9062863);
+    VAR
+      IBE@1000000001 : Record 7134;
+      Temp_IBE@1000000005 : TEMPORARY Record 7134;
+      Adj_IBE@1000000008 : Record 7134;
+      BudgetAdjFactor@1000000002 : Record 9062861;
+      BudgetAdjFactorEntry@1000000003 : Record 9062862;
+      EntryNo@1000000006 : Integer;
+      CriteriaMgt@1100710000 : Codeunit 9062462;
+      Item@1100710001 : Record 27;
+      Customer@1100710002 : Record 18;
+      ToDelete@1100710003 : Boolean;
+      eFactorAlreadyApplied@1000000004 : TextConst 'ENU=The Factor %1 has already been applied to the Budget %2;ENG=The Factor %1 has already been applied to the Budget %2';
+      eFactorAdjustmentPercent@1000000007 : TextConst 'ENU=Factor: %1, Adjustment: %2 (Percent);ENG=Factor: %1, Adjustment: %2 (Percent)';
+      eFactorAdjustmentQuantity@1000000009 : TextConst 'ENU=Factor: %1, Adjustment: %2 (Quantity);ENG=Factor: %1, Adjustment: %2 (Quantity)';
+    BEGIN
+      IF ItemBudgetAdjFactor.Applied = TRUE THEN ERROR(eFactorAlreadyApplied,ItemBudgetAdjFactor."Factor Code",ItemBudgetAdjFactor.Name);
+      IBE.SETRANGE("Analysis Area",ItemBudgetAdjFactor."Analysis Area");
+      IBE.SETRANGE("Budget Name",ItemBudgetAdjFactor.Name);
+      IBE.SETRANGE("Source Type",IBE."Source Type"::Customer);
+      IF NOT IBE.FINDSET THEN EXIT;
+
+      BudgetAdjFactorEntry.SETRANGE("Factor Code",ItemBudgetAdjFactor."Factor Code");
+      BudgetAdjFactorEntry.SETFILTER("Adjustment %",'<>0');
+      IF BudgetAdjFactorEntry.FINDSET THEN BEGIN
+        REPEAT
+          Temp_IBE.DELETEALL;
+
+          //Get all the IBE Entries for the week
+          IBE.RESET;
+          IBE.SETRANGE("Analysis Area",ItemBudgetAdjFactor."Analysis Area");
+          IBE.SETRANGE("Budget Name",ItemBudgetAdjFactor.Name);
+          IBE.SETRANGE("Source Type",IBE."Source Type"::Customer);
+          IBE.SETRANGE(Date,BudgetAdjFactorEntry."Week Start",CALCDATE('<CW>',BudgetAdjFactorEntry."Week Start"));
+          IF IBE.FINDSET THEN BEGIN
+            REPEAT
+              Temp_IBE.SETRANGE("Item No.",IBE."Item No.");
+              Temp_IBE.SETRANGE(Date,BudgetAdjFactorEntry."Week Start");
+              Temp_IBE.SETRANGE("Source No.",IBE."Source No.");
+              IF NOT Temp_IBE.FINDFIRST THEN BEGIN
+                EntryNo += 1;
+                Temp_IBE.INIT;
+                Temp_IBE.TRANSFERFIELDS(IBE);
+                Temp_IBE.VALIDATE("Entry No.",EntryNo);
+                Temp_IBE.INSERT(TRUE);
+              END ELSE BEGIN
+                Temp_IBE.VALIDATE(Quantity,Temp_IBE.Quantity + IBE.Quantity);
+                Temp_IBE.MODIFY(TRUE);
+              END;
+            UNTIL IBE.NEXT = 0;
+          END;
+
+          //Remove all entries that don't match the criteria
+          BudgetAdjFactor.GET(ItemBudgetAdjFactor."Factor Code");
+          Temp_IBE.RESET;
+          IF Temp_IBE.FINDSET THEN BEGIN
+            REPEAT
+              ToDelete := FALSE;
+              IF NOT Item.GET(Temp_IBE."Item No.") THEN ToDelete := TRUE;
+              IF NOT ToDelete THEN IF NOT CriteriaMgt.RecordInFilter(BudgetAdjFactor."Item Criteria ID",DATABASE::Item,Item.GETPOSITION) THEN ToDelete := TRUE;
+              IF NOT Customer.GET(Temp_IBE."Source No.") THEN ToDelete := TRUE;
+              IF NOT ToDelete THEN IF NOT CriteriaMgt.RecordInFilter(BudgetAdjFactor."Customer Criteria ID",DATABASE::Customer,Customer.GETPOSITION) THEN ToDelete := TRUE;
+
+              IF ToDelete THEN Temp_IBE.DELETE;
+            UNTIL Temp_IBE.NEXT = 0;
+          END;
+
+          BudgetAdjFactor.GET(ItemBudgetAdjFactor."Factor Code");
+          Temp_IBE.RESET;
+          IF Temp_IBE.FINDSET THEN BEGIN
+            REPEAT
+              //Make the Adjustment Entry
+              Adj_IBE.INIT;
+              Adj_IBE.TRANSFERFIELDS(Temp_IBE);
+              Adj_IBE."Entry No." := 0;
+              //Adj_IBE.VALIDATE("Adj. Factor Code", BudgetAdjFactorEntry."Factor Code");
+              CASE BudgetAdjFactor."Adjust By" OF
+                BudgetAdjFactor."Adjust By"::Percentage :
+                  BEGIN
+                    Adj_IBE.VALIDATE(Quantity,Temp_IBE.Quantity * (BudgetAdjFactorEntry."Adjustment %"/100));
+                    Adj_IBE.VALIDATE(Description,COPYSTR(STRSUBSTNO(eFactorAdjustmentPercent,BudgetAdjFactorEntry."Factor Code",BudgetAdjFactorEntry."Adjustment %"),1,MAXSTRLEN(Adj_IBE.Description)));
+                  END;
+                BudgetAdjFactor."Adjust By"::Quantity :
+                  BEGIN
+                    Adj_IBE.VALIDATE(Quantity,BudgetAdjFactorEntry."Adjustment Quantity");
+                    Adj_IBE.VALIDATE(Description,COPYSTR(STRSUBSTNO(eFactorAdjustmentQuantity,BudgetAdjFactorEntry."Factor Code",BudgetAdjFactorEntry."Adjustment Quantity"),1,MAXSTRLEN(Adj_IBE.Description)));
+                  END;
+              END;
+              Adj_IBE.VALIDATE(Quantity,ROUND(Adj_IBE.Quantity,0.1));
+              IF Adj_IBE.Quantity <> 0 THEN Adj_IBE.INSERT(TRUE);
+              IBE_SetAdjustmentFactor(Adj_IBE,BudgetAdjFactorEntry."Factor Code");
+
+            UNTIL Temp_IBE.NEXT = 0;
+          END;
+        UNTIL BudgetAdjFactorEntry.NEXT = 0;
+      END;
+
+      ItemBudgetAdjFactor.VALIDATE(Applied,TRUE);
+      ItemBudgetAdjFactor.VALIDATE("Applied DateTime",CURRENTDATETIME);
+      ItemBudgetAdjFactor.VALIDATE("Applied By User",USERID);
+      ItemBudgetAdjFactor.MODIFY(TRUE);
+    END;
+
+    PROCEDURE UnApplyAdjustmentToBudget@1100710000(VAR ItemBudgetAdjFactor@1100710000 : Record 9062863);
+    VAR
+      ItemBudgetAdjFactor2@1100710001 : Record 9062863;
+      IBE@1100710002 : Record 7134;
+      ItemBudgetEntryAdjFactor@1000000000 : Record 9062864;
+      eConfirmation@1000000001 : TextConst 'ENU=To UnApply the Factor %1, all Factors with a higher sequence must also be UnApplied, would you like to do this?;ENG=To UnApply the Factor %1, all Factors with a higher sequence must also be UnApplied, would you like to do this?';
+      eCancelled@1000000002 : TextConst 'ENU=UnApply cancelled;ENG=UnApply cancelled';
+    BEGIN
+      ItemBudgetAdjFactor2.SETCURRENTKEY("Analysis Area",Name,Sequence);
+      ItemBudgetAdjFactor2.ASCENDING(TRUE);
+      ItemBudgetAdjFactor2.SETRANGE("Analysis Area",ItemBudgetAdjFactor."Analysis Area");
+      ItemBudgetAdjFactor2.SETRANGE(Name,ItemBudgetAdjFactor.Name);
+      ItemBudgetAdjFactor2.SETRANGE(Applied,TRUE);
+      ItemBudgetAdjFactor2.SETFILTER(Sequence,'>%1',ItemBudgetAdjFactor.Sequence);
+      IF ItemBudgetAdjFactor2.FINDSET THEN BEGIN
+        IF NOT CONFIRM
+          (STRSUBSTNO(eConfirmation,ItemBudgetAdjFactor.Name))
+          THEN ERROR(eCancelled);
+        REPEAT
+          ItemBudgetEntryAdjFactor.SETRANGE("Analysis Area",ItemBudgetAdjFactor2."Analysis Area");
+          ItemBudgetEntryAdjFactor.SETRANGE("Budget Name",ItemBudgetAdjFactor2.Name);
+          ItemBudgetEntryAdjFactor.SETRANGE("Factor Code",ItemBudgetAdjFactor2."Factor Code");
+          IF ItemBudgetEntryAdjFactor.FINDSET THEN
+            REPEAT
+              IF IBE.GET(ItemBudgetEntryAdjFactor."Entry No.") THEN
+                IBE.DELETE(TRUE);
+            UNTIL ItemBudgetEntryAdjFactor.NEXT = 0;
+      //    IBE.SETRANGE(IBE."Analysis Area",ItemBudgetAdjFactor2."Analysis Area");
+      //    IBE.SETRANGE(IBE."Budget Name",ItemBudgetAdjFactor2.Name);
+      //    IBE.SETRANGE(IBE."Adj. Factor Code",ItemBudgetAdjFactor2."Factor Code");
+      //    IF IBE.FINDSET THEN BEGIN
+      //      IBE.DELETEALL(TRUE);
+      //    END;
+
+          ItemBudgetAdjFactor2.VALIDATE(Applied,FALSE);
+          ItemBudgetAdjFactor2.VALIDATE("Applied DateTime",CREATEDATETIME(0D,0T));
+          ItemBudgetAdjFactor2.VALIDATE("Applied By User",'');
+          ItemBudgetAdjFactor2.MODIFY(TRUE);
+
+        UNTIL ItemBudgetAdjFactor2.NEXT = 0;
+      END;
+
+      ItemBudgetEntryAdjFactor.SETRANGE("Analysis Area",ItemBudgetAdjFactor."Analysis Area");
+          ItemBudgetEntryAdjFactor.SETRANGE("Budget Name",ItemBudgetAdjFactor.Name);
+          ItemBudgetEntryAdjFactor.SETRANGE("Factor Code",ItemBudgetAdjFactor."Factor Code");
+          IF ItemBudgetEntryAdjFactor.FINDSET THEN
+            REPEAT
+              IF IBE.GET(ItemBudgetEntryAdjFactor."Entry No.") THEN
+                IBE.DELETE(TRUE);
+            UNTIL ItemBudgetEntryAdjFactor.NEXT = 0;
+
+      // IBE.SETRANGE("Analysis Area",ItemBudgetAdjFactor."Analysis Area");
+      // IBE.SETRANGE(IBE."Budget Name",ItemBudgetAdjFactor.Name);
+      // IBE.SETRANGE(IBE."Adj. Factor Code",ItemBudgetAdjFactor."Factor Code");
+      // IF IBE.FINDSET THEN BEGIN
+      //  IBE.DELETEALL(TRUE);
+      // END;
+
+      ItemBudgetAdjFactor.VALIDATE(Applied,FALSE);
+      ItemBudgetAdjFactor.VALIDATE("Applied DateTime",CREATEDATETIME(0D,0T));
+      ItemBudgetAdjFactor.VALIDATE("Applied By User",'');
+      ItemBudgetAdjFactor.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Event Subscribers ---"@1000000002();
+    BEGIN
+    END;
+
+    [EventSubscriber(Table,7134,OnAfterValidateEvent,Quantity)]
+    LOCAL PROCEDURE ItemBudgetEntry_OnAfterValidateEvent_Quantity_SetSalesCostAmount@1000000003(VAR Rec@1000000000 : Record 7134;VAR xRec@1000000001 : Record 7134;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      Rec."Sales Amount" := Rec.Quantity * GetItemPrice(Rec);;
+      Rec."Cost Amount" := Rec.Quantity * GetItemCost(Rec);
+    END;
+
+    [EventSubscriber(Table,7134,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE ItemBudgetEntry_OnAfterDelete_RemoveIBEAdjFactorEntry@1000000009(VAR Rec@1000000000 : Record 7134;RunTrigger@1000000001 : Boolean);
+    VAR
+      IBE_AdjFactor@1000000002 : Record 9062864;
+    BEGIN
+      IF IBE_AdjFactor.GET(Rec."Entry No.") THEN
+        IBE_AdjFactor.DELETE;
+    END;
+
+    LOCAL PROCEDURE "--- Misc ---"@1000000006();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE GetItemPrice@1000000005(VAR IBE@1000000001 : Record 7134) : Decimal;
+    VAR
+      Item@1000000000 : Record 27;
+    BEGIN
+      //DOC PC
+      Item.GET(IBE."Item No.");
+      EXIT(Item."Unit Price");
+    END;
+
+    LOCAL PROCEDURE GetItemCost@1000000004(VAR IBE@1000000001 : Record 7134) : Decimal;
+    VAR
+      Item@1000000000 : Record 27;
+    BEGIN
+      //DOC PC
+      Item.GET(IBE."Item No.");
+      EXIT(Item."Unit Cost");
+    END;
+
+    LOCAL PROCEDURE IBE_SetAdjustmentFactor@1000000008(IBE@1000000000 : Record 7134;AdjustmentFactor@1000000002 : Code[20]);
+    VAR
+      IBE_AdjFactor@1000000001 : Record 9062864;
+    BEGIN
+      IF NOT IBE_AdjFactor.GET(IBE."Entry No.") THEN BEGIN
+        IF AdjustmentFactor <> '' THEN BEGIN
+          IBE_AdjFactor.INIT;
+          IBE_AdjFactor."Entry No." := IBE."Entry No.";
+          IBE_AdjFactor."Factor Code" := AdjustmentFactor;
+          IBE_AdjFactor."Analysis Area" := IBE."Analysis Area";
+          IBE_AdjFactor."Budget Name" := IBE."Budget Name";
+          IBE_AdjFactor.INSERT;
+        END;
+      END ELSE BEGIN
+        IF AdjustmentFactor = '' THEN
+          IBE_AdjFactor.DELETE
+        ELSE BEGIN
+          IBE_AdjFactor."Factor Code" := AdjustmentFactor;
+          IBE_AdjFactor."Analysis Area" := IBE."Analysis Area";
+          IBE_AdjFactor."Budget Name" := IBE."Budget Name";
+          IBE_AdjFactor.MODIFY;
+        END;
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NH2016.15 JH 26/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

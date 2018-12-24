@@ -1,0 +1,463 @@
+OBJECT Codeunit 9062608 Page Filtering
+{
+  OBJECT-PROPERTIES
+  {
+    Date=28/01/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.12;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SystemBehaviour@9062234 : Record 9062230;
+      String@1000000000 : Codeunit 9062236;
+      TnpToolkit@9062229 : Codeunit 9062230;
+      ActiveText@9062230 : Text;
+      InactiveText@9062231 : Text;
+      ActiveStyle@9062232 : Text;
+      InactiveStyle@9062233 : Text;
+
+    LOCAL PROCEDURE "--- Filter Buffer ---"@9062233();
+    BEGIN
+    END;
+
+    PROCEDURE ClearFilterBuffer@9062234(VAR pFilterBuffer@9062229 : Record 9062735);
+    BEGIN
+      //DOC NA2016.10 - Clearing filter buffer
+
+      pFilterBuffer.RESET();
+      pFilterBuffer.DELETEALL();
+    END;
+
+    PROCEDURE AddToFilterBuffer@9062235(pIndex@9062230 : Integer;pName@9062231 : Text[50];VAR pFilterBuffer@9062229 : Record 9062735);
+    BEGIN
+      //DOC NA2016.10 - Adding an entry to filter buffer (simplified version)
+      //  -> pIndex: Index of the entry
+      //  -> pName: Name
+      //  <> pFilterBuffer: Target filter buffer
+
+      AddToFilterBufferFull(pIndex, pName, '', '', '', '', pFilterBuffer);
+    END;
+
+    PROCEDURE AddToFilterBufferFull@9062263(pIndex@9062230 : Integer;pName@9062231 : Text[50];pActiveText@9062232 : Text;pInactiveText@9062233 : Text;pActiveStyle@9062234 : Text;pInactiveStyle@9062235 : Text;VAR pFilterBuffer@9062229 : Record 9062735);
+    BEGIN
+      //DOC NA2016.10 - Adding an entry to filter buffer (full version)
+      //  -> pIndex: Index of the entry
+      //  -> pName: Name
+      //  -> pActiveText: Active text (taken from global variable if empty)
+      //  -> pInactiveText: Inactive text (taken from global variable if empty)
+      //  -> pActiveStyle: Active style (taken from global variable if empty)
+      //  -> pInactiveStyle: Inactive style (taken from global variable if empty)
+      //  <> pFilterBuffer: Target filter buffer
+
+      pActiveText := TnpToolkit.DefaultString(pActiveText, ActiveText);
+      pInactiveText := TnpToolkit.DefaultString(pInactiveText, InactiveText);
+      pActiveStyle := TnpToolkit.DefaultString(pActiveStyle, ActiveStyle);
+      pInactiveStyle := TnpToolkit.DefaultString(pInactiveStyle, InactiveStyle);
+
+      pFilterBuffer.INIT();
+      pFilterBuffer.VALIDATE(Index, pIndex);
+      pFilterBuffer.VALIDATE(Name, pName);
+      pFilterBuffer.VALIDATE("Active Text", pActiveText);
+      pFilterBuffer.VALIDATE("Inactive Text", pInactiveText);
+      pFilterBuffer.VALIDATE("Active Style", pActiveStyle);
+      pFilterBuffer.VALIDATE("Inactive Style", pInactiveStyle);
+      pFilterBuffer.VALIDATE(Active, TRUE);
+      pFilterBuffer.INSERT();
+    END;
+
+    PROCEDURE AddOptionsToFilterBuffer@9062237(pTableId@9062230 : Integer;pFieldId@9062231 : Integer;VAR pFilterBuffer@9062229 : Record 9062735);
+    VAR
+      lRecordRef@9062232 : RecordRef;
+      lFieldRef@9062233 : FieldRef;
+      lOptions@9062234 : TEMPORARY Record 9062730;
+    BEGIN
+      //DOC NA2016.10 - Adding options from given field to filter buffer
+      //  -> pTableId: Table ID
+      //  -> pFieldId: Field ID
+      //  <> pFilterBuffer: Target filter buffer
+
+      lRecordRef.OPEN(pTableId);
+      lFieldRef := lRecordRef.FIELD(pFieldId);
+      String.SplitAdvanced(lFieldRef.OPTIONCAPTION, ',', FALSE, TRUE, lOptions);
+      lRecordRef.CLOSE();
+
+      lOptions.RESET();
+      IF (lOptions.FINDSET()) THEN
+      REPEAT
+        IF (lOptions.Value <> '') THEN
+          AddToFilterBuffer(lOptions.ID, lOptions.Value, pFilterBuffer);
+      UNTIL (lOptions.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE "--- Filter Activities ---"@9062272();
+    BEGIN
+    END;
+
+    PROCEDURE GetActivity@9062243(pIndex@9062229 : Integer;VAR pFilterBuffer@9062230 : Record 9062735) : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Returning activity of required filter buffer
+      //  -> pIndex: Filter index
+      //  <> pFilterBuffer: The buffer
+      //  <- The activity
+
+      IF (pFilterBuffer.GET(pIndex)) THEN
+        EXIT(pFilterBuffer.Active)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE SetActivity@9062244(pIndex@9062230 : Integer;pActivity@9062231 : Boolean;VAR pFilterBuffer@9062229 : Record 9062735);
+    BEGIN
+      //DOC NA2016.10 - Setting activity of required filter buffer
+      //  -> pIndex: Filter index
+      //  -> pActivity: The activity
+      //  <> pFilterBuffer: The buffer
+
+      IF (pFilterBuffer.GET(pIndex)) THEN
+      BEGIN
+        pFilterBuffer.VALIDATE(Active, pActivity);
+        pFilterBuffer.MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE SetExclusiveFilterActivity@9062246(pIndex@9062230 : Integer;VAR pFilterBuffer@9062229 : Record 9062735);
+    BEGIN
+      //DOC NA2016.10 - Settng exclusive filter activity
+      //  -> pIndex: Index
+      //  <> pFilterBuffer: Target filter buffer
+
+      pFilterBuffer.RESET();
+      pFilterBuffer.SETFILTER(Index, '<>%1', pIndex);
+      IF (pFilterBuffer.FINDSET()) THEN
+      REPEAT
+        pFilterBuffer.VALIDATE(Active, FALSE);
+        pFilterBuffer.MODIFY();
+      UNTIL (pFilterBuffer.NEXT() = 0);
+      pFilterBuffer.RESET();
+
+      pFilterBuffer.GET(pIndex);
+      pFilterBuffer.VALIDATE(Active, TRUE);
+      pFilterBuffer.MODIFY();
+    END;
+
+    PROCEDURE ToggleFilterActivity@9062280(pIndex@9062230 : Integer;VAR pFilterBuffer@9062229 : Record 9062735);
+    BEGIN
+      //DOC NA2016.10 - Toggling filter activity
+      //  -> pIndex: Index
+      //  <> pFilterBuffer: Target filter buffer
+
+      pFilterBuffer.GET(pIndex);
+      pFilterBuffer.VALIDATE(Active, ( NOT (pFilterBuffer.Active)));
+      pFilterBuffer.MODIFY();
+    END;
+
+    PROCEDURE SetFilterActive@9062277(pIndex@9062230 : Integer;pActive@9062231 : Boolean;VAR pFilterBuffer@9062229 : Record 9062735);
+    BEGIN
+      //DOC NA2016.10 - Setting filter active
+      //  -> pIndex: Index
+      //  -> pActive: The activity value
+      //  <> pFilterBuffer: Target filter buffer
+
+      pFilterBuffer.GET(pIndex);
+      pFilterBuffer.VALIDATE(Active, pActive);
+      pFilterBuffer.MODIFY();
+    END;
+
+    PROCEDURE SetAllFiltersActive@9062273(pActive@9062230 : Boolean;VAR pFilterBuffer@9062229 : Record 9062735);
+    BEGIN
+      //DOC NA2016.10 - Setting all filters active / inactive
+      //  -> pActive: The activity value
+      //  <> pFilterBuffer: Target filter buffer
+
+      pFilterBuffer.RESET();
+      IF (pFilterBuffer.FINDSET()) THEN
+      REPEAT
+        pFilterBuffer.VALIDATE(Active, pActive);
+        pFilterBuffer.MODIFY();
+      UNTIL (pFilterBuffer.NEXT() = 0);
+    END;
+
+    PROCEDURE ReadFilterActivitiesFromSysB@9062274(pPageId@9062230 : Integer;pFilterId@9062231 : Code[10];pActive@9062233 : Boolean;VAR pFilterBuffer@9062229 : Record 9062735);
+    VAR
+      lActivitiesText@9062232 : Text;
+      lActivitiesBuffer@9062234 : TEMPORARY Record 9062730;
+      lActivity@9062235 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Reading activities from system behaviour
+      //  -> pPageId: Page ID
+      //  -> pFilterId: Additional filter ID (to be able to support more than one filter on one page)
+      //  -> pActive: Default value
+      //  <> pFilterBuffer: Target filter buffer
+
+      SetAllFiltersActive(pActive, pFilterBuffer);
+
+      lActivitiesText := SystemBehaviour.GetText(SysBCode(pPageId, pFilterId));
+      IF (lActivitiesText <> '') THEN
+      BEGIN
+        String.SplitAdvanced(lActivitiesText, ',', FALSE, TRUE, lActivitiesBuffer);
+        lActivitiesBuffer.RESET();
+        IF (lActivitiesBuffer.FINDSET()) THEN
+        REPEAT
+          IF (pFilterBuffer.GET(lActivitiesBuffer.ID)) THEN
+          BEGIN
+            pFilterBuffer.VALIDATE(Active, lActivitiesBuffer.Value = '1');
+            pFilterBuffer.MODIFY();
+          END;
+        UNTIL (lActivitiesBuffer.NEXT() = 0);
+      END;
+    END;
+
+    PROCEDURE WriteFilterActivitiesToSysB@9062275(pPageId@9062232 : Integer;pFilterId@9062231 : Code[10];VAR pFilterBuffer@9062229 : Record 9062735);
+    VAR
+      lActivitiesText@9062230 : Text;
+    BEGIN
+      //DOC NA2016.10 - Writing activities to system behaviour
+      //  -> pPageId: Page ID
+      //  -> pFilterId: Additional filter ID (to be able to support more than one filter on one page)
+      //  <> pFilterBuffer: Filter buffer
+
+      lActivitiesText := '';
+
+      pFilterBuffer.RESET();
+      IF (pFilterBuffer.FINDSET()) THEN
+      REPEAT
+        IF (lActivitiesText <> '') THEN
+          lActivitiesText := lActivitiesText + ',';
+        lActivitiesText := lActivitiesText + FORMAT(pFilterBuffer.Active, 0, 2);
+      UNTIL (pFilterBuffer.NEXT() = 0);
+
+      SystemBehaviour.SetUserText(SysBCode(pPageId, pFilterId), USERID(), lActivitiesText, TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Application ---"@9062229();
+    BEGIN
+    END;
+
+    PROCEDURE FilterForOptionField@9062230(VAR pFilterBuffer@9062231 : Record 9062735) : Text;
+    VAR
+      lAllActive@9062229 : Boolean;
+      lAllInactive@9062230 : Boolean;
+      lFilter@9062232 : Text;
+    BEGIN
+      //DOC NA2016.10 - Creating a filter for option field
+      //  <> pFilterBuffer: Filter buffer
+      //  <- The filter created
+
+      lFilter := '';
+      lAllActive := TRUE;
+      lAllInactive := TRUE;
+
+      pFilterBuffer.RESET();
+      IF (pFilterBuffer.FINDSET()) THEN
+      REPEAT
+        lAllActive := ((lAllActive) AND (pFilterBuffer.Active));
+        lAllInactive := ((lAllInactive) AND ( NOT (pFilterBuffer.Active)));
+      UNTIL (pFilterBuffer.NEXT() = 0);
+
+      IF (lAllActive) THEN
+        lFilter := ''
+      ELSE IF (lAllInactive) THEN
+        lFilter := '0&1'
+      ELSE
+      BEGIN
+        pFilterBuffer.RESET();
+        IF (pFilterBuffer.FINDSET()) THEN
+        REPEAT
+          IF (pFilterBuffer.Active) THEN
+          BEGIN
+            IF (lFilter <> '') THEN
+              lFilter := lFilter + '|';
+            lFilter := lFilter + FORMAT(pFilterBuffer.Index, 0, 1);
+          END;
+        UNTIL (pFilterBuffer.NEXT() = 0);
+      END;
+
+      EXIT(lFilter);
+    END;
+
+    PROCEDURE "--- Texts ---"@9062236();
+    BEGIN
+    END;
+
+    PROCEDURE GetText@9062231(pIndex@9062229 : Integer;VAR pFilterBuffer@9062230 : Record 9062735) : Text;
+    BEGIN
+      //DOC NA2016.10 - Returning text of required filter buffer
+      //  -> pIndex: Filter index
+      //  <> pFilterBuffer: The buffer
+      //  <- The text
+
+      IF (pFilterBuffer.GET(pIndex)) THEN
+        EXIT(pFilterBuffer.Text)
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE SetTexts@9062240(pActiveText@9062230 : Text;pInactiveText@9062229 : Text);
+    BEGIN
+      //DOC NA2016.10 - Setting filter texts
+      //  -> pActiveText: Active text
+      //  -> pInactiveText: Inactive text
+
+      ActiveText := pActiveText;
+      InactiveText := pInactiveText;
+    END;
+
+    PROCEDURE SetTextsAsTrueFalse@9062245();
+    BEGIN
+      //DOC NA2016.10 - Setting filter texts as "True" / "False"
+
+      SetTexts(String.ToSentenceCase(FORMAT(TRUE, 0, 9)), String.ToSentenceCase(FORMAT(FALSE, 0, 9)));
+    END;
+
+    PROCEDURE SetTextsAsYesNo@9062247();
+    BEGIN
+      //DOC NA2016.10 - Setting filter texts as "Yes" / "No"
+
+      SetTexts(FORMAT(TRUE, 0, 1), FORMAT(FALSE, 0, 1));
+    END;
+
+    PROCEDURE SetTextsAsOneZero@9062252();
+    BEGIN
+      //DOC NA2016.10 - Setting filter texts as "1" / "0"
+
+      SetTexts(FORMAT(TRUE, 0, 2), FORMAT(FALSE, 0, 2));
+    END;
+
+    PROCEDURE SetTextsAsOnOff@9062250();
+    VAR
+      eActiveText@9062230 : TextConst 'ENU=On;ENG=On';
+      eInactiveText@9062229 : TextConst 'ENU=Off;ENG=Off';
+    BEGIN
+      //DOC NA2016.10 - Setting filter texts as "On" / "Off"
+
+      SetTexts(eActiveText, eInactiveText);
+    END;
+
+    PROCEDURE SetTextsAsVisibleHidden@9062249();
+    VAR
+      eActiveText@9062230 : TextConst 'ENU=Visible;ENG=Visible';
+      eInactiveText@9062229 : TextConst 'ENU=Hidden;ENG=Hidden';
+    BEGIN
+      //DOC NA2016.10 - Setting filter texts as "Visible" / "Hidden"
+
+      SetTexts(eActiveText, eInactiveText);
+    END;
+
+    PROCEDURE SetTextsAsActiveInactive@9062248();
+    VAR
+      eActiveText@9062230 : TextConst 'ENU=Active;ENG=Active';
+      eInactiveText@9062229 : TextConst 'ENU=Inactive;ENG=Inactive';
+    BEGIN
+      //DOC NA2016.10 - Setting filter texts as "Active" / "Inactive"
+
+      SetTexts(eActiveText, eInactiveText);
+    END;
+
+    PROCEDURE "--- Styles ---"@9062242();
+    BEGIN
+    END;
+
+    PROCEDURE GetStyle@9062238(pIndex@9062229 : Integer;VAR pFilterBuffer@9062230 : Record 9062735) : Text;
+    BEGIN
+      //DOC NA2016.10 - Returning style of required filter buffer
+      //  -> pIndex: Filter index
+      //  <> pFilterBuffer: The buffer
+      //  <- The style
+
+      IF (pFilterBuffer.GET(pIndex)) THEN
+        EXIT(pFilterBuffer.Style)
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE SetActiveStyle@9062232(pIndex@9062229 : Integer;pStyle@9062231 : Text;VAR pFilterBuffer@9062230 : Record 9062735);
+    BEGIN
+      //DOC NA2016.10 - Setting active style of required filter buffer
+      //  -> pIndex: Filter index
+      //  -> pStyle: The style
+      //  <> pFilterBuffer: The buffer
+
+      IF (pFilterBuffer.GET(pIndex)) THEN
+      BEGIN
+        pFilterBuffer.VALIDATE("Active Style", pStyle);
+        pFilterBuffer.MODIFY();
+      END;
+    END;
+
+    PROCEDURE SetInactiveStyle@9062239(pIndex@9062229 : Integer;pStyle@9062231 : Text;VAR pFilterBuffer@9062230 : Record 9062735);
+    BEGIN
+      //DOC NA2016.10 - Setting inactive style of required filter buffer
+      //  -> pIndex: Filter index
+      //  -> pStyle: The style
+      //  <> pFilterBuffer: The buffer
+
+      IF (pFilterBuffer.GET(pIndex)) THEN
+      BEGIN
+        pFilterBuffer.VALIDATE("Inactive Style", pStyle);
+        pFilterBuffer.MODIFY();
+      END;
+    END;
+
+    PROCEDURE SetStyles@9062241(pActiveStyle@9062229 : Text;pInactiveStyle@9062230 : Text);
+    BEGIN
+      //DOC NA2016.10 - Setting filter styles
+      //  -> pActiveStyle: Active style
+      //  -> pInactiveStyle: Inactive style
+
+      ActiveStyle := pActiveStyle;
+      InactiveStyle := pInactiveStyle;
+    END;
+
+    PROCEDURE SetStylesBlackGrey@9062258();
+    BEGIN
+      //DOC NA2016.10 - Setting filter styles as "Black" / "Grey"
+
+      SetStyles('Standard', 'Subordinate');
+    END;
+
+    PROCEDURE SetStylesBlueGrey@9062259();
+    BEGIN
+      //DOC NA2016.10 - Setting filter styles as "Blue" / "Grey"
+
+      SetStyles('StandardAccent', 'Subordinate');
+    END;
+
+    PROCEDURE SetStylesGreenRed@9062260();
+    BEGIN
+      //DOC NA2016.10 - Setting filter styles as "Green" / "Red"
+
+      SetStyles('Favorable', 'Unfavorable');
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@9062286();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE SysBCode@9062287(pPageId@9062229 : Integer;pFilterId@9062230 : Code[10]) : Code[20];
+    VAR
+      eSysBCode@9062231 : TextConst 'ENU=PAGE%1%2FILTER;ENG=PAGE%1%2FILTER';
+    BEGIN
+      //DOC NA2016.10 - Returning system behaviour code
+      //  -> pPageId: Page ID
+      //  -> pFilterId: Additional filter ID (to be able to support more than one filter on one page)
+      //  <- The code
+
+      EXIT(STRSUBSTNO(eSysBCode, pPageId, pFilterId));
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.10 JH 21/09/2015 - Created
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit
+    }
+    END.
+  }
+}
+

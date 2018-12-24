@@ -1,0 +1,838 @@
+OBJECT Codeunit 9062703 Customer Import
+{
+  OBJECT-PROPERTIES
+  {
+    Date=24/05/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Customer@1000000005 : Record 18;
+      CustomerImportWorksheetHdr@1000000003 : Record 9062837;
+      CustomerImportWorksheetLine@1000000002 : Record 9062838;
+      EnhancedRapidStartSetup@1000000011 : Record 9062844;
+      ImportErrorLine@1000000012 : Record 9062842;
+      MarketingSetup@1000000008 : Record 5079;
+      ImportToolkit@1000000000 : Codeunit 9062701;
+      ImportErrorManagement@1000000001 : Codeunit 9062708;
+      ImportValidation@1000000009 : Codeunit 9062707;
+      TnpToolkit@1000000007 : Codeunit 9062230;
+      tDialogTitle@1000000013 : TextConst 'ENU=Importing customers...;ENG=Importing customers...';
+      tIsEmpty@1000000006 : TextConst 'ENU="""%1"" is empty";ENG="""%1"" is empty"';
+      tAlreadyExists@1000000010 : TextConst 'ENU=%1 already exists.;ENG=%1 already exists.';
+      AutosearchForDuplicatesOff@1000000014 : Boolean;
+
+    LOCAL PROCEDURE "--- General ---"@1000000058();
+    BEGIN
+    END;
+
+    PROCEDURE CheckBatch@1000000057(VAR pCustomerImportWorksheetHdr@1000000000 : Record 9062837;pInteraction@1000000001 : Boolean) : Boolean;
+    VAR
+      lResult@1000000002 : Integer;
+      eFinalMessageIfSuccess@1000000003 : TextConst 'ENU=All lines have been checked and they are OK.;ENG=All lines have been checked and they are OK.';
+      eFinalMessageIfErrors@1000000004 : TextConst 'ENU=Lines checking resulted with errorrs. Please examine the lines for details.;ENG=Lines checking resulted with errorrs. Please examine the lines for details.';
+      lMessage@1000000005 : Text;
+      eFinalMessageIfWarnings@1000000006 : TextConst 'ENU=Lines checking resulted with warnings. You can still process the lines, but you can examine the lines for details before.;ENG=Lines checking resulted with warnings. You can still process the lines, but you can examine the lines for details before.';
+    BEGIN
+      CustomerImportWorksheetHdr := pCustomerImportWorksheetHdr;
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+
+      lResult := CheckBatchInternal();
+      IF (pInteraction) THEN
+      BEGIN
+        CASE (lResult) OF
+          EnhancedRapidStartSetup."Check Result"::Warnings: lMessage := eFinalMessageIfWarnings;
+          EnhancedRapidStartSetup."Check Result"::Errors: lMessage := eFinalMessageIfErrors;
+          ELSE lMessage := eFinalMessageIfSuccess;
+        END;
+        MESSAGE(lMessage);
+      END;
+
+      pCustomerImportWorksheetHdr := CustomerImportWorksheetHdr;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ProcessBatch@1000000052(VAR pCustomerImportWorksheetHdr@1000000006 : Record 9062837;pInteraction@1000000001 : Boolean) : Boolean;
+    VAR
+      eConfirmation@1000000002 : TextConst 'ENU=Do you want to process the worksheet?;ENG=Do you want to process the worksheet?';
+      eFinalMessageIfSuccess@1000000003 : TextConst 'ENU=Processing has been finished with success.;ENG=Processing has been finished with success.';
+      eFinalMessageIfFailure@1000000004 : TextConst 'ENU=Processing has been finished with errors. Please examine the lines for details.;ENG=Processing has been finished with errors. Please examine the lines for details.';
+      lResult@1000000005 : Boolean;
+    BEGIN
+      CustomerImportWorksheetHdr := pCustomerImportWorksheetHdr;
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+      IF (pInteraction) THEN
+        IF ( NOT (CONFIRM(eConfirmation, TRUE))) THEN
+          EXIT(FALSE);
+
+      lResult := ProcessBatchInternal();
+
+      IF (pInteraction) THEN
+        MESSAGE(TnpToolkit.IIFText(lResult, eFinalMessageIfSuccess, eFinalMessageIfFailure));
+
+      pCustomerImportWorksheetHdr := CustomerImportWorksheetHdr;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE UndoInserts@1000000045(VAR pCustomerImportWorksheetHdr@1000000000 : Record 9062837;pInteraction@1000000001 : Boolean) : Boolean;
+    VAR
+      eConfirmation@1000000002 : TextConst 'ENU=Do you want to delete created records?;ENG=Do you want to delete created records?';
+      eFinalMessage@1000000003 : TextConst 'ENU=All created records have been deleted.;ENG=All created records have been deleted.';
+      ImportLog@1000000004 : Record 9062843;
+    BEGIN
+      CustomerImportWorksheetHdr := pCustomerImportWorksheetHdr;
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+      IF (pInteraction) THEN
+        IF NOT CONFIRM(eConfirmation, FALSE) THEN
+          EXIT;
+
+      ImportLog.RESET();
+      ImportLog.SETCURRENTKEY("Import Header Table ID", "Batch No");
+      ImportLog.SETRANGE("Import Header Table ID", DATABASE::"Customer Import Worksheet Hdr.");
+      ImportLog.SETRANGE("Batch No", CustomerImportWorksheetHdr."Batch No.");
+      ImportToolkit.ReverseLogEntry(ImportLog);
+
+      CustomerImportWorksheetLine.RESET();
+      CustomerImportWorksheetLine.SETRANGE("Batch No.", CustomerImportWorksheetHdr."Batch No.");
+      CustomerImportWorksheetLine.MODIFYALL(Status, CustomerImportWorksheetLine.Status::Loaded, TRUE);
+      CustomerImportWorksheetHdr.GET(CustomerImportWorksheetHdr."Batch No.");
+
+      IF (pInteraction) THEN
+        MESSAGE(eFinalMessage);
+
+      pCustomerImportWorksheetHdr := CustomerImportWorksheetHdr;
+    END;
+
+    PROCEDURE DeleteAllCustomers@1000000034(VAR pCustomerImportWorksheetHdr@1000000006 : Record 9062837;pInteraction@1000000005 : Boolean) : Boolean;
+    VAR
+      Customer@1000000000 : Record 18;
+      Dlg@1000000001 : Dialog;
+      eConfirmation@1000000004 : TextConst 'ENU=Do you want to delete all customers?;ENG=Do you want to delete all customers?';
+      eConfirmation2@1000000003 : TextConst 'ENU=Are you absolutely SURE you want to delete all customers?;ENG=Are you absolutely SURE you want to delete all customers?';
+      eFinalMessage@1000000002 : TextConst 'ENU=All customers have been deleted.;ENG=All customers have been deleted.';
+    BEGIN
+      CustomerImportWorksheetHdr := pCustomerImportWorksheetHdr;
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+      IF (pInteraction) THEN
+      BEGIN
+        IF ( NOT (CONFIRM(eConfirmation, FALSE))) THEN
+          EXIT(FALSE);
+        IF ( NOT (CONFIRM(eConfirmation2, FALSE))) THEN
+          EXIT(FALSE);
+      END;
+
+      Customer.DELETEALL(TRUE);
+
+      IF (pInteraction) THEN
+        MESSAGE(eFinalMessage);
+
+      pCustomerImportWorksheetHdr := CustomerImportWorksheetHdr;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CreateImportTemplate@1000000047();
+    VAR
+      lField@1000000000 : Record 2000000041;
+    BEGIN
+      CustomerImportWorksheetLine.FilterSimpleFields(lField);
+      ImportToolkit.CreateImportTemplateAdv(DATABASE::"Customer Import Worksheet Line", DATABASE::"Customer Import Worksheet Line", lField, TRUE);
+    END;
+
+    PROCEDURE ResetAllLines@1000000051(pCustomerImportWorksheetHdr@1000000002 : Record 9062837;pInteraction@1000000000 : Boolean) : Boolean;
+    VAR
+      eConfirmation@1000000001 : TextConst 'ENU=Do you want to reset status of all lines?;ENG=Do you want to reset status of all lines?';
+    BEGIN
+      CustomerImportWorksheetHdr := pCustomerImportWorksheetHdr;
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+      IF (pInteraction) THEN
+        IF ( NOT (CONFIRM(eConfirmation, FALSE))) THEN
+          EXIT(FALSE);
+
+      CustomerImportWorksheetLine.RESET();
+      CustomerImportWorksheetLine.SETRANGE("Batch No.", CustomerImportWorksheetHdr."Batch No.");
+      IF (CustomerImportWorksheetLine.FINDSET(TRUE)) THEN
+      REPEAT
+        CustomerImportWorksheetLine.VALIDATE(Status, CustomerImportWorksheetLine.Status::Loaded);
+        CustomerImportWorksheetLine.MODIFY(TRUE);
+        ImportErrorManagement.DeleteErrorsAndWarnings(DATABASE::"Customer Import Worksheet Line", CustomerImportWorksheetLine.GETPOSITION(FALSE));
+      UNTIL (CustomerImportWorksheetLine.NEXT() = 0);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Internal ---"@1000000059();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CheckBatchInternal@1000000019() : Integer;
+    VAR
+      lResult@1000000000 : Integer;
+    BEGIN
+      lResult := EnhancedRapidStartSetup."Check Result"::OK;
+      EnhancedRapidStartSetup.VerifyAndGet();
+      ImportToolkit.InitaliseDialog(tDialogTitle);
+      ImportToolkit.SetDialogCheckingActivity();
+
+      CustomerImportWorksheetLine.RESET;
+      CustomerImportWorksheetLine.SETRANGE("Batch No.", CustomerImportWorksheetHdr."Batch No.");
+      CustomerImportWorksheetLine.SETFILTER(Status, '%1|%2|%3|%4', CustomerImportWorksheetLine.Status::" ", CustomerImportWorksheetLine.Status::Loaded,
+        CustomerImportWorksheetLine.Status::Warning, CustomerImportWorksheetLine.Status::Error);
+      ImportToolkit.SetDialogCount(CustomerImportWorksheetLine.COUNT());
+      IF CustomerImportWorksheetLine.FINDSET THEN
+      REPEAT
+        ImportToolkit.SetDialogCurrent(CustomerImportWorksheetLine."No.");
+        CheckLine(lResult);
+      UNTIL CustomerImportWorksheetLine.NEXT=0;
+
+      ImportToolkit.FinaliseDialog();
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE CheckLine@1000000021(VAR pResult@1000000002 : Integer);
+    VAR
+      lCustomerImportWorksheetLine@1000000003 : Record 9062838;
+      lModify@1000000000 : Boolean;
+      lStatus@1000000001 : Integer;
+    BEGIN
+      ImportErrorManagement.DeleteErrorsAndWarnings(DATABASE::"Customer Import Worksheet Line", CustomerImportWorksheetLine."Postion Text");
+      ImportValidation.SetRecord(DATABASE::"Customer Import Worksheet Hdr.", CustomerImportWorksheetLine, CustomerImportWorksheetLine.FIELDNO("Batch No."),
+        CustomerImportWorksheetHdr."Configuration Template Code");
+
+      lModify := FALSE;
+
+      CheckCustomer();
+
+      ImportValidation.CheckIfFieldNotEmpty(CustomerImportWorksheetLine.FIELDNO("No."), Customer.FIELDNO("No."), FALSE);
+      ImportValidation.CheckIfFieldNotEmpty(CustomerImportWorksheetLine.FIELDNO(Name), Customer.FIELDNO(Name), FALSE);
+
+      CheckGenBusPostingGroup(CustomerImportWorksheetLine."Gen. Bus. Posting Group", lModify);
+      CheckVatBusPostingGroup(CustomerImportWorksheetLine."VAT Bus. Posting Group", lModify);
+      CheckCustomerPostingGroup(CustomerImportWorksheetLine."Customer Posting Group", lModify);
+      CheckCustomerPriceGroup(CustomerImportWorksheetLine."Customer Price Group", lModify);
+      CheckCustomerDiscountGroup(CustomerImportWorksheetLine."Customer Disc. Group", lModify);
+      CheckPaymentMethod(CustomerImportWorksheetLine."Payment Method Code", lModify);
+      CheckPaymentTerms(CustomerImportWorksheetLine."Payment Terms Code", lModify);
+      CheckReminderTerms(CustomerImportWorksheetLine."Reminder Terms Code", lModify);
+      CheckTypeOfSupply(CustomerImportWorksheetLine."Type of Supply Code", lModify);
+      CheckSalespersonPurchaser(CustomerImportWorksheetLine."Salesperson Code", lModify);
+      CheckShipmentMethod(CustomerImportWorksheetLine."Shipment Method Code", lModify);
+      CheckShippingAgent(CustomerImportWorksheetLine."Shipping Agent Code", lModify);
+      CheckCountryRegion(CustomerImportWorksheetLine."Country/Region Code", lModify);
+      CheckCurrency(CustomerImportWorksheetLine."Currency Code", lModify);
+      CheckLanguage(CustomerImportWorksheetLine."Language Code", lModify);
+      CheckVatRegistrationNo(lModify);
+
+      ImportValidation.CheckDimensionValue(1, CustomerImportWorksheetLine."Global Dimension 1 Code", CustomerImportWorksheetHdr."Create Dimension Values");
+      ImportValidation.CheckDimensionValue(2, CustomerImportWorksheetLine."Global Dimension 2 Code", CustomerImportWorksheetHdr."Create Dimension Values");
+      ImportValidation.CheckDimensionValue(3, CustomerImportWorksheetLine."Shortcut Dimension 3 Code", CustomerImportWorksheetHdr."Create Dimension Values");
+      ImportValidation.CheckDimensionValue(4, CustomerImportWorksheetLine."Shortcut Dimension 4 Code", CustomerImportWorksheetHdr."Create Dimension Values");
+      ImportValidation.CheckDimensionValue(5, CustomerImportWorksheetLine."Shortcut Dimension 5 Code", CustomerImportWorksheetHdr."Create Dimension Values");
+      ImportValidation.CheckDimensionValue(6, CustomerImportWorksheetLine."Shortcut Dimension 6 Code", CustomerImportWorksheetHdr."Create Dimension Values");
+      ImportValidation.CheckDimensionValue(7, CustomerImportWorksheetLine."Shortcut Dimension 7 Code", CustomerImportWorksheetHdr."Create Dimension Values");
+      ImportValidation.CheckDimensionValue(8, CustomerImportWorksheetLine."Shortcut Dimension 8 Code", CustomerImportWorksheetHdr."Create Dimension Values");
+
+      ImportValidation.CheckWorkflows(DATABASE::Customer);
+
+      IF (lModify) THEN
+        CustomerImportWorksheetLine.MODIFY(TRUE);
+
+      lCustomerImportWorksheetLine.GET(CustomerImportWorksheetLine."Batch No.", CustomerImportWorksheetLine."No.");
+      lCustomerImportWorksheetLine.CALCFIELDS("No. of Errors", "No. of Warnings");
+      IF (lCustomerImportWorksheetLine."No. of Errors" > 0) THEN
+        lStatus := lCustomerImportWorksheetLine.Status::Error
+      ELSE IF (lCustomerImportWorksheetLine."No. of Warnings" > 0) THEN
+        lStatus := lCustomerImportWorksheetLine.Status::Warning
+      ELSE
+        lStatus := lCustomerImportWorksheetLine.Status::Ready;
+      lCustomerImportWorksheetLine.SetSystemActivity(TRUE);
+      lCustomerImportWorksheetLine.VALIDATE(Status, lStatus);
+      lCustomerImportWorksheetLine.MODIFY(TRUE);
+      lCustomerImportWorksheetLine.SetSystemActivity(FALSE);
+
+      CASE (lCustomerImportWorksheetLine.Status) OF
+        lCustomerImportWorksheetLine.Status::Error:
+          pResult := EnhancedRapidStartSetup."Check Result"::Errors;
+        lCustomerImportWorksheetLine.Status::Warning:
+          IF (pResult <> EnhancedRapidStartSetup."Check Result"::Errors) THEN
+            pResult := EnhancedRapidStartSetup."Check Result"::Warnings;
+      END;
+    END;
+
+    LOCAL PROCEDURE ProcessBatchInternal@1000000000() : Boolean;
+    VAR
+      lCustomerImportWorksheetLine@1000000004 : Record 9062838;
+      lProcessingResult@1000000003 : Boolean;
+      lCustomerInserted@1000000002 : Boolean;
+      lErrorMessage@1000000001 : Text;
+      lStatus@1000000005 : Integer;
+      lResult@1000000006 : Boolean;
+      eErrorsDetected@1000000007 : TextConst 'ENU=Some lines checking resulted in errors. Please correct them before processing.;ENG=Some lines checking resulted in errors. Please correct them before processing.';
+    BEGIN
+      EnhancedRapidStartSetup.VerifyAndGet();
+
+      CustomerImportWorksheetLine.RESET();
+      CustomerImportWorksheetLine.SETRANGE("Batch No.", CustomerImportWorksheetLine."Batch No.");
+      CustomerImportWorksheetLine.SETFILTER(Status, '%1|%2|%3', CustomerImportWorksheetLine.Status::" ", CustomerImportWorksheetLine.Status::Loaded,
+        CustomerImportWorksheetLine.Status::Error);
+      IF ( NOT (CustomerImportWorksheetLine.ISEMPTY())) THEN
+      BEGIN
+        CheckBatchInternal();
+        COMMIT;
+      END;
+
+      CustomerImportWorksheetLine.RESET();
+      CustomerImportWorksheetLine.SETRANGE("Batch No.", CustomerImportWorksheetHdr."Batch No.");
+      CustomerImportWorksheetLine.SETRANGE(Status, CustomerImportWorksheetLine.Status::Error);
+      CustomerImportWorksheetLine.SETFILTER("No. of Errors", '<>0');
+      IF ( NOT (CustomerImportWorksheetLine.ISEMPTY())) THEN
+        ERROR(eErrorsDetected);
+
+      lResult := TRUE;
+      ImportToolkit.InitaliseDialog(tDialogTitle);
+      ImportToolkit.SetDialogProcessingActivity();
+
+      CustomerImportWorksheetLine.RESET();
+      CustomerImportWorksheetLine.SETRANGE(CustomerImportWorksheetLine."Batch No.", CustomerImportWorksheetHdr."Batch No.");
+      CustomerImportWorksheetLine.SETFILTER(Status, '%1|%2', CustomerImportWorksheetLine.Status::Ready, CustomerImportWorksheetLine.Status::Warning);
+      ImportToolkit.SetDialogCount(CustomerImportWorksheetLine.COUNT());
+      IF CustomerImportWorksheetLine.FINDSET THEN
+      BEGIN
+        TurnAutosearchForDuplicatesOff();
+        REPEAT
+          ImportToolkit.SetDialogCurrent(CustomerImportWorksheetLine."No.");
+
+          CLEARLASTERROR();
+          lProcessingResult := ProcessLine(lCustomerInserted);
+          IF ( NOT (lProcessingResult)) THEN
+          BEGIN
+            lErrorMessage := GETLASTERRORTEXT;
+            IF lCustomerInserted THEN
+              IF NOT Customer.DELETE(TRUE) THEN
+                lErrorMessage := lErrorMessage + '; ' + GETLASTERRORTEXT;
+            CreateError(lErrorMessage);
+            lResult := FALSE;
+          END;
+
+          lStatus := TnpToolkit.IIFInteger(lProcessingResult, lCustomerImportWorksheetLine.Status::Processed, lCustomerImportWorksheetLine.Status::Error);
+          lCustomerImportWorksheetLine.GET(CustomerImportWorksheetLine."Batch No.", CustomerImportWorksheetLine."No.");
+          lCustomerImportWorksheetLine.SetSystemActivity(TRUE);
+          lCustomerImportWorksheetLine.VALIDATE(Status, lStatus);
+          lCustomerImportWorksheetLine.MODIFY(TRUE);
+          lCustomerImportWorksheetLine.SetSystemActivity(FALSE);
+
+          IF (lCustomerImportWorksheetLine.Status = lCustomerImportWorksheetLine.Status::Processed) THEN
+            ImportErrorManagement.DeleteErrorsAndWarnings(DATABASE::"Customer Import Worksheet Line", lCustomerImportWorksheetLine.GETPOSITION(FALSE));
+        UNTIL CustomerImportWorksheetLine.NEXT = 0;
+        TurnAutosearchForDuplicatesOn();
+      END;
+
+      ImportToolkit.FinaliseDialog();
+
+      EXIT(lResult);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ProcessLine@1000000001(pCustomerInserted@1000000000 : Boolean);
+    BEGIN
+      ImportValidation.SetRecord(DATABASE::"Customer Import Worksheet Hdr.", CustomerImportWorksheetLine, CustomerImportWorksheetLine.FIELDNO("Batch No."),
+        CustomerImportWorksheetHdr."Configuration Template Code");
+
+      UpdateCustomer(pCustomerInserted);
+
+      UpdateContact(CustomerImportWorksheetLine."Person 1 No.", CustomerImportWorksheetLine."Person 1 Name", CustomerImportWorksheetLine."Person 1 E-Mail",
+        CustomerImportWorksheetLine."Person 1 Phone No.");
+      UpdateContact(CustomerImportWorksheetLine."Person 2 No.", CustomerImportWorksheetLine."Person 2 Name", CustomerImportWorksheetLine."Person 2 E-Mail",
+        CustomerImportWorksheetLine."Person 2 Phone No.");
+      UpdateContact(CustomerImportWorksheetLine."Person 3 No.", CustomerImportWorksheetLine."Person 3 Name", CustomerImportWorksheetLine."Person 3 E-Mail",
+        CustomerImportWorksheetLine."Person 3 Phone No.");
+
+      UpdateDefaultDimension(1, CustomerImportWorksheetLine."Global Dimension 1 Code");
+      UpdateDefaultDimension(2, CustomerImportWorksheetLine."Global Dimension 2 Code");
+      UpdateDefaultDimension(3, CustomerImportWorksheetLine."Shortcut Dimension 3 Code");
+      UpdateDefaultDimension(4, CustomerImportWorksheetLine."Shortcut Dimension 4 Code");
+      UpdateDefaultDimension(5, CustomerImportWorksheetLine."Shortcut Dimension 5 Code");
+      UpdateDefaultDimension(6, CustomerImportWorksheetLine."Shortcut Dimension 6 Code");
+      UpdateDefaultDimension(7, CustomerImportWorksheetLine."Shortcut Dimension 7 Code");
+      UpdateDefaultDimension(8, CustomerImportWorksheetLine."Shortcut Dimension 8 Code");
+    END;
+
+    LOCAL PROCEDURE "--- Checking ---"@1000000032();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CheckCustomer@1000000050();
+    BEGIN
+      IF (Customer.GET(CustomerImportWorksheetLine."No.")) THEN
+        CreateWarning(STRSUBSTNO(tAlreadyExists, Customer.TABLECAPTION));
+    END;
+
+    LOCAL PROCEDURE CheckGenBusPostingGroup@1000000036(VAR pCode@1000000001 : Code[10];VAR pModify@1000000000 : Boolean);
+    VAR
+      lDefaultCode@1000000002 : Code[10];
+    BEGIN
+      lDefaultCode := ImportToolkit.GetGenBusPostGrpFromCountry(CustomerImportWorksheetLine."Country/Region Code");
+      ImportValidation.CheckCodeFieldWithRelationAdv(pCode, lDefaultCode,
+        TRUE, CustomerImportWorksheetHdr."Create Gen. Bus. Post. Groups",
+        CustomerImportWorksheetLine.FIELDCAPTION("Gen. Bus. Posting Group"), Customer.FIELDNO("Gen. Bus. Posting Group"),
+        DATABASE::"Gen. Business Posting Group", ImportErrorLine.Type::Warning, pModify);
+    END;
+
+    LOCAL PROCEDURE CheckVatBusPostingGroup@1000000033(VAR pCode@1000000001 : Code[10];VAR pModify@1000000000 : Boolean);
+    VAR
+      VATBusinessPostingGroup@1000000005 : Record 323;
+      Lvbpg@1000000004 : Code[10];
+      ConfigTemplateLine@1000000003 : Record 8619;
+      CustomerImportHeader@1000000002 : Record 9062837;
+    BEGIN
+      ImportValidation.CheckCodeFieldWithRelationAdv(pCode, EnhancedRapidStartSetup."Def. Cust. VAT Bus. P. G.",
+        TRUE, CustomerImportWorksheetHdr."Create VAT Bus. Posting Groups",
+        CustomerImportWorksheetLine.FIELDCAPTION("VAT Bus. Posting Group"), Customer.FIELDNO("VAT Bus. Posting Group"),
+        DATABASE::"VAT Business Posting Group", ImportErrorLine.Type::Warning, pModify);
+    END;
+
+    LOCAL PROCEDURE CheckCustomerPostingGroup@1000000042(VAR pCode@1000000000 : Code[10];VAR pModify@1000000001 : Boolean);
+    BEGIN
+      ImportValidation.CheckCodeFieldWithRelationAdv(pCode, EnhancedRapidStartSetup."Def. Customer Posting Group",
+        TRUE, CustomerImportWorksheetHdr."Create Customer Posting Groups",
+        CustomerImportWorksheetLine.FIELDCAPTION("Customer Posting Group"), Customer.FIELDNO("Customer Posting Group"),
+        DATABASE::"Customer Posting Group", ImportErrorLine.Type::Warning, pModify);
+    END;
+
+    LOCAL PROCEDURE CheckCustomerPriceGroup@1000000046(VAR pCode@1000000000 : Code[10];VAR pModify@1000000001 : Boolean);
+    BEGIN
+      ImportValidation.CheckCodeFieldWithRelation(pCode, TRUE, CustomerImportWorksheetHdr."Create Customer Price Groups",
+        CustomerImportWorksheetLine.FIELDCAPTION("Customer Price Group"), Customer.FIELDNO("Customer Price Group"),
+        DATABASE::"Customer Price Group", ImportErrorLine.Type::" ", pModify);
+    END;
+
+    LOCAL PROCEDURE CheckCustomerDiscountGroup@1000000039(VAR pCode@1000000005 : Code[10];VAR pModify@1000000000 : Boolean);
+    VAR
+      lDiscCode@1000000004 : Code[10];
+      ConfigTemplateLine@1000000003 : Record 8619;
+      CustomerImportHeader@1000000002 : Record 9062837;
+      CustomerDiscountGroup@1000000001 : Record 340;
+    BEGIN
+      ImportValidation.CheckCodeFieldWithRelation(pCode, TRUE, CustomerImportWorksheetHdr."Create Customer Disc. Groups",
+        CustomerImportWorksheetLine.FIELDCAPTION("Customer Disc. Group"), Customer.FIELDNO("Customer Disc. Group"),
+        DATABASE::"Customer Discount Group", ImportErrorLine.Type::" ", pModify);
+    END;
+
+    LOCAL PROCEDURE CheckPaymentMethod@1000000020(VAR pCode@1000000001 : Code[10];VAR pModify@1000000000 : Boolean);
+    BEGIN
+      ImportValidation.CheckCodeFieldWithRelation(pCode, TRUE, CustomerImportWorksheetHdr."Create Payment Methods",
+        CustomerImportWorksheetLine.FIELDCAPTION("Payment Method Code"), Customer.FIELDNO("Payment Method Code"),
+        DATABASE::"Payment Method", ImportErrorLine.Type::Warning, pModify);
+    END;
+
+    LOCAL PROCEDURE CheckPaymentTerms@1000000005(VAR pCode@1000000001 : Code[10];VAR pModify@1000000000 : Boolean);
+    BEGIN
+      ImportValidation.CheckCodeFieldWithRelation(pCode, TRUE, CustomerImportWorksheetHdr."Create Payment Terms",
+        CustomerImportWorksheetLine.FIELDCAPTION("Payment Terms Code"), Customer.FIELDNO("Payment Terms Code"),
+        DATABASE::"Payment Terms", ImportErrorLine.Type::Warning, pModify);
+    END;
+
+    LOCAL PROCEDURE CheckReminderTerms@1000000006(VAR pCode@1000000001 : Code[10];VAR pModify@1000000000 : Boolean);
+    BEGIN
+      ImportValidation.CheckCodeFieldWithRelation(pCode, FALSE, CustomerImportWorksheetHdr."Create Reminder Terms",
+        CustomerImportWorksheetLine.FIELDCAPTION("Reminder Terms Code"), Customer.FIELDNO("Reminder Terms Code"),
+        DATABASE::"Reminder Terms", ImportErrorLine.Type::" ", pModify);
+    END;
+
+    LOCAL PROCEDURE CheckTypeOfSupply@1000000012(VAR pCode@1000000001 : Code[10];VAR pModify@1000000000 : Boolean);
+    BEGIN
+      ImportValidation.CheckCodeFieldWithRelation(pCode, FALSE, CustomerImportWorksheetHdr."Create Types of Supply",
+        CustomerImportWorksheetLine.FIELDCAPTION("Type of Supply Code"), Customer.FIELDNO("Type of Supply Code"),
+        DATABASE::"Type of Supply", ImportErrorLine.Type::" ", pModify);
+    END;
+
+    LOCAL PROCEDURE CheckSalespersonPurchaser@1000000010(VAR pCode@1000000001 : Code[10];VAR pModify@1000000000 : Boolean);
+    BEGIN
+      ImportValidation.CheckCodeFieldWithRelation(pCode, FALSE, CustomerImportWorksheetHdr."Create Salespeople",
+        CustomerImportWorksheetLine.FIELDCAPTION("Salesperson Code"), Customer.FIELDNO("Salesperson Code"),
+        DATABASE::"Salesperson/Purchaser", ImportErrorLine.Type::" ", pModify);
+    END;
+
+    LOCAL PROCEDURE CheckShipmentMethod@1000000013(VAR pCode@1000000001 : Code[10];VAR pModify@1000000000 : Boolean);
+    VAR
+      lShipmentMethod@1000000004 : Code[10];
+      ConfigTemplateLine@1000000003 : Record 8619;
+      CustomerImportHeader@1000000002 : Record 9062837;
+    BEGIN
+      ImportValidation.CheckCodeFieldWithRelation(pCode, FALSE, CustomerImportWorksheetHdr."Create Shipment Methods",
+        CustomerImportWorksheetLine.FIELDCAPTION("Shipment Method Code"), Customer.FIELDNO("Shipment Method Code"),
+        DATABASE::"Shipment Method", ImportErrorLine.Type::" ", pModify);
+    END;
+
+    LOCAL PROCEDURE CheckShippingAgent@1000000018(VAR pCode@1000000001 : Code[10];VAR pModify@1000000000 : Boolean);
+    BEGIN
+      ImportValidation.CheckCodeFieldWithRelation(pCode, FALSE, CustomerImportWorksheetHdr."Create Shipping Agents",
+        CustomerImportWorksheetLine.FIELDCAPTION("Shipping Agent Code"), Customer.FIELDNO("Shipping Agent Code"),
+        DATABASE::"Shipping Agent", ImportErrorLine.Type::" ", pModify);
+    END;
+
+    LOCAL PROCEDURE CheckCountryRegion@1000000008(VAR pCode@1000000001 : Code[10];VAR pModify@1000000000 : Boolean);
+    BEGIN
+      ImportValidation.CheckCodeFieldWithRelation(pCode, FALSE, CustomerImportWorksheetHdr."Create Countries/Regions",
+        CustomerImportWorksheetLine.FIELDCAPTION("Country/Region Code"), Customer.FIELDNO("Country/Region Code"),
+        DATABASE::"Country/Region", ImportErrorLine.Type::" ", pModify);
+    END;
+
+    LOCAL PROCEDURE CheckCurrency@1000000027(VAR pCode@1000000001 : Code[10];VAR pModify@1000000000 : Boolean);
+    BEGIN
+      ImportValidation.CheckCodeFieldWithRelation(pCode, FALSE, CustomerImportWorksheetHdr."Create Currencies",
+        CustomerImportWorksheetLine.FIELDCAPTION("Currency Code"), Customer.FIELDNO("Currency Code"),
+        DATABASE::Currency, ImportErrorLine.Type::" ", pModify);
+    END;
+
+    LOCAL PROCEDURE CheckLanguage@1000000028(VAR pCode@1000000001 : Code[10];VAR pModify@1000000000 : Boolean);
+    BEGIN
+      ImportValidation.CheckCodeFieldWithRelation(pCode, FALSE, CustomerImportWorksheetHdr."Create Languages",
+        CustomerImportWorksheetLine.FIELDCAPTION("Language Code"), Customer.FIELDNO("Language Code"),
+        DATABASE::Language, ImportErrorLine.Type::" ", pModify);
+    END;
+
+    LOCAL PROCEDURE CheckVatRegistrationNo@1000000043(VAR pModify@1000000004 : Boolean);
+    VAR
+      eVatRegNoUsedForMultiple@1000000000 : TextConst 'ENU=VAT Registration No. "%1" is used for multiple %2.;ENG=VAT Registration No. "%1" is used for multiple %2.';
+      eImportLines@1000000002 : TextConst 'ENU=import lines;ENG=import lines';
+      eCustomers@1000000003 : TextConst 'ENU=customers;ENG=customers';
+      lVatRegistrationNo@1000000001 : Text;
+    BEGIN
+      lVatRegistrationNo := DELCHR(CustomerImportWorksheetLine."VAT Registration No.", '<>', ' ');
+      IF (CustomerImportWorksheetLine."VAT Registration No." <> lVatRegistrationNo) THEN
+      BEGIN
+        CustomerImportWorksheetLine."VAT Registration No." := lVatRegistrationNo;
+        pModify := TRUE;
+      END;
+      IF (CustomerImportWorksheetLine."VAT Registration No." = '') THEN
+        EXIT;
+      CustomerImportWorksheetLine.SETFILTER("No. Filter", '<>%1', CustomerImportWorksheetLine."No.");
+      CustomerImportWorksheetLine.CALCFIELDS("No. of Import VAT Reg. Nos.", "No. of Customer VAT Reg. Nos.");
+      IF (CustomerImportWorksheetLine."No. of Import VAT Reg. Nos." > 0) THEN
+        CreateWarning(STRSUBSTNO(eVatRegNoUsedForMultiple, CustomerImportWorksheetLine."VAT Registration No.", eImportLines));
+      IF (CustomerImportWorksheetLine."No. of Customer VAT Reg. Nos." > 0) THEN
+        CreateWarning(STRSUBSTNO(eVatRegNoUsedForMultiple, CustomerImportWorksheetLine."VAT Registration No.", eCustomers));
+      CustomerImportWorksheetLine.SETRANGE("No. Filter");
+    END;
+
+    LOCAL PROCEDURE "--- Updating ---"@1000000029();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE UpdateCustomer@1000000009(VAR pInserted@1000000000 : Boolean);
+    VAR
+      lCustomerVariant@1000000002 : Variant;
+    BEGIN
+      pInserted := InsertCustomer();
+
+      Customer.VALIDATE(Name, CustomerImportWorksheetLine.Name);
+      Customer.VALIDATE("Name 2", CustomerImportWorksheetLine."Name 2");
+      Customer.VALIDATE(Address, CustomerImportWorksheetLine.Address);
+      Customer.VALIDATE("Address 2", CustomerImportWorksheetLine."Address 2");
+      Customer.VALIDATE(City, CustomerImportWorksheetLine.City);
+      Customer.VALIDATE(County, CustomerImportWorksheetLine.County);
+      Customer.VALIDATE("E-Mail", CustomerImportWorksheetLine."E-Mail");
+      Customer.VALIDATE(GLN, CustomerImportWorksheetLine.GLN);
+      Customer.VALIDATE("Home Page", CustomerImportWorksheetLine."Home Page");
+      Customer.VALIDATE("Phone No.", CustomerImportWorksheetLine."Phone No.");
+      Customer.VALIDATE("Post Code", CustomerImportWorksheetLine."Post Code");
+      Customer.VALIDATE("VAT Registration No.", CustomerImportWorksheetLine."VAT Registration No.");
+      Customer.VALIDATE("Credit Limit (LCY)", CustomerImportWorksheetLine."Credit Limit (LCY)");
+      Customer.VALIDATE(Contact, CustomerImportWorksheetLine.Contact);
+      Customer.VALIDATE("Gen. Bus. Posting Group", ProcessGenBusPostingGroup(CustomerImportWorksheetLine."Gen. Bus. Posting Group"));
+      Customer.VALIDATE("VAT Bus. Posting Group", ProcessVatBusPostingGroup(CustomerImportWorksheetLine."VAT Bus. Posting Group"));
+      Customer.VALIDATE("Customer Posting Group", ProcessCustomerPostingGroup(CustomerImportWorksheetLine."Customer Posting Group"));
+      Customer.VALIDATE("Customer Price Group", ProcessCustomerPriceGroup(CustomerImportWorksheetLine."Customer Price Group"));
+      Customer.VALIDATE("Customer Disc. Group", ProcessCustomerDiscountGroup(CustomerImportWorksheetLine."Customer Disc. Group"));
+      Customer.VALIDATE("Payment Method Code", ProcessPaymentMethod(CustomerImportWorksheetLine."Payment Method Code"));
+      Customer.VALIDATE("Payment Terms Code", ProcessPaymentTerms(CustomerImportWorksheetLine."Payment Terms Code"));
+      Customer.VALIDATE("Reminder Terms Code", ProcessReminderTerms(CustomerImportWorksheetLine."Reminder Terms Code"));
+      Customer.VALIDATE("Type of Supply Code", ProcessTypeOfSupply(CustomerImportWorksheetLine."Type of Supply Code"));
+      Customer.VALIDATE("Salesperson Code", ProcessSalespersonPurchaser(CustomerImportWorksheetLine."Salesperson Code"));
+      Customer.VALIDATE("Shipment Method Code", ProcessShipmentMethod(CustomerImportWorksheetLine."Shipment Method Code"));
+      Customer.VALIDATE("Shipping Agent Code", ProcessShippingAgent(CustomerImportWorksheetLine."Shipping Agent Code"));
+      Customer.VALIDATE("Country/Region Code", ProcessCountryRegion(CustomerImportWorksheetLine."Country/Region Code"));
+      Customer.VALIDATE("Currency Code", ProcessCurrency(CustomerImportWorksheetLine."Currency Code"));
+      Customer.VALIDATE("Language Code", ProcessLanguage(CustomerImportWorksheetLine."Language Code"));
+      Customer.VALIDATE("Global Dimension 1 Code", ProcessDimensionValue(1, CustomerImportWorksheetLine."Global Dimension 1 Code"));
+      Customer.VALIDATE("Global Dimension 2 Code", ProcessDimensionValue(2, CustomerImportWorksheetLine."Global Dimension 2 Code"));
+      Customer.MODIFY(TRUE);
+
+      lCustomerVariant := Customer;
+      ImportToolkit.TransferEnhancedFields(CustomerImportWorksheetLine, lCustomerVariant);
+      Customer := lCustomerVariant;
+    END;
+
+    LOCAL PROCEDURE InsertCustomer@1000000002() : Boolean;
+    VAR
+      lRecordRef@1000000001 : RecordRef;
+      lResult@1000000000 : Boolean;
+    BEGIN
+      //DOC NH2016.14 - Inserting a new customer (with application of configuration template if present
+      //  <- TRUE = Customer inserted, FALSE = Customer already there
+
+      lResult := FALSE;
+
+      IF ( NOT (Customer.GET(CustomerImportWorksheetLine."No."))) THEN
+      BEGIN
+        CLEAR(Customer);
+        Customer.INIT();
+        Customer.VALIDATE("No.", CustomerImportWorksheetLine."No.");
+        Customer.INSERT(TRUE);
+        lRecordRef.GETTABLE(Customer);
+        IF (ImportToolkit.ApplyConfigTemplate(CustomerImportWorksheetHdr."Configuration Template Code", lRecordRef)) THEN
+        BEGIN
+          lRecordRef.SETTABLE(Customer);
+          Customer.MODIFY(TRUE);
+        END;
+        CreateLogEntry(Customer);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE UpdateDefaultDimension@1000000056(pDimensionNumber@1000000000 : Integer;pDimensionValueCode@1000000001 : Code[20]);
+    BEGIN
+      //DOC NH2016.14 - Updating default dimension (and creates it if it doesn't exist)
+      //  -> pDimensionNumber: Dimension number (between 1 and 8)
+      //  -> pDimensionValueCode: Dimension value code
+
+      ImportValidation.UpdateDefaultDimension(DATABASE::Customer, Customer."No.", pDimensionNumber, pDimensionValueCode,
+        CustomerImportWorksheetHdr."Create Dimension Values");
+    END;
+
+    LOCAL PROCEDURE UpdateContact@1000000004(pNo@1000000000 : Code[20];pName@1000000001 : Text[40];pEMail@1000000002 : Text[80];pPhoneNo@1000000003 : Text[30]) : Boolean;
+    VAR
+      lContact@1000000004 : Record 5050;
+      lContactBusinessRelation@1000000006 : Record 5054;
+    BEGIN
+      //DOC NH2016.14 - Updating a contact
+      //  -> pNo: Contact no.
+      //  -> pName: Contact name
+      //  -> pEMail: Contact e-mail
+      //  -> pPhoneNo: Contact phone no.
+      //  <- TRUE = Created, FALSE = Not
+
+      IF ((pNo = '') OR (pName = '')) THEN
+        EXIT(FALSE);
+
+      lContactBusinessRelation.RESET();
+      lContactBusinessRelation.SETRANGE("Business Relation Code",'CUST');
+      lContactBusinessRelation.SETRANGE("Link to Table", lContactBusinessRelation."Link to Table"::Customer);
+      lContactBusinessRelation.SETRANGE("No.", Customer."No.");
+      lContactBusinessRelation.SETFILTER("Contact No.", '<>''''');
+      IF ( NOT (lContactBusinessRelation.FINDFIRST())) THEN
+        CLEAR(lContactBusinessRelation);
+
+      IF ( NOT (lContact.GET(pNo))) THEN
+      BEGIN
+        CLEAR(lContact);
+        lContact.INIT();
+        lContact.VALIDATE(Type, lContact.Type::Person);
+        lContact.VALIDATE("No.", pNo);
+        IF (lContactBusinessRelation."Contact No." <> '') THEN
+          lContact.VALIDATE("Company No.", lContactBusinessRelation."Contact No.");
+        lContact.VALIDATE(Name, pName);
+        lContact.VALIDATE("E-Mail", pEMail);
+        lContact.VALIDATE("Phone No.", pPhoneNo);
+        lContact.INSERT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Processing ---"@1000000053();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ProcessGenBusPostingGroup@1000000038(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lGenBusinessPostingGroup@1000000001 : Record 250;
+    BEGIN
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Gen. Business Posting Group", lGenBusinessPostingGroup.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessVatBusPostingGroup@1000000037(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lVavBusinessPostingGroup@1000000001 : Record 323;
+    BEGIN
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"VAT Business Posting Group", lVavBusinessPostingGroup.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessCustomerPostingGroup@1000000041(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lCustomerPostingGroup@1000000001 : Record 92;
+    BEGIN
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Customer Posting Group", 0));
+    END;
+
+    LOCAL PROCEDURE ProcessCustomerPriceGroup@1000000061(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lCustomerPriceGroup@1000000001 : Record 6;
+    BEGIN
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Customer Price Group", lCustomerPriceGroup.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessCustomerDiscountGroup@1000000040(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lCustomerDiscountGroup@1000000001 : Record 340;
+    BEGIN
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Customer Discount Group", lCustomerDiscountGroup.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessPaymentMethod@1000000030(pCode@1000000001 : Code[10]) : Code[10];
+    VAR
+      lPaymentMethod@1000000000 : Record 289;
+    BEGIN
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Payment Method", lPaymentMethod.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessPaymentTerms@1000000026(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lPaymentTerms@1000000001 : Record 3;
+    BEGIN
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Payment Terms", lPaymentTerms.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessReminderTerms@1000000011(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lReminderTerms@1000000001 : Record 292;
+    BEGIN
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Reminder Terms", lReminderTerms.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessTypeOfSupply@1000000031(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lTypeOfSupply@1000000001 : Record 10500;
+    BEGIN
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Type of Supply", lTypeOfSupply.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessSalespersonPurchaser@1000000070(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lSalespersonPurchaser@1000000001 : Record 13;
+    BEGIN
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Salesperson/Purchaser", lSalespersonPurchaser.FIELDNO(Name)));
+    END;
+
+    LOCAL PROCEDURE ProcessShipmentMethod@1000000024(pCode@1000000001 : Code[10]) : Code[10];
+    VAR
+      lShipmentMethod@1000000000 : Record 10;
+    BEGIN
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Shipment Method", lShipmentMethod.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessShippingAgent@1000000017(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lShippingAgent@1000000001 : Record 291;
+    BEGIN
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Shipping Agent", lShippingAgent.FIELDNO(Name)));
+    END;
+
+    LOCAL PROCEDURE ProcessCountryRegion@1000000016(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lCountryRegion@1000000004 : Record 9;
+    BEGIN
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::"Country/Region", lCountryRegion.FIELDNO(Name)));
+    END;
+
+    LOCAL PROCEDURE ProcessCurrency@1000000023(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lCurrency@1000000001 : Record 4;
+    BEGIN
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::Currency, lCurrency.FIELDNO(Description)));
+    END;
+
+    LOCAL PROCEDURE ProcessLanguage@1000000022(pCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      lLanguage@1000000001 : Record 8;
+    BEGIN
+      EXIT(ImportValidation.ProcessCodeFieldWithRelation(pCode, DATABASE::Language, lLanguage.FIELDNO(Name)));
+    END;
+
+    LOCAL PROCEDURE ProcessDimensionValue@1000000014(pDimensionNumber@1000000001 : Integer;pDimensionValueCode@1000000000 : Code[20]) : Code[20];
+    BEGIN
+      EXIT(ImportValidation.ProcessDimensionValue(pDimensionNumber, pDimensionValueCode, CustomerImportWorksheetHdr."Create Dimension Values"));
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@1000000003();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CreateError@1000000007(pErrorMessage@1000000000 : Text);
+    BEGIN
+      //DOC NH2016.14 - Creating an error entry with specified error message
+      //  -> pErrorMessage: The error message
+
+      ImportErrorManagement.CreateError(DATABASE::"Customer Import Worksheet Line", CustomerImportWorksheetLine.GETPOSITION(FALSE), pErrorMessage);
+    END;
+
+    LOCAL PROCEDURE CreateWarning@1000000049(pErrorMessage@1000000000 : Text);
+    BEGIN
+      //DOC NH2016.14 - Creating a warning entry with specified error message
+      //  -> pErrorMessage: The error message
+
+      ImportErrorManagement.CreateWarning(DATABASE::"Customer Import Worksheet Line", CustomerImportWorksheetLine.GETPOSITION(FALSE), pErrorMessage);
+    END;
+
+    LOCAL PROCEDURE CreateLogEntry@1000000060(pRecord@1000000000 : Variant);
+    VAR
+      lRecordRef@1000000001 : RecordRef;
+    BEGIN
+      //DOC NH2016.14 - Creating log entry for specified record
+      //  -> pRecord: The record
+
+      lRecordRef.GETTABLE(pRecord);
+      ImportToolkit.CreateLogEntry(lRecordRef, CustomerImportWorksheetHdr."Batch No.", DATABASE::"Customer Import Worksheet Hdr.", CustomerImportWorksheetLine);
+    END;
+
+    LOCAL PROCEDURE TurnAutosearchForDuplicatesOff@1000000054();
+    BEGIN
+      //DOC NH2016.14 - Turning marketing setup autosearch for duplicates flag off not to bother during customers update
+
+      MarketingSetup.GET();
+      IF (MarketingSetup."Autosearch for Duplicates") THEN
+      BEGIN
+        MarketingSetup."Autosearch for Duplicates" := FALSE;
+        MarketingSetup.MODIFY();
+        AutosearchForDuplicatesOff := TRUE;
+      END
+      ELSE
+        AutosearchForDuplicatesOff := FALSE;
+    END;
+
+    LOCAL PROCEDURE TurnAutosearchForDuplicatesOn@1000000055();
+    BEGIN
+      //DOC NH2016.14 - Turning marketing setup autosearch for duplicates back on if it has been switched off before
+
+      IF (AutosearchForDuplicatesOff) THEN
+      BEGIN
+        MarketingSetup."Autosearch for Duplicates" := TRUE;
+        MarketingSetup.MODIFY();
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NH2016.14 AP 07/03/2016 - Created
+      //DOC NH2016.14 JH 23/03/2016 - Bugfixes
+      //DOC NH2016.16 JH 24/05/2016 - Bugfixes
+    }
+    END.
+  }
+}
+

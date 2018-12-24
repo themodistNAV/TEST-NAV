@@ -1,0 +1,476 @@
+OBJECT Codeunit 9062709 Sana Depl. Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            DeployNewInstall();
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1000000002 : TextConst 'ENU=Unable to perform the DeployNewInstall operation in the Sana Deployment Mgt. Cdodeunit.;ENG=Unable to perform the DeployNewInstall operation in the Sana Deployment Mgt. Cdodeunit.';
+      Text002@1000000000 : TextConst 'ENU=No answer value is specified for the System Behaviour ''%2''.\\%3;ENG=No answer value is specified for the System Behaviour ''%2''.\\%3';
+      Text003@1000000001 : TextConst 'ENU=The folder %1 (derived from the %2 ''%3'') does not exist.\\%4;ENG=The folder %1 (derived from the %2 ''%3'') does not exist.\\%4';
+      cfgNavSanaWSUrl@1000000014 : Text;
+      cfgNavWSUserDomain@1000000019 : Text;
+      cfgNavWSUserName@1000000015 : Text;
+      cfgNavWSUserPassword@1000000016 : Text;
+      cfgSmtpServer@1000000012 : Text[40];
+      cfgSmtpPort@1000000011 : Text[10];
+      cfgSqlIntegSecurity@1000000010 : Text[20];
+      cfgSqlServer@1000000009 : Text[30];
+      cfgSqlDatabase@1000000008 : Text[40];
+      cfgSqlUser@1000000007 : Text[20];
+      cfgSqlUserPassword@1000000006 : Text[20];
+      cfgWebAdminUserLogin@1000000017 : Text;
+      cfgWebAdminUserPassword@1000000018 : Text;
+      cfgWebAppName@1000000005 : Text[40];
+      cfgWebAppPath@1000000004 : Text[100];
+      cfgWebBaseUrl@1000000024 : Text;
+      cfgWebBinding@1000000003 : Text;
+      cfgWebDeployMode@1000000013 : Text;
+      cfgWebSWAppConfigFile@1000000029 : Text;
+      cfgWebSWInstallExeInnerPath@1000000031 : Text;
+      cfgWebSWInstallExeFile@1000000032 : Text;
+      cfgWebSWInstallFile@1000000028 : Text;
+      cfgWebSWInstallPath@1000000025 : Text;
+      cfgWebSWLicensePath@1000000026 : Text;
+      cfgWebSWDownloadPath@1000000030 : Text;
+      diaBox@1000000020 : Dialog;
+      diaText@1000000021 : Text;
+      diaStep@1000000022 : Decimal;
+      diaStatus@1000000023 : Text;
+      sanaPsScripts@1000000027 : Codeunit 9062710;
+
+    PROCEDURE DeployNewInstall@1000000008();
+    VAR
+      eText@1000000000 : TextConst 'ENU=Rapid Sana Deployment Step %1 Status %2;ENG=Rapid Sana Deployment Step %1 Status %2';
+      eInitiailisingStatus@1000000001 : TextConst 'ENU=Initialising;ENG=Initialising';
+      eProcessingStatus@1000000002 : TextConst 'ENU=Processing;ENG=Processing';
+      eConfirmation01@1000000003 : TextConst 'ENU=do you want to validate the configs?;ENG=do you want to validate the configs?';
+      eConfirmation02@1000000004 : TextConst 'ENU=do you want to setup the NAV data?;ENG=do you want to setup the NAV data?';
+      eConfirmation03@1000000005 : TextConst 'ENU=do you want to download the install files?;ENG=do you want to download the install files?';
+      eConfirmation04@1000000006 : TextConst 'ENU=do you want to create the installation config file?;ENG=do you want to create the installation config file?';
+      eConfirmation05@1000000007 : TextConst 'ENU=do you want to initiate the installation?;ENG=do you want to initiate the installation?';
+      eConfirmation06@1000000008 : TextConst 'ENU=do you want to complete the online setup?;ENG=do you want to complete the online setup?';
+      eFinishedStatus@1000000009 : TextConst 'ENU=Finished;ENG=Finished';
+    BEGIN
+      diaText := STRSUBSTNO(eText, '#1', PADSTR('#2', 30, '#'));
+      diaStep := 0;
+      diaStatus := eInitiailisingStatus;
+      diaBox.OPEN(diaText, diaStep, diaStatus);
+      diaBox.UPDATE();
+
+      //STEP 01: check all required configuration settings are available...
+      diaStep := 1; diaStatus := eProcessingStatus; diaBox.UPDATE();
+      IF CONFIRM(eConfirmation01, FALSE) THEN
+        ValidateRequiredConfigs();
+
+      //STEP 02: get NAV setup...
+      diaStep := 2; diaStatus := eProcessingStatus; diaBox.UPDATE();
+      IF CONFIRM(eConfirmation02, FALSE) THEN
+        SetupNavData();
+
+      //SETP 03: get the required install files from the TNP content server...
+      diaStep := 3; diaStatus := eProcessingStatus; diaBox.UPDATE();
+      IF CONFIRM(eConfirmation03, FALSE) THEN
+        CopyInstallFiles();
+
+      //STEP 04: create the software installation config file...
+      diaStep := 4; diaStatus := eProcessingStatus; diaBox.UPDATE();
+      IF CONFIRM(eConfirmation04, FALSE) THEN
+        CreateInstallConfigFile();
+
+      //STEP 05: initiate the software installation process...
+      diaStep := 5; diaStatus := eProcessingStatus; diaBox.UPDATE();
+      IF CONFIRM(eConfirmation05, FALSE) THEN
+        InitiateInstall();
+
+      //STEP 06: complete the online setup...
+      diaStep := 6; diaStatus := eProcessingStatus; diaBox.UPDATE();
+      IF CONFIRM(eConfirmation06, FALSE) THEN
+        CompleteSetupOnline(cfgWebBaseUrl, cfgWebAdminUserLogin, cfgWebAdminUserPassword, cfgNavSanaWSUrl, cfgNavWSUserDomain, cfgNavWSUserName, cfgNavWSUserPassword);
+
+      diaStep := 6; diaStatus := eFinishedStatus; diaBox.UPDATE();
+    END;
+
+    LOCAL PROCEDURE "--- Installation sequence ---"@1000000006();
+    BEGIN
+    END;
+
+    PROCEDURE ValidateRequiredConfigs@1000000009();
+    VAR
+      defaultWebBindingPort@1000000013 : Integer;
+      dir@1000000011 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+      env@1000000015 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Environment";
+      fs@1000000016 : Codeunit 9062264;
+      isTNPhosted@1000000009 : Boolean;
+      NASetup@1000000008 : Record 9062229;
+      NAVWSBaseUrl@1000000010 : Text;
+      PSMSetup@1000000012 : Record 9062714;
+      SMTPSetup@1000000007 : Record 409;
+      sysBehav@1000000006 : Record 9062230;
+      sysUri@1000000014 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Uri";
+      tenantNumber@1000000005 : Text;
+      tenantText@1000000004 : Text;
+      uniqueInstallId@1000000003 : Text;
+      webClientUrl@1000000002 : Text;
+      webBindingPort@1000000001 : Integer;
+      webUrlServerName@1000000000 : Text;
+      eSettingDefaultsStatus@1000000017 : TextConst 'ENU=Setting Defaults;ENG=Setting Defaults';
+      eCheckingSystemInfoStatus@1000000018 : TextConst 'ENU=Checking System Info;ENG=Checking System Info';
+      eBetaDeployMode@1000000019 : TextConst 'ENU=beta;ENG=beta';
+      eDevDeployMode@1000000022 : TextConst 'ENU=dev;ENG=dev';
+      eTestDeployMode@1000000020 : TextConst 'ENU=test;ENG=test';
+      eLiveDeployMode@1000000021 : TextConst 'ENU=live;ENG=live';
+      eCheckingWebServiceInfoStatus@1000000023 : TextConst 'ENU=Checking Web Service Info;ENG=Checking Web Service Info';
+      eCheckingSqlInfoStatus@1000000024 : TextConst 'ENU=Checking SQL Info;ENG=Checking SQL Info';
+      eCheckingSmtpInfoStatus@1000000025 : TextConst 'ENU=Checking SMTP Info;ENG=Checking SMTP Info';
+      eCheckingPowerShellInfoStatus@1000000026 : TextConst 'ENU=Checking PowerShell Info;ENG=Checking PowerShell Info';
+      eCheckingSanaInfoStatus@1000000027 : TextConst 'ENU=Checking Sana Info;ENG=Checking Sana Info';
+    BEGIN
+      //hard-coded default values...
+      diaStep := 1.1; diaStatus := eSettingDefaultsStatus; diaBox.UPDATE();
+      defaultWebBindingPort := 90000;
+
+      //Required System Info:
+      //  Unique System ID --> NASetup."System ID"
+      //  System Mode --> NASetup."System Mode"
+      diaStep := 1.1; diaStatus := eCheckingSystemInfoStatus; diaBox.UPDATE();
+      NASetup.GET();
+      NASetup.TESTFIELD("System ID");
+      uniqueInstallId := 'SANA_' + NASetup."System ID" + '_' + UPPERCASE(FORMAT(NASetup."System Mode"));
+      CASE NASetup."System Mode" OF
+        NASetup."System Mode"::Demo : cfgWebDeployMode := eBetaDeployMode;
+        NASetup."System Mode"::Dev : cfgWebDeployMode := eTestDeployMode;   //no dev option available in sana install
+        NASetup."System Mode"::Test : cfgWebDeployMode := eTestDeployMode;
+        NASetup."System Mode"::Live : cfgWebDeployMode := eLiveDeployMode;
+      END;
+      GetValidSysBehaviourText('WEBCONTENTSERVER');  //no need to get the value as it's used by default later, but check it exists!
+
+      //Required NAV Web Service Info:
+      //  NAV Web Service User Domain -->
+      //  NAV Web Service User Name
+      //  NAV Web Service User Password
+      diaStep := 1.2; diaStatus := eCheckingWebServiceInfoStatus; diaBox.UPDATE();
+      cfgNavWSUserDomain := env.GetEnvironmentVariable('USERDNSDOMAIN');
+      IF (cfgNavWSUserDomain = 'NAVONDEMAND') THEN
+        isTNPhosted := TRUE;
+      NAVWSBaseUrl := GETURL(CLIENTTYPE::SOAP);
+      NAVWSBaseUrl := COPYSTR(NAVWSBaseUrl, 1, STRPOS(NAVWSBaseUrl, 'Services') -1) + sysUri.EscapeDataString(COMPANYNAME);
+      cfgNavSanaWSUrl := NAVWSBaseUrl + '/Codeunit/SANA_NAV_WebService';
+      cfgNavWSUserName := GetValidSysBehaviourText('SANA_NAVWS_USER_NAME');
+      cfgNavWSUserPassword := GetValidSysBehaviourText('SANA_NAVWS_USER_PASS');
+
+      //Required SQL Info:
+      //  SQL Server Name --> System Behaviour (SQL_SERVER_NAME)
+      //  SQL Server Authentication Type (SQL, Windows) --> System Behaviour (SQL_AUTHENTICATION)
+      //  SQL Auth User Login --> System Behaviour (SQL_LOGIN)
+      //  SQL Auth User Password --> System Behaviour (SQL_PASSWORD)
+      diaStep := 1.3; diaStatus := eCheckingSqlInfoStatus; diaBox.UPDATE();
+      cfgSqlServer := GetValidSysBehaviourText('SQL_SERVER_NAME');
+      cfgSqlDatabase := uniqueInstallId;
+      IF (UPPERCASE(GetValidSysBehaviourText('SQL_AUTHENTICATION')) = 'WINDOWS') THEN BEGIN
+        cfgSqlIntegSecurity := 'true';
+      END ELSE BEGIN
+        cfgSqlIntegSecurity := 'false';
+        cfgSqlUser := GetValidSysBehaviourText('SQL_LOGIN');
+        cfgSqlUserPassword := GetValidSysBehaviourText('SQL_PASSWORD');
+      END;
+
+      //Required SMTP Info:
+      //  SMTP Server Name --> SMTPSetup."SMTP Server"
+      //  SMTP Server Port --> SMTPSetup."SMTP Server Port"
+      diaStep := 1.4; diaStatus := eCheckingSmtpInfoStatus; diaBox.UPDATE();
+      SMTPSetup.GET();
+      SMTPSetup.TESTFIELD("SMTP Server");
+      SMTPSetup.TESTFIELD("SMTP Server Port");
+      cfgSmtpServer := SMTPSetup."SMTP Server";
+      cfgSmtpPort := FORMAT(SMTPSetup."SMTP Server Port");
+
+      //Required PowerShell Info:
+      //  PowerShell Mgt. Server Name --> PSMSetup."Default Server Name"
+      //  PowerShell Mgt. User Login --> PSMSetup.GetLoginID
+      //  PowerShell Mgt. User Password --> PSMSetup.GetPassword
+      diaStep := 1.5; diaStatus := eCheckingPowerShellInfoStatus; diaBox.UPDATE();
+      PSMSetup.GET();
+      PSMSetup.TESTFIELD("Default Server Name");
+      PSMSetup.TESTFIELD("User ID Store");
+      PSMSetup.TESTFIELD("Password Store");
+
+      //Required Sana Info:
+      //  Sana Admin User Email Address --> System Behaviour (SANA_ADMIN_EMAIL)
+      //  Sana Admin User Password --> System Behaviour (SANA_ADMIN_PASSWORD)
+      //  Sana License (if we can answer with a file!!)
+      diaStep := 1.6; diaStatus := eCheckingSanaInfoStatus; diaBox.UPDATE();
+      cfgWebAdminUserLogin := GetValidSysBehaviourText('SANA_ADMIN_EMAIL');
+      cfgWebAdminUserPassword := GetValidSysBehaviourText('SANA_ADMIN_PASSWORD');
+      cfgWebAppName := uniqueInstallId;
+      cfgWebAppPath := GetValidFolderPath('SANA_WEB_FOLDER', FALSE) + cfgWebAppName;
+      cfgWebBaseUrl := 'http://localhost';
+      cfgWebBinding := cfgWebBaseUrl + ':' + FORMAT(defaultWebBindingPort);
+      IF (isTNPhosted) THEN BEGIN
+        //get the integer value from the tenant id & add to default port number...
+        tenantText := TENANTID;
+        tenantNumber := DELCHR(tenantText,'=',DELCHR(tenantText,'=','1234567890'));
+        IF (STRLEN(tenantNumber) = 0) THEN
+          tenantNumber := '1';
+        EVALUATE(webBindingPort, tenantNumber);
+        webBindingPort += defaultWebBindingPort;
+        IF (cfgWebDeployMode = 'demo') THEN BEGIN
+          cfgWebBaseUrl := 'http://sanademo.navondemand.co.uk';
+          cfgWebBinding += ',' + cfgWebBaseUrl + ':' + FORMAT(webBindingPort);
+        END;
+      END;
+      cfgWebSWDownloadPath := GetValidSysBehaviourText('SANA_SW_DOWNLOAD');
+      IF (COPYSTR(cfgWebSWDownloadPath, STRLEN(cfgWebSWDownloadPath), 1) <> '/') THEN
+        cfgWebSWDownloadPath += '/';
+      cfgWebSWInstallFile := GetValidSysBehaviourText('SANA_SW_ZIP_FILENAME');
+      cfgWebSWAppConfigFile := GetValidSysBehaviourText('SANA_SW_APPCONFIG');
+      cfgWebSWLicensePath := GetValidFolderPath('SANA_LICENSE_FOLDER', TRUE);
+      cfgWebSWInstallExeInnerPath := GetValidSysBehaviourText('SANA_EXE_INNERPATH');
+      cfgWebSWInstallPath := fs.GetTempPath(FALSE) + 'SanaRapidInstall\';
+      fs.CreateFolderStructure(FALSE, cfgWebSWInstallPath);
+    END;
+
+    LOCAL PROCEDURE SetupNavData@1000000003();
+    VAR
+      sanaUserName@1000000005 : Text;
+      sanaUserNameFull@1000000004 : Text;
+      sanaWsName@1000000001 : Text;
+      user@1000000003 : Record 2000000120;
+      ws@1000000000 : Record 2000000076;
+      eUserName@1000000002 : TextConst 'ENU=SANA-ADMIN;ENG=SANA-ADMIN';
+      eUserNameFull@1000000006 : TextConst 'ENU=Sana Commerce User;ENG=Sana Commerce User';
+      eWebServiceName@1000000007 : TextConst 'ENU=SANA NAV Web Service;ENG=SANA NAV Web Service';
+      eCheckingWebServiceStatus@1000000008 : TextConst 'ENU=Checking Web Service;ENG=Checking Web Service';
+      eSettingUpWebServiceStatus@1000000009 : TextConst 'ENU=Setting Up Web Service;ENG=Setting Up Web Service';
+      eAddingEnhancedRolesStatus@1000000010 : TextConst 'ENU=Adding Enhanced Roles;ENG=Adding Enhanced Roles';
+      eAwaiting@1000000011 : TextConst 'ENU=Awaiting delta file and PowerShell script to be applied.\\Continue anyway?;ENG=Awaiting delta file and PowerShell script to be applied.\\Continue anyway?';
+      eStopped@1000000012 : TextConst 'ENU=Stopped right here;ENG=Stopped right here';
+      eAddingSanaUserStatus@1000000013 : TextConst 'ENU=Adding SANA user;ENG=Adding SANA user';
+      eAssigningPermissionSetsStatus@1000000014 : TextConst 'ENU=Assigning Permission Sets;ENG=Assigning Permission Sets';
+      eManagerPermissionSet@1000000015 : TextConst 'ENU=SC-MANAGER;ENG=SC-MANAGER';
+      eSanaPermissionSet@1000000016 : TextConst 'ENU=SC-SANA;ENG=SC-SANA';
+      eSysAdminPermissionSet@1000000017 : TextConst 'ENU=SC-SYSADMIN;ENG=SC-SYSADMIN';
+      eUserPermissionSet@1000000018 : TextConst 'ENU=SC-USER;ENG=SC-USER';
+      eEnablingSanaCommerceStatus@1000000019 : TextConst 'ENU=Enabling Sana Commerce;ENG=Enabling Sana Commerce';
+    BEGIN
+      //this function requires Sana objects.  once objects have been merged:
+      //  add local variables listed below
+      //  uncomment lines prefixed with: ADD-BACK-AFTER-OBJECT-MERGE
+
+      //REQUIRED SANA OBJECT LOCAL VARIABLES:
+      //Name        DataTypeSubtype          Length
+      //sanaSettingsCodeunitCodeunit11123311
+      //sanaSetup     Record    Table11123305
+
+      //assignment of local variables used below...
+      sanaUserName      := eUserName;        //used to create NAV User for Sana
+      sanaUserNameFull  := eUserNameFull;
+      sanaWsName        := eWebServiceName;  //used to name the Published NAV web service
+
+      diaStep := 2.0; diaStatus := eCheckingWebServiceStatus; diaBox.UPDATE();
+
+      // #01: Check for/Publish "SC - NAV Web Service" Codeunit (11123303)
+      IF (NOT ws.GET(0, sanaWsName)) THEN BEGIN
+        diaStep := 2.1; diaStatus := eSettingUpWebServiceStatus; diaBox.UPDATE();
+        ws.INIT;
+        ws."Object ID" := 11123303;
+        ws."Object Type" := 0;  //codeunit
+        ws."Service Name" := sanaWsName;
+        ws.Published := TRUE;
+        ws.INSERT();
+      END;
+
+      //#02: Trigger the function to 'Add Enhanced Roles (CfMD)' from Setup > Navigate > Roles & Permissions
+      diaStep := 2.2; diaStatus := eAddingEnhancedRolesStatus; diaBox.UPDATE();
+      IF (NOT CONFIRM(eAwaiting,TRUE)) THEN
+        ERROR(eStopped);
+      //ADD-BACK-AFTER-OBJECT-MERGE: sanaSettings.SetRolesPermissions();
+
+      //#03: Add user (with same authorisation as NAV service)
+      user.SETRANGE(user."User Name", sanaUserName);
+      IF (NOT user.FINDFIRST()) THEN BEGIN
+        diaStep := 2.3; diaStatus := eAddingSanaUserStatus; diaBox.UPDATE();
+        user.INIT();
+        user."User Security ID" := CREATEGUID();
+        user."User Name" := sanaUserName;
+        user."Full Name" := sanaUserNameFull;
+        user."License Type" := user."License Type"::"Full User";
+        user.State := user.State::Enabled;
+        user.INSERT(TRUE);
+      END;
+
+      //#04: Add SC-* Permission Sets to the new SANA user
+      diaStep := 2.4; diaStatus := eAssigningPermissionSetsStatus; diaBox.UPDATE();
+      AddUserAccess(sanaUserName, eManagerPermissionSet);
+      AddUserAccess(sanaUserName, eSanaPermissionSet);
+      AddUserAccess(sanaUserName, eSysAdminPermissionSet);
+      AddUserAccess(sanaUserName, eUserPermissionSet);
+
+      //#05: Flagging "Enable Sana Setup" on Setup
+      diaStep := 2.5; diaStatus := eEnablingSanaCommerceStatus; diaBox.UPDATE();
+      //ADD-BACK-AFTER-OBJECT-MERGE: sanaSetup.GET();
+      //ADD-BACK-AFTER-OBJECT-MERGE: sanaSetup.VALIDATE("Enable Sana Commerce", TRUE);
+      //ADD-BACK-AFTER-OBJECT-MERGE: sanaSetup.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE CopyInstallFiles@1000000025();
+    VAR
+      dnldMgt@1000000000 : Codeunit 9062687;
+      f@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+      relativeBaseUrl@1000000002 : Text;
+      relativeUrl@1000000003 : Text;
+      tempFileName@1000000004 : Text;
+      destFileName@1000000005 : Text;
+      eCopying@1000000006 : TextConst 'ENU=Copying %1 from %2 to %3;ENG=Copying %1 from %2 to %3';
+    BEGIN
+      relativeBaseUrl := cfgWebSWDownloadPath;
+      relativeUrl := relativeBaseUrl + cfgWebSWInstallFile;
+      destFileName := cfgWebSWInstallPath + cfgWebSWInstallFile;
+      diaStep := 3; diaStatus := STRSUBSTNO(eCopying, cfgWebSWInstallFile, relativeBaseUrl, cfgWebSWInstallPath); diaBox.UPDATE();
+      dnldMgt.DownloadToFile(relativeUrl, tempFileName);
+      IF (f.Exists(destFileName)) THEN
+        f.Delete(destFileName);
+      f.Move(tempFileName, destFileName);
+    END;
+
+    LOCAL PROCEDURE InitiateInstall@1000000004();
+    VAR
+      configFilePath@1000000001 : Text;
+      PsScript@1000000000 : Text;
+      WebSWInstallExefile@1000000002 : Text;
+      eConfirmation@1000000003 : TextConst 'ENU=Last time running this broke the service. Do you want to try it again?;ENG=Last time running this broke the service. Do you want to try it again?';
+    BEGIN
+      WebSWInstallExefile := COPYSTR(cfgWebSWAppConfigFile, 1, STRPOS(cfgWebSWAppConfigFile, '.config') - 1);
+      PsScript := sanaPsScripts.GetPsScriptToInstallSanaSoftware(cfgWebSWInstallPath, cfgWebSWInstallFile, cfgWebSWInstallExeInnerPath, WebSWInstallExefile, cfgWebSWAppConfigFile);
+      IF (CONFIRM(eConfirmation, FALSE)) THEN
+        ExecutePowerShellScript(PsScript);
+    END;
+
+    PROCEDURE CreateInstallConfigFile@1000000001();
+    VAR
+      strWr@1000000025 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamWriter";
+      f@1000000000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+      filepath@1000000001 : Text;
+    BEGIN
+      //this function creates the Xxx.exe.config file for a manual installation
+      //  the config file is populated with the required settings
+      //  this function is NOT used in the rapid deployment but exists as a potential helper function
+
+      //write the config file...
+      filepath := cfgWebSWInstallPath + cfgWebSWAppConfigFile;
+      strWr := f.CreateText(filepath);
+      strWr.WriteLine('<?xml version="1.0"?>');
+      strWr.WriteLine('<configuration>');
+      strWr.WriteLine('  <appSettings>');
+      strWr.WriteLine('    <add key="AppRootPath" value="'+ cfgWebAppPath +'"/>');
+      strWr.WriteLine('    <add key="FrontendAppName" value="' + cfgWebAppName + '"/>');
+      strWr.WriteLine('    <add key="DatabaseServer" value="' + cfgSqlServer + '"/>');
+      strWr.WriteLine('    <add key="DatabaseName" value="' + cfgSqlDatabase + '"/>');
+      strWr.WriteLine('    <add key="Integrated security" value="' + cfgSqlIntegSecurity + '"/>');
+      strWr.WriteLine('    <add key="DatabaseUser" value="' + cfgSqlUser + '"/>');
+      strWr.WriteLine('    <add key="DatabaseUserPassword" value="' + cfgSqlUserPassword + '"/>');
+      strWr.WriteLine('    <add key="Domains" value="' + cfgWebBinding + '"/>');
+      strWr.WriteLine('    <add key="DeploymentType" value="' + cfgWebDeployMode + '"/>');
+      strWr.WriteLine('    <add key="SmtpHost" value="' + cfgSmtpServer + '" />');
+      strWr.WriteLine('    <add key="SmtpPort" value="' + cfgSmtpPort + '" />');
+      strWr.WriteLine('    <add key="LicenseSource" value="' + cfgWebSWLicensePath + '" />');
+      strWr.WriteLine('  </appSettings>');
+      strWr.WriteLine('  <startup>');
+      strWr.WriteLine('    <supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.5"/>');
+      strWr.WriteLine('  </startup>');
+      strWr.WriteLine('</configuration>');
+      strWr.Close();
+      strWr.Dispose();
+    END;
+
+    LOCAL PROCEDURE CompleteSetupOnline@1000000010(SanaBaseUrl@1000000004 : Text;SanaUserName@1000000005 : Text;SanaUserPassword@1000000006 : Text;NAVWSUrl@1000000008 : Text;NAVWSDomain@1000000003 : Text;NAVWSUserName@1000000007 : Text;NAVWSUserPassword@1000000010 : Text);
+    VAR
+      PsScript@1000000000 : Text;
+    BEGIN
+      PsScript := sanaPsScripts.GetPsScriptToCreateFirstSanaAdmin(SanaBaseUrl, SanaUserName, SanaUserPassword);
+      ExecutePowerShellScript(PsScript);
+
+      PsScript := sanaPsScripts.GetPsScriptToSetupNavConnection(SanaBaseUrl, SanaUserName, SanaUserPassword, NAVWSUrl, NAVWSDomain, NAVWSUserName, NAVWSUserPassword);
+      ExecutePowerShellScript(PsScript);
+    END;
+
+    LOCAL PROCEDURE "--- Helper functions ---"@1000000000();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE AddUserAccess@1000000012(userName@1000000000 : Text;RoleId@1000000001 : Code[10]);
+    VAR
+      permSet@1000000003 : Record 2000000004;
+      userAccess@1000000002 : Record 2000000053;
+    BEGIN
+      permSet.GET(RoleId);  //check role/permission set exists
+      userAccess.SETRANGE("User Name", userName);
+      userAccess.SETRANGE("Role ID", RoleId);
+      IF (NOT userAccess.FINDFIRST()) THEN BEGIN
+        userAccess.INIT();
+        userAccess."User Name" := userName;
+        userAccess."Role ID" := RoleId;
+        userAccess.INSERT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE ExecutePowerShellScript@1000000014(scriptText@1000000000 : Text);
+    VAR
+      PSMPowershellWrapper@1000000006 : Codeunit 9062554;
+      PSMPsObjectCollection@1000000005 : Codeunit 9062555;
+      PSMSetup@1000000004 : Record 9062714;
+      PSMSetupPage@1000000003 : Page 9063043;
+      PSMessage@1000000001 : Text;
+    BEGIN
+      IF NOT PSMSetup.GET THEN
+        PSMSetupPage.RUNMODAL;
+
+      WITH PSMPowershellWrapper DO BEGIN
+        OpenRunspace(PSMSetup."Default Server Name",PSMSetup.GetLoginID,PSMSetup.GetPassword);
+        PSMPowershellWrapper.AddScript(scriptText);
+        InvokeCommands(PSMPsObjectCollection);
+        CloseRunspace();
+      END;
+    END;
+
+    LOCAL PROCEDURE GetValidFolderPath@1000000002(SystemBehaviourCode@1000000000 : Code[20];DirMustAlreadyExist@1000000001 : Boolean) folderPath : Text[100];
+    VAR
+      dir@1000000002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+    BEGIN
+      folderPath := GetValidSysBehaviourText(SystemBehaviourCode);
+      IF (COPYSTR(folderPath, STRLEN(folderPath), 1) <> '\') THEN
+        folderPath += '\';
+      IF ((DirMustAlreadyExist) AND (NOT dir.Exists(folderPath))) THEN
+        ERROR(Text002, folderPath, SystemBehaviourCode, Text001);
+      EXIT(folderPath);
+    END;
+
+    LOCAL PROCEDURE GetValidSysBehaviourText@1000000005(SystemBehaviourCode@1000000000 : Code[20]) SystemBehaviourText : Text[250];
+    VAR
+      sysBehav@1000000001 : Record 9062230;
+    BEGIN
+      SystemBehaviourText := sysBehav.GetText(SystemBehaviourCode);
+      IF (STRLEN(SystemBehaviourText) = 0) THEN
+        ERROR(Text002, sysBehav.TABLECAPTION, SystemBehaviourCode, Text001);
+      EXIT(SystemBehaviourText);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.15 JH 26/04/2016 - CfMD modifications
+    }
+    END.
+  }
+}
+

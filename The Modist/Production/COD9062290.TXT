@@ -1,0 +1,373 @@
+OBJECT Codeunit 9062290 Document Sending
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      FileMgt@1000000000 : Codeunit 419;
+      TNPUtils@1000000001 : Codeunit 9062229;
+      Logger@1000000002 : Record 9062280;
+      TxtDocSend@1000000003 : TextConst 'ENU=DOCSEND;ENG=DOCSEND';
+      errNotFound_Report@1000000004 : TextConst 'ENU=Sorry, couldn''t find an entry in Document Sending for the Report %1;ENG=Sorry, couldn''t find an entry in Document Sending for the Report %1';
+      errNotFound_Doc@1000000005 : TextConst 'ENU=Sorry, couldn''t find an entry in Document Sending for the Document Code %1;ENG=Sorry, couldn''t find an entry in Document Sending for the Document Code %1';
+      errNotFound_Count@1000000006 : TextConst 'ENU=Sorry, couldn''t find a valid Contact in the field %1 on the record %2;ENG=Sorry, couldn''t find a valid Contact in the field %1 on the record %2';
+      SysB@1000000007 : Record 9062230;
+      errBlank_Email@1000000008 : TextConst 'ENU=The E-Mail address on Contact %1 is blank;ENG=The E-Mail address on Contact %1 is blank';
+      errBlank_Fax@1000000009 : TextConst 'ENU=The Fax No. on Contact %1 is blank;ENG=The Fax No. on Contact %1 is blank';
+      FileSystem@1000000011 : Codeunit 9062264;
+
+    PROCEDURE "--- Document Sending ---"@1000000005();
+    BEGIN
+    END;
+
+    PROCEDURE FindDocument@1000000010(Document@1000000000 : Text[100]) : Code[20];
+    VAR
+      DocumentSending@1000000001 : Record 9062301;
+      ReportNo@1000000002 : Integer;
+      Found@1000000003 : Boolean;
+    BEGIN
+      Found := FALSE;
+
+      IF NOT Found THEN
+        Found := DocumentSending.GET(COPYSTR(Document, 1, MAXSTRLEN(DocumentSending."Document Code")));
+
+      IF NOT Found THEN BEGIN
+        DocumentSending.RESET;
+        DocumentSending.SETRANGE("Print Mgmt. Document Code", COPYSTR(Document, 1, MAXSTRLEN(DocumentSending."Print Mgmt. Document Code")));
+        Found := DocumentSending.FINDFIRST();
+      END;
+
+      IF NOT Found THEN BEGIN
+        DocumentSending.RESET;
+        DocumentSending.SETRANGE(Description, COPYSTR(Document, 1, MAXSTRLEN(DocumentSending.Description)));
+        Found := DocumentSending.FINDFIRST();
+      END;
+
+      IF NOT Found THEN
+        IF EVALUATE(ReportNo, Document) THEN BEGIN
+          DocumentSending.RESET;
+          DocumentSending.SETRANGE("Report No.", ReportNo);
+          Found := DocumentSending.FINDFIRST();
+        END;
+
+      IF NOT Found THEN
+        CLEAR(DocumentSending);
+
+      EXIT(DocumentSending."Document Code");
+    END;
+
+    PROCEDURE FindSendTo@1000000007(Document@1000000000 : Text[100];PositionText@1000000001 : Text[1024];VAR DeliveryMethod@1000000008 : 'System Default,Hard Copy,E-Mail,Fax';VAR SendTo@1000000009 : Text[250]) DestContactNo : Code[20];
+    VAR
+      DocumentSending@1000000002 : Record 9062301;
+      ContDocumentSending@1000000003 : Record 9062302;
+      ReportNo@1000000004 : Integer;
+      Contact@1000000005 : Record 5050;
+      RecRef@1000000006 : RecordRef;
+      FieldRef@1000000007 : FieldRef;
+      GotContDocSending@1000000010 : Boolean;
+    BEGIN
+      IF NOT DocumentSending.GET(FindDocument(Document)) THEN EXIT;
+      //Get the record for the document we're sending >>
+      IF DocumentSending."Table No." = 0 THEN EXIT;
+      RecRef.OPEN(DocumentSending."Table No.");
+      RecRef.SETPOSITION(PositionText);
+      IF NOT RecRef.GET(RecRef.RECORDID) THEN EXIT;
+      //Get the record for the document we're sending <<
+
+      //Get the Contact from the record >>
+      FieldRef := RecRef.FIELD(DocumentSending."Contact Field No.");
+      IF NOT Contact.GET(FieldRef.VALUE) THEN EXIT;//ERROR(errNotFound_Count,FieldRef.NAME,PositionText);
+      //Get the Contact from the record <<
+
+      //Get the Contact we're looking up the Contact Document Sending record for >>
+      IF ContDocumentSending.GET(Contact."No.",DocumentSending."Document Code") THEN BEGIN
+        GotContDocSending := TRUE;
+      END ELSE BEGIN
+        IF ContDocumentSending.GET(Contact."Company No.",DocumentSending."Document Code") THEN BEGIN
+          GotContDocSending := TRUE;
+        END ELSE BEGIN
+          GotContDocSending := FALSE;
+        END;
+      END;
+      //Get the Contact we're looking up the Contact Document Sending record for <<
+
+      //Get the Destination Contact >>
+      IF GotContDocSending THEN BEGIN
+        IF ContDocumentSending."Destination Contact No." <> '' THEN BEGIN
+          Contact.GET(ContDocumentSending."Destination Contact No.");
+        END;
+      END;
+      //Get the Destination Contact <<
+
+      //Find the Delivery Method either from the Contact Document Sending Record, or from the Record >>
+      IF GotContDocSending THEN BEGIN
+        DeliveryMethod := ContDocumentSending."Delivery Method";
+      END ELSE BEGIN
+        IF DocumentSending."Delivery Method Field No." <> 0 THEN BEGIN
+          FieldRef := RecRef.FIELD(DocumentSending."Delivery Method Field No.");
+          DeliveryMethod := FieldRef.VALUE;
+        END ELSE BEGIN
+          DeliveryMethod := DeliveryMethod::"System Default";
+        END;
+      END;
+      //Find the Delivery Method either from the Contact Document Sending Record, or from the Record <<
+
+      //Get the "SendTo" details >>
+      SendTo := GetDeliveryDetails(Contact."No.",DeliveryMethod);
+      //Get the "SendTo" details <<
+
+      EXIT(Contact."No.");
+    END;
+
+    PROCEDURE FindPrintManagementDetails@1000000008(Document@1000000008 : Text[100];PositionText@1000000007 : Text[1024];DestContactNo@1000000014 : Code[20];VAR PrintMgtDocumentCode@1000000003 : Text[250];VAR Variable1@1000000000 : Text[250];VAR Variable2@1000000005 : Text[250];VAR Variable3@1000000006 : Text[250]);
+    VAR
+      DocumentSending@1000000002 : Record 9062301;
+      RecRef@1000000001 : RecordRef;
+      FieldRef@1000000004 : FieldRef;
+      DestContact@1000000011 : Record 5050;
+      DestContactRecRef@1000000010 : RecordRef;
+      DeliveryMethod@1000000013 : 'System Default,Hard Copy,E-Mail,Fax';
+      SendTo@1000000012 : Text[250];
+    BEGIN
+      IF NOT DocumentSending.GET(FindDocument(Document)) THEN EXIT;
+      PrintMgtDocumentCode := DocumentSending."Print Mgmt. Document Code";
+
+      //Get the record for the document we're sending >>
+      IF DocumentSending."Table No." = 0 THEN EXIT;
+      RecRef.OPEN(DocumentSending."Table No.");
+      RecRef.SETPOSITION(PositionText);
+      IF NOT RecRef.GET(RecRef.RECORDID) THEN EXIT;
+      //Get the record for the document we're sending <<
+
+      //Get the Destination Contact >>
+      IF DestContactNo <> '' THEN BEGIN
+        IF NOT DestContact.GET(DestContactNo) THEN DestContactNo := '';
+        DestContactRecRef.OPEN(DATABASE::Contact);
+        DestContactRecRef.SETPOSITION(DestContact.GETPOSITION);
+        IF NOT DestContactRecRef.GET(DestContactRecRef.RECORDID) THEN DestContactNo := '';
+      END;
+      //Get the Destination Contact <<
+
+      //Get the Variables >>
+      IF (DocumentSending."Variable 1 Field No." <> 0) THEN BEGIN
+        CASE DocumentSending."Variable 1 Field Source" OF
+          DocumentSending."Variable 1 Field Source"::"Document Record" :
+            BEGIN
+              IF (RecRef.FIELDEXIST(DocumentSending."Variable 1 Field No.")) THEN BEGIN
+                FieldRef := RecRef.FIELD(DocumentSending."Variable 1 Field No.");
+                Variable1 := COPYSTR(FORMAT(FieldRef.VALUE),1,MAXSTRLEN(Variable1));
+              END;
+            END;
+          DocumentSending."Variable 1 Field Source"::"Destination Contact Record" :
+            BEGIN
+              IF (DestContactNo <> '') THEN BEGIN
+                IF (DestContactRecRef.FIELDEXIST(DocumentSending."Variable 1 Field No.")) THEN BEGIN
+                  FieldRef := DestContactRecRef.FIELD(DocumentSending."Variable 1 Field No.");
+                  Variable1 := COPYSTR(FORMAT(FieldRef.VALUE),1,MAXSTRLEN(Variable1));
+                END;
+              END;
+            END;
+        END;
+      END ELSE Variable1 := '';
+
+      IF (DocumentSending."Variable 2 Field No." <> 0) THEN BEGIN
+        CASE DocumentSending."Variable 2 Field Source" OF
+          DocumentSending."Variable 2 Field Source"::"Document Record" :
+            BEGIN
+              IF (RecRef.FIELDEXIST(DocumentSending."Variable 2 Field No.")) THEN BEGIN
+                FieldRef := RecRef.FIELD(DocumentSending."Variable 2 Field No.");
+                Variable2 := COPYSTR(FORMAT(FieldRef.VALUE),1,MAXSTRLEN(Variable1));
+              END;
+            END;
+          DocumentSending."Variable 2 Field Source"::"Destination Contact Record" :
+            BEGIN
+              IF (DestContactNo <> '') THEN BEGIN
+                IF (DestContactRecRef.FIELDEXIST(DocumentSending."Variable 2 Field No.")) THEN BEGIN
+                  FieldRef := DestContactRecRef.FIELD(DocumentSending."Variable 2 Field No.");
+                  Variable2 := COPYSTR(FORMAT(FieldRef.VALUE),1,MAXSTRLEN(Variable1));
+                END;
+              END;
+            END;
+        END;
+      END ELSE Variable2 := '';
+
+      IF (DocumentSending."Variable 3 Field No." <> 0) THEN BEGIN
+        CASE DocumentSending."Variable 3 Field Source" OF
+          DocumentSending."Variable 3 Field Source"::"Document Record" :
+            BEGIN
+              IF (RecRef.FIELDEXIST(DocumentSending."Variable 3 Field No.")) THEN BEGIN
+                FieldRef := RecRef.FIELD(DocumentSending."Variable 3 Field No.");
+                Variable3 := COPYSTR(FORMAT(FieldRef.VALUE),1,MAXSTRLEN(Variable3));
+              END;
+            END;
+          DocumentSending."Variable 3 Field Source"::"Destination Contact Record" :
+            BEGIN
+              IF (DestContactNo <> '') THEN BEGIN
+                IF (DestContactRecRef.FIELDEXIST(DocumentSending."Variable 3 Field No.")) THEN BEGIN
+                  FieldRef := DestContactRecRef.FIELD(DocumentSending."Variable 3 Field No.");
+                  Variable3 := COPYSTR(FORMAT(FieldRef.VALUE),1,MAXSTRLEN(Variable3));
+                END;
+              END;
+            END;
+        END;
+      END ELSE Variable3 := '';
+
+      //Get the Variables <<
+    END;
+
+    PROCEDURE GetDeliveryDetails@1000000009(ContactNo@1000000000 : Code[20];VAR DeliveryMethod@1000000001 : 'System Default,Hard Copy,E-Mail,Fax') SendTo : Text[250];
+    VAR
+      Contact@1000000002 : Record 5050;
+      Corr_Type@1000000003 : Text[1024];
+    BEGIN
+      Contact.GET(ContactNo);
+
+      CASE DeliveryMethod OF
+        DeliveryMethod::"System Default" :
+          BEGIN
+            //If we're using System Behaviour then look up the CORRESPONDENCE_TYPE in system behaviour
+            //then call this function again with the correct Delivery Method
+            Corr_Type := SysB.GetText('CORRESPONDENCE_TYPE');
+            CASE LOWERCASE(Corr_Type) OF
+              'print', 'hardcopy': DeliveryMethod := DeliveryMethod::"Hard Copy";
+              'mail', 'email', 'e-mail': DeliveryMethod := DeliveryMethod::"E-Mail";
+              'fax': DeliveryMethod := DeliveryMethod::Fax;
+              ELSE DeliveryMethod := DeliveryMethod::"Hard Copy";
+            END;
+            EXIT(GetDeliveryDetails(ContactNo,DeliveryMethod));
+          END;
+        DeliveryMethod::"E-Mail" : EXIT(Contact."E-Mail");
+        DeliveryMethod::"Hard Copy" : EXIT('');
+        DeliveryMethod::Fax : EXIT(Contact."Fax No.");
+      END;
+    END;
+
+    PROCEDURE "--- Emailing ---"@1000000006();
+    BEGIN
+    END;
+
+    PROCEDURE AttachFileToOutlookEmail@1000000002(ToEmail@1000000003 : Text;CCEmail@1000000005 : Text;Subject@1000000002 : Text;Body@1000000001 : Text;AttachmentPath@1000000004 : Text);
+    VAR
+      Mail@1000000000 : Codeunit 397;
+    BEGIN
+      Mail.NewMessage(ToEmail,CCEmail,'',Subject,Body,AttachmentPath,TRUE);
+    END;
+
+    PROCEDURE SaveReportToPDF@1000000000(ReportID@1000000000 : Integer;VAR Record@1000000001 : RecordRef;SaveToPath@1000000002 : Text) OK : Boolean;
+    VAR
+      RecRefVariant@1000000003 : Variant;
+      ServerTempPath@1000000004 : Text;
+      TxtSaving@1000000007 : TextConst 'ENU=Saving report %1 for position %2 to path %3;ENG=Saving report %1 for position %2 to path %3';
+      TxtProblemSavingReport@1000000005 : TextConst 'ENU=There was a problem saving report %1 for position %2 to path %3'';ENG=There was a problem saving report %1 for position %2 to path %3''';
+      TxtReportSaved@1000000006 : TextConst 'ENU=Report %1 for position %2 saved to path %3;ENG=Report %1 for position %2 saved to path %3';
+    BEGIN
+      Logger.Log(TxtDocSend, Logger.Type::Debug, STRSUBSTNO(TxtSaving, ReportID, Record.GETPOSITION, SaveToPath), USERID);
+      Record.SETRECFILTER; //DOC PC 04/02/14
+      RecRefVariant := Record;
+      ServerTempPath := FileMgt.ServerTempFileName('pdf');
+
+      OK := REPORT.SAVEASPDF(ReportID, ServerTempPath, RecRefVariant);
+
+      IF NOT OK THEN BEGIN
+        Logger.Log(TxtDocSend, Logger.Type::Error, STRSUBSTNO(TxtProblemSavingReport, ReportID, Record.GETPOSITION, ServerTempPath), USERID);
+        EXIT(FALSE);
+      END ELSE BEGIN
+        Logger.Log(TxtDocSend, Logger.Type::Debug, STRSUBSTNO(TxtReportSaved, ReportID, Record.GETPOSITION, ServerTempPath), USERID);
+      END;
+
+      FileSystem.DeleteFileIfExists(GUIALLOWED,SaveToPath); //DOC PC 04/02/2014
+
+      IF GUIALLOWED THEN BEGIN
+        FileMgt.DownloadToFile(ServerTempPath,SaveToPath);
+        FileMgt.DeleteServerFile(ServerTempPath);
+      END ELSE BEGIN
+        IF NOT FileSystem.FileExists(GUIALLOWED,ServerTempPath) THEN EXIT(FALSE);
+        RENAME(ServerTempPath, SaveToPath);
+      END;
+    END;
+
+    PROCEDURE SendReportViaOutlook@1000000001(ReportNo@1000000000 : Integer;RecordTableNo@1000000001 : Integer;RecordPosition@1000000002 : Text;ToEmail@1000000003 : Text;CCEmail@1000000013 : Text;Subject@1000000004 : Text;Body@1000000005 : Text);
+    VAR
+      RecRef@1000000006 : RecordRef;
+      eReportNotFound@1000000009 : TextConst 'ENU=Report %1 was not found;ENG=Report %1 was not found';
+      eSavingReportToPDF@1000000007 : TextConst 'ENU=There was a problem saving the Report %1 to PDF;ENG=There was a problem saving the Report %1 to PDF';
+      Object@1000000008 : Record 2000000001;
+      SaveAsFileName@1000000010 : Text;
+      SaveAsFilePath@1000000012 : Text;
+      PKValue@1000000011 : Text[250];
+      FieldRef@1000000014 : FieldRef;
+      FieldID@1000000015 : Integer;
+    BEGIN
+      RecRef.OPEN(RecordTableNo);
+      RecRef.SETPOSITION(RecordPosition);
+      RecRef.GET(RecRef.RECORDID);
+      RecRef.SETRECFILTER;
+
+      Object.SETRANGE(Type,Object.Type::Report);
+      Object.SETRANGE(ID,ReportNo);
+
+      IF NOT Object.FINDFIRST THEN ERROR(eReportNotFound,ReportNo);
+
+      SaveAsFileName := Object.Name;
+      FieldID := TNPUtils.GetPrimaryKeyFieldID(RecRef.NUMBER,'',1);
+      IF FieldID <> 0 THEN BEGIN
+        FieldRef := RecRef.FIELD(FieldID);
+        SaveAsFileName += ' - ' + FORMAT(FieldRef.VALUE);
+      END;
+
+      FieldID := TNPUtils.GetPrimaryKeyFieldID(RecRef.NUMBER,'',2);
+      IF FieldID <> 0 THEN BEGIN
+        FieldRef := RecRef.FIELD(FieldID);
+        SaveAsFileName += ' ' + FORMAT(FieldRef.VALUE);
+      END;
+
+      FieldID := TNPUtils.GetPrimaryKeyFieldID(RecRef.NUMBER,'',3);
+      IF FieldID <> 0 THEN BEGIN
+        FieldRef := RecRef.FIELD(FieldID);
+        SaveAsFileName += ' ' + FORMAT(FieldRef.VALUE);
+      END;
+
+      SaveAsFileName += '.pdf';
+      SaveAsFilePath := FileMgt.GetDirectoryName(FileMgt.ClientTempFileName('.pdf')) + '\' + SaveAsFileName;
+
+      IF NOT SaveReportToPDF(ReportNo,RecRef,SaveAsFilePath) THEN ERROR(eSavingReportToPDF,Object.Name);
+
+      AttachFileToOutlookEmail(ToEmail,CCEmail,Subject,Body,SaveAsFilePath);
+
+      FileMgt.DeleteClientFile(SaveAsFilePath);
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@1000000003();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE FindDocumentSending@1000000004(pDocument@1000000000 : Text[100];VAR pDocumentSending@1000000001 : Record 9062301);
+    BEGIN
+      //DOC NA2016.10 - Trying to find document sending using document code / description
+      //  -> pDocument: The document code / description
+      //  <> pDocumentSending: Document sending recordset
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  PC 01/01/2013 - Created
+      //DOC NA2015.4  JH 03/11/2014 - Upgraded to 2015
+      //DOC NA2015.4  JH 28/12/2014 - System behaviours renamed
+      //DOC NA2016.10 JH 27/08/2015 - Upgraded to 2016
+      //DOC NA2016.15 JH 09/05/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

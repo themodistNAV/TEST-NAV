@@ -1,0 +1,99 @@
+OBJECT Codeunit 50041 Internet Ret. Order Conversion
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/03/18;
+    Time=[ 2:31:10 PM];
+    Modified=Yes;
+    Version List=TM0020;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            IntegrationErrorLog.RESET;
+            IntegrationErrorLog.SETCURRENTKEY("Source Type","Document No.","Document Line No.");
+            IntegrationErrorLog.SETRANGE("Source Type",DATABASE::"Internet Order Header");
+            WITH InternetOrderHeader DO BEGIN
+              RESET;
+              SETRANGE(Status,InternetOrderHeader.Status::New);
+              SETRANGE("Order Type","Order Type"::Return);
+              IF FINDSET(TRUE,FALSE) THEN BEGIN
+                REPEAT
+                  CLEARLASTERROR;
+                  IF NOT ConvertInternetReturnOrder(InternetOrderHeader) THEN
+                    LogValidationError(InternetOrderHeader)
+                  ELSE BEGIN
+                    Status := Status::Converted;
+                    "Converted-To Document No." := "Internet Order Reference";
+                    "Converted-To Document Type" := "Converted-To Document Type"::Return;
+                    MODIFY;
+                    InternetOrderLine.RESET;
+                    InternetOrderLine.SETRANGE("Order Guid","Order Guid");
+                    IF NOT InternetOrderLine.ISEMPTY THEN
+                      InternetOrderLine.MODIFYALL(Status,InternetOrderLine.Status::Converted);
+                  END;
+                UNTIL NEXT=0;
+              END;
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      InternetOrderHeader@1000000000 : Record 9021666;
+      InternetOrderLine@1000000003 : Record 9021667;
+      IntegrationErrorLog@1000000002 : Record 50011;
+      CreateExchangeOrders@1000000001 : Report 50009;
+
+    [TryFunction]
+    LOCAL PROCEDURE ConvertInternetReturnOrder@1000000002(VAR pInternetOrderHeader@1000000000 : Record 9021666);
+    BEGIN
+      WITH pInternetOrderHeader DO BEGIN
+        CLEAR(CreateExchangeOrders);
+        CreateExchangeOrders.SetSalesInvoice("Original Order No.");
+        CreateExchangeOrders.SetAutoCreateWhseRcpt(TRUE);
+        CreateExchangeOrders.SetAutoSendToWMS(TRUE);
+        CreateExchangeOrders.SetReturnOrderNo("Internet Order Reference");
+        CreateExchangeOrders.SetFromCompanyName(COMPANYNAME);
+        CreateExchangeOrders.SetReturnReasonCode(Comment);
+        CreateExchangeOrders.USEREQUESTPAGE(FALSE);
+        CreateExchangeOrders.RUN;
+      END;
+    END;
+
+    LOCAL PROCEDURE LogValidationError@1000000000(pInternetOrderHeader@1000000000 : Record 9021666);
+    BEGIN
+      IntegrationErrorLog.SETRANGE("Document No.",InternetOrderHeader."Internet Order Reference");
+      IntegrationErrorLog.DELETEALL;
+
+      IntegrationErrorLog.INIT;
+      IntegrationErrorLog."Entry No." := 0;
+      IntegrationErrorLog."Source Type" := DATABASE::"Internet Order Line";
+      IntegrationErrorLog."Document No." := pInternetOrderHeader."Internet Order Reference";
+      IntegrationErrorLog."Error Text" := COPYSTR(GETLASTERRORTEXT,1,249);
+      IntegrationErrorLog.INSERT(TRUE);
+    END;
+
+    PROCEDURE ConvertSingleOrder@1000000001(pInternetOrderHeader@1000000000 : Record 9021666);
+    BEGIN
+      WITH pInternetOrderHeader DO BEGIN
+        TESTFIELD(Status,Status::New);
+        TESTFIELD("Order Type","Order Type"::Return);
+        CLEARLASTERROR;
+        IF NOT ConvertInternetReturnOrder(pInternetOrderHeader) THEN
+          LogValidationError(pInternetOrderHeader)
+        ELSE BEGIN
+          Status := Status::Converted;
+          "Converted-To Document No." := "Internet Order Reference";
+          "Converted-To Document Type" := "Converted-To Document Type"::Return;
+          MODIFY;
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

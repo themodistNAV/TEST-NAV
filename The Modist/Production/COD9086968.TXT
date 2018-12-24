@@ -1,0 +1,393 @@
+OBJECT Codeunit 9086968 nF. Smart Filter Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=30/10/16;
+    Time=12:18:23 PM;
+    Version List=NF2016.17;
+  }
+  PROPERTIES
+  {
+    SingleInstance=Yes;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      NfUser@1000000006 : Record 9086953;
+      NfSmartFilter@1000000000 : TEMPORARY Record 9086972;
+      NfBlobToolkit@1000000002 : Codeunit 9086979;
+      NfString@1000000005 : Codeunit 9086971;
+      Filter@1000000004 : Text;
+      Initialised@1000000001 : Boolean;
+      InFilterPosition@1000000003 : Integer;
+      tMyUserId@1000000027 : TextConst 'ENU=MYUSESRID;ENG=MYUSESRID';
+      tMyUser@1000000026 : TextConst 'ENU=MYUSER;ENG=MYUSER';
+      tMyShortUserId@1000000008 : TextConst 'ENU=MYSHORTUSERID;ENG=MYSHORTUSERID';
+      tMyContactNo@1000000048 : TextConst 'ENU=MYCONTACTNO;ENG=MYCONTACTNO';
+      tMyContact@1000000047 : TextConst 'ENU=MYCONTACT;ENG=MYCONTACT';
+      tMySalespersonCode@1000000046 : TextConst 'ENU=MYSALESPERSONCODE;ENG=MYSALESPERSONCODE';
+      tMySalesperson@1000000045 : TextConst 'ENU=MYSALESPERSON;ENG=MYSALESPERSON';
+      tMyVendorNo@1000000044 : TextConst 'ENU=MYVENDORNO;ENG=MYVENDORNO';
+      tMyVendor@1000000043 : TextConst 'ENU=MYVENDOR;ENG=MYVENDOR';
+      tMyResourceNo@1000000042 : TextConst 'ENU=MYRESOURCENO;ENG=MYRESOURCENO';
+      tMyResource@1000000041 : TextConst 'ENU=MYRESOURCE;ENG=MYRESOURCE';
+      tMyEmployeeNo@1000000040 : TextConst 'ENU=MYEMPLOYEENO;ENG=MYEMPLOYEENO';
+      tMyEmployee@1000000038 : TextConst 'ENU=MYEMPLOYEE;ENG=MYEMPLOYEE';
+      tMyLocationCode@1000000035 : TextConst 'ENU=MYLOCATIONCODE;ENG=MYLOCATIONCODE';
+      tMyLocation@1000000034 : TextConst 'ENU=MYLOCATION;ENG=MYLOCATION';
+      tMyName@1000000032 : TextConst 'ENU=MYNAME;ENG=MYNAME';
+      tMyUserName@1000000007 : TextConst 'ENU=MYUSERNAME;ENG=MYNAME';
+      tMyEMail@1000000031 : TextConst 'ENU=MYEMAIL;ENG=MYEMAIL';
+      tUser@1000000028 : TextConst 'ENU=USER;ENG=USER';
+
+    LOCAL PROCEDURE "--- General ---"@1000000001();
+    BEGIN
+    END;
+
+    PROCEDURE ApplySmartFilters@1000000000(pNfUserId@1000000004 : Integer;pFilter@1000000000 : Text) : Text;
+    VAR
+      lApplying@1000000001 : Boolean;
+      lApplied@1000000002 : Boolean;
+      lRegexMatch@1000000003 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Match";
+    BEGIN
+      ///<summary>Applying smart filters to given filter</summary>
+      ///<param name="pNfUserId">nForcement user ID</param>
+      ///<param name="pFilter">The filter</param>
+      ///<returns>Amended filter</returns>
+
+      NfUser.GET(pNfUserId);
+      Filter := pFilter;
+
+      Initialise();
+
+      lApplying := TRUE;
+      WHILE (lApplying) DO
+      BEGIN
+        lApplied := FALSE;
+        IF (NfSmartFilter.FINDSET()) THEN
+        REPEAT
+          IF (SmartFilterMatches(lRegexMatch)) THEN
+            IF (NfSmartFilter."Use Regular Expressions") THEN
+              ApplyRegExSmartFilter(lRegexMatch, lApplied)
+            ELSE
+              ApplySmartFilter(lApplied);
+        UNTIL (NfSmartFilter.NEXT() = 0);
+        lApplying := lApplied;
+      END;
+
+      EXIT(Filter);
+    END;
+
+    PROCEDURE SmartFilterLookup@1000000010(VAR pSmartFilter@1000000000 : Text) : Boolean;
+    VAR
+      lResult@1000000001 : Boolean;
+    BEGIN
+      ///<summary>Performing smart filter lookup</summary>
+      ///<param name="pSmartFilter">Target smart filter selected (its syntax)</param>
+      ///<returns>Lookup result</returns>
+
+      lResult := FALSE;
+
+      Initialise();
+
+      NfSmartFilter.RESET();
+      NfSmartFilter.SETRANGE(Syntax, pSmartFilter);
+      IF (NfSmartFilter.FINDFIRST()) THEN;
+      NfSmartFilter.SETRANGE(Syntax);
+      IF (PAGE.RUNMODAL(0, NfSmartFilter) = ACTION::LookupOK) THEN
+      BEGIN
+        pSmartFilter := NfSmartFilter.Syntax;
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE "--- Initialisation ---"@1000000014();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE Initialise@1000000005();
+    BEGIN
+      ///<summary>Initialising the codeunit</summary>
+
+      IF (Initialised) THEN
+        EXIT;
+
+      InitialiseMy();
+
+      NfSmartFilter.RESET();
+      IF (NfSmartFilter.FINDFIRST()) THEN;
+
+      Initialised := TRUE;
+    END;
+
+    LOCAL PROCEDURE InitialiseMy@1000000035();
+    VAR
+      eMyUserIdDescription@1000000006 : TextConst 'ENU=Your user identifier;ENG=Your user identifier';
+      eMyUserIdHelp@1000000000 : TextConst 'ENU=Returns your user identifier (including domain name).|Your current user ID is: %1.;ENG=Returns your user identifier (including domain name).|Your current user ID is: %1.';
+      eUserDescription@1000000002 : TextConst 'ENU="""%1"" field value";ENG="""%1"" field value"';
+      eUserSyntax@1000000023 : TextConst 'ENU=USER.[Field_Name];ENG=USER.[Field_Name]';
+      eUserHelp@1000000001 : TextConst 'ENU=Returns any field from "%1" table for your user ID.|You specify this filter typing USER.[Field_Name].;ENG=Returns any field from "%1" table for your user ID.|You specify this filter typing USER.[Field_Name].';
+    BEGIN
+      ///<summary>Initialising "My"s</summary>
+
+      NfSmartFilter.Add(tMyUserId, eMyUserIdDescription, STRSUBSTNO(eMyUserIdHelp, USERID()));
+      NfSmartFilter.Add(tMyUser, eMyUserIdDescription, STRSUBSTNO(eMyUserIdHelp, USERID()));
+
+      InitialiseMyInternal(tMyShortUserId, NfUser.FIELDNO("Short User ID"));
+      InitialiseMyInternal(tMyContactNo, NfUser.FIELDNO("Contact No."));
+      InitialiseMyInternal(tMyContact, NfUser.FIELDNO("Contact No."));
+      InitialiseMyInternal(tMySalespersonCode, NfUser.FIELDNO("Salesperson/Purchaser Code"));
+      InitialiseMyInternal(tMySalesperson, NfUser.FIELDNO("Salesperson/Purchaser Code"));
+      InitialiseMyInternal(tMyVendorNo, NfUser.FIELDNO("Vendor No."));
+      InitialiseMyInternal(tMyVendor, NfUser.FIELDNO("Vendor No."));
+      InitialiseMyInternal(tMyResourceNo, NfUser.FIELDNO("Resource No."));
+      InitialiseMyInternal(tMyResource, NfUser.FIELDNO("Resource No."));
+      InitialiseMyInternal(tMyEmployeeNo, NfUser.FIELDNO("Employee No."));
+      InitialiseMyInternal(tMyEmployee, NfUser.FIELDNO("Employee No."));
+      InitialiseMyInternal(tMyLocationCode, NfUser.FIELDNO("Location Code"));
+      InitialiseMyInternal(tMyLocation, NfUser.FIELDNO("Location Code"));
+      InitialiseMyInternal(tMyName, NfUser.FIELDNO("User Name"));
+      InitialiseMyInternal(tMyEMail, NfUser.FIELDNO("E-Mail"));
+
+      NfSmartFilter.AddRegEx(tUser, STRSUBSTNO(eUserDescription, NfUser.TABLECAPTION()), tUser + '\.\[(.+)\]', eUserSyntax,
+        STRSUBSTNO(eUserHelp, NfUser.TABLECAPTION()));
+    END;
+
+    LOCAL PROCEDURE "--- Initialisation (Internal) ---"@1000000022();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE InitialiseMyInternal@1000000049(pCode@1000000007 : Code[20];pFieldId@1000000009 : Integer);
+    VAR
+      eDescription@1000000010 : TextConst 'ENU=Returns your %2 from "%1" table.;ENG=Returns your %2 from "%1" table.';
+      lField@1000000001 : Record 2000000041;
+      lTableCaption@1000000012 : Text;
+      lFieldCaption@1000000011 : Text;
+      eHelp@1000000000 : TextConst 'ENU=Returns %2 from "%1" table specified against your user ID.|Currently your user ID is: %3.;ENG=Returns %2 from "%1" table specified against your user ID.|Currently your user ID is: %3.';
+    BEGIN
+      ///<summary>Initialising "My"</summary>
+      ///<param name="pCode">Code (for the smart filter)</param>
+      ///<param name="pFieldId">Field ID (from "Enablement User" table)</param>
+
+      lTableCaption := NfUser.TABLECAPTION();
+      lField.GET(DATABASE::"nF. User", pFieldId);
+      lFieldCaption := lField."Field Caption";
+
+      NfSmartFilter.Add(
+        pCode,
+        STRSUBSTNO(eDescription, lTableCaption, LOWERCASE(lFieldCaption)),
+        STRSUBSTNO(eHelp, lTableCaption, LOWERCASE(lFieldCaption), USERID()));
+    END;
+
+    LOCAL PROCEDURE "--- Internal ---"@1000000004();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE SmartFilterMatches@1000000007(VAR pRegexMatch@1000000001 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Match") : Boolean;
+    VAR
+      lRegex@1000000002 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex";
+      lResult@1000000000 : Boolean;
+    BEGIN
+      ///<summary>Returns if the current smart filter matches content of the filter</summary>
+      ///<param name="pRegexMatch">Regex match object used for regular expression smart filters</param>
+
+      lResult := FALSE;
+
+      IF (NfSmartFilter."Use Regular Expressions") THEN
+      BEGIN
+        pRegexMatch := lRegex.Match(Filter, NfSmartFilter.Pattern);
+        lResult := pRegexMatch.Success;
+      END
+      ELSE
+      BEGIN
+        InFilterPosition := STRPOS(Filter, NfSmartFilter.Code);
+        lResult := (InFilterPosition > 0);
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE ApplySmartFilter@1000000008(VAR pApplied@1000000001 : Boolean);
+    VAR
+      lReplace@1000000000 : Text;
+      lApplied@1000000002 : Boolean;
+    BEGIN
+      ///<summary>Applying smart filter</summary>
+      ///<param name="pApplied">Applied flag (to be modified)</param>
+
+      lApplied := TRUE;
+
+      CASE (NfSmartFilter.Pattern) OF
+        tMyUserId, tMyUser: lReplace := USERID();
+        tMyShortUserId: lReplace := MyField(NfUser.FIELDNO("Short User ID"));
+        tMyContactNo, tMyContact: lReplace := MyField(NfUser.FIELDNO("Contact No."));
+        tMySalespersonCode, tMySalesperson: lReplace := MyField(NfUser.FIELDNO("Salesperson/Purchaser Code"));
+        tMyVendorNo, tMyVendor: lReplace := MyField(NfUser.FIELDNO("Vendor No."));
+        tMyResourceNo, tMyResource: lReplace := MyField(NfUser.FIELDNO("Resource No."));
+        tMyLocationCode, tMyLocation: lReplace := MyField(NfUser.FIELDNO("Location Code"));
+        tMyName: lReplace := MyField(NfUser.FIELDNO("User Name"));
+        tMyEMail: lReplace := MyField(NfUser.FIELDNO("E-Mail"));
+        ELSE lApplied := FALSE;
+      END;
+
+      IF (lApplied) THEN
+      BEGIN
+        pApplied := lApplied;
+        IF (lReplace = '') THEN
+          lReplace := '0&1';
+      END;
+
+      ReplaceInFilter(lReplace);
+    END;
+
+    LOCAL PROCEDURE ApplyRegExSmartFilter@1000000009(pRegexMatch@1000000002 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Match";VAR pApplied@1000000000 : Boolean);
+    VAR
+      lApplied@1000000001 : Boolean;
+    BEGIN
+      ///<summary>Applying regular expression smart filter</summary>
+      ///<param name="pRegexMatch">The regex match object</param>
+      ///<param name="pApplied">Applied flag (to be modified)</param>
+
+      lApplied := TRUE;
+
+      CASE (NfSmartFilter.Code) OF
+        tUser: ApplyUser(pRegexMatch);
+        ELSE lApplied := FALSE;
+      END;
+
+      IF (lApplied) THEN
+        pApplied := lApplied;
+    END;
+
+    LOCAL PROCEDURE "--- Logic ---"@1000000041();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ApplyUser@1000000042(pRegexMatch@1000000002 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Match");
+    VAR
+      lField@1000000001 : Record 2000000041;
+      lFieldName@1000000000 : Text;
+    BEGIN
+      ///<summary>Applying user (field) logic to the filter</summary>
+      ///<param name="pRegexMatch">The regex match object</param>
+
+      lFieldName := DELCHR(GetRegexGroupValue(pRegexMatch, 1), '<>', ' ');
+      lField.RESET();
+      lField.SETRANGE(TableNo, DATABASE::"nF. User");
+      lField.SETFILTER("Field Caption", '@' + lFieldName);
+      lField.FINDFIRST();
+
+      ReplaceRegexInFilter(pRegexMatch, MyField(lField."No."));
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@1000000003();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ReplaceInFilter@1190000035(pReplace@1190000014 : Text);
+    VAR
+      lPos@1190000015 : Integer;
+    BEGIN
+      ///<summary>Replacing text inside filter</summary>
+      ///<param name="pReplace">Replacement</param>
+
+      lPos := STRPOS(Filter, NfSmartFilter.Code);
+      IF (lPos > 0) THEN
+        Filter := COPYSTR(Filter, 1, lPos - 1) + pReplace + COPYSTR(Filter, lPos + STRLEN(NfSmartFilter.Code));
+    END;
+
+    LOCAL PROCEDURE ReplaceRegexInFilter@1000000048(pRegexMatch@1000000002 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Match";pReplace@1000000000 : Text);
+    VAR
+      lFilter@1000000001 : Text;
+    BEGIN
+      ///<summary>Replacing regex inside filter</summary>
+      ///<param name="pRegexMatch">The regex match</param>
+      ///<param name="pReplace">Replacement</param>
+
+      IF (pRegexMatch.Index > 0) THEN
+        lFilter := COPYSTR(Filter, 1, pRegexMatch.Index);
+      lFilter := lFilter + pReplace;
+      IF (pRegexMatch.Index + pRegexMatch.Length <= STRLEN(Filter)) THEN
+        lFilter := lFilter + COPYSTR(Filter, pRegexMatch.Index + pRegexMatch.Length + 1, STRLEN(Filter) - pRegexMatch.Index - pRegexMatch.Length + 1);
+      Filter := lFilter;
+    END;
+
+    LOCAL PROCEDURE MyField@1000000027(pFieldId@1000000000 : Integer) : Text;
+    VAR
+      lRecordRef@1000000001 : RecordRef;
+      lFieldRef@1000000002 : FieldRef;
+      lFieldValue@1000000003 : Text;
+    BEGIN
+      ///<summary>Teturning "My" field (field from "Enablement User" table)</summary>
+      ///<param name="pFieldId">Field ID</param>
+      ///<returns>The field</returns>
+
+      lFieldValue := '';
+
+      lRecordRef.OPEN(DATABASE::"nF. User");
+      lRecordRef.GETTABLE(NfUser);
+      lFieldRef := lRecordRef.FIELD(pFieldId);
+      IF (LOWERCASE(FORMAT(lFieldRef.CLASS)) = 'flowfield') THEN
+        lFieldRef.CALCFIELD();
+      lFieldValue := FORMAT(lFieldRef.VALUE);
+      lRecordRef.CLOSE();
+
+      EXIT(lFieldValue);
+    END;
+
+    LOCAL PROCEDURE GetRegexGroupValue@1000000050(pRegexMatch@1000000001 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Match";pGroupIndex@1000000000 : Integer) : Text;
+    BEGIN
+      ///<summary>Returning regex group value</summary>
+      ///<param name="pRegexMatch">The regex match object</param>
+      ///<param name="pGroupIndex">Group index</param>
+      ///<returns>Group value</returns>
+
+      EXIT(pRegexMatch.Groups.Item(pGroupIndex).Value);
+    END;
+
+    LOCAL PROCEDURE "--- UI ---"@1000000018();
+    BEGIN
+    END;
+
+    PROCEDURE UnpackHelp@1000000019(VAR pNfSmartFilter@1000000001 : Record 9086972;VAR pNfTextBuffer@1000000000 : Record 9086971);
+    VAR
+      lTextBuffer@1000000004 : TEMPORARY Record 823;
+      lHelpBlob@1000000002 : Record 99008535;
+      lHelpText@1000000003 : Text;
+    BEGIN
+      ///<summary>Unpacking help into "Name Value" temporary recordset</summary>
+      ///<param name="pNfSmartFilter">The smart filter to take help from</param>
+      ///<param name="pHelpBuffer">Target buffer</param>
+
+      pNfTextBuffer.RESET();
+      pNfTextBuffer.DELETEALL();
+
+      pNfSmartFilter.CALCFIELDS(Help);
+      IF (pNfSmartFilter.Help.HASVALUE()) THEN
+      BEGIN
+        lHelpBlob.Blob := pNfSmartFilter.Help;
+        lHelpText := NfBlobToolkit.BlobToText(lHelpBlob);
+        NfString.Split(lHelpText, '|', lTextBuffer);
+        IF (lTextBuffer.FINDSET()) THEN
+        REPEAT
+          pNfTextBuffer.AddAdvanced(lTextBuffer.ID, lTextBuffer.Value);
+        UNTIL (lTextBuffer.NEXT() = 0);
+      END;
+
+      pNfTextBuffer.RESET();
+    END;
+
+    BEGIN
+    {
+      ///<summary>nForcement smart filter management</summary>
+      ///<change version="NF2016.17" initials="JH" date="2016-10-20">Created</change>
+    }
+    END.
+  }
+}
+

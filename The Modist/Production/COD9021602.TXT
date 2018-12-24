@@ -1,0 +1,568 @@
+OBJECT Codeunit 9021602 Build Catalogue
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:16 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Label@1190000019 : Record 9021618;
+      CatBuildData@1000000006 : Record 9021602;
+      CatBuildData1@1000000000 : Record 9021602;
+      PageItem@1190000005 : Record 9021629;
+      PageItem1@1190000006 : Record 9021629;
+      PageItem2@1190000020 : Record 9021629;
+      ePage@1190000007 : Record 9021628;
+      PageItemSort@1190000010 : Record 9021600;
+      ProdGroup@1190000012 : Record 5723;
+      MultiLabelItemCatProdGrp@1190000013 : Record 9021601;
+      Item@1190000014 : Record 27;
+      WebAtt@1190000021 : Record 9021701;
+      WebAttValue@1190000015 : Record 9021702;
+      ItemsInPromo@1190000016 : Record 9021650;
+      NewOrderNo@1000000005 : Integer;
+      Text000@1190000008 : TextConst 'ENU=The Label Code must not be blank.;ENG=The Label Code must not be blank.';
+      Text001@1190000009 : TextConst 'ENU=The epage GuID must not be 0.;ENG=The epage GuID must not be 0.';
+      i@1190000026 : Integer;
+      StartDate@1190000011 : Date;
+      EndDate@1190000017 : Date;
+      Text002@1190000018 : TextConst 'ENU=The Start Date %1 must be less then the End Date %2.;ENG=The Start Date %1 must be less then the End Date %2.';
+      Text003@1190000022 : TextConst 'ENU=Auto Build Complete.;ENG=Auto Build Complete.';
+      Window@1190000023 : Dialog;
+      WebAttributeMgt@1190000025 : Codeunit 9021620;
+      Text004@1190000024 : TextConst 'ENU=Page Item Entry No. cannot be 0 in ePage Guild %1, No. %2;ENG=Page Item Entry No. cannot be 0 in ePage Guild %1, No. %2';
+      Text005@1190000027 : TextConst 'ENU=There are no Page Items to copy.;ENG=There are no Page Items to copy.';
+      Text006@1190000028 : TextConst 'ENU=There are %1 Page Items.  This will take a long time.  Are you sure you want to continue?;ENG=There are %1 Page Items.  This will take a long time.  Are you sure you want to continue?';
+      Text007@1190000029 : TextConst 'ENU=Abandonned.;ENG=Abandonned.';
+
+    PROCEDURE BuildCatBuildData@1000000000(LabelCode@1000000000 : Code[10];ePageGuID@1000000001 : Integer;DoBoth@1000000002 : Boolean);
+    VAR
+      TxtWindowTitle@1000000003 : TextConst 'ENU=Building Catalogue Build Data %1 %2;ENG=Building Catalogue Build Data %1 %2';
+      TxtByProductGroup@1000000004 : TextConst 'ENU=By Product Group;ENG=By Product Group';
+      TxtByExistingItems@1000000005 : TextConst 'ENU=By Existing Items;ENG=By Existing Items';
+      TxtByWebAttribute@1000000006 : TextConst 'ENU=By Web Attribute;ENG=By Web Attribute';
+      TxtByWebGlobal@1000000007 : TextConst 'ENU=By Web Global;ENG=By Web Global';
+    BEGIN
+      //Process 1 is to put items into the Catalogue Data Build Table
+      IF LabelCode = '' THEN
+        ERROR(Text000);
+      IF ePageGuID = 0 THEN
+        ERROR(Text001);
+
+      Window.OPEN(STRSUBSTNO(TxtWindowTitle, PADSTR('#1', 20, '#'), PADSTR('#2', 20, '#')));
+
+      ePage.GET(LabelCode,ePageGuID);
+      ePage.TESTFIELD("Page Item Sort Code");
+      PageItemSort.GET(LabelCode,ePage."Page Item Sort Code");
+      IF PageItemSort."Build By" <> PageItemSort."Build By"::Manual THEN BEGIN
+        IF PageItemSort."Delete Existing Build Entries" THEN BEGIN
+          CatBuildData.RESET;
+          CatBuildData.SETRANGE("Label Code",LabelCode);
+          CatBuildData.SETRANGE("ePage GuID",ePageGuID);
+          CatBuildData.DELETEALL;
+        END;
+        CASE PageItemSort."Build By" OF
+          PageItemSort."Build By"::"Item Cat/Prod Group" :
+            BEGIN
+              MultiLabelItemCatProdGrp.RESET;
+              MultiLabelItemCatProdGrp.SETCURRENTKEY("Label Code","ePage GuID");
+              MultiLabelItemCatProdGrp.SETRANGE("Label Code",LabelCode);
+              MultiLabelItemCatProdGrp.SETRANGE("ePage GuID",ePageGuID);
+              Window.UPDATE(1,TxtByProductGroup);
+              IF MultiLabelItemCatProdGrp.FIND('-') THEN
+              REPEAT
+                Item.RESET;
+                //Warning this will take a long time as there is not a suitable key on the Item table.
+                //If customer use this and it takes too long, will have to add a key.
+                Item.SETRANGE("Item Category Code",MultiLabelItemCatProdGrp."Item Category Code");
+                Item.SETRANGE("Product Group Code",MultiLabelItemCatProdGrp."Product Group Code");
+                IF Item.FIND('-') THEN
+                REPEAT
+                  Window.UPDATE(2,Item."No.");
+                  CreateCatBuildData(LabelCode,ePageGuID,Item."No.",0,'');
+                UNTIL Item.NEXT = 0;
+              UNTIL MultiLabelItemCatProdGrp.NEXT = 0;
+            END;
+          PageItemSort."Build By"::"Existing Page Items" :
+            BEGIN
+              PageItem.RESET;
+              PageItem.SETRANGE("Label Code",LabelCode);
+              PageItem.SETRANGE("Page GroupGuid",ePageGuID);
+              PageItem.SETFILTER(Type,'%1|%2',PageItem.Type::Item,PageItem.Type::"Promo Item");
+              PageItem.SETFILTER("No.",'<>%1','');
+              Window.UPDATE(1,TxtByExistingItems);
+              IF PageItem.FIND('-') THEN
+              REPEAT
+                Window.UPDATE(2,PageItem."No.");
+                CreateCatBuildData(LabelCode,ePageGuID,PageItem."No.",0,'');
+              UNTIL PageItem.NEXT = 0;
+            END;
+          PageItemSort."Build By"::"Web Attribute" :
+            BEGIN
+              PageItemSort.TESTFIELD("Web Attribute to Build By");
+              WebAttValue.RESET;
+              WebAttValue.SETRANGE("Label Code",LabelCode);
+              WebAttValue.SETRANGE("Table ID",27);
+              WebAttValue.SETRANGE("Attribute Code",PageItemSort."Web Attribute to Build By");
+              Window.UPDATE(1,TxtByWebAttribute);
+              IF WebAttValue.FIND('-') THEN
+              REPEAT
+                Window.UPDATE(2,WebAttValue."Key Field String 1");
+                CreateCatBuildData(LabelCode,ePageGuID,WebAttValue."Key Field String 1",0,'');
+              UNTIL WebAttValue.NEXT = 0;
+            END;
+          PageItemSort."Build By"::"Web Global" :
+            BEGIN
+              PageItemSort.TESTFIELD("Web Global to Build By");
+              WebAttValue.RESET;
+              WebAttValue.SETCURRENTKEY("Label Code","Table ID","Key Field String 1","Key Field String 2",
+                                        "Key Field Integer 1","Global Code");
+              WebAttValue.SETRANGE("Label Code",LabelCode);
+              WebAttValue.SETRANGE("Table ID",27);
+              WebAttValue.SETFILTER("Key Field String 1",'<>%1','');
+              WebAttValue.SETRANGE("Global Code",PageItemSort."Web Global to Build By");
+              Window.UPDATE(1,TxtByWebGlobal);
+              IF WebAttValue.FIND('-') THEN
+              REPEAT
+                Window.UPDATE(2,WebAttValue."Key Field String 1");
+                CreateCatBuildData(LabelCode,ePageGuID,WebAttValue."Key Field String 1",0,'');
+              UNTIL WebAttValue.NEXT = 0;
+            END;
+        END;
+      END;
+      Window.CLOSE;
+      IF DoBoth THEN
+        CalcScore(LabelCode,ePageGuID);
+    END;
+
+    PROCEDURE CalcScore@1000000002(LabelCode@1000000001 : Code[10];ePageGuID@1000000000 : Integer);
+    VAR
+      TxtWindowTitle@1000000002 : TextConst 'ENU=calculating Score %1;ENG=calculating Score %1';
+    BEGIN
+      IF LabelCode = '' THEN
+        ERROR(Text000);
+      IF ePageGuID = 0 THEN
+        ERROR(Text001);
+
+      ePage.GET(LabelCode,ePageGuID);
+      IF ePage."Page Item Sort Code" = '' THEN BEGIN
+        //Use defaults from Label
+        Label.GET(LabelCode);
+        ApplyOrder(LabelCode,ePageGuID,Label."Default Sort Put Promos At Top",
+                   FALSE,Label."Default Sort Lowest First");
+
+      END ELSE BEGIN
+        //Process 2 is to add the score to the Catalogue Build Data.
+
+        PageItemSort.GET(LabelCode,ePage."Page Item Sort Code");
+        IF PageItemSort."Do Not Maintain Catalogue Data" THEN
+          EXIT;
+
+        Window.OPEN(STRSUBSTNO(TxtWindowTitle, PADSTR('#1', 20, '#')));
+        Window.UPDATE(1,ePageGuID);
+
+
+        CatBuildData.RESET;
+        CatBuildData.SETRANGE("Label Code",LabelCode);
+        CatBuildData.SETRANGE("ePage GuID",ePageGuID);
+        CatBuildData.SETFILTER("Item No.",'<>%1','');
+        IF CatBuildData.FIND('-') THEN
+        REPEAT
+          CatBuildData1 := CatBuildData;
+
+          //Is Item On Promotion
+          ItemsInPromo.RESET;
+          ItemsInPromo.SETCURRENTKEY("Label Code","Item No.");
+          ItemsInPromo.SETRANGE("Label Code",LabelCode);
+          ItemsInPromo.SETRANGE("Item No.",CatBuildData."Item No.");
+          IF ItemsInPromo.FINDFIRST THEN
+            CatBuildData1."Is On Promotion" := TRUE
+          ELSE
+            CatBuildData1."Is On Promotion" := FALSE;
+          IF PageItemSort."Score By" <> PageItemSort."Score By"::"Web Attribute" THEN
+            Item.GET(CatBuildData."Item No.");
+          IF PageItemSort."Score By" IN [PageItemSort."Score By"::"Sales LCY",PageItemSort."Score By"::"Sales Qty",
+                                      PageItemSort."Score By"::"Profit LCY"] THEN BEGIN
+            PageItemSort.TESTFIELD("Score Start Date Calculation");
+            StartDate := CALCDATE(PageItemSort."Score Start Date Calculation");
+            EndDate :=  CALCDATE(PageItemSort."Score End Date Calculation");
+            IF StartDate >= EndDate THEN
+              ERROR(Text002,StartDate,EndDate);
+            Item.SETRANGE("Date Filter",StartDate,EndDate);
+          END;
+          CASE PageItemSort."Score By" OF
+            PageItemSort."Score By"::"No Sort" : ;
+            PageItemSort."Score By"::"Sales LCY" :
+              BEGIN
+                Item.CALCFIELDS("Sales (LCY)");
+                CatBuildData1."Decimal Score" := Item."Sales (LCY)";
+                CatBuildData1."Code Score" := '';
+              END;
+            PageItemSort."Score By"::"Sales Qty" :
+              BEGIN
+                Item.CALCFIELDS("Sales (Qty.)");
+                CatBuildData1."Decimal Score" := Item."Sales (Qty.)";
+                CatBuildData1."Code Score" := '';
+              END;
+            PageItemSort."Score By"::"Profit LCY" :
+              BEGIN
+                Item.CALCFIELDS("Sales (LCY)","COGS (LCY)");
+                CatBuildData1."Decimal Score" := Item."Sales (LCY)" - Item."COGS (LCY)";
+                CatBuildData1."Code Score" := '';
+              END;
+            PageItemSort."Score By"::"Profit Percent" :
+              BEGIN
+                CatBuildData1."Decimal Score" := Item."Profit %";
+                CatBuildData1."Code Score" := '';
+              END;
+            PageItemSort."Score By"::"List Price" :
+              BEGIN
+                CatBuildData1."Decimal Score" := Item."Unit Price";
+                CatBuildData1."Code Score" := '';
+              END;
+            PageItemSort."Score By"::"Alphabetical A to Z" :
+              BEGIN
+                CatBuildData1."Decimal Score" := 0;
+                CatBuildData1."Code Score" := COPYSTR(Item.Description,1,50);
+              END;
+            PageItemSort."Score By"::"Web Attribute" :
+              BEGIN
+                PageItemSort.TESTFIELD("Web Attribute to Score By");
+                IF WebAttValue.GET(LabelCode,27,PageItemSort."Web Attribute to Score By",
+                                 CatBuildData."Item No.",'',0) THEN BEGIN
+                  CASE WebAttValue."Data Type" OF
+                    WebAttValue."Data Type"::Integer :
+                      BEGIN
+                        CatBuildData1."Decimal Score" := WebAttValue.IntegerVar;
+                        CatBuildData1."Code Score" := '';
+                      END;
+                    WebAttValue."Data Type"::Decimal :
+                      BEGIN
+                        CatBuildData1."Decimal Score" := WebAttValue.DecimalVar;
+                        CatBuildData1."Code Score" := '';
+                      END;
+                    ELSE BEGIN
+                      CatBuildData1."Decimal Score" := 0;
+                      CatBuildData1."Code Score" := COPYSTR(WebAttValue.Value,1,50);
+                    END;
+                  END;
+                END ELSE BEGIN
+                  CatBuildData1."Decimal Score" := 0;
+                  CatBuildData1."Code Score" := '';
+                END;
+              END;
+            PageItemSort."Score By"::"Web Global" :
+              BEGIN
+                PageItemSort.TESTFIELD("Web Global to Score By");
+                WebAttValue.RESET;
+                WebAttValue.SETRANGE("Label Code",LabelCode);
+                WebAttValue.SETRANGE("Table ID",27);
+                WebAttValue.SETRANGE("Key Field String 1",CatBuildData."Item No.");
+                //DOC EC2013.4.67 WebAttValue.SETRANGE("Global Code",PageItemSort."Web Global to Build By");
+                WebAttValue.SETRANGE("Global Code",PageItemSort."Web Global to Score By"); //DOC EC2013.4.67
+                IF WebAttValue.FINDFIRST THEN BEGIN
+                  WebAtt.GET(LabelCode,27,WebAttValue."Attribute Code");
+                  CatBuildData1."Decimal Score" := WebAtt."Sort Order";
+                  CatBuildData1."Code Score" := '';
+                END ELSE BEGIN
+                  CatBuildData1."Decimal Score" := 0;
+                  CatBuildData1."Code Score" := '';
+                END;
+              END;
+          END;
+          CatBuildData1.MODIFY;
+        UNTIL CatBuildData.NEXT = 0;
+
+        Window.CLOSE;
+
+        IF PageItemSort."Score By" = PageItemSort."Score By":: "Alphabetical A to Z" THEN
+          ApplyOrder(LabelCode,ePageGuID,PageItemSort."Put Promos At Top of Page",TRUE,
+                     PageItemSort."Score Lowest First")
+        ELSE
+          ApplyOrder(LabelCode,ePageGuID,PageItemSort."Put Promos At Top of Page",FALSE,
+                     PageItemSort."Score Lowest First");
+      END;
+    END;
+
+    PROCEDURE ApplyOrder@1190000011(LabelCode@1190000006 : Code[10];ePageGuID@1190000005 : Integer;PutPromosAtTop@1190000007 : Boolean;ScoreByAlphabetical@1190000008 : Boolean;ScoreLowestFirst@1190000009 : Boolean);
+    VAR
+      TxtWindowTitle@1000000000 : TextConst 'ENU=Calculating Order %1;ENG=Calculating Order %1';
+    BEGIN
+      //Process 3 is to put an Order No. on the entries in the Build Catalogue Analysis Table
+      Window.OPEN(STRSUBSTNO(TxtWindowTitle, PADSTR('#1', 20, '#')));
+      Window.UPDATE(1,ePageGuID);
+
+      CatBuildData.RESET;
+      CatBuildData.SETRANGE("Label Code",LabelCode);
+      CatBuildData.SETRANGE("ePage GuID",ePageGuID);
+
+
+      IF PutPromosAtTop THEN
+        CatBuildData.SETCURRENTKEY("Label Code","ePage GuID","Is On Promotion","Decimal Score","Code Score")
+      ELSE
+        CatBuildData.SETCURRENTKEY("Label Code","ePage GuID","Decimal Score","Code Score");
+      NewOrderNo := 0;
+
+      CASE LabelCode OF
+
+        ELSE BEGIN
+          IF ScoreByAlphabetical THEN
+             DoAFindFirst(PutPromosAtTop)
+          ELSE BEGIN
+            IF ScoreLowestFirst THEN
+              DoAFindFirst(PutPromosAtTop)
+            ELSE
+              DoAFindLast;
+          END;
+        END;
+      END;
+
+      Window.CLOSE;
+    END;
+
+    PROCEDURE CreateCatBuildData@1190000005(LabelCode@1190000005 : Code[10];ePageGuID@1190000006 : Integer;ItemNo@1190000007 : Code[20];DecimalScore@1190000008 : Decimal;CodeScore@1190000009 : Code[50]);
+    BEGIN
+      //Add DecimalScore and CodeScore so can populate at this time
+
+      //Just create PageItem if Do Not Maintain Catalogue Data
+      ePage.GET(LabelCode,ePageGuID);
+      IF ePage."Page Item Sort Code" <> '' THEN BEGIN
+        PageItemSort.GET(LabelCode,ePage."Page Item Sort Code");
+        IF PageItemSort."Do Not Maintain Catalogue Data" THEN BEGIN
+          IF NOT PageItem.GET(LabelCode,ePageGuID,PageItem.Type::Item,ItemNo) THEN BEGIN
+            PageItem.INIT;
+            PageItem."Label Code" := LabelCode;
+            PageItem."Page GroupGuid" := ePageGuID;
+            PageItem.Type := PageItem.Type::Item;
+            PageItem."No." := ItemNo;
+            PageItem.INSERT(TRUE);
+          END;
+          EXIT;
+        END;
+      END;
+
+      IF CatBuildData.GET(LabelCode,ePageGuID,ItemNo) THEN BEGIN
+        IF DecimalScore <> 0 THEN BEGIN
+          CatBuildData."Decimal Score" := DecimalScore;
+          CatBuildData.MODIFY;
+        END;
+        IF CodeScore <> '' THEN BEGIN
+          CatBuildData."Code Score" := CodeScore;
+          CatBuildData.MODIFY;
+        END;
+      END ELSE BEGIN
+        CatBuildData.INIT;
+        CatBuildData."Label Code" := LabelCode;
+        CatBuildData."ePage GuID" := ePageGuID;
+        CatBuildData."Item No." := ItemNo;
+        IF DecimalScore <> 0 THEN
+          CatBuildData."Decimal Score" := DecimalScore;
+        IF CodeScore <> '' THEN
+          CatBuildData."Code Score" := CodeScore;
+        CatBuildData.INSERT;
+      END;
+    END;
+
+    PROCEDURE DeleteCatBuildData@1190000010(LabelCode@1190000007 : Code[10];ePageGuID@1190000006 : Integer;ItemNo@1190000005 : Code[20];AlsoDeletePageItem@1190000008 : Boolean);
+    BEGIN
+      IF CatBuildData.GET(LabelCode,ePageGuID,ItemNo) THEN
+        CatBuildData.DELETE;
+      IF AlsoDeletePageItem THEN BEGIN
+        IF PageItem.GET(LabelCode,ePageGuID,PageItem.Type::Item,ItemNo) THEN
+          PageItem.DELETE(TRUE);
+        IF PageItem.GET(LabelCode,ePageGuID,PageItem.Type::"Promo Item",ItemNo) THEN
+          PageItem.DELETE(TRUE);
+      END;
+    END;
+
+    PROCEDURE DoAFindFirst@1190000008(PromosStillAtTop@1190000005 : Boolean);
+    BEGIN
+      IF PromosStillAtTop THEN BEGIN
+        CatBuildData.SETRANGE("Is On Promotion",TRUE);
+        IF CatBuildData.FIND('-') THEN
+        REPEAT
+          NewOrderNo := NewOrderNo +1;
+          CatBuildData1 := CatBuildData;
+          CatBuildData1.Order := NewOrderNo;
+          CatBuildData1.MODIFY;
+        UNTIL CatBuildData.NEXT = 0;
+        CatBuildData.SETRANGE("Is On Promotion",FALSE);
+        IF CatBuildData.FIND('-') THEN
+        REPEAT
+          NewOrderNo := NewOrderNo +1;
+          CatBuildData1 := CatBuildData;
+          CatBuildData1.Order := NewOrderNo;
+          CatBuildData1.MODIFY;
+        UNTIL CatBuildData.NEXT = 0;
+        CatBuildData.SETRANGE("Is On Promotion");
+      END ELSE BEGIN
+        IF CatBuildData.FIND('-') THEN
+        REPEAT
+          NewOrderNo := NewOrderNo +1;
+          CatBuildData1 := CatBuildData;
+          CatBuildData1.Order := NewOrderNo;
+          CatBuildData1.MODIFY;
+        UNTIL CatBuildData.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE DoAFindLast@1190000009();
+    BEGIN
+      IF  CatBuildData.FIND('+') THEN
+      REPEAT
+        NewOrderNo := NewOrderNo +1;
+        CatBuildData1 := CatBuildData;
+        CatBuildData1.Order := NewOrderNo;
+        CatBuildData1.MODIFY;
+      UNTIL CatBuildData.NEXT(-1) = 0;
+    END;
+
+    PROCEDURE TransferBuildDataToPageItems@1190000006(LabelCode@1190000005 : Code[10];ePageGuID@1190000006 : Integer);
+    VAR
+      TxtRemovingOldPageItems@1000000000 : TextConst 'ENU=Removing Old Page Items %1 %2;ENG=Removing Old Page Items %1 %2';
+      TxtInsertingPageItems@1000000001 : TextConst 'ENU=Inserting Page Items %1 %2;ENG=Inserting Page Items %1 %2';
+    BEGIN
+      CatBuildData.RESET;
+      CatBuildData.SETRANGE("Label Code",LabelCode);
+      CatBuildData.SETRANGE("ePage GuID",ePageGuID);
+      IF NOT CatBuildData.FINDFIRST THEN
+        EXIT;
+
+      Window.OPEN(STRSUBSTNO(TxtRemovingOldPageItems, PADSTR('#1', 20, '#'), PADSTR('#2', 20, '#')));
+      Window.UPDATE(1,ePageGuID);
+
+      //Process 4 is to add the Items to the Page Item table.
+      IF LabelCode = '' THEN
+        ERROR(Text000);
+      IF ePageGuID = 0 THEN
+        ERROR(Text001);
+
+      //DANGER of delete existings Page Items if they contain the only details of attributes.
+      //Need to put Page Items into a hidden ePage.
+      Label.GET(LabelCode);
+
+      PageItem.RESET;
+      PageItem.SETRANGE("Label Code",LabelCode);
+      PageItem.SETRANGE("Page GroupGuid",ePageGuID);
+      PageItem.SETFILTER(Type,'%1|%2',PageItem.Type::Item,PageItem.Type::"Promo Item");
+      PageItem.SETFILTER("No.",'<>%1','');
+      IF PageItem.FIND('-') THEN
+      REPEAT
+        Window.UPDATE(2,PageItem."No.");
+        IF NOT CatBuildData.GET(LabelCode,ePageGuID,PageItem."No.") THEN BEGIN
+          PageItem2 := PageItem;
+          PageItem2.DELETE(TRUE);
+        END;
+      UNTIL PageItem.NEXT = 0;
+
+      Window.CLOSE;
+
+      Window.OPEN(STRSUBSTNO(TxtInsertingPageItems, PADSTR('#1', 20, '#'), PADSTR('#2', 20, '#')));
+      Window.UPDATE(1,ePageGuID);
+
+      CatBuildData.RESET;
+      CatBuildData.SETRANGE("Label Code",LabelCode);
+      CatBuildData.SETRANGE("ePage GuID",ePageGuID);
+      IF CatBuildData.FIND('-') THEN
+      REPEAT
+        Window.UPDATE(2,CatBuildData."Item No.");
+        IF PageItem.GET(LabelCode,ePageGuID,PageItem1.Type::Item,CatBuildData."Item No.") THEN BEGIN
+          PageItem.Order := CatBuildData.Order;
+          PageItem.MODIFY(TRUE);
+          CreatePageItemWebAttributes(LabelCode,PageItem."Entry No.");
+        END ELSE BEGIN
+          PageItem.INIT;
+          PageItem."Label Code" := LabelCode;
+          PageItem."Page GroupGuid" := ePageGuID;
+          PageItem.Type := PageItem.Type::Item;
+          PageItem."No." := CatBuildData."Item No.";
+          PageItem.Order := CatBuildData.Order;
+          PageItem.INSERT(TRUE);
+          CreatePageItemWebAttributes(LabelCode,PageItem."Entry No.");
+        END;
+      UNTIL CatBuildData.NEXT = 0;
+
+      Window.CLOSE;
+    END;
+
+    PROCEDURE AutoBuild@1190000007(LabelCode@1190000005 : Code[10]);
+    VAR
+      ePageLocal@1190000007 : Record 9021628;
+    BEGIN
+      ePageLocal.RESET;
+      ePageLocal.SETRANGE("Label Code",LabelCode);
+      ePageLocal.SETRANGE("Auto Build",TRUE);
+      IF ePageLocal.FIND('-') THEN
+      REPEAT
+        BuildCatBuildData(LabelCode,ePageLocal."Page GUID",TRUE);
+        TransferBuildDataToPageItems(LabelCode,ePageLocal."Page GUID");
+      UNTIL ePageLocal.NEXT = 0;
+      MESSAGE(Text003);
+    END;
+
+    PROCEDURE CreatePageItemWebAttributes@1190000012(LabelCodeIn@1190000005 : Code[10];PageItemEntryNo@1190000007 : Integer);
+    BEGIN
+      IF PageItemEntryNo = 0 THEN
+        ERROR(Text004,PageItem."Page GroupGuid",PageItem."No.");
+      IF CatBuildData."Page Item Attribute 1" <> '' THEN
+        WebAttributeMgt.ControlWebAttributes('','',PageItemEntryNo,9021629,LabelCodeIn,
+                        CatBuildData."Page Item Web Attribute Code 1",0,
+                        CatBuildData."Page Item Attribute 1",'',0,FALSE,0D,0T);
+      IF CatBuildData."Page Item Attribute 2" <> '' THEN
+        WebAttributeMgt.ControlWebAttributes('','',PageItemEntryNo,9021629,LabelCodeIn,
+                        CatBuildData."Page Item Web Attribute Code 2",0,
+                        CatBuildData."Page Item Attribute 2",'',0,FALSE,0D,0T);
+      IF CatBuildData."Page Item Attribute 3" <> '' THEN
+        WebAttributeMgt.ControlWebAttributes('','',PageItemEntryNo,9021629,LabelCodeIn,
+                        CatBuildData."Page Item Web Attribute Code 3",0,
+                        CatBuildData."Page Item Attribute 3",'',0,FALSE,0D,0T);
+    END;
+
+    PROCEDURE AddFromePagePageItems@1190000013(LabelCode@1190000005 : Code[10];ePageGuID@1190000006 : Integer);
+    BEGIN
+      PageItem.RESET;
+      PageItem.SETRANGE("Label Code",LabelCode);
+      PageItem.SETRANGE("Page GroupGuid",ePageGuID);
+      PageItem.SETRANGE(Type,PageItem.Type::Item);
+      i := PageItem.COUNT;
+      IF i = 0 THEN
+        ERROR(Text005)
+      ELSE
+        IF i > 100000 THEN
+          IF NOT CONFIRM(Text006,FALSE,i) THEN
+            ERROR(Text007);
+
+      PageItem.FIND('-');
+      REPEAT
+        IF NOT CatBuildData.GET(LabelCode,ePageGuID,PageItem."No.") THEN BEGIN
+          CatBuildData.INIT;
+          CatBuildData."Label Code" := LabelCode;
+          CatBuildData."ePage GuID" := ePageGuID;
+          CatBuildData."Item No." := PageItem."No.";
+          CatBuildData.Order := PageItem.Order;
+          CatBuildData."Decimal Score" := PageItem.Order;
+          CatBuildData.INSERT;
+        END;
+      UNTIL PageItem.NEXT = 0;
+    END;
+
+    BEGIN
+    {
+      //DOC EC2013.3.00 MQ 01/01/2013 - Remove reference to PageItem."Page Item Type"
+      //DOC EC2013.4.67 MQ 09/10/2014 - GW141009 fix bug
+      //DOC EC2015.5.02 MQ 16/04/2015 - GW150416 Add support for DERMUK2015 x1
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,277 @@
+OBJECT Codeunit 11102065 OM - Debug Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            Mgt@1000 : Codeunit 11102035;
+            ApplicationSettings@1001 : Codeunit 11102101;
+            CommandLine2@1002 : Text;
+            ctCommandLine@1003 : TextConst 'DEU=DynamicsNAV://%1/%2/%3/debug;ENU=DynamicsNAV://%1/%2/%3/debug;ESP=DynamicsNAV://%1/%2/%3/debug;FRA=DynamicsNAV://%1/%2/%3/debug;NLD=DynamicsNAV://%1/%2/%3/debug;DEA=DynamicsNAV://%1/%2/%3/debug';
+          BEGIN
+            CommandLine2 := STRSUBSTNO(ctCommandLine, ApplicationSettings.ServerName, ApplicationSettings.ServerInstance, COMPANYNAME);
+            Mgt.RunHyperlink(CommandLine2);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      GlobalUserSecurityId@1000 : GUID;
+      GlobalUserSecurityIdSet@1001 : Boolean;
+
+    PROCEDURE GetBreakpoints@1(ObjectType2@1000 : Option;ObjectNo@1001 : Integer;VAR BreakPoint@1002 : Record 11102053);
+    VAR
+      TmpBreakPointLine@1003 : TEMPORARY Record 11102053;
+      DebuggerBreakpoint@1004 : Record 2000000100;
+      CALLineNo2@1005 : Integer;
+      LineCounter@1006 : ARRAY [7] OF Integer;
+    BEGIN
+      DebuggerBreakpoint.SETRANGE("Object Type", ObjectType2);
+      DebuggerBreakpoint.SETRANGE("Object ID", ObjectNo);
+      DebuggerBreakpoint.SETRANGE(Enabled, TRUE);
+      IF DebuggerBreakpoint.FINDSET THEN BEGIN
+        GetBreakpointLines(ObjectType2, ObjectNo, TmpBreakPointLine, LineCounter);
+        REPEAT
+          CALLineNo2 := CALLineNo(DebuggerBreakpoint."Line No.", TmpBreakPointLine, LineCounter);
+          IF CALLineNo2 > 0 THEN
+            IF NOT BreakPoint.GET(0, CALLineNo2, 0) THEN BEGIN
+              BreakPoint."Line No." := CALLineNo2;
+              BreakPoint.INSERT;
+            END;
+        UNTIL DebuggerBreakpoint.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE InsertBreakpoint@2(ObjectType2@1000 : Option;ObjectNo@1001 : Integer;LineNo@1002 : Integer) : Boolean;
+    VAR
+      TmpBreakPointLine@1003 : TEMPORARY Record 11102053;
+      BreakPointLineNo2@1004 : Integer;
+      LineCounter@1005 : ARRAY [7] OF Integer;
+    BEGIN
+      GetBreakpointLines(ObjectType2, ObjectNo, TmpBreakPointLine, LineCounter);
+      BreakPointLineNo2 := BreakpointLineNo(LineNo, TmpBreakPointLine, LineCounter);
+      IF BreakPointLineNo2 > 0 THEN BEGIN
+        InsertRecord(ObjectType2, ObjectNo, BreakPointLineNo2);
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE DeleteBreakpoint@3(ObjectType2@1000 : Option;ObjectNo@1001 : Integer;LineNo@1002 : Integer) : Boolean;
+    VAR
+      TmpBreakPointLine@1003 : TEMPORARY Record 11102053;
+      BreakPointLineNo2@1004 : Integer;
+      LineCounter@1005 : ARRAY [7] OF Integer;
+    BEGIN
+      GetBreakpointLines(ObjectType2, ObjectNo, TmpBreakPointLine, LineCounter);
+
+      BreakPointLineNo2 := BreakpointLineNo(LineNo, TmpBreakPointLine, LineCounter);
+      IF BreakPointLineNo2 > 0 THEN BEGIN
+        DeleteRecord(ObjectType2, ObjectNo, BreakPointLineNo2);
+        EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetBreakpointLines@4(VAR ObjectType2@1000 : Option;VAR ObjectNo@1001 : Integer;VAR TmpBreakPointLine@1002 : TEMPORARY Record 11102053;VAR LineCounter@1003 : ARRAY [7] OF Integer);
+    VAR
+      CALHistoryObject@1004 : Record 11102052;
+      CALHistoryLine@1005 : Record 11102053;
+      ApplicationSettings@1006 : Codeunit 11102101;
+      FunctionFlag@1007 : Text;
+      ActiveGroup@1008 : Integer;
+      ExpectedEndPos@1009 : Integer;
+      LastBeginPos@1010 : Integer;
+      AddEmptyLine@1011 : Boolean;
+      EmptyFunction@1012 : Boolean;
+    BEGIN
+      AddEmptyLine := ApplicationSettings.ApplicationVersion = '9.0';
+
+      IF NOT CALHistoryObject.TryGoToLastRecord(ObjectType2, ObjectNo) THEN
+        EXIT;
+
+      CALHistoryLine.SETRANGE("Entry No.", CALHistoryObject."Entry No.");
+      CALHistoryLine.SETRANGE("Sub Line No.", 1);
+      IF CALHistoryLine.FINDSET THEN
+        REPEAT
+          CASE CALHistoryLine.Code OF
+            '  PROPERTIES' : ActiveGroup := 1;
+            '  CODE' : ActiveGroup := 2;
+            '  FIELDS' : ActiveGroup := 3;
+            '  DATASET' : ActiveGroup := 3;
+            '  ELEMENTS' : ActiveGroup := 3;
+            '  CONTROLS' : ActiveGroup := 3;
+            '  REQUESTPAGE' : ActiveGroup := 4;
+            '    ActionList=ACTIONS' : ActiveGroup := 4;
+            '    CONTROLS' : ActiveGroup := 5;
+            '      ActionList=ACTIONS' : ActiveGroup := 6;
+            '    END.' :
+              BEGIN
+                LineCounter[ActiveGroup] := LastBeginPos;
+                EXIT;
+              END;
+          END;
+
+          IF ExpectedEndPos > 0 THEN
+            IF COPYSTR(CALHistoryLine.Code, ExpectedEndPos) = 'END;' THEN BEGIN
+              IF EmptyFunction OR AddEmptyLine THEN
+                LineCounter[ActiveGroup] += 1;
+              AddBreakpointLine(TmpBreakPointLine, CALHistoryLine."Line No.", ActiveGroup, LineCounter[ActiveGroup], FunctionFlag);
+              ExpectedEndPos := 0;
+            END;
+
+          IF ExpectedEndPos > 0 THEN BEGIN
+            EmptyFunction := FALSE;
+            AddBreakpointLine(TmpBreakPointLine, CALHistoryLine."Line No.", ActiveGroup, LineCounter[ActiveGroup], FunctionFlag);
+          END;
+
+          IF ExpectedEndPos = 0 THEN
+            IF STRLEN(CALHistoryLine.Code) > 5 THEN
+              IF COPYSTR(CALHistoryLine.Code, STRLEN(CALHistoryLine.Code) - 4) = 'BEGIN' THEN BEGIN
+                FunctionFlag := '1';
+                LastBeginPos := LineCounter[ActiveGroup];
+                EmptyFunction := TRUE;
+                ExpectedEndPos := STRLEN(CALHistoryLine.Code) - 4;
+              END;
+
+        UNTIL CALHistoryLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE AddBreakpointLine@12(VAR TmpBreakPointLine@1000 : TEMPORARY Record 11102053;CALLineNo@1001 : Integer;ActiveGroup@1002 : Integer;VAR DebuggerLineNo@1003 : Integer;VAR FunctionFlag@1004 : Text);
+    BEGIN
+      DebuggerLineNo += 1;
+      TmpBreakPointLine."Line No." := CALLineNo;
+      TmpBreakPointLine."Sub Line No." := 10000 * ActiveGroup + DebuggerLineNo;
+      TmpBreakPointLine.Code := FunctionFlag;
+      TmpBreakPointLine.INSERT;
+
+      FunctionFlag := '';
+    END;
+
+    PROCEDURE CALLineNoFromCodeCoverage@5(ObjectType2@1000 : Option;ObjectNo@1001 : Integer;LineNo@1002 : Integer) : Integer;
+    VAR
+      TmpBreakPointLine@1003 : TEMPORARY Record 11102053;
+      GroupNo@1004 : Integer;
+      LineCounter@1005 : ARRAY [7] OF Integer;
+      LineNoInGroup@1006 : Integer;
+    BEGIN
+      GetBreakpointLines(ObjectType2, ObjectNo, TmpBreakPointLine, LineCounter);
+
+      LineNoInGroup := LineNo;
+      GroupNo := 1;
+
+      WHILE (LineNoInGroup > LineCounter[GroupNo]) AND (GroupNo <= 6) DO BEGIN
+        LineNoInGroup -= LineCounter[GroupNo];
+        GroupNo += 1;
+      END;
+
+      IF GroupNo <= 6 THEN BEGIN
+        TmpBreakPointLine.SETRANGE("Sub Line No.", GroupNo * 10000 + LineNoInGroup);
+        IF TmpBreakPointLine.FINDFIRST THEN
+          EXIT(TmpBreakPointLine."Line No.");
+      END;
+    END;
+
+    LOCAL PROCEDURE CALLineNo@113(VAR BreakPointLineNo@1000 : Integer;VAR TmpBreakPointLine@1001 : TEMPORARY Record 11102053;VAR LineCounter@1002 : ARRAY [7] OF Integer) : Integer;
+    VAR
+      GroupNo@1003 : Integer;
+      LineNoInGroup@1004 : Integer;
+    BEGIN
+      LineNoInGroup := BreakPointLineNo;
+      GroupNo := 1;
+
+      WHILE (LineNoInGroup > LineCounter[GroupNo]) AND (GroupNo <= 6) DO BEGIN
+        LineNoInGroup -= LineCounter[GroupNo];
+        GroupNo += 1;
+      END;
+
+      IF GroupNo <= 6 THEN BEGIN
+        TmpBreakPointLine.SETRANGE("Sub Line No.", GroupNo * 10000 + LineNoInGroup);
+        IF TmpBreakPointLine.FINDFIRST THEN
+          EXIT(TmpBreakPointLine."Line No.");
+      END;
+    END;
+
+    LOCAL PROCEDURE BreakpointLineNo@6(VAR CALLineNo@1000 : Integer;VAR TmpBreakPointLine@1001 : TEMPORARY Record 11102053;VAR LineCounter@1002 : ARRAY [7] OF Integer) : Integer;
+    VAR
+      BreakPointGroup@1003 : Integer;
+      BreakPointGroupLine@1004 : Integer;
+      BreakPointLineNo2@1005 : Integer;
+      i@1006 : Integer;
+    BEGIN
+      TmpBreakPointLine.RESET;
+      TmpBreakPointLine.SETRANGE("Line No.", CALLineNo);
+      IF TmpBreakPointLine.FINDFIRST THEN BEGIN
+        BreakPointGroup := TmpBreakPointLine."Sub Line No." DIV 10000;
+        BreakPointGroupLine := TmpBreakPointLine."Sub Line No." MOD 10000;
+
+        FOR i := BreakPointGroup - 1 DOWNTO 1 DO
+          BreakPointLineNo2 += LineCounter[i];
+        BreakPointLineNo2 += BreakPointGroupLine;
+
+        EXIT(BreakPointLineNo2);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertRecord@7(ObjectType2@1000 : Option;ObjectNo@1001 : Integer;LineNo@1002 : Integer);
+    VAR
+      DebuggerBreakpoint@1003 : Record 2000000100;
+      DebuggerBreakpoint2@1004 : Record 2000000100;
+    BEGIN
+      DebuggerBreakpoint.SETRANGE("Object Type", ObjectType2);
+      DebuggerBreakpoint.SETRANGE("Object ID", ObjectNo);
+      DebuggerBreakpoint.SETRANGE("Line No.", LineNo);
+      IF DebuggerBreakpoint.FINDFIRST THEN BEGIN
+        DebuggerBreakpoint.Enabled := TRUE;
+        DebuggerBreakpoint.MODIFY(TRUE);
+      END ELSE BEGIN
+        DebuggerBreakpoint2.INIT;
+        DebuggerBreakpoint2."Object Type" := ObjectType2;
+        DebuggerBreakpoint2."Object ID" := ObjectNo;
+        DebuggerBreakpoint2."Line No." := LineNo;
+        IF DebuggerBreakpoint2.INSERT(TRUE) THEN
+          ;
+      END;
+    END;
+
+    LOCAL PROCEDURE DeleteRecord@8(ObjectType2@1000 : Option;ObjectNo@1001 : Integer;LineNo@1002 : Integer);
+    VAR
+      DebuggerBreakpoint@1003 : Record 2000000100;
+    BEGIN
+      DebuggerBreakpoint.SETRANGE("Object Type", ObjectType2);
+      DebuggerBreakpoint.SETRANGE("Object ID", ObjectNo);
+      DebuggerBreakpoint.SETRANGE("Line No.", LineNo);
+      IF DebuggerBreakpoint.FINDSET THEN
+        REPEAT
+          DebuggerBreakpoint.DELETE(TRUE);
+        UNTIL DebuggerBreakpoint.NEXT = 0;
+    END;
+
+    PROCEDURE RemoveAllBreakpoints@9();
+    VAR
+      DebuggerBreakpoint@1000 : Record 2000000100;
+    BEGIN
+      DebuggerBreakpoint.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE SetUser@11() : Boolean;
+    VAR
+      User@1000 : Record 2000000120;
+    BEGIN
+      IF PAGE.RUNMODAL(PAGE::Users, User) = ACTION::LookupOK THEN BEGIN
+        GlobalUserSecurityId := User."User Security ID";
+        GlobalUserSecurityIdSet := TRUE;
+        EXIT(TRUE);
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

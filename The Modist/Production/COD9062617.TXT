@@ -1,0 +1,527 @@
+OBJECT Codeunit 9062617 E-Mail Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            Test();
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EMail@9062229 : Record 9062281;
+      EMailAttachment@9062237 : TEMPORARY Record 9062283;
+      SystemBehaviour@9062230 : Record 9062230;
+      BlobToolkit@9062236 : Codeunit 9062242;
+      FileManagement@9062238 : Codeunit 419;
+      FileSystem@9062235 : Codeunit 9062264;
+      Cc@9062231 : Text;
+      Bcc@9062232 : Text;
+      Subject@9062233 : Text;
+      Body@9062234 : Text;
+      FromFile@1000000000 : Text;
+
+    LOCAL PROCEDURE "--- Direct Access to E-Mail ---"@9062269();
+    BEGIN
+    END;
+
+    PROCEDURE GetEMail@9062270(VAR pEMail@9062229 : Record 9062281);
+    BEGIN
+      //DOC NA2016.10 - Returning e-mail
+      //  <> pEMail: Target e-mail
+
+      pEMail := EMail;
+    END;
+
+    PROCEDURE GetEMailAttachments@9062243(VAR pEMailAttachment@9062229 : Record 9062283);
+    BEGIN
+      //DOC NA2016.10 - Returning e-mail attachments
+      //  <> pEMailAttachment: Target recordset
+
+      pEMailAttachment.COPY(EMailAttachment, TRUE);
+    END;
+
+    PROCEDURE SetEMail@9062271(pEMail@9062229 : Record 9062281);
+    BEGIN
+      //DOC NA2016.10 - Setting e-mail
+      //  -> pEMail: The e-mail
+
+      EMail := pEMail;
+    END;
+
+    PROCEDURE SetEMailAttachments@1000000002(VAR pEMailAttachment@9062229 : Record 9062283);
+    BEGIN
+      //DOC NA2016.14 - PC
+      EMailAttachment.COPY(pEMailAttachment, TRUE);
+    END;
+
+    PROCEDURE ClearEMailAttachments@9062245();
+    BEGIN
+      //DOC NA2016.10 - Clearing e-mail attachments
+
+      EMailAttachment.RESET();
+      EMailAttachment.DELETEALL();
+    END;
+
+    PROCEDURE AddEMailAttachment@9062244(pEMailAttachment@9062229 : Record 9062283);
+    BEGIN
+      //DOC NA2016.10 - Adding e-mail attachment
+      //  -> pEMailAttachment: E-mail attachment
+
+      EMailAttachment.RESET();
+      EMailAttachment.SETRANGE("Line No.", pEMailAttachment."Line No.");
+      IF ( NOT (EMailAttachment.ISEMPTY())) THEN
+      BEGIN
+        EMailAttachment.SETRANGE("Line No.");
+        EMailAttachment.FINDLAST();
+        pEMailAttachment."Line No." := EMailAttachment."Line No." + 1;
+      END;
+
+      EMailAttachment := pEMailAttachment;
+      EMailAttachment.INSERT();
+    END;
+
+    PROCEDURE "--- Creating E-Mail ---"@9062236();
+    BEGIN
+    END;
+
+    PROCEDURE CreateEMail@9062231() : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Sending an e-mail
+      //  <- TRUE = Sent, FALSE = Nope
+
+      EXIT(CreateEMailInternal('', '', ''));
+    END;
+
+    PROCEDURE CreateEMailTo@9062232(pRecipients@9062229 : Text) : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Sending an e-mail to somebody
+      //  -> pRecipients: A list of recipients (semicolon-separated)
+      //  <- TRUE = Sent, FALSE = Nope
+
+      EXIT(CreateEMailInternal('', '', pRecipients));
+    END;
+
+    PROCEDURE CreateEMailToContact@9062233(pRecipientContact@9062229 : Record 5050) : Boolean;
+    VAR
+      lToContact@9062230 : Record 5050;
+    BEGIN
+      //DOC NA2016.10 - Sending an e-mail to a contact
+      //  -> pRecipientContact: Recipient contact
+      //  <- TRUE = Sent, FALSE = Nope
+
+      EXIT(CreateEMailInternal('', '', pRecipientContact."E-Mail"));
+    END;
+
+    PROCEDURE CreateEMailFromTo@9062234(pSenderEMail@9062230 : Text;pSenderName@9062229 : Text;pRecipients@9062231 : Text) : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Sending an e-mail from somebody to somebody
+      //  -> pSenderEMail: Sender e-mail
+      //  -> pSenderName: Sender name
+      //  -> pRecipients: A list of recipients (semicolon-separated)
+      //  <- TRUE = Sent, FALSE = Nope
+
+      EXIT(CreateEMailInternal(pSenderEMail, pSenderName, pRecipients));
+    END;
+
+    PROCEDURE CreateEMailFromToContact@9062235(pSenderEMail@9062229 : Text;pSenderName@9062230 : Text;pRecipientContact@9062231 : Record 5050) : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Sending an e-mail from somebody to a contact
+      //  -> pSenderEMail: Sender e-mail
+      //  -> pSenderName: Sender name
+      //  -> pRecipientContact: Recipient contact
+      //  <- TRUE = Sent, FALSE = Nope
+
+      EXIT(CreateEMailInternal(pSenderEMail, pSenderName, pRecipientContact."E-Mail"));
+    END;
+
+    PROCEDURE CreateEMailFromContactToContact@9062237(pFromContact@9062229 : Record 5050;pRecipientContact@9062230 : Record 5050) : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Sending an e-mail from a contact to a contact
+      //  -> pFromContact: From contact
+      //  -> pRecipientContact: Recipient contact
+
+      EXIT(CreateEMailInternal(pFromContact."E-Mail", pFromContact.Name, pRecipientContact."E-Mail"));
+    END;
+
+    LOCAL PROCEDURE CreateEMailInternal@9062240(pSenderEMail@9062231 : Text;pSenderName@9062230 : Text;pRecipients@9062229 : Text) : Boolean;
+    VAR
+      lContact@9062236 : Record 5050;
+      lNablementSetup@9062234 : Record 9062229;
+      lNablementUser@9062232 : Record 9062729;
+      lUseNora@9062233 : Boolean;
+      lUserId@9062235 : Code[50];
+    BEGIN
+      //DOC NA2016.10 - Sending an e-mail (internal version)
+      //  -> pSenderEMail: Sender e-mail
+      //  -> pSenderName: Sender name
+      //  -> pRecipients: A list of recipients (semicolon-separated)
+      //  <- TRUE = Sent, FALSE = Nope
+
+      IF (pSenderEMail = '') THEN
+      BEGIN
+        lUseNora := SystemBehaviour.GetBoolean('MAN_EMAIL_AS_NORA');
+        IF (lUseNora) THEN
+        BEGIN
+          lNablementSetup.GET();
+          lUserId := lNablementSetup."Auto Response User ID";
+        END
+        ELSE
+          lUserId := USERID();
+        IF (lNablementUser.GET(lUserId)) THEN
+        BEGIN
+          IF (lNablementUser."Contact No." <> '') THEN
+            IF (lContact.GET(lNablementUser."Contact No.")) THEN
+            BEGIN
+              pSenderEMail := lContact."E-Mail";
+              IF (pSenderName = '') THEN
+                pSenderName := lContact.Name;
+            END;
+          IF (pSenderEMail = '') THEN
+          BEGIN
+            pSenderEMail := lNablementUser."E-Mail";
+            IF (pSenderName = '') THEN
+              pSenderName := lNablementUser.Name;
+          END;
+        END;
+      END;
+
+      CLEAR(EMail);
+      EMail.INIT();
+      EMail.VALIDATE("Sender E-Mail", COPYSTR(pSenderEMail, 1, MAXSTRLEN(EMail."Sender E-Mail")));
+      EMail.VALIDATE("Sender Name", COPYSTR(pSenderName, 1, MAXSTRLEN(EMail."Sender Name")));
+      EMail.VALIDATE(Recipients, COPYSTR(pRecipients, 1, MAXSTRLEN(EMail.Recipients)));
+      EMail.VALIDATE(CC, COPYSTR(Cc, 1, MAXSTRLEN(EMail.CC)));
+      EMail.VALIDATE(BCC, COPYSTR(Bcc, 1, MAXSTRLEN(EMail.BCC)));
+      EMail.VALIDATE(Subject, COPYSTR(Subject, 1, MAXSTRLEN(EMail.Subject)));
+      EMail.SetBodyText(Body);
+    END;
+
+    PROCEDURE "--- Setting E-Mail Properties ---"@9062268();
+    BEGIN
+    END;
+
+    PROCEDURE SetCC@9062249(pCc@9062229 : Text);
+    BEGIN
+      //DOC NA2016.10 - Setting "CC"
+      //  -> pCc: The "CC" (semicolon-separated e-mail addresses)
+
+      Cc := pCc;
+    END;
+
+    PROCEDURE ClearCC@9062257();
+    BEGIN
+      //DOC NA2016.10 - Clearing "CC"
+
+      Cc := '';
+    END;
+
+    PROCEDURE AddToCC@9062258(pCc@9062229 : Text);
+    BEGIN
+      //DOC NA2016.10 - Adding to "CC"
+      //  -> pCc: The "CC" (semicolon-separated e-mail addresses)
+
+      IF (Cc <> '') THEN
+        Cc := Cc + ';';
+      Cc := Cc + pCc;
+    END;
+
+    PROCEDURE SetBCC@9062250(pBCC@9062229 : Text);
+    BEGIN
+      //DOC NA2016.10 - Setting "BCC"
+      //  -> pBCC: The "BCC" (semicolon-separated e-mail addresses)
+
+      Bcc := pBCC;
+    END;
+
+    PROCEDURE ClearBCC@9062259();
+    BEGIN
+      //DOC NA2016.10 - Clearing "BCC"
+
+      Bcc := '';
+    END;
+
+    PROCEDURE AddToBCC@9062260(pBCC@9062229 : Text);
+    BEGIN
+      //DOC NA2016.10 - Adding to "BCC"
+      //  -> pBCC: The "BCC" (semicolon-separated e-mail addresses)
+
+      IF (Bcc <> '') THEN
+        Bcc := Bcc + ';';
+      Bcc := Bcc + pBCC;
+    END;
+
+    PROCEDURE SetSubject@9062251(pSubject@9062229 : Text);
+    BEGIN
+      //DOC NA2016.10 - Setting subject
+      //  -> pSubject: The subject
+
+      Subject := pSubject;
+    END;
+
+    PROCEDURE SetBody@9062252(pBody@9062229 : Text);
+    BEGIN
+      //DOC NA2016.10 - Setting body
+      //  -> pBody: The body
+
+      Body := pBody;
+    END;
+
+    PROCEDURE ClearBody@9062253();
+    BEGIN
+      //DOC NA2016.10 - Clearing body
+
+      Body := '';
+    END;
+
+    PROCEDURE AddToBody@9062254(pBody@9062229 : Text);
+    BEGIN
+      //DOC NA2016.10 - Adding body
+      //  -> pBody: The body
+
+      IF (Body <> '') THEN
+        Body := Body + '\';
+      Body := Body + pBody;
+    END;
+
+    PROCEDURE "--- Adding ---"@9062229();
+    BEGIN
+    END;
+
+    PROCEDURE AddRecipient@9062230(VAR pEMail@9062229 : Record 9062281) : Boolean;
+    VAR
+      lContact@9062230 : Record 5050;
+      eContactHasNoEMail@9062231 : TextConst 'ENU=Contact ''%1'' has no e-mail.;ENG=Contact ''%1'' has no e-mail.';
+      eContactAlreadyAdded@9062232 : TextConst 'ENU=The contact''s e-mail has been already added to recipients. Do you want to add it again?;ENG=The contact''s e-mail has been already added to recipients. Do you want to add it again?';
+    BEGIN
+      //DOC NA2016.10 - Add a recipient to e-mail recipients
+      //  <> pEMail: E-mail to add recipient to
+      //  <- TRUE = Recipient added, FALSE = Not
+
+      IF (PAGE.RUNMODAL(0, lContact) <> ACTION::LookupOK) THEN
+        EXIT(FALSE);
+
+      IF (lContact."E-Mail" = '') THEN
+        ERROR(eContactHasNoEMail, lContact."No.");
+
+      IF (pEMail.Recipients <> '') THEN
+        IF (STRPOS(';' + pEMail.Recipients + ';', ';' + lContact."E-Mail" + ';') > 0) THEN
+          IF ( NOT (CONFIRM(eContactAlreadyAdded, FALSE))) THEN
+            EXIT(FALSE);
+
+      IF (pEMail.Recipients <> '') THEN
+        pEMail.Recipients := pEMail.Recipients + ';';
+      pEMail.Recipients := pEMail.Recipients + lContact."E-Mail";
+      pEMail.MODIFY();
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE AddAttachment@9062241(pEMail@9062234 : Record 9062281;VAR pEMailAttachment@9062229 : Record 9062283) : Boolean;
+    VAR
+      lBlob@9062236 : Record 99008535;
+      lFilePath@9062231 : Text;
+      eDialogTitle@9062232 : TextConst 'ENU=Select attachment file;ENG=Select attachment file';
+      eDialogFilter@9062233 : TextConst 'ENU=All Files (*.*)|*.*;ENG=All Files (*.*)|*.*';
+      lLineNo@9062235 : Integer;
+    BEGIN
+      //DOC NA2016.10 - Adding attachment to e-mail attachments
+      //  -> pEMail: The current e-mail
+      //  <> pEMailAttachment: Target e-mail attachment recordset
+      //  <- TRUE = Attachment added, FALSE = Cancelled
+
+      //DOC NA2016.14 PC - Changed to use UPLOAD
+      UPLOAD(eDialogTitle,'',eDialogFilter,'',lFilePath);
+      //lFilePath := FileManagement.OpenFileDialog(eDialogTitle, '', eDialogFilter);
+
+      IF (lFilePath = '') THEN
+        EXIT(FALSE);
+
+      pEMailAttachment.RESET();
+      IF (pEMailAttachment.FINDLAST()) THEN
+        lLineNo := pEMailAttachment."Line No." + 1
+      ELSE
+        lLineNo := 1;
+
+      CLEAR(pEMailAttachment);
+      pEMailAttachment.INIT();
+      pEMailAttachment.VALIDATE("E-Mail Entry No.", pEMail."Entry No.");
+      pEMailAttachment.VALIDATE("Line No.", lLineNo);
+      pEMailAttachment.VALIDATE("File Path", lFilePath);
+      //pEMailAttachment.VALIDATE("File Name", FileSystem.GetFileName(FileSystem.Client(), lFilePath));
+      pEMailAttachment.VALIDATE("File Name", FileSystem.GetFileName(TRUE, lFilePath));
+      pEMailAttachment.VALIDATE("Display Name", pEMailAttachment."File Name");
+      pEMailAttachment.VALIDATE("Content BLOB", lBlob.Blob);
+      pEMailAttachment.INSERT();
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Sending E-Mail ---"@9062274();
+    BEGIN
+    END;
+
+    PROCEDURE EditAndSendEMail@9062275() : Boolean;
+    VAR
+      lEMailPage@9062229 : Page 9063100;
+      lPageResult@9062230 : Action;
+      lTryingToSend@9062232 : Boolean;
+      lSend@9062233 : Boolean;
+      lSent@9062234 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Editing and sending an e-mail
+      //  <- TRUE = Sent, FALSE = Cancelled
+
+      IF EMail."Sender E-Mail" = '' THEN
+        CreateEMail;
+
+      lSent := FALSE;
+
+      lTryingToSend := TRUE;
+      lSend := FALSE;
+      WHILE (lTryingToSend) DO
+      BEGIN
+        COMMIT;
+        CLEAR(lEMailPage);
+        lEMailPage.SetEMail(EMail);
+        lEMailPage.SetEMailAttachments(EMailAttachment);
+        lPageResult := lEMailPage.RUNMODAL();
+        lSend := lEMailPage.OK();
+        IF (lSend) THEN
+        BEGIN
+          lEMailPage.GetEMail(EMail);
+          lEMailPage.GetEMailAttachments(EMailAttachment);
+        END
+        ELSE
+          lTryingToSend := FALSE;
+        IF (lSend) THEN
+        BEGIN
+          lSent := SendEMail();
+          IF (lSent) THEN
+            lTryingToSend := FALSE;
+        END;
+      END;
+
+      EXIT(lSent);
+    END;
+
+    PROCEDURE SendEMail@9062276() : Boolean;
+    VAR
+      lDialog@9062229 : Dialog;
+      eDialogTitle@9062230 : TextConst 'ENU=Sending an e-mail...;ENG=Sending an e-mail...';
+      lResult@9062231 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Sending an e-mail (without interaction)
+      //  <- Result
+      lResult := TRUE;
+
+      CLEARLASTERROR();
+      lDialog.OPEN(eDialogTitle);
+      lResult := TryToSendEMail();
+      IF ( NOT (lResult)) THEN
+        MESSAGE(GETLASTERRORTEXT());
+      lDialog.CLOSE();
+
+      EXIT(lResult);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryToSendEMail@9062242();
+    VAR
+      lTnpMail@9062229 : Codeunit 9062276;
+      lSent@9062230 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Trying to send an e-mail
+
+      lTnpMail.NewMessage(EMail."Sender Name", EMail."Sender E-Mail", EMail.Recipients, EMail.Subject, '');
+      IF (EMail.CC <> '') THEN
+        lTnpMail.AddCC(EMail.CC);
+      IF (EMail.BCC <> '') THEN
+        lTnpMail.AddBCC(EMail.BCC);
+      lTnpMail.AddBodyLine(EMail.GetBodyText(FALSE));
+
+      EMailAttachment.RESET();
+      IF (EMailAttachment.FINDSET()) THEN
+        lTnpMail.AddEmailAttachments(EMailAttachment);
+
+      CreateCRMLogForEmail;
+
+      lSent := lTnpMail.Send();
+
+      IF ( NOT (lSent)) THEN
+        ERROR(lTnpMail.GetLastErrorMessage());
+    END;
+
+    LOCAL PROCEDURE "--- Create CRM Log ---"@1000000000();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CreateCRMLogForEmail@1000000001();
+    VAR
+      CRMLogEntry@1000000000 : Record 9062392;
+      FileAttachmentProcessing@1000000001 : Codeunit 9062600;
+      FileAttachment@1000000002 : Record 9062272;
+    BEGIN
+      IF EMail."Create CRM Log" = FALSE THEN
+        EXIT;
+
+      IF EMail."Contact No." = '' THEN
+        EXIT;
+
+      CRMLogEntry.INIT;
+      CRMLogEntry.VALIDATE(CRMLogEntry."Related Contact",EMail."Contact No.");
+      CRMLogEntry.VALIDATE(CRMLogEntry.Subject,EMail.Subject);
+      CRMLogEntry.VALIDATE(CRMLogEntry."E-mail",TRUE);
+      CRMLogEntry."E-mail Body HTML" := EMail.Body;
+      CRMLogEntry.VALIDATE("E-mail Recipients",EMail.Recipients);
+      CRMLogEntry.VALIDATE("E-mail CC",EMail.CC);
+      CRMLogEntry.VALIDATE("E-mail BCC",EMail.BCC);
+      CRMLogEntry.VALIDATE("E-mail Sender Name",EMail."Sender Name");
+      CRMLogEntry.VALIDATE("E-mail Sender E-Mail",EMail."Sender E-Mail");
+      CRMLogEntry.INSERT(TRUE);
+
+      EMailAttachment.RESET();
+        IF (EMailAttachment.FINDSET()) THEN
+        REPEAT
+          FileAttachment.RESET();
+          FileAttachment.SETRANGE("Table ID", DATABASE::"CRM Log Entry");
+          FileAttachment.SETRANGE("Primary Key FieldID 1", CRMLogEntry.FIELDNO("Entry No."));
+          FileAttachment.SETRANGE("Primary Key Value 1", FORMAT(CRMLogEntry."Entry No.", 0, 1));
+          FileAttachmentProcessing.GetFromServer(FileAttachment,EMailAttachment."File Path",EMailAttachment."File Name",EMailAttachment."File Name",FALSE,FALSE);
+        UNTIL (EMailAttachment.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE "--- Testing ---"@9062238();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE Test@9062239();
+    VAR
+      lNablementUser@9062229 : Record 9062729;
+    BEGIN
+      //DOC NA2016.10 - Testing the codeunit
+
+      IF ( NOT (lNablementUser.GET(USERID()))) THEN
+        CLEAR(lNablementUser);
+
+      CreateEMailFromTo(lNablementUser."E-Mail", lNablementUser.Name, '');
+      EditAndSendEMail();
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.10 JH 30/09/2015 - Created
+      //DOC NA2016.14 PC 02/03/2016 - Attachments behaviour changed
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

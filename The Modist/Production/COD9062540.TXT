@@ -1,0 +1,1200 @@
+OBJECT Codeunit 9062540 Quest. Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            QuestionnaireTemplateLine@1000000001 : Record 9062703;
+          BEGIN
+            QuestionnaireTemplateLine.FINDSET;
+            REPEAT
+              QuestionnaireTemplateLine.VALIDATE("Line No.");
+              QuestionnaireTemplateLine.MODIFY;
+            UNTIL QuestionnaireTemplateLine.NEXT = 0;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      errLineTypeNotAnswer@1000000000 : TextConst 'ENU=Sorry, the Line Type was not "Question";ENG=Sorry, the Line Type was not "Question"';
+      CriteriaLineType@1000000001 : 'Ask,Skip To';
+      errNotSavedFieldChange@1000000002 : TextConst 'ENU=Questionnaire action %2 for template %1 contains field change that is not saved to the database.;ENG=Questionnaire action %2 for template %1 contains field change that is not saved to the database.';
+
+    LOCAL PROCEDURE "--- Questionnaire Line Management ---"@1000000009();
+    BEGIN
+    END;
+
+    PROCEDURE RenumberQuestLines@1000000010(VAR QuestionnaireTemplate@1000000000 : Record 9062702);
+    VAR
+      QuestionnaireTemplateLine@1000000002 : Record 9062703;
+      PageNo@1000000001 : Integer;
+      GroupNo@1000000003 : Integer;
+      GroupSequence@1000000005 : Integer;
+      FirstRecord@1000000004 : Boolean;
+    BEGIN
+      FirstRecord := TRUE;
+      PageNo := 1;
+      GroupNo := 1;
+      GroupSequence := 0;
+
+      QuestionnaireTemplateLine.RESET();
+      QuestionnaireTemplateLine.SETCURRENTKEY("Questionnaire Template Code", Sequence);
+      QuestionnaireTemplateLine.SETRANGE("Questionnaire Template Code",QuestionnaireTemplate.Code);
+
+      RenumberQuestLinesRange(QuestionnaireTemplateLine, -1, FALSE, FALSE, FALSE);
+      //InternalRenumberQuestLines(QuestionnaireTemplateLine, FirstRecord, PageNo, GroupNo, GroupSequence);
+    END;
+
+    PROCEDURE RenumberQuestLinesRange@1000000004(VAR QuestTemplateLine@1000000000 : Record 9062703;SkipLineNo@1000000004 : Integer;ModifyQuestLine@1000000001 : Boolean;NewLine@1000000017 : Boolean;Deleted@1000000018 : Boolean);
+    VAR
+      SrcQuestLine@1000000002 : Record 9062703;
+      LineToCheck@1000000013 : TEMPORARY Record 9062703;
+      LevelsBuffer@1000000005 : TEMPORARY Record 9062730;
+      CurrentPageNo@1000000011 : Integer;
+      CurrentGroupNo@1000000012 : Integer;
+      CurrentBlockNo@1000000003 : Integer;
+      PrevIndent@1000000006 : Integer;
+      CurrentIndex@1000000007 : Integer;
+      CurrentIndent@1000000016 : Integer;
+      ParentNumber@1000000008 : Code[250];
+      CurrentNumber@1000000009 : Code[250];
+      LevelsBufferExists@1000000010 : Boolean;
+      GroupFound@1000000014 : Boolean;
+      BlockFound@1000000015 : Boolean;
+    BEGIN
+      LevelsBuffer.RESET();
+      LevelsBuffer.DELETEALL();
+
+      PrevIndent := -1;
+      CurrentGroupNo := 0;
+      CurrentPageNo := 0;
+      CurrentBlockNo := 0;
+      GroupFound := FALSE;
+      BlockFound := FALSE;
+
+      LineToCheck.RESET();
+      LineToCheck.DELETEALL();
+
+      SrcQuestLine.RESET();
+      SrcQuestLine.SETCURRENTKEY("Questionnaire Template Code", Sequence);
+      SrcQuestLine.SETRANGE("Questionnaire Template Code", QuestTemplateLine."Questionnaire Template Code");
+      IF (SrcQuestLine.FINDSET()) THEN BEGIN
+        REPEAT
+          IF (SrcQuestLine."Line No." = SkipLineNo) THEN BEGIN
+            IF (NOT(Deleted)) THEN BEGIN
+              LineToCheck.TRANSFERFIELDS(QuestTemplateLine);
+              LineToCheck.INSERT();
+            END;
+          END ELSE BEGIN
+            LineToCheck.TRANSFERFIELDS(SrcQuestLine);
+            LineToCheck.INSERT();
+          END;
+        UNTIL (SrcQuestLine.NEXT() = 0);
+      END;
+      IF (NewLine) THEN BEGIN
+        LineToCheck.TRANSFERFIELDS(QuestTemplateLine);
+        LineToCheck.INSERT();
+      END;
+
+      LineToCheck.RESET();
+      LineToCheck.SETCURRENTKEY("Questionnaire Template Code", Sequence);
+      IF (LineToCheck.FINDSET()) THEN BEGIN
+        REPEAT
+          CurrentIndent := 0;
+
+          CASE (LineToCheck."Line Type") OF
+            LineToCheck."Line Type"::"Group Header":
+              GroupFound := TRUE;
+            LineToCheck."Line Type"::Block:
+              BlockFound := TRUE;
+          END;
+          IF (LineToCheck."Line Type" IN [LineToCheck."Line Type"::Question, LineToCheck."Line Type"::"Group Header"]) AND (BlockFound) THEN
+            CurrentIndent += 1;
+          IF (LineToCheck."Line Type"  = LineToCheck."Line Type"::Question) AND (GroupFound) THEN
+            CurrentIndent += 1;
+
+          //get current and parent data
+          IF (PrevIndent = -1) THEN BEGIN
+            ParentNumber := '';
+            CurrentIndex := 0;
+          END ELSE IF (PrevIndent > CurrentIndent) THEN BEGIN
+            IF (LevelsBuffer.GET(CurrentIndent)) THEN BEGIN
+              ParentNumber := LevelsBuffer.Name;
+              CurrentIndex := LevelsBuffer."Integer Value";
+            END ELSE BEGIN
+              ParentNumber := '';
+              CurrentIndex := 0;
+            END;
+          END ELSE IF (PrevIndent < CurrentIndent) THEN BEGIN
+            ParentNumber := CurrentNumber;
+            CurrentIndex := 0;
+          END;
+
+          IF (LineToCheck."New Page") OR (CurrentPageNo = 0) THEN
+            CurrentPageNo += 1;
+          IF (LineToCheck."Line Type" = LineToCheck."Line Type"::"Group Header") OR (CurrentGroupNo = 0) THEN
+            CurrentGroupNo += 1;
+          IF (LineToCheck."Line Type" = LineToCheck."Line Type"::Block) OR (CurrentBlockNo = 0) THEN
+            CurrentBlockNo += 1;
+
+          //increment data
+          CurrentIndex += 1;
+          IF (ParentNumber = '') THEN
+            CurrentNumber := FORMAT(CurrentIndex, 0, 9)
+          ELSE
+            CurrentNumber := ParentNumber + '.' + FORMAT(CurrentIndex, 0, 9);
+          LevelsBufferExists := LevelsBuffer.GET(CurrentIndent);
+          IF (NOT(LevelsBufferExists)) THEN
+            LevelsBuffer.ID := CurrentIndent;
+          LevelsBuffer.Name := ParentNumber;
+          LevelsBuffer.Value := CurrentNumber;
+          LevelsBuffer."Integer Value" := CurrentIndex;
+          IF (LevelsBufferExists) THEN
+            LevelsBuffer.MODIFY()
+          ELSE
+            LevelsBuffer.INSERT();
+
+          //update Questonnaire Template Line
+          IF (LineToCheck."Line No." = SkipLineNo) THEN BEGIN
+            QuestTemplateLine.Indent := CurrentIndent;
+            QuestTemplateLine."Page No." := CurrentPageNo;
+            QuestTemplateLine."Group No." := CurrentGroupNo;
+            QuestTemplateLine."Question Block No." := CurrentBlockNo;
+            QuestTemplateLine."Group Sequence" := CurrentIndex;
+            QuestTemplateLine.VALIDATE("Question No.", CurrentNumber);
+
+            IF (ModifyQuestLine) AND (NOT(NewLine)) THEN
+              QuestTemplateLine.MODIFY();
+          END ELSE BEGIN
+            SrcQuestLine.GET(LineToCheck."Questionnaire Template Code", LineToCheck."Line No.");
+            SrcQuestLine.Indent := CurrentIndent;
+            SrcQuestLine."Page No." := CurrentPageNo;
+            SrcQuestLine."Group No." := CurrentGroupNo;
+            SrcQuestLine."Question Block No." := CurrentBlockNo;
+            SrcQuestLine."Group Sequence" := CurrentIndex;
+            SrcQuestLine.VALIDATE("Question No.", CurrentNumber);
+            SrcQuestLine.MODIFY();
+          END;
+
+          PrevIndent := CurrentIndent;
+        UNTIL (LineToCheck.NEXT() = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Creating Instances ---"@1000000002();
+    BEGIN
+    END;
+
+    PROCEDURE CreateInstanceOfQuest@1000000000(VAR QuestTemplate@1000000000 : Record 9062702;VAR QuestInstance@1000000001 : Record 9062704) QuestionnaireNo : Integer;
+    BEGIN
+      //DOC NH2015.8 AZ >>
+      //Code moved to CreateInstanceOfContactQuest
+      EXIT(CreateInstanceOfContactQuest(QuestTemplate, QuestInstance, ''));
+      //DOC NH2015.8 AZ <<
+    END;
+
+    PROCEDURE CreateInstanceOfQuestAndShow@1000000006(VAR QuestTemplate@1000000001 : Record 9062702;VAR QuestInstance@1000000000 : Record 9062704) QuestionnaireNo : Integer;
+    BEGIN
+      QuestionnaireNo := CreateInstanceOfQuest(QuestTemplate,QuestInstance);
+      ShowQuestionnaire(QuestInstance);
+    END;
+
+    PROCEDURE CreateInstanceOfContactQuest@1000000013(VAR QuestTemplate@1000000000 : Record 9062702;VAR QuestInstance@1000000001 : Record 9062704;ContactNo@1000000008 : Code[20]) QuestionnaireNo : Integer;
+    VAR
+      QuestTemplateLine@1000000002 : Record 9062703;
+      QuestInstanceLine@1000000003 : Record 9062705;
+      QuestTemplateLineAskCriteria@1000000004 : Record 9062707;
+      QuestInstanceLineAskCriteria@1000000005 : Record 9062708;
+      QuestTemplateLine_TextExt@1000000006 : Record 9062238;
+      QuestInstanceLine_TextExt@1000000007 : Record 9062238;
+      QuestTemplActionHeader@1000000009 : Record 9062722;
+      QuestTemplActionLine@1000000010 : Record 9062723;
+      QuestActionHeader@1000000011 : Record 9062724;
+      QuestActionLine@1000000012 : Record 9062725;
+    BEGIN
+      //DOC NH2015.8 AZ
+
+      QuestTemplate.TESTFIELD(Status, QuestTemplate.Status::Released);
+
+      //create instance header
+      QuestInstance.RESET;
+      QuestInstance.INIT;
+      QuestInstance.TRANSFERFIELDS(QuestTemplate);
+      QuestInstance."Questionnaire No." := 0;
+      QuestInstance.VALIDATE("Related Record Position",QuestTemplate.GetPositionFromFilters);
+      QuestInstance."Created by Contact No." := ContactNo;
+      QuestInstance.INSERT(TRUE);
+
+      QuestionnaireNo := QuestInstance."Questionnaire No.";
+
+      //create instance lines
+      QuestTemplateLine.RESET();
+      QuestTemplateLine.SETRANGE("Questionnaire Template Code",QuestTemplate.Code);
+      CreateQuestInstanceLines(QuestTemplateLine, QuestInstance);
+
+      //create instance actions
+      QuestTemplActionHeader.RESET();
+      QuestTemplActionHeader.SETRANGE("Questionnaire Template Code",QuestTemplate.Code);
+      CreateQuestInstanceActions(QuestTemplActionHeader, QuestInstance);
+
+      //process visibility
+      ProcessVisibility(QuestInstance."Questionnaire No.", -1);
+
+      UpdateQuestionnaireSequence(QuestInstance);
+
+      //DOC NA2016.14 >>
+      //initialize questionnaire answers
+      LoadAnswers(QuestInstance);
+      //run initialization codeunit
+      IF (QuestTemplate."On Init - Run CU ID" <> 0) THEN
+        CODEUNIT.RUN(QuestTemplate."On Init - Run CU ID", QuestInstance);
+      //DOC NA2016.14 <<
+    END;
+
+    LOCAL PROCEDURE CreateQuestInstanceLines@1000000021(VAR QuestTemplateLine@1000000000 : Record 9062703;VAR QuestInstance@1000000001 : Record 9062704);
+    VAR
+      QuestInstanceLine@1000000002 : Record 9062705;
+      QuestTemplateLine_TextExt@1000000004 : Record 9062238;
+      QuestInstanceLine_TextExt@1000000003 : Record 9062238;
+      QuestTemplateLogicCriteria@1000000007 : Record 9062707;
+      QuestLogicCriteria@1000000006 : Record 9062708;
+      Criteria@1000000005 : Record 9062626;
+      CriteriaLine@1000000009 : Record 9062627;
+      SrcQuestTemplLine@1000000010 : Record 9062703;
+      SrcQuestLine@1000000011 : Record 9062705;
+      CriteriaMgt@1000000008 : Codeunit 9062462;
+    BEGIN
+      IF QuestTemplateLine.FINDSET THEN BEGIN
+        REPEAT
+          //create instance line
+          QuestInstanceLine.INIT;
+          QuestInstanceLine.TRANSFERFIELDS(QuestTemplateLine);
+          QuestInstanceLine."Questionnaire No." := QuestInstance."Questionnaire No.";
+          QuestInstanceLine.VALIDATE("Questionnaire GUID",QuestInstance."Questionnaire GUID");
+          IF (QuestInstanceLine.Hidden) THEN
+            QuestInstanceLine.Skip := TRUE;
+          QuestInstanceLine."Question Block Instance No." := 0;
+          QuestInstanceLine."First Block Inst. Line No." := QuestInstanceLine."Line No.";
+          QuestInstanceLine."First Block Inst. Sequence No." := QuestInstanceLine.Sequence;
+          QuestInstanceLine.INSERT(TRUE);
+
+          //create instance line extended texts
+          QuestTemplateLine_TextExt.SETRANGE("Table No.",DATABASE::"Questionnaire Template Line");
+          QuestTemplateLine_TextExt.SETRANGE(PositionText,QuestTemplateLine.GETPOSITION);
+          IF QuestTemplateLine_TextExt.FINDSET THEN BEGIN
+            REPEAT
+              QuestTemplateLine_TextExt.CALCFIELDS(BLOB);
+              QuestInstanceLine_TextExt.INIT;
+              QuestInstanceLine_TextExt.TRANSFERFIELDS(QuestTemplateLine_TextExt);
+              QuestInstanceLine_TextExt.VALIDATE("Table No.",DATABASE::"Questionnaire Line");
+              QuestInstanceLine_TextExt.VALIDATE(PositionText,QuestInstanceLine.GETPOSITION);
+              QuestInstanceLine_TextExt.INSERT(TRUE);
+            UNTIL QuestTemplateLine_TextExt.NEXT = 0;
+          END;
+
+          //create instance line action criteria
+          QuestTemplateLogicCriteria.RESET();
+          QuestTemplateLogicCriteria.SETRANGE("Questionnaire Template Code", QuestTemplateLine."Questionnaire Template Code");
+          QuestTemplateLogicCriteria.SETFILTER("Line Type", '%1|%2',
+            QuestTemplateLogicCriteria."Line Type"::"Before Question",
+            QuestTemplateLogicCriteria."Line Type"::"After Question");
+          QuestTemplateLogicCriteria.SETRANGE("Source Entry No." , QuestTemplateLine."Line No.");
+          CreateQuestInstanceCriteria(QuestTemplateLogicCriteria, QuestInstance, QuestInstanceLine."Line No.", QuestTemplateLine."Question Block No.");
+
+          //create answer source criteria
+          IF (QuestTemplateLine."Source Criteria Id" <> 0) THEN BEGIN
+            Criteria.GET(QuestTemplateLine."Source Criteria Id");
+            QuestInstanceLine."Source Criteria Id" := CriteriaMgt.CloneCriteriaAttached(Criteria, DATABASE::"Questionnaire Line",
+              QuestInstanceLine.GETPOSITION(), QuestInstanceLine.FIELDNO("Source Criteria Id"));
+            QuestInstanceLine.MODIFY();
+          END;
+
+          //create instance line criterias
+          IF (QuestTemplateLine."Answer Criteria Id" <> 0) THEN BEGIN
+            Criteria.GET(QuestTemplateLine."Answer Criteria Id");
+            QuestInstanceLine."Answer Criteria Id" := CriteriaMgt.CloneCriteriaAttached(Criteria, DATABASE::"Questionnaire Line",
+              QuestInstanceLine.GETPOSITION(), QuestInstanceLine.FIELDNO("Answer Criteria Id"));
+            QuestInstanceLine.MODIFY();
+
+            Criteria.GET(QuestInstanceLine."Answer Criteria Id");
+            Criteria."Filter Source Table Id" := DATABASE::"Questionnaire Line";
+            Criteria."Filter Source Field Id" := QuestInstanceLine.FIELDNO("Text Input");
+            Criteria.MODIFY();
+
+            //replace criteria record positions
+            CriteriaLine.RESET();
+            CriteriaLine.SETRANGE("Criteria ID", QuestInstanceLine."Answer Criteria Id");
+            CriteriaLine.SETRANGE("Filter Source", CriteriaLine."Filter Source"::Record);
+            IF (CriteriaLine.FINDSET(TRUE)) THEN BEGIN
+              REPEAT
+                IF (CriteriaLine."Filter Source Record Position" <> '') THEN BEGIN
+                  SrcQuestTemplLine.SETPOSITION(CriteriaLine."Filter Source Record Position");
+                  SrcQuestTemplLine.FIND('=');
+                  SrcQuestLine.GET(QuestInstanceLine."Questionnaire No.", SrcQuestTemplLine."Line No.");
+
+                  CriteriaLine."Filter Source Table Id" := Criteria."Filter Source Table Id";
+                  CriteriaLine."Filter Source Record Position" := SrcQuestLine.GETPOSITION();
+                  CriteriaLine."Filter Source Field Id" := Criteria."Filter Source Field Id";
+                  CriteriaLine.MODIFY();
+                END;
+              UNTIL (CriteriaLine.NEXT() = 0);
+            END;
+          END;
+
+        UNTIL QuestTemplateLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateQuestInstanceActions@1000000028(VAR QuestTemplActionHeader@1000000000 : Record 9062722;VAR QuestInstance@1000000001 : Record 9062704);
+    VAR
+      QuestTemplateLine@1000000006 : Record 9062703;
+      QuestActionHeader@1000000003 : Record 9062724;
+      QuestTemplActionLine@1000000004 : Record 9062723;
+      QuestTemplateCriteria@1000000007 : Record 9062707;
+      QuestLine@1000000009 : Record 9062705;
+      QuestCriteria@1000000008 : Record 9062708;
+      QuestActionLine@1000000005 : Record 9062725;
+      QuestionBlockNo@1000000002 : Integer;
+    BEGIN
+      IF (QuestTemplActionHeader.FINDSET()) THEN BEGIN
+        REPEAT
+          IF (QuestTemplActionHeader."Block Line No." <> 0) THEN BEGIN
+            QuestTemplateLine.GET(QuestTemplActionHeader."Questionnaire Template Code", QuestTemplActionHeader."Block Line No.");
+            QuestionBlockNo := QuestTemplateLine."Question Block No.";
+          END ELSE
+            QuestionBlockNo := 0;
+
+          QuestActionHeader.INIT();
+          QuestActionHeader.TRANSFERFIELDS(QuestTemplActionHeader);
+          QuestActionHeader."Questionnaire No." := QuestInstance."Questionnaire No.";
+          QuestActionHeader."Question Block No." := QuestionBlockNo;
+          QuestActionHeader."Question Block Instance No." := 0;
+          QuestActionHeader.INSERT();
+
+          QuestTemplActionLine.RESET();
+          QuestTemplActionLine.SETRANGE("Questionnaire Template Code", QuestTemplActionHeader."Questionnaire Template Code");
+          QuestTemplActionLine.SETRANGE("Quest. Action Template Id", QuestTemplActionHeader.Id);
+          IF (QuestTemplActionLine.FINDSET()) THEN BEGIN
+            REPEAT
+              QuestActionLine.INIT();
+              QuestActionLine.TRANSFERFIELDS(QuestTemplActionLine);
+              QuestActionLine."Questionnaire No." := QuestActionHeader."Questionnaire No.";
+              IF (QuestActionLine."Quest. Line No." <> 0) THEN BEGIN
+                QuestLine.GET(QuestActionLine."Questionnaire No.", QuestActionLine."Quest. Line No.");
+                QuestActionLine."Line Quest. Block No." := QuestLine."Question Block No.";
+                QuestActionLine."Line Quest. Block Inst. No." := QuestLine."Question Block Instance No.";
+              END;
+              //!!!QuestActionLine."Question Block No." := QuestActionHeader."Question Block No.";
+              //!!!QuestActionLine."Question Block Instance No." := QuestActionHeader."Question Block Instance No.";
+              QuestActionLine.INSERT();
+            UNTIL (QuestTemplActionLine.NEXT() = 0);
+          END;
+
+          QuestTemplateCriteria.RESET();
+          QuestTemplateCriteria.SETRANGE("Questionnaire Template Code", QuestInstance."Questionnaire Template Code");
+          QuestTemplateCriteria.SETRANGE("Line Type", QuestTemplateCriteria."Line Type"::"Questionnaire Action");
+          QuestTemplateCriteria.SETRANGE("Source Entry No." , QuestTemplActionHeader.Id);
+          CreateQuestInstanceCriteria(QuestTemplateCriteria, QuestInstance, QuestActionHeader.Id, QuestionBlockNo);
+
+        UNTIL (QuestTemplActionHeader.NEXT() = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateQuestInstanceCriteria@1000000005(VAR QuestTemplateLogicCriteria@1000000000 : Record 9062707;VAR QuestInstance@1000000001 : Record 9062704;EntryNo@1000000005 : Integer;QuestionBlockNo@1000000002 : Integer);
+    VAR
+      QuestTemplateLine@1000000004 : Record 9062703;
+      QuestLogicCriteria@1000000003 : Record 9062708;
+    BEGIN
+      IF (QuestTemplateLogicCriteria.FINDSET()) THEN BEGIN
+        REPEAT
+          QuestLogicCriteria.INIT;
+          QuestLogicCriteria.TRANSFERFIELDS(QuestTemplateLogicCriteria);
+          QuestLogicCriteria."Questionnaire No." := QuestInstance."Questionnaire No.";
+
+          QuestLogicCriteria."Source Entry No." := EntryNo;
+          QuestLogicCriteria."Source First Block Entry No." := EntryNo;
+          QuestLogicCriteria."Source Quest. Block No." := QuestionBlockNo;
+          QuestLogicCriteria."Source Quest. Block Inst. No." := 0;
+
+          IF (QuestLogicCriteria."Related Line No." <> 0) THEN BEGIN
+            QuestTemplateLine.GET(QuestLogicCriteria."Questionnaire Template Code", QuestLogicCriteria."Related Line No.");
+            QuestLogicCriteria."Related Question Block No." := QuestTemplateLine."Question Block No.";
+            QuestLogicCriteria."Related Quest. Block Inst. No." := 0;
+          END;
+          QuestLogicCriteria.ClearContent();
+          QuestLogicCriteria.INSERT();
+        UNTIL (QuestTemplateLogicCriteria.NEXT() = 0);
+      END;
+    END;
+
+    PROCEDURE CreateBlockInstance@1000000020(VAR QuestInstance@1000000000 : Record 9062704;QuestionBlockNo@1000000002 : Integer) : Integer;
+    VAR
+      QuestInstanceLine@1000000005 : Record 9062705;
+      DestQuestInstanceLine@1000000001 : Record 9062705;
+      QuestCriteriaLine@1000000004 : Record 9062708;
+      DestQuestCriteriaLine@1000000006 : Record 9062708;
+      QuestAction@1000000007 : Record 9062724;
+      DestQuestAction@1000000008 : Record 9062724;
+      QuestActionLine@1000000009 : Record 9062725;
+      DestQuestActionLine@1000000010 : Record 9062725;
+      Criteria@1000000014 : Record 9062626;
+      CriteriaLine@1000000015 : Record 9062627;
+      SrcQuestLine@1000000016 : Record 9062705;
+      DestQuestLine@1000000017 : Record 9062705;
+      CriteriaMgt@1000000018 : Codeunit 9062462;
+      QuestionBlockInstanceNo@1000000003 : Integer;
+      InstanceLineNo@1000000011 : Integer;
+      Sequence@1000000012 : Integer;
+      ActionId@1000000013 : Integer;
+    BEGIN
+      //find last quetsion block instance no.
+      QuestInstanceLine.RESET();
+      QuestInstanceLine.SETCURRENTKEY("Questionnaire No.", "Question Block No.", "Question Block Instance No.");
+      QuestInstanceLine.SETRANGE("Questionnaire No.", QuestInstance."Questionnaire No.");
+      QuestInstanceLine.SETRANGE("Question Block No.", QuestionBlockNo);
+      IF (QuestInstanceLine.FINDLAST()) THEN
+        QuestionBlockInstanceNo := QuestInstanceLine."Question Block Instance No." + 1
+      ELSE
+        EXIT(-1);
+
+      //Find last Line No.
+      QuestInstanceLine.RESET();
+      QuestInstanceLine.SETRANGE("Questionnaire No.", QuestInstance."Questionnaire No.");
+      QuestInstanceLine.FINDLAST();
+      InstanceLineNo := QuestInstanceLine."Line No.";
+
+      //copy instance lines
+      QuestInstanceLine.RESET();
+      QuestInstanceLine.SETCURRENTKEY("Questionnaire No.", "Question Block No.", "Question Block Instance No.");
+      QuestInstanceLine.SETRANGE("Questionnaire No.", QuestInstance."Questionnaire No.");
+      QuestInstanceLine.SETRANGE("Question Block No.", QuestionBlockNo);
+      QuestInstanceLine.SETRANGE("Question Block Instance No.", 0);
+      IF (QuestInstanceLine.FINDSET(TRUE)) THEN BEGIN
+        REPEAT
+          //create new block line
+          InstanceLineNo += 10000;
+          DestQuestInstanceLine.TRANSFERFIELDS(QuestInstanceLine);
+          DestQuestInstanceLine."Line No." := InstanceLineNo;
+          DestQuestInstanceLine."Question Block Instance No." := QuestionBlockInstanceNo;
+          DestQuestInstanceLine.ClearContent();
+          DestQuestInstanceLine.INSERT();
+        UNTIL (QuestInstanceLine.NEXT() = 0);
+      END;
+
+      //copy criteria lines
+      QuestInstanceLine.RESET();
+      QuestInstanceLine.SETCURRENTKEY("Questionnaire No.", "Question Block No.", "Question Block Instance No.");
+      QuestInstanceLine.SETRANGE("Questionnaire No.", QuestInstance."Questionnaire No.");
+      QuestInstanceLine.SETRANGE("Question Block No.", QuestionBlockNo);
+      QuestInstanceLine.SETRANGE("Question Block Instance No.", QuestionBlockInstanceNo);
+      IF (QuestInstanceLine.FINDSET(TRUE)) THEN BEGIN
+        REPEAT
+          //copy action criterias
+          QuestCriteriaLine.RESET();
+          QuestCriteriaLine.SETRANGE("Questionnaire No.", QuestInstanceLine."Questionnaire No.");
+          QuestCriteriaLine.SETFILTER("Line Type", '%1|%2', QuestCriteriaLine."Line Type"::"Before Question",
+            QuestCriteriaLine."Line Type"::"After Question");
+          QuestCriteriaLine.SETRANGE("Source Entry No.", QuestInstanceLine."First Block Inst. Line No.");
+          CreateBlockInstanceCriteriaLines(QuestCriteriaLine, QuestionBlockInstanceNo, QuestInstanceLine."Line No.");
+
+          //copy answer value criterias
+          IF (QuestInstanceLine."Answer Criteria Id" <> 0) THEN BEGIN
+            Criteria.GET(QuestInstanceLine."Answer Criteria Id");
+            QuestInstanceLine."Answer Criteria Id" := CriteriaMgt.CloneCriteriaAttached(Criteria, DATABASE::"Questionnaire Line",
+              QuestInstanceLine.GETPOSITION(), QuestInstanceLine.FIELDNO("Answer Criteria Id"));
+            QuestInstanceLine.MODIFY();
+
+            //replace criteria record positions
+            CriteriaLine.RESET();
+            CriteriaLine.SETRANGE("Criteria ID", QuestInstanceLine."Answer Criteria Id");
+            CriteriaLine.SETRANGE("Filter Source", CriteriaLine."Filter Source"::Record);
+            IF (CriteriaLine.FINDSET(TRUE)) THEN BEGIN
+              REPEAT
+                IF (CriteriaLine."Filter Source Record Position" <> '') THEN BEGIN
+                  SrcQuestLine.SETPOSITION(CriteriaLine."Filter Source Record Position");
+                  SrcQuestLine.FIND('=');
+
+                  DestQuestLine.RESET();
+                  DestQuestLine.SETCURRENTKEY("Questionnaire No.", "Question Block No.", "Question Block Instance No.");
+                  DestQuestLine.SETRANGE("Questionnaire No.", QuestInstance."Questionnaire No.");
+                  DestQuestLine.SETRANGE("Question Block No.", QuestionBlockNo);
+                  DestQuestLine.SETRANGE("Question Block Instance No.", QuestionBlockInstanceNo);
+                  DestQuestLine.SETRANGE("First Block Inst. Line No.", SrcQuestLine."Line No.");
+                  DestQuestLine.FINDFIRST();
+
+                  CriteriaLine."Filter Source Record Position" := DestQuestLine.GETPOSITION();
+                  CriteriaLine.MODIFY();
+                END;
+              UNTIL (CriteriaLine.NEXT() = 0);
+            END;
+
+          END;
+
+        UNTIL (QuestInstanceLine.NEXT() = 0);
+      END;
+
+      //copy actions
+      QuestAction.RESET();
+      QuestAction.SETRANGE("Questionnaire No.", QuestInstance."Questionnaire No.");
+      IF (QuestAction.FINDLAST()) THEN
+        ActionId := QuestAction.Id
+      ELSE
+        ActionId := 0;
+
+      QuestAction.RESET();
+      QuestAction.SETRANGE("Questionnaire No.", QuestInstance."Questionnaire No.");
+      QuestAction.SETRANGE("Question Block No.", QuestionBlockNo);
+      QuestAction.SETRANGE("Question Block Instance No.", 0);
+      IF (QuestAction.FINDSET()) THEN BEGIN
+        REPEAT
+          ActionId += 1;
+          DestQuestAction.TRANSFERFIELDS(QuestAction);
+          DestQuestAction.Id := ActionId;
+          DestQuestAction."Question Block Instance No." := QuestionBlockInstanceNo;
+          //!!!DestQuestAction.Clear();
+          DestQuestAction.INSERT();
+
+          //copy action criterias
+          QuestCriteriaLine.RESET();
+          QuestCriteriaLine.SETRANGE("Questionnaire No.", QuestInstance."Questionnaire No.");
+          QuestCriteriaLine.SETRANGE("Line Type", QuestCriteriaLine."Line Type"::"Questionnaire Action");
+          QuestCriteriaLine.SETRANGE("Source Entry No.", QuestAction.Id);
+          CreateBlockInstanceCriteriaLines(QuestCriteriaLine, QuestionBlockInstanceNo, DestQuestAction.Id);
+
+          //copy action lines
+          QuestActionLine.RESET();
+          QuestActionLine.SETRANGE("Questionnaire No.", QuestInstance."Questionnaire No.");
+          QuestActionLine.SETRANGE("Questionnaire Action Id", QuestAction.Id);
+          IF (QuestActionLine.FINDSET()) THEN BEGIN
+            REPEAT
+              DestQuestActionLine.TRANSFERFIELDS(QuestActionLine);
+              DestQuestActionLine."Questionnaire Action Id" := DestQuestAction.Id;
+              //get question block line no.
+              IF (DestQuestActionLine."Quest. Line No." <> 0) AND (DestQuestActionLine."Line Quest. Block No." = QuestionBlockNo) THEN BEGIN
+                DestQuestActionLine."Line Quest. Block Inst. No." := QuestionBlockInstanceNo;
+                DestQuestActionLine."Quest. Line No." := GetBlockInstanceLineNo(DestQuestActionLine."Questionnaire No.",
+                  DestQuestActionLine."Line Quest. Block No.", DestQuestActionLine."Line Quest. Block Inst. No.",
+                  DestQuestActionLine."Quest. Line No.");
+              END;
+              //!!!DestQuestActionLine.Clear();
+              DestQuestActionLine.INSERT();
+            UNTIL (QuestActionLine.NEXT() = 0);
+          END;
+
+        UNTIL (QuestAction.NEXT() = 0);
+      END;
+
+      //!!!update before question criteria lines to check last question block instance
+      {
+      QuestCriteriaLine.RESET();
+      QuestCriteriaLine.SETRANGE("Questionnaire No.", QuestInstance."Questionnaire No.");
+      QuestCriteriaLine.SETFILTER("Line Type", '%1|%2', QuestCriteriaLine."Line Type"::"Before Question",
+        QuestCriteriaLine."Line Type"::"Questionnaire Action");
+      QuestCriteriaLine.SETFILTER("Source Quest. Block Inst. No.", '>%1', QuestionBlockNo);
+      QuestCriteriaLine.SETRANGE("Related Template Line No.", QuestionBlockNo);
+      QuestCriteriaLine.MODIFYALL("Source Question Block No.", QuestionBlockInstanceNo);
+      }
+
+      //update questionnaire lines sequence
+      UpdateQuestionnaireSequence(QuestInstance);
+    END;
+
+    LOCAL PROCEDURE CreateBlockInstanceCriteriaLines@1000000022(VAR QuestCriteriaLine@1000000000 : Record 9062708;QuestBlockInstanceNo@1000000002 : Integer;EntryNo@1000000003 : Integer);
+    VAR
+      DestQuestCriteriaLine@1000000001 : Record 9062708;
+    BEGIN
+      IF (QuestCriteriaLine.FINDSET()) THEN BEGIN
+        REPEAT
+          DestQuestCriteriaLine.TRANSFERFIELDS(QuestCriteriaLine);
+          DestQuestCriteriaLine."Source Entry No." := EntryNo;
+          DestQuestCriteriaLine."Source Quest. Block Inst. No." := QuestBlockInstanceNo;
+          IF (DestQuestCriteriaLine."Related Line No." <> 0) AND (DestQuestCriteriaLine."Related Question Block No." = DestQuestCriteriaLine."Source Quest. Block No.") THEN BEGIN
+            DestQuestCriteriaLine."Related Quest. Block Inst. No." := QuestBlockInstanceNo;
+            DestQuestCriteriaLine."Related Line No." := GetBlockInstanceLineNo(DestQuestCriteriaLine."Questionnaire No.",
+              DestQuestCriteriaLine."Related Question Block No.", DestQuestCriteriaLine."Related Quest. Block Inst. No.",
+              DestQuestCriteriaLine."Related Line No.");
+          END;
+          DestQuestCriteriaLine.ClearContent();
+          DestQuestCriteriaLine.INSERT();
+        UNTIL (QuestCriteriaLine.NEXT() = 0);
+      END;
+    END;
+
+    PROCEDURE DeleteBlockInstancesAfter@1000000024(VAR QuestInstance@1000000000 : Record 9062704;QuestionBlockNo@1000000002 : Integer;LastQuestBlockInstanceNo@1000000011 : Integer) : Integer;
+    VAR
+      QuestInstanceLine@1000000005 : Record 9062705;
+      DestQuestInstanceLine@1000000001 : Record 9062705;
+      QuestCriteriaLine@1000000004 : Record 9062708;
+      DestQuestCriteriaLine@1000000006 : Record 9062708;
+      QuestAction@1000000007 : Record 9062724;
+      DestQuestAction@1000000008 : Record 9062724;
+      QuestActionLine@1000000009 : Record 9062725;
+      DestQuestActionLine@1000000010 : Record 9062725;
+      QuestionBlockInstanceNo@1000000003 : Integer;
+    BEGIN
+      IF (LastQuestBlockInstanceNo < 0) THEN
+        LastQuestBlockInstanceNo := 0;
+
+      //delete logic criteria
+      QuestInstanceLine.RESET();
+      QuestInstanceLine.SETRANGE("Questionnaire No.", QuestInstance."Questionnaire No.");
+      QuestInstanceLine.SETRANGE("Question Block No.", QuestionBlockNo);
+      QuestInstanceLine.SETFILTER("Question Block Instance No.", '>%1', QuestionBlockInstanceNo);
+      QuestInstanceLine.DELETEALL(TRUE);
+
+      //delete actions
+      QuestAction.RESET();
+      QuestAction.SETRANGE("Questionnaire No.", QuestInstance."Questionnaire No.");
+      QuestAction.SETRANGE("Question Block No.", QuestionBlockNo);
+      QuestAction.SETFILTER("Question Block Instance No.", '>%1', LastQuestBlockInstanceNo);
+      QuestAction.DELETEALL(TRUE);
+
+      //!!!update before question criteria lines to check last question block instance
+      {
+      QuestCriteriaLine.RESET();
+      QuestCriteriaLine.SETRANGE("Questionnaire No.", QuestInstance."Questionnaire No.");
+      QuestCriteriaLine.SETFILTER("Line Type", '%1|%2', QuestCriteriaLine."Line Type"::"Before Question",
+        QuestCriteriaLine."Line Type"::"Questionnaire Action");
+      QuestCriteriaLine.SETFILTER("Source Quest. Block Inst. No.", '>%1', QuestionBlockNo);
+      QuestCriteriaLine.SETRANGE("Related Template Line No.", QuestionBlockNo);
+      QuestCriteriaLine.MODIFYALL("Source Question Block No.", LastQuestBlockInstanceNo);
+      }
+    END;
+
+    LOCAL PROCEDURE GetBlockInstanceLineNo@1000000023(QuestionnaireNo@1000000000 : Integer;ForBlockNo@1000000001 : Integer;ForBlockInstanceNo@1000000004 : Integer;FirstBlockLineNo@1000000002 : Integer) : Integer;
+    VAR
+      QuestLine@1000000003 : Record 9062705;
+    BEGIN
+      QuestLine.RESET();
+      QuestLine.SETCURRENTKEY("Questionnaire No.", "Question Block Instance No.", "First Block Inst. Line No.");
+      QuestLine.SETRANGE("Questionnaire No.", QuestionnaireNo);
+      QuestLine.SETRANGE("Question Block No.", ForBlockNo);
+      QuestLine.SETRANGE("Question Block Instance No.", ForBlockInstanceNo);
+      QuestLine.SETRANGE("First Block Inst. Line No.", FirstBlockLineNo);
+      //QuestLine.FINDFIRST();
+
+      IF (QuestLine.FINDFIRST()) THEN
+        EXIT(QuestLine."Line No.");
+      EXIT(FirstBlockLineNo);
+    END;
+
+    PROCEDURE UpdateQuestionnaireSequence@1000000031(VAR QuestInstance@1000000000 : Record 9062704);
+    VAR
+      QuestInstanceLine@1000000001 : Record 9062705;
+      Sequence@1000000004 : Integer;
+      PageNo@1000000002 : Integer;
+      FirstLine@1000000003 : Boolean;
+      InGroup@1000000005 : Boolean;
+      QuestionIndent@1000000006 : Integer;
+    BEGIN
+      Sequence := 0;
+      PageNo := 0;
+      FirstLine := FALSE;
+      QuestionIndent := 0;
+      InGroup := FALSE;
+
+      QuestInstanceLine.RESET();
+      QuestInstanceLine.SETCURRENTKEY("Questionnaire No.", "Question Block No.", "Question Block Instance No.", "First Block Inst. Sequence No.");
+      QuestInstanceLine.SETRANGE("Questionnaire No.", QuestInstance."Questionnaire No.");
+      IF (QuestInstanceLine.FINDSET(TRUE)) THEN BEGIN
+        REPEAT
+          CASE (QuestInstanceLine."Line Type") OF
+            QuestInstanceLine."Line Type"::Question:
+              IF (InGroup) THEN
+                QuestionIndent := 1
+              ELSE
+                QuestionIndent := 0;
+            QuestInstanceLine."Line Type"::"Group Header":
+              BEGIN
+                QuestionIndent := 0;
+                InGroup := TRUE;
+              END;
+            QuestInstanceLine."Line Type"::Block:
+              QuestionIndent := 0;
+          END;
+
+          IF (FirstLine) OR (QuestInstanceLine."New Page") THEN
+            PageNo += 1;
+
+          Sequence += 1;
+          IF ((QuestInstanceLine.Sequence <> Sequence) OR (QuestInstanceLine."Page No." <> PageNo) OR (QuestInstanceLine."Question Indent" <> QuestionIndent))THEN BEGIN
+            QuestInstanceLine.Sequence := Sequence;
+            QuestInstanceLine."Page No." := PageNo;
+            QuestInstanceLine."Question Indent" := QuestionIndent;
+            QuestInstanceLine.MODIFY();
+          END;
+        UNTIL (QuestInstanceLine.NEXT() = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Checking Criteria ---"@1000000017();
+    BEGIN
+    END;
+
+    PROCEDURE ProcessLineCriteria@1000000001(VAR QuestLine@1000000000 : Record 9062705);
+    VAR
+      QuestInstance@1000000005 : Record 9062704;
+      NextBlockLine@1000000002 : Record 9062705;
+      QuestCriteriaLine@1000000001 : Record 9062708;
+      RestartBlock@1000000003 : Boolean;
+      NextBlockExists@1000000004 : Boolean;
+    BEGIN
+      //process "Ask" and "Questionnaire Action" criteria lines
+
+      QuestCriteriaLine.RESET();
+      QuestCriteriaLine.SETCURRENTKEY("Questionnaire No.", "Line Type", "Related Line No.");
+      QuestCriteriaLine.SETRANGE("Questionnaire No.", QuestLine."Questionnaire No.");
+      QuestCriteriaLine.SETFILTER("Line Type", '%1|%2', QuestCriteriaLine."Line Type"::"Before Question",
+        QuestCriteriaLine."Line Type"::"Questionnaire Action");
+      QuestCriteriaLine.SETRANGE("Related Line No.", QuestLine."Line No.");
+      QuestCriteriaLine.SetLineToCheck(QuestLine);
+      IF (QuestCriteriaLine.FINDSET(TRUE)) THEN BEGIN
+        REPEAT
+          QuestCriteriaLine.Process();
+          QuestCriteriaLine.MODIFY();
+        UNTIL (QuestCriteriaLine.NEXT() = 0);
+      END;
+
+      //process "Skip To" criteria lines
+      QuestCriteriaLine.RESET();
+      QuestCriteriaLine.SETCURRENTKEY("Questionnaire No.", "Line Type", "Source Entry No.");
+      QuestCriteriaLine.SETRANGE("Questionnaire No.", QuestLine."Questionnaire No.");
+      QuestCriteriaLine.SETRANGE("Line Type", QuestCriteriaLine."Line Type"::"After Question");
+      QuestCriteriaLine.SETRANGE("Source Entry No.", QuestLine."Line No.");
+      QuestCriteriaLine.SetLineToCheck(QuestLine);
+      IF (QuestCriteriaLine.FINDSET(TRUE)) THEN BEGIN
+        REPEAT
+          QuestCriteriaLine.Process();
+          QuestCriteriaLine.MODIFY();
+        UNTIL (QuestCriteriaLine.NEXT() = 0);
+      END;
+
+      //check "restart block" criteria
+      QuestCriteriaLine.RESET();
+      QuestCriteriaLine.SETCURRENTKEY("Questionnaire No.", "Line Type", "Source Entry No.");
+      QuestCriteriaLine.SETRANGE("Questionnaire No.", QuestLine."Questionnaire No.");
+      QuestCriteriaLine.SETRANGE("Line Type", QuestCriteriaLine."Line Type"::"After Question");
+      QuestCriteriaLine.SETRANGE("Source Entry No.", QuestLine."Line No.");
+      QuestCriteriaLine.SETRANGE("Action After Question", QuestCriteriaLine."Action After Question"::"Restart Block");
+      IF (NOT(QuestCriteriaLine.ISEMPTY)) THEN BEGIN
+        QuestCriteriaLine.SETRANGE(Processed, TRUE);
+        QuestCriteriaLine.SETRANGE(Active, TRUE);
+        QuestCriteriaLine.SETRANGE(Result, TRUE);
+        RestartBlock := NOT(QuestCriteriaLine.ISEMPTY);
+
+        NextBlockLine.RESET();
+        NextBlockLine.SETCURRENTKEY("Questionnaire No.", "Question Block No.", "Question Block Instance No.", "First Block Inst. Sequence No.");
+        NextBlockLine.SETRANGE("Questionnaire No.", QuestLine."Questionnaire No.");
+        NextBlockLine.SETRANGE("Question Block No.", QuestLine."Question Block No.");
+        NextBlockLine.SETFILTER("Question Block Instance No.", '>%1', QuestLine."Question Block Instance No.");
+        NextBlockExists := NOT(NextBlockLine.ISEMPTY);
+
+        IF (RestartBlock <> NextBlockExists) THEN
+          QuestInstance.GET(QuestLine."Questionnaire No.");
+
+        IF (RestartBlock) AND (NOT(NextBlockExists)) THEN
+          CreateBlockInstance(QuestInstance, QuestLine."Question Block No.")
+        ELSE IF ((NOT(RestartBlock)) AND (NextBlockExists)) THEN
+          DeleteBlockInstancesAfter(QuestInstance, QuestLine."Question Block No.", QuestLine."Question Block Instance No.");
+      END;
+    END;
+
+    PROCEDURE ProcessVisibility@1000000003(InstanceNo@1000000001 : Integer;SequenceNo@1000000002 : Integer);
+    VAR
+      QuestLine@1000000003 : Record 9062705;
+      DestQuestLine@1000000007 : Record 9062705;
+      QuestCriteriaLine@1000000004 : Record 9062708;
+      SkipToSequenceNo@1000000005 : Integer;
+      SkipLine@1000000006 : Boolean;
+    BEGIN
+      SkipToSequenceNo := -1;
+
+      QuestLine.RESET();
+      QuestLine.SETCURRENTKEY("Questionnaire No.", Sequence);
+      QuestLine.SETRANGE("Questionnaire No.", InstanceNo);
+      QuestLine.SETRANGE("Line Type", QuestLine."Line Type"::Question);
+      QuestLine.SETFILTER(Sequence, '>=%1', SequenceNo);
+      IF (QuestLine.FINDSET(TRUE)) THEN BEGIN
+        //SkipToSequenceNo := QuestLine."Skip by"
+        REPEAT
+          IF (SkipToSequenceNo > QuestLine.Sequence) THEN BEGIN
+            IF (NOT(QuestLine.Skip)) THEN BEGIN
+              QuestLine.VALIDATE(Skip, TRUE);
+              QuestLine.MODIFY();
+              ProcessLineCriteria(QuestLine);
+            END;
+          END ELSE BEGIN
+
+            //hide?
+            QuestCriteriaLine.RESET();
+            QuestCriteriaLine.SETRANGE("Questionnaire No.", QuestLine."Questionnaire No.");
+            QuestCriteriaLine.SETRANGE("Line Type", QuestCriteriaLine."Line Type"::"Before Question");
+            QuestCriteriaLine.SETRANGE("Action Before Question", QuestCriteriaLine."Action Before Question"::"Ask Question");
+            QuestCriteriaLine.SETRANGE("Source Entry No.", QuestLine."Line No.");
+            QuestCriteriaLine.SETRANGE(Processed, TRUE);
+            QuestCriteriaLine.SETRANGE(Active, TRUE);
+            QuestCriteriaLine.SETRANGE(Result, FALSE);
+            SkipLine := ((NOT(QuestCriteriaLine.ISEMPTY)) OR (QuestLine.Hidden));
+            IF (SkipLine <> QuestLine.Skip) THEN BEGIN
+              QuestLine.VALIDATE(Skip, SkipLine);
+              QuestLine.MODIFY();
+              ProcessLineCriteria(QuestLine);
+            END;
+
+            //skip to
+            QuestCriteriaLine.RESET();
+            QuestCriteriaLine.SETRANGE("Questionnaire No.", QuestLine."Questionnaire No.");
+            QuestCriteriaLine.SETRANGE("Line Type", QuestCriteriaLine."Line Type"::"After Question");
+            QuestCriteriaLine.SETRANGE("Action After Question", QuestCriteriaLine."Action Before Question"::"Ask Question");
+            QuestCriteriaLine.SETRANGE("Source Entry No.", QuestLine."Line No.");
+            QuestCriteriaLine.SETRANGE(Processed, TRUE);
+            QuestCriteriaLine.SETRANGE(Active, TRUE);
+            QuestCriteriaLine.SETRANGE(Result, TRUE);
+            IF (QuestCriteriaLine.FINDFIRST()) THEN BEGIN
+              DestQuestLine.GET(QuestCriteriaLine."Questionnaire No.", QuestCriteriaLine."Related Line No.");
+              SkipToSequenceNo := DestQuestLine.Sequence;
+            END;
+
+          END;
+        UNTIL (QuestLine.NEXT() = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Update Questionnaire ---"@1000000011();
+    BEGIN
+    END;
+
+    PROCEDURE UpdateQuestionnaire@1000000012(VAR QuestLine@1000000000 : Record 9062705);
+    VAR
+      Questionnaire@1000000001 : Record 9062704;
+    BEGIN
+      Questionnaire.GET(QuestLine."Questionnaire No.");
+
+      IF Questionnaire.Finished THEN BEGIN
+        Questionnaire.VALIDATE(Status,Questionnaire.Status::Finished);
+      END ELSE BEGIN
+        IF QuestLine.Answered THEN
+          Questionnaire.VALIDATE(Status,Questionnaire.Status::Started)
+        ELSE
+          Questionnaire.VALIDATE(Status,Questionnaire.Status::"Not Started");
+      END;
+
+      Questionnaire.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Finishing Instance ---"@1000000007();
+    BEGIN
+    END;
+
+    PROCEDURE FinishInstance@1000000008(VAR QuestInstance@1000000000 : Record 9062704;RunProcessingCodeunit@1000000001 : Boolean;RunQuestActions@1000000002 : Boolean);
+    VAR
+      QuestAction@1000000003 : Record 9062724;
+      NoOfActions@1000000004 : Integer;
+    BEGIN
+      //Carry Out Actions
+      QuestInstance.VALIDATE(Status,QuestInstance.Status::Finished);
+      QuestInstance.MODIFY(TRUE);
+
+      //DOC NA2016.14 >>
+      //Save answers to the database
+      SaveAnswers(QuestInstance);
+      //DOC NA2016.14 <<
+
+      IF QuestInstance."On Finish - Status" <> QuestInstance."On Finish - Status"::Success THEN BEGIN
+
+        //DOC NA2015.9 >>
+        IF ((RunProcessingCodeunit) AND (QuestInstance."On Finish - Run CU Status" = QuestInstance."On Finish - Run CU Status"::Ready)) OR
+          (QuestInstance."On Finish - Run CU ID" = 0)
+        THEN BEGIN
+          IF QuestInstance."On Finish - Run CU ID" <> 0 THEN
+            CODEUNIT.RUN(QuestInstance."On Finish - Run CU ID",QuestInstance);
+          QuestInstance."On Finish - Run CU Status" := QuestInstance."On Finish - Run CU Status"::Finished;
+          QuestInstance.MODIFY();
+        END;
+
+        QuestAction.RESET();
+        QuestAction.SETRANGE("Questionnaire No.", QuestInstance."Questionnaire No.");
+        NoOfActions := QuestAction.COUNT;
+
+        IF ((RunQuestActions) AND (QuestInstance."On Finish - Run Actions Status" = QuestInstance."On Finish - Run Actions Status"::Ready)) OR
+          (NoOfActions = 0)
+        THEN BEGIN
+          IF ((QuestInstance."On Finish - Run CU ID" <> CODEUNIT::"Quest. Action Processing") AND (NoOfActions <> 0)) THEN
+            CODEUNIT.RUN(CODEUNIT::"Quest. Action Processing", QuestInstance);
+          QuestInstance."On Finish - Run Actions Status" := QuestInstance."On Finish - Run Actions Status"::Finished;
+          QuestInstance.MODIFY();
+        END;
+
+        IF (QuestInstance."On Finish - Run CU Status" = QuestInstance."On Finish - Run CU Status"::Finished) AND
+          (QuestInstance."On Finish - Run Actions Status" = QuestInstance."On Finish - Run Actions Status"::Finished)
+        THEN
+          QuestInstance."On Finish - Status" := QuestInstance."On Finish - Status"::Success
+        ELSE
+          QuestInstance."On Finish - Status" := QuestInstance."On Finish - Status"::"Ready to Run";
+        QuestInstance.MODIFY();
+        //DOC NA2015.9 <<
+
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Qustionnaire Template Status ---"@1000000014();
+    BEGIN
+    END;
+
+    PROCEDURE ReopenTemplate@1000000015(VAR QuestTemplHeader@1000000000 : Record 9062702);
+    VAR
+      QuestTemplActionHeader@1000000001 : Record 9062722;
+    BEGIN
+      //DOC NH2016.12
+
+      QuestTemplHeader.Status := QuestTemplHeader.Status::Open;
+      QuestTemplHeader.MODIFY();
+    END;
+
+    PROCEDURE ReleaseTemplate@1000000016(VAR QuestTemplHeader@1000000000 : Record 9062702);
+    VAR
+      QuestTemplActionHeader@1000000001 : Record 9062722;
+    BEGIN
+      //DOC NH2016.12
+
+      IF (QuestTemplHeader.Status = QuestTemplHeader.Status::Released) THEN
+        EXIT;
+
+      //test questionnaire template data
+
+
+      //release template actions
+      QuestTemplActionHeader.RESET();
+      QuestTemplActionHeader.SETRANGE("Questionnaire Template Code", QuestTemplHeader.Code);
+      IF (QuestTemplActionHeader.FINDSET(TRUE)) THEN BEGIN
+        REPEAT
+          ReleaseTemplateAction(QuestTemplActionHeader);
+        UNTIL (QuestTemplActionHeader.NEXT() = 0);
+      END;
+
+      //change status to released
+      QuestTemplHeader.Status := QuestTemplHeader.Status::Released;
+      QuestTemplHeader.MODIFY();
+    END;
+
+    PROCEDURE ReopenTemplateAction@1000000018(VAR QuestTemplActionHeader@1000000000 : Record 9062722);
+    BEGIN
+      IF (QuestTemplActionHeader.Status = QuestTemplActionHeader.Status::Open) THEN
+        EXIT;
+
+      QuestTemplActionHeader.Status := QuestTemplActionHeader.Status::Open;
+      QuestTemplActionHeader.MODIFY();
+    END;
+
+    PROCEDURE ReleaseTemplateAction@1000000019(VAR QuestTemplActionHeader@1000000000 : Record 9062722);
+    VAR
+      QuestTemplHeader@1000000004 : Record 9062702;
+      QuestTemplActionLine@1000000001 : Record 9062723;
+      LastTableModifyNo@1000000002 : Integer;
+      LastFieldModifyNo@1000000003 : Integer;
+    BEGIN
+      IF (QuestTemplActionHeader.Status = QuestTemplActionHeader.Status::Released) THEN
+        EXIT;
+
+      QuestTemplHeader.GET(QuestTemplActionHeader."Questionnaire Template Code");
+      IF (QuestTemplHeader.Status = QuestTemplHeader.Status::Released) THEN
+        ReopenTemplate(QuestTemplHeader);
+
+      LastTableModifyNo := -1;
+      QuestTemplActionLine.RESET();
+      QuestTemplActionLine.SETRANGE("Questionnaire Template Code", QuestTemplActionHeader."Questionnaire Template Code");
+      QuestTemplActionLine.SETRANGE("Quest. Action Template Id", QuestTemplActionHeader.Id);
+      QuestTemplActionLine.SETFILTER("Action Type", '%1|%2', QuestTemplActionLine."Action Type"::Insert,
+        QuestTemplActionLine."Action Type"::Modify);
+      IF (QuestTemplActionLine.FINDLAST()) THEN
+        LastTableModifyNo := QuestTemplActionLine."Line No.";
+
+      LastFieldModifyNo := -1;
+      QuestTemplActionLine.SETRANGE("Action Type", QuestTemplActionLine."Action Type"::"Set Field");
+      IF (QuestTemplActionLine.FINDLAST()) THEN
+        LastFieldModifyNo := QuestTemplActionLine."Line No.";
+
+      IF (LastFieldModifyNo > LastTableModifyNo) THEN BEGIN
+        ERROR(errNotSavedFieldChange, QuestTemplActionHeader."Questionnaire Template Code",
+          QuestTemplActionHeader.Id);
+      END;
+
+      QuestTemplActionLine.RESET();
+      QuestTemplActionLine.SETRANGE("Questionnaire Template Code", QuestTemplActionHeader."Questionnaire Template Code");
+      QuestTemplActionLine.SETRANGE("Quest. Action Template Id", QuestTemplActionHeader.Id);
+      QuestTemplActionLine.SETRANGE("Action Type", QuestTemplActionLine."Action Type"::"Set Field");
+      QuestTemplActionLine.SETRANGE("Field Id", 0);
+      IF (QuestTemplActionLine.FINDFIRST()) THEN
+        QuestTemplActionLine.TESTFIELD("Field Id");
+
+      QuestTemplActionHeader.Status := QuestTemplActionHeader.Status::Released;
+      QuestTemplActionHeader.MODIFY();
+    END;
+
+    LOCAL PROCEDURE "--- Answer Source/Destination Processing ---"@1000000025();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE LoadAnswers@1000000035(VAR Questionnaire@1000000000 : Record 9062704);
+    VAR
+      QuestLine@1000000001 : Record 9062705;
+    BEGIN
+      QuestLine.RESET();
+      QuestLine.SETRANGE("Questionnaire No.", Questionnaire."Questionnaire No.");
+      QuestLine.SETRANGE("Line Type", QuestLine."Line Type"::Question);
+      QuestLine.SETFILTER("Source Table Id", '<>%1', 0);
+      QuestLine.SETFILTER("Source Field Id", '<>%1', 0);
+      QuestLine.SETFILTER("Source Action", '%1|%2', QuestLine."Source Action"::"Load and Save", QuestLine."Source Action"::Load);
+      IF (QuestLine.FINDSET(TRUE)) THEN BEGIN
+        REPEAT
+          LoadLineAnswer(QuestLine);
+        UNTIL (QuestLine.NEXT() = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE SaveAnswers@1000000037(VAR Questionnaire@1000000000 : Record 9062704);
+    VAR
+      QuestLine@1000000001 : Record 9062705;
+    BEGIN
+      QuestLine.RESET();
+      QuestLine.SETRANGE("Questionnaire No.", Questionnaire."Questionnaire No.");
+      QuestLine.SETRANGE("Line Type", QuestLine."Line Type"::Question);
+      QuestLine.SETFILTER("Source Table Id", '<>%1', 0);
+      QuestLine.SETFILTER("Source Field Id", '<>%1', 0);
+      QuestLine.SETFILTER("Source Action", '%1|%2', QuestLine."Source Action"::"Load and Save", QuestLine."Source Action"::Save);
+      IF (QuestLine.FINDSET(TRUE)) THEN BEGIN
+        REPEAT
+          SaveLineAnswer(QuestLine);
+        UNTIL (QuestLine.NEXT() = 0);
+      END;
+    END;
+
+    PROCEDURE LoadLineAnswer@1000000026(VAR QuestLine@1000000000 : Record 9062705);
+    VAR
+      CriteriaMgt@1000000001 : Codeunit 9062462;
+      EnhFldMgt@1000000006 : Codeunit 9062298;
+      RecRef@1000000002 : RecordRef;
+      FldRef@1000000003 : FieldRef;
+      Value@1000000004 : Text;
+    BEGIN
+      IF ((QuestLine."Source Action" IN [QuestLine."Source Action"::"Load and Save", QuestLine."Source Action"::Load]) AND
+        (QuestLine."Source Table Id" <> 0) AND
+        (QuestLine."Source Field Id" <> 0) AND
+        (QuestLine."Source Field Type" IN [QuestLine."Source Field Type"::Field, QuestLine."Source Field Type"::"Enhanced Field"]))
+      THEN BEGIN
+
+        RecRef.OPEN(QuestLine."Source Table Id");
+        CriteriaMgt.ApplyCriteriaToRecRef(QuestLine."Source Criteria Id", RecRef);
+
+        IF (RecRef.FINDFIRST()) THEN BEGIN
+          CASE (QuestLine."Source Field Type") OF
+            QuestLine."Source Field Type"::Field:
+              BEGIN
+                FldRef := RecRef.FIELD(QuestLine."Source Field Id");
+                QuestLine.VALIDATE("Text Input", FORMAT(FldRef.VALUE));
+              END;
+            QuestLine."Source Field Type"::"Enhanced Field":
+              BEGIN
+                Value := EnhFldMgt.GetTextFieldValue(RecRef.NUMBER, RecRef.GETPOSITION(FALSE), QuestLine."Source Field Id");
+                QuestLine.VALIDATE("Text Input", Value);
+              END;
+          END;
+
+          QuestLine.MODIFY(TRUE);
+        END;
+        RecRef.CLOSE();
+
+      END;
+    END;
+
+    PROCEDURE SaveLineAnswer@1000000027(VAR QuestLine@1000000000 : Record 9062705);
+    VAR
+      Field@1000000008 : Record 2000000041;
+      TableFieldBuffer@1000000007 : Record 9062231;
+      CriteriaMgt@1000000004 : Codeunit 9062462;
+      EnhFldMgt@1000000006 : Codeunit 9062298;
+      Convert@1000000005 : Codeunit 9062683;
+      TableFieldManagement@1000000011 : Codeunit 9062248;
+      Value@1000000001 : Variant;
+      DestFieldValue@1000000009 : Variant;
+      RecRef@1000000002 : RecordRef;
+      FldRef@1000000003 : FieldRef;
+      FieldType@1000000010 : Integer;
+    BEGIN
+      IF ((QuestLine."Source Action" IN [QuestLine."Source Action"::"Load and Save", QuestLine."Source Action"::Save]) AND
+        (QuestLine."Source Table Id" <> 0) AND
+        (QuestLine."Source Field Id" <> 0) AND
+        (QuestLine."Source Field Type" IN [QuestLine."Source Field Type"::Field, QuestLine."Source Field Type"::"Enhanced Field"]))
+      THEN BEGIN
+        QuestLine.GetAnswerValue(Value);
+
+        RecRef.OPEN(QuestLine."Source Table Id");
+        CriteriaMgt.ApplyCriteriaToRecRef(QuestLine."Source Criteria Id", RecRef);
+        IF (RecRef.FINDFIRST()) THEN BEGIN
+          CASE (QuestLine."Source Field Type") OF
+            QuestLine."Source Field Type"::Field:
+              BEGIN
+                FieldType := TableFieldManagement.TableFieldTypeToDataType(QuestLine."Source Table Id", QuestLine."Source Field Id");
+                Convert.Parse(FORMAT(Value), FieldType, DestFieldValue);
+                FldRef := RecRef.FIELD(QuestLine."Source Field Id");
+                FldRef.VALUE := DestFieldValue;
+                RecRef.MODIFY();
+              END;
+            QuestLine."Source Field Type"::"Enhanced Field":
+              BEGIN
+                EnhFldMgt.SetFieldValue(QuestLine."Source Table Id", QuestLine."Source Field Id", RecRef.GETPOSITION(FALSE),
+                  FORMAT(Value));
+              END;
+          END;
+        END;
+        RecRef.CLOSE();
+
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Other ---"@1000000032();
+    BEGIN
+    END;
+
+    PROCEDURE ShowQuestionnaire@1000000033(VAR ForQuestionnaire@1000000000 : Record 9062704);
+    BEGIN
+      ShowNavQuestionnaire(ForQuestionnaire);
+    END;
+
+    PROCEDURE ShowNavQuestionnaire@1000000029(VAR ForQuestionnaire@1000000000 : Record 9062704);
+    VAR
+      Questionnaire@1000000001 : Record 9062704;
+    BEGIN
+      Questionnaire.RESET();
+      Questionnaire.SETRANGE("Questionnaire No.", ForQuestionnaire."Questionnaire No.");
+      PAGE.RUN(PAGE::"Questionnaire Web Control", Questionnaire);
+    END;
+
+    PROCEDURE ShowWebQuestionnaire@1000000030(VAR ForQuestionnaire@1000000000 : Record 9062704);
+    BEGIN
+      HYPERLINK(ForQuestionnaire.GetWebPageURL);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.7  AZ 05/06/2015 - Created
+      //DOC NA2015.8  AZ 14/07/2015 - CreateInstanceOfContactQuest function created
+      //DOC NA2015.9  AZ 04/08/2015 - Run Questionnaire Actions
+      //DOC NA2015.9  AZ 05/08/2015 - Release/Reopen Questionnaire Template
+      //DOC NA2015.9  AZ 18/08/2015 - Question groups and loops
+      //DOC NA2016.10 AZ 08/09/2015 - Nav 2016 Upgrade
+      //DOC NA2016.10 AZ 30/09/2015 - Open web questionnaire instead of Nav page when new questionnaire is created
+      //DOC NA2016.12 JH 27/12/2015 - Criteria references changed
+      //DOC NA2016.14 AZ 09/03/2016 - Run questionnaire initialization codeunit, load and save questionnaire answers
+      //DOC NA2016.15 JH 14/03/2016 - Fixes
+    }
+    END.
+  }
+}
+

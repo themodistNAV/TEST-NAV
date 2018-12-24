@@ -1,0 +1,825 @@
+OBJECT Codeunit 11102046 OM - Object Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      LastError@1000 : Text[1024];
+      DatabaseCode@1001 : Code[20];
+      ErrrorHandling@1002 : ' ,Yes,No';
+      ErrorOccured@1003 : Boolean;
+
+    PROCEDURE ExportRangeTxt@1(VAR Object@1000 : Record 2000000001;FileName@1001 : Text);
+    VAR
+      FileHandler@1002 : Codeunit 11102097;
+      oFile@1003 : File;
+      oFile2@1004 : File;
+      InStr@1005 : InStream;
+      OutStr@1006 : OutStream;
+      TempFileName@1007 : Text;
+      ctCommand@1008 : TextConst 'DEU="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3""";ENU="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3""";ESP="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3""";FRA="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3""";NLD="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3""";DEA="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3"""';
+    BEGIN
+      IF EXISTS(FileName) THEN
+        ERASE(FileName);
+
+      oFile.WRITEMODE(TRUE);
+      oFile.CREATE(FileName);
+      oFile.CREATEOUTSTREAM(OutStr);
+
+      TempFileName := FileHandler.TempDirectory + '\temp.txt';
+
+      IF Object.FINDSET THEN
+        REPEAT
+
+          IF EXISTS(TempFileName) THEN
+            ERASE(TempFileName);
+
+          ExecuteCommand(STRSUBSTNO(ctCommand, Object.Type, Object.ID, TempFileName));
+          IF EXISTS(TempFileName) THEN BEGIN
+            oFile2.OPEN(TempFileName);
+            oFile2.CREATEINSTREAM(InStr);
+            COPYSTREAM(OutStr, InStr);
+            oFile2.CLOSE;
+          END;
+
+        UNTIL Object.NEXT = 0;
+
+      oFile.CLOSE;
+    END;
+
+    PROCEDURE ExportFob@2(VAR Object@1000 : Record 2000000001;FileName@1001 : Text);
+    VAR
+      ctCommand@1002 : TextConst 'DEU="command=exportobjects, file=""%1"", filter=""DBM Table No.=1""";ENU="command=exportobjects, file=""%1"", filter=""DBM Table No.=1""";ESP="command=exportobjects, file=""%1"", filter=""DBM Table No.=1""";FRA="command=exportobjects, file=""%1"", filter=""DBM Table No.=1""";NLD="command=exportobjects, file=""%1"", filter=""DBM Table No.=1""";DEA="command=exportobjects, file=""%1"", filter=""DBM Table No.=1"""';
+    BEGIN
+      ErrorIfMarkingNotPossible(Object);
+      MarkForExport(Object);
+      ExecuteCommand(STRSUBSTNO(ctCommand, FileName));
+    END;
+
+    PROCEDURE ImportObject@3(FileName@1000 : Text);
+    VAR
+      Object@1001 : Record 2000000001;
+      TmpObjectHeaders@1002 : TEMPORARY Record 2000000001;
+      TmpObjectLock@1003 : TEMPORARY Record 2000000001;
+      VersionControl@1004 : Codeunit 11102040;
+      ImExportMgt@1005 : Codeunit 11102043;
+      ObjectMgt@1006 : Codeunit 11102046;
+      oFile@1007 : File;
+      InStr@1008 : InStream;
+      Parameters@1009 : Text;
+      IsFobFile@1010 : Boolean;
+      ctCommand@1011 : TextConst 'DEU="command=importobjects, file=""%1"", importaction=1%2";ENU="command=importobjects, file=""%1"", importaction=1%2";ESP="command=importobjects, file=""%1"", importaction=1%2";FRA="command=importobjects, file=""%1"", importaction=1%2";NLD="command=importobjects, file=""%1"", importaction=1%2";DEA="command=importobjects, file=""%1"", importaction=1%2"';
+    BEGIN
+      IsFobFile := LOWERCASE(COPYSTR(FileName, STRLEN(FileName) - 3)) = '.fob';
+
+      oFile.OPEN(FileName);
+      oFile.CREATEINSTREAM(InStr);
+      IF IsFobFile THEN
+        ImExportMgt.GetObjectHeadersFromFob(InStr, TmpObjectHeaders)
+      ELSE
+        ImExportMgt.GetObjectHeadersFromTxt(InStr, TmpObjectHeaders);
+      oFile.CLOSE;
+
+      ParkObjectLocks(TmpObjectHeaders, TmpObjectLock);
+
+      AddExpectedModification(0, 0);
+
+      COMMIT;
+
+      Parameters := CommandParameters;
+      ExecuteCommand(STRSUBSTNO(ctCommand, FileName, Parameters));
+
+      IF IsFobFile AND SynchronizeSchema THEN BEGIN
+        AddSynchronizeParameter(Parameters);
+        IF ErrrorHandling <> ErrrorHandling::No THEN
+          ObjectMgt.SetErrorHandling(TRUE);
+        ObjectMgt.SetDatabaseCode(DatabaseCode);
+        ObjectMgt.ExecuteCommand(STRSUBSTNO(ctCommand, FileName, Parameters));
+      END;
+
+      COMMIT;
+      DeleteExpectedModifications;
+
+      RestoreObjectLocks(TmpObjectLock);
+
+      IF IsFobFile THEN
+        IF TmpObjectHeaders.FINDSET THEN
+          REPEAT
+            IF Object.GET(TmpObjectHeaders.Type, '', TmpObjectHeaders.ID) THEN
+              VersionControl.RemoveObjectMark(Object);
+          UNTIL TmpObjectHeaders.NEXT = 0;
+
+      VersionControl.RemoveMarkLock(TRUE);
+    END;
+
+    PROCEDURE CompileObject@4(VAR Object@1000 : Record 2000000001);
+    VAR
+      Object2@1001 : Record 2000000001;
+      TmpObjectLock@1002 : TEMPORARY Record 2000000001;
+      ObjectMgt@1003 : Codeunit 11102046;
+      Parameters@1004 : Text;
+      ctCommand@1005 : TextConst 'DEU="command=compileobjects, filter=""Type=%1;ID=%2""%3";ENU="command=compileobjects, filter=""Type=%1;ID=%2""%3";ESP="command=compileobjects, filter=""Type=%1;ID=%2""%3";FRA="command=compileobjects, filter=""Type=%1;ID=%2""%3";NLD="command=compileobjects, filter=""Type=%1;ID=%2""%3";DEA="command=compileobjects, filter=""Type=%1;ID=%2""%3"';
+    BEGIN
+      Object2 := Object;
+      Object2.SETRECFILTER;
+
+      ParkObjectLocks(Object2, TmpObjectLock);
+      COMMIT;
+
+      Parameters := CommandParameters;
+      ExecuteCommand(STRSUBSTNO(ctCommand, Object.Type, Object.ID, Parameters));
+
+      IF (Object.Type = Object.Type::Table) AND SynchronizeSchema THEN BEGIN
+        AddSynchronizeParameter(Parameters);
+        IF ErrrorHandling <> ErrrorHandling::No THEN
+          ObjectMgt.SetErrorHandling(TRUE);
+        ObjectMgt.SetDatabaseCode(DatabaseCode);
+        ObjectMgt.ExecuteCommand(STRSUBSTNO(ctCommand, Object.Type, Object.ID, Parameters));
+      END;
+
+      COMMIT;
+      RestoreObjectLocks(TmpObjectLock);
+    END;
+
+    PROCEDURE ExportObject@5(VAR Object@1000 : Record 2000000001;FileName@1001 : Text);
+    VAR
+      ctCommand@1002 : TextConst 'DEU="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3""";ENU="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3""";ESP="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3""";FRA="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3""";NLD="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3""";DEA="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3"""';
+    BEGIN
+      ExecuteCommand(STRSUBSTNO(ctCommand, Object.Type, Object.ID, FileName));
+    END;
+
+    PROCEDURE DeleteObject@114(VAR Object@1000 : Record 2000000001);
+    VAR
+      Parameters@1001 : Text;
+      ctCommand@1002 : TextConst 'DEU="command=deleteobjects, filter=""Type=%1;ID=%2""%3";ENU="command=deleteobjects, filter=""Type=%1;ID=%2""%3";ESP="command=deleteobjects, filter=""Type=%1;ID=%2""%3";FRA="command=deleteobjects, filter=""Type=%1;ID=%2""%3";NLD="command=deleteobjects, filter=""Type=%1;ID=%2""%3";DEA="command=deleteobjects, filter=""Type=%1;ID=%2""%3"';
+    BEGIN
+      Parameters := CommandParameters;
+      AddSynchronizeParameter(Parameters);
+      ExecuteCommand(STRSUBSTNO(ctCommand, Object.Type, Object.ID, Parameters));
+    END;
+
+    PROCEDURE SetErrorHandling@6(NewValue@1000 : Boolean);
+    BEGIN
+      IF NewValue THEN
+        ErrrorHandling := ErrrorHandling::Yes
+      ELSE
+        ErrrorHandling := ErrrorHandling::No;
+    END;
+
+    PROCEDURE GetErrorOccured@7() : Boolean;
+    BEGIN
+      EXIT(ErrorOccured);
+    END;
+
+    PROCEDURE GetLastError@8() : Text;
+    BEGIN
+      EXIT(LastError);
+    END;
+
+    PROCEDURE ExecuteCommand@9(Command@1000 : Text);
+    VAR
+      Setup@1001 : Record 11102035;
+      FileHandler@1002 : Codeunit 11102097;
+      oFile@1003 : File;
+      DatabaseName@1004 : Text;
+      LogFileName@1005 : Text;
+      ResultFile@1006 : Text;
+      ServerName@1007 : Text;
+      TempString@1008 : Text;
+      OpenCounter@1009 : Integer;
+      FileOpen@1010 : Boolean;
+      ctCommand@1011 : TextConst 'DEU="servername=""%1"", database=""%2"", %3, logfile=""%4"", id=%5, ntauthentication=1";ENU="servername=""%1"", database=""%2"", %3, logfile=""%4"", id=%5, ntauthentication=1";ESP="servername=""%1"", database=""%2"", %3, logfile=""%4"", id=%5, ntauthentication=1";FRA="servername=""%1"", database=""%2"", %3, logfile=""%4"", id=%5, ntauthentication=1";NLD="servername=""%1"", database=""%2"", %3, logfile=""%4"", id=%5, ntauthentication=1";DEA="servername=""%1"", database=""%2"", %3, logfile=""%4"", id=%5, ntauthentication=1"';
+      ctError@1012 : TextConst 'DEU=Command Line Failure:\%1;ENU=Command Line Failure:\%1;ESP=Command Line Failure:\%1;FRA=Command Line Failure:\%1;NLD=Opdrachtregelcommand mislukt:\%1;DEA=Command Line Failure:\%1';
+      ctLogFileCannotBeOpened@1013 : TextConst 'DEU=Log File cannot be opened.;ENU=Log File cannot be opened.;ESP=Log File cannot be opened.;FRA=Log File cannot be opened.;NLD=Logbestand kan niet worden geopend.;DEA=Log File cannot be opened.';
+      ctNoResultFile@1014 : TextConst 'DEU=No result file.\\Possible reasons:\1. Wrong "Working Directory"\2. The license is about to expire.;ENU=No result file.\\Possible reasons:\1. Wrong "Working Directory"\2. The license is about to expire.;ESP=No result file.\\Possible reasons:\1. Wrong "Working Directory"\2. The license is about to expire.;FRA=No result file.\\Possible reasons:\1. Wrong "Working Directory"\2. The license is about to expire.;NLD=Geen resultaatbestand.\\Mogelijke oorzaken:\1. Verkeerde werkmap ingesteld.\2. De licentie vervalt binnenkort.;DEA=No result file.\\Possible reasons:\1. Wrong "Working Directory"\2. The license is about to expire.';
+      Process@1015 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Diagnostics.Process";
+    BEGIN
+      Setup.CustomGet;
+
+      Setup.TESTFIELD("Compiler (Finsql on Server)");
+
+      GetServerAndDatabaseName(ServerName, DatabaseName);
+
+      TempString := DELCHR(CREATEGUID, '=', '{-}');
+
+      LogFileName := FileHandler.TempDirectory + 'log-' + TempString + '.txt';
+      ResultFile := FileHandler.TempDirectory + 'navcommandresult.txt';
+
+      TryDeleteFile(ResultFile);
+
+      Command :=
+        STRSUBSTNO(
+          ctCommand, DELCHR(ServerName, '<>', '"'), DELCHR(DatabaseName, '<>', '"'),
+          Command, LogFileName, Setup."Zup File Id");
+
+      Process := Process.Start(Setup."Compiler (Finsql on Server)", Command);
+      Process.WaitForExit;
+
+      IF NOT FilePresent(ResultFile) THEN BEGIN
+        ErrorOccured := TRUE;
+        LastError := ctNoResultFile;
+      END;
+
+      TryDeleteFile(ResultFile);
+
+      IF EXISTS(LogFileName) THEN BEGIN
+        ErrorOccured := TRUE;
+
+        FileOpen := oFile.OPEN(LogFileName);
+        WHILE NOT FileOpen AND (OpenCounter < 50) DO BEGIN
+          SLEEP(100);
+          FileOpen := oFile.OPEN(LogFileName);
+          OpenCounter += 1;
+        END;
+
+        IF NOT FileOpen THEN
+          ERROR(ctLogFileCannotBeOpened);
+
+        oFile.READ(LastError);
+        oFile.CLOSE;
+        TryDeleteFile(LogFileName);
+      END;
+
+      IF NOT Process.HasExited THEN BEGIN
+        SLEEP(500);
+        IF NOT Process.HasExited THEN
+          Process.Kill;
+      END;
+
+      IF ErrorOccured AND (ErrrorHandling <> ErrrorHandling::Yes) THEN
+        ERROR(ctError, LastError);
+    END;
+
+    PROCEDURE TryDeleteFile@10(FileName@1000 : Text);
+    VAR
+      LoopCounter@1001 : Integer;
+    BEGIN
+      WHILE LoopCounter < 100 DO BEGIN
+        IF NOT EXISTS(FileName) THEN
+          EXIT;
+
+        IF ERASE(FileName) THEN
+          EXIT;
+
+        SLEEP(200);
+        LoopCounter += 1;
+      END;
+    END;
+
+    LOCAL PROCEDURE FilePresent@11(FileToCheck@1000 : Text) : Boolean;
+    VAR
+      LoopCounter@1001 : Integer;
+    BEGIN
+      WHILE LoopCounter < 100 DO BEGIN
+        IF EXISTS(FileToCheck) THEN
+          EXIT(TRUE);
+        SLEEP(100);
+        LoopCounter += 1;
+      END;
+    END;
+
+    PROCEDURE SetDatabaseCode@12(NewValue@1000 : Code[20]);
+    BEGIN
+      DatabaseCode := NewValue;
+    END;
+
+    LOCAL PROCEDURE GetServerAndDatabaseName@13(VAR ServerName@1000 : Text;VAR DatabaseName@1001 : Text);
+    VAR
+      Setup@1002 : Record 11102035;
+      NAVDatabase@1003 : Record 11102099;
+      ApplicationSettings@1004 : Codeunit 11102101;
+    BEGIN
+      Setup.CustomGet;
+
+      IF DatabaseCode = '' THEN
+        DatabaseCode := Setup."Database Code";
+
+      IF DatabaseCode <> '' THEN BEGIN
+        NAVDatabase.GET(DatabaseCode);
+
+        NAVDatabase.TESTFIELD("Server Name");
+        NAVDatabase.TESTFIELD("Database Name");
+        ServerName := NAVDatabase."Server Name";
+        DatabaseName := NAVDatabase."Database Name";
+      END ELSE BEGIN
+        ServerName := ApplicationSettings.ServerInstanceName;
+        DatabaseName := ApplicationSettings.DatabaseName;
+      END;
+
+      IF (ServerName = '') OR (DatabaseName = '') THEN
+        Setup.TESTFIELD("Database Code");
+    END;
+
+    LOCAL PROCEDURE MarkForExport@15(VAR Object@1000 : Record 2000000001);
+    VAR
+      Object2@1001 : Record 2000000001;
+      Object3@1002 : Record 2000000001;
+    BEGIN
+      Object3.SETFILTER(Type, '<>%1', Object3.Type::TableData);
+      Object3.SETFILTER("DBM Table No.", '<>0');
+      IF Object3.FINDSET THEN
+        REPEAT
+          IF Object2.GET(Object3.Type, '', Object3.ID) THEN BEGIN
+            Object2."DBM Table No." := 0;
+            UpdateObject(Object2, TRUE);
+          END;
+        UNTIL Object3.NEXT = 0;
+
+      IF Object.FINDSET THEN
+        REPEAT
+          IF Object2.GET(Object.Type, '', Object.ID) THEN BEGIN
+            Object2."DBM Table No." := 1;
+            UpdateObject(Object2, TRUE);
+          END;
+        UNTIL Object.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateObject@17(VAR Object@1000 : Record 2000000001;Async@1001 : Boolean);
+    VAR
+      NewObject@1002 : Record 2000000001;
+      SQLMgt@1003 : Codeunit 11102075;
+      SqlString@1004 : Text;
+      LoopCounter@1005 : Integer;
+      ObjectUpdated@1006 : Boolean;
+      ctUpdatingObjectFailed@1007 : TextConst 'DEU=Updating object failed.;ENU=Updating object failed.;ESP=Updating object failed.;FRA=Updating object failed.;NLD=Bijwerken van object mislukt.;DEA=Updating object failed.';
+    BEGIN
+      SqlString :=
+        'UPDATE [Object] ' +
+        '   SET [Modified] = ' + SQLMgt.SQLTinyInt(Object.Modified) + ', ' +
+        '       [Compiled] = ' + SQLMgt.SQLTinyInt(Object.Compiled) + ', ' +
+        '       [Date] = ' + SQLMgt.SQLDate(Object.Date) + ', ' +
+        '       [Time] = ' + SQLMgt.SQLTime(Object.Time) + ', ' +
+        '       [DBM Table No_] = ' + FORMAT(Object."DBM Table No.") + ', ' +
+        '       [Version List] = ''' + SQLMgt.SQLTxt(Object."Version List") + ''' ';
+
+      IF Object.Type = Object.Type::Table THEN
+        SqlString := SqlString + ' WHERE [Type] IN (0, 1) '
+      ELSE
+        SqlString := SqlString + ' WHERE [Type] = ' + FORMAT(Object.Type + 0) + ' ';
+
+      SqlString := SqlString + ' AND ID = ' + FORMAT(Object.ID);
+
+      COMMIT;
+
+      AddExpectedModification(Object.Type, Object.ID);
+      COMMIT;
+      SQLMgt.ExecuteNonQuery(SqlString);
+      COMMIT;
+      DeleteExpectedModifications;
+
+      COMMIT;
+
+      IF NOT Async THEN BEGIN
+        REPEAT
+          LoopCounter += 1;
+          IF LoopCounter <> 1 THEN
+            SLEEP(50);
+
+          SELECTLATESTVERSION;
+          NewObject.GET(Object.Type, '', Object.ID);
+          ObjectUpdated :=
+            (Object.Modified = NewObject.Modified) AND
+            (Object.Compiled = NewObject.Compiled) AND
+            (Object.Date = NewObject.Date) AND
+            (ABS(Object.Time - NewObject.Time) < 1000) AND
+            (Object."Version List" = NewObject."Version List");
+
+          IF LoopCounter = 100 THEN
+            ERROR(ctUpdatingObjectFailed);
+
+        UNTIL ObjectUpdated;
+
+        SLEEP(50);
+      END;
+    END;
+
+    PROCEDURE RenameObject@14(VAR Object@1000 : Record 2000000001;NewName@1001 : Text);
+    VAR
+      FileHandler@1002 : Codeunit 11102097;
+      oFileNew@1003 : File;
+      oFileOld@1004 : File;
+      InStr@1005 : InStream;
+      OutStr@1006 : OutStream;
+      CrLf@1007 : Text;
+      Line@1008 : Text;
+      NewFileName@1009 : Text;
+      OldFileName@1010 : Text;
+    BEGIN
+      OldFileName := FileHandler.CreateServerTempFileName('txt');
+      NewFileName := FileHandler.CreateServerTempFileName('txt');
+      ExportObject(Object, OldFileName);
+
+      oFileOld.TEXTMODE(TRUE);
+      oFileOld.OPEN(OldFileName);
+      oFileOld.CREATEINSTREAM(InStr);
+      InStr.READTEXT(Line);
+
+      oFileNew.TEXTMODE(TRUE);
+      oFileNew.WRITEMODE(TRUE);
+      oFileNew.CREATE(NewFileName);
+      oFileNew.CREATEOUTSTREAM(OutStr);
+
+      OutStr.WRITETEXT(STRSUBSTNO('OBJECT %1 %2 %3', Object.Type, Object.ID, NewName));
+      CrLf[1] := 13;
+      CrLf[2] := 10;
+      OutStr.WRITETEXT(CrLf);
+
+      COPYSTREAM(OutStr, InStr);
+
+      oFileOld.CLOSE;
+      oFileNew.CLOSE;
+
+      ImportObject(NewFileName);
+      CompileObject(Object);
+
+      TryDeleteFile(OldFileName);
+      TryDeleteFile(NewFileName);
+    END;
+
+    PROCEDURE UpdateObjectLock@23(VAR Object@1000 : Record 2000000001;Async@1001 : Boolean);
+    VAR
+      NewObject@1002 : Record 2000000001;
+      SQLMgt@1003 : Codeunit 11102075;
+      SqlString@1004 : Text;
+      LoopCounter@1005 : Integer;
+      ObjectUpdated@1006 : Boolean;
+      ctUpdatingObjectFailed@1007 : TextConst 'DEU=Updating object failed.;ENU=Updating object failed.;ESP=Updating object failed.;FRA=Updating object failed.;NLD=Bijwerken van object mislukt.;DEA=Updating object failed.';
+    BEGIN
+      SqlString :=
+        'UPDATE [Object] ' +
+        '   SET [Locked] = ' + SQLMgt.SQLTinyInt(Object.Locked) + ', ' +
+        '       [Locked By] = ''' + SQLMgt.SQLTxt(Object."Locked By") + ''' ';
+
+      IF Object.Type = Object.Type::Table THEN
+        SqlString := SqlString + ' WHERE [Type] IN (0, 1) '
+      ELSE
+        SqlString := SqlString + ' WHERE [Type] = ' + FORMAT(Object.Type + 0) + ' ';
+
+      SqlString := SqlString + ' AND   ID = ' + FORMAT(Object.ID);
+
+      COMMIT;
+
+      AddExpectedModification(Object.Type, Object.ID);
+      COMMIT;
+      SQLMgt.ExecuteNonQuery(SqlString);
+      COMMIT;
+      DeleteExpectedModifications;
+
+      COMMIT;
+
+      IF NOT Async THEN BEGIN
+        REPEAT
+          LoopCounter += 1;
+          IF LoopCounter <> 1 THEN
+            SLEEP(50);
+
+          SELECTLATESTVERSION;
+          NewObject.GET(Object.Type, '', Object.ID);
+          ObjectUpdated :=
+            (Object.Locked = NewObject.Locked) AND
+            (Object."Locked By" = NewObject."Locked By");
+
+          IF LoopCounter = 100 THEN
+            ERROR(ctUpdatingObjectFailed);
+
+        UNTIL ObjectUpdated;
+
+        SLEEP(50);
+      END;
+    END;
+
+    PROCEDURE WaitForObjectUpdate@24();
+    BEGIN
+      SLEEP(100);
+    END;
+
+    PROCEDURE RunObject@18(Object@1000 : Record 2000000001);
+    VAR
+      TableMgt@1001 : Codeunit 11102053;
+      StartTimer@1002 : Boolean;
+    BEGIN
+      CASE Object.Type OF
+
+        Object.Type::Table :
+
+          IF TableMgt.HasInsertPermission THEN
+            TableMgt.RUN(Object)
+          ELSE
+            StartTimer := TRUE;
+
+        Object.Type::Report :
+          REPORT.RUN(Object.ID);
+
+        Object.Type::Codeunit :
+          CODEUNIT.RUN(Object.ID);
+
+        Object.Type::Page :
+          PAGE.RUN(Object.ID);
+
+        ELSE
+          Object.FIELDERROR(Type);
+
+      END;
+    END;
+
+    PROCEDURE DesignObject@19(Object@1000 : Record 2000000001);
+    VAR
+      Setup@1001 : Record 11102035;
+      ObjectLock@1002 : Record 11102054;
+      Mgt@1003 : Codeunit 11102035;
+      SourceControl@1004 : Codeunit 11102050;
+      Arguments@1005 : Text;
+      DatabaseName@1006 : Text;
+      ServerName@1007 : Text;
+      ctArguments@1008 : TextConst 'DEU="servername=%1, database=%2, designobject=%3 %4, id=%5";ENU="servername=%1, database=%2, designobject=%3 %4, id=%5";ESP="servername=%1, database=%2, designobject=%3 %4, id=%5";FRA="servername=%1, database=%2, designobject=%3 %4, id=%5";NLD="servername=%1, database=%2, designobject=%3 %4, id=%5";DEA="servername=%1, database=%2, designobject=%3 %4, id=%5"';
+    BEGIN
+      IF NOT SourceControl.ConfirmObjectLock(Object) THEN
+        EXIT;
+
+      Setup.CustomGet;
+      IF Setup."Lock Object at Design" THEN
+        ObjectLock.InsertLock(Object);
+
+      Setup.TESTFIELD("Designer (Finsql on Client)");
+
+      GetServerAndDatabaseName(ServerName, DatabaseName);
+      Arguments := STRSUBSTNO(ctArguments, ServerName, DatabaseName, Object.Type, Object.ID, Setup."Zup File Id");
+
+      Mgt.RunExecutable(Setup."Designer (Finsql on Client)", Arguments);
+    END;
+
+    PROCEDURE NewObject@20(Object@1000 : Record 2000000001);
+    VAR
+      Setup@1001 : Record 11102035;
+      Mgt@1002 : Codeunit 11102035;
+      Arguments@1003 : Text;
+      DatabaseName@1004 : Text;
+      ServerName@1005 : Text;
+      ctArguments@1006 : TextConst 'DEU="servername=%1, database=%2, designobject=%3 %4, id=%5";ENU="servername=%1, database=%2, designobject=%3 %4, id=%5";ESP="servername=%1, database=%2, designobject=%3 %4, id=%5";FRA="servername=%1, database=%2, designobject=%3 %4, id=%5";NLD="servername=%1, database=%2, designobject=%3 %4, id=%5";DEA="servername=%1, database=%2, designobject=%3 %4, id=%5"';
+    BEGIN
+      Setup.CustomGet;
+      Setup.TESTFIELD("Designer (Finsql on Client)");
+
+      GetServerAndDatabaseName(ServerName, DatabaseName);
+      Arguments := STRSUBSTNO(ctArguments, ServerName, DatabaseName, Object.Type, 0, Setup."Zup File Id");
+
+      Mgt.RunExecutable(Setup."Designer (Finsql on Client)", Arguments);
+    END;
+
+    PROCEDURE AddExpectedModification@21(ObjectType@1000 : ' ,Table,,Report,,Codeunit,XMLport,MenuSuite,Page';ObjectNo@1001 : Integer);
+    VAR
+      ExpectedModification@1002 : Record 11102045;
+    BEGIN
+      ExpectedModification.AddRecordToDatabase(ObjectType, ObjectNo);
+    END;
+
+    PROCEDURE DeleteExpectedModifications@22();
+    VAR
+      ExpectedModification@1000 : Record 11102045;
+    BEGIN
+      ExpectedModification.DeleteMyRecords;
+    END;
+
+    LOCAL PROCEDURE ParkObjectLocks@25(VAR TmpObject@1000 : TEMPORARY Record 2000000001;VAR TmpObjectLocks@1001 : TEMPORARY Record 2000000001);
+    VAR
+      ObjectLock@1002 : Record 11102054;
+      Object@1003 : Record 2000000001;
+      ObjectLockRecord@1004 : Boolean;
+    BEGIN
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          ObjectLockRecord := ObjectLock.GET(TmpObject.Type, TmpObject.ID);
+
+          IF Object.GET(TmpObject.Type, '', TmpObject.ID) THEN
+            IF Object.Locked THEN BEGIN
+              TmpObjectLocks := Object;
+              TmpObjectLocks.INSERT;
+              Object.Locked := FALSE;
+              Object."Locked By" := '';
+              UpdateObjectLock(Object, TRUE);
+            END;
+
+          IF ObjectLockRecord THEN BEGIN
+            COMMIT;
+            SELECTLATESTVERSION;
+            COMMIT;
+            IF NOT ObjectLock.GET(TmpObject.Type, TmpObject.ID) THEN
+              ObjectLock.INSERT;
+            COMMIT;
+          END;
+
+        UNTIL TmpObject.NEXT = 0;
+
+      WaitForObjectUpdate;
+    END;
+
+    LOCAL PROCEDURE RestoreObjectLocks@26(VAR TmpObjectLocks@1000 : TEMPORARY Record 2000000001);
+    VAR
+      Object@1001 : Record 2000000001;
+    BEGIN
+      IF TmpObjectLocks.FINDSET THEN
+        REPEAT
+          IF Object.GET(TmpObjectLocks.Type, '', TmpObjectLocks.ID) THEN BEGIN
+            Object.Locked := TmpObjectLocks.Locked;
+            Object."Locked By" := TmpObjectLocks."Locked By";
+            UpdateObjectLock(Object, TRUE);
+          END;
+        UNTIL TmpObjectLocks.NEXT = 0;
+
+      WaitForObjectUpdate;
+    END;
+
+    LOCAL PROCEDURE ErrorIfMarkingNotPossible@27(VAR Object@1000 : Record 2000000001);
+    VAR
+      ctObjectRangeCannotBeMarkedForExport@1001 : TextConst 'DEU=The objects cannot be marked for export.\Version list is full %1 %2 %3.;ENU=The objects cannot be marked for export.\Version list is full %1 %2 %3.;ESP=The objects cannot be marked for export.\Version list is full %1 %2 %3.;FRA=The objects cannot be marked for export.\Version list is full %1 %2 %3.;NLD=Objecten kunnen niet worden gemarkeerd for export.\Versielist is vol %1 %2 %3.;DEA=The objects cannot be marked for export.\Version list is full %1 %2 %3.';
+    BEGIN
+      WITH Object DO
+        IF FINDSET THEN
+          REPEAT
+            IF ("Version List"[1] <> '#') AND
+               (STRLEN("Version List") = MAXSTRLEN("Version List"))
+            THEN
+              ERROR(ctObjectRangeCannotBeMarkedForExport, Type, ID, Name);
+          UNTIL NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CommandParameters@32() : Text;
+    VAR
+      Setup@1000 : Record 11102035;
+      NAVDatabase@1001 : Record 11102099;
+      CommandLineParameters@1002 : Text;
+    BEGIN
+      IF DatabaseCode = '' THEN BEGIN
+        Setup.CustomGet;
+        CommandLineParameters := Setup."Command Line Parameters";
+      END ELSE
+        IF NAVDatabase.GET(DatabaseCode) THEN
+          IF NAVDatabase."Command Line Parameters" = '' THEN
+            CommandLineParameters := NAVDatabase.DefaultCommandParameters
+          ELSE
+            CommandLineParameters := NAVDatabase."Command Line Parameters";
+
+      IF CommandLineParameters = '' THEN
+        CommandLineParameters := DefaultCommandParameters(TRUE);
+
+      IF CommandLineParameters <> '' THEN
+        EXIT(', ' + CommandLineParameters);
+    END;
+
+    PROCEDURE DefaultCommandParameters@28(WithInstance@1000 : Boolean) ExitValue : Text;
+    VAR
+      ApplicationSettings@1001 : Codeunit 11102101;
+      ServerComputerName@1002 : Text;
+      ServerInstanceName@1003 : Text;
+      ManagementPort@1004 : Integer;
+      ctCommandParameters71@1005 : TextConst 'DEU="validatetablechanges=0";ENU="validatetablechanges=0";ESP="validatetablechanges=0";FRA="validatetablechanges=0";NLD="validatetablechanges=0";DEA="validatetablechanges=0"';
+      ctCommandParameters80@1006 : TextConst 'DEU="synchronizeschemachanges=no";ENU="synchronizeschemachanges=no";ESP="synchronizeschemachanges=no";FRA="synchronizeschemachanges=no";NLD="synchronizeschemachanges=no";DEA="synchronizeschemachanges=no"';
+      ctInstanceParameters@1007 : TextConst 'DEU="navservername=%1, navserverinstance=%2, navservermanagementport=%3";ENU="navservername=%1, navserverinstance=%2, navservermanagementport=%3";ESP="navservername=%1, navserverinstance=%2, navservermanagementport=%3";FRA="navservername=%1, navserverinstance=%2, navservermanagementport=%3";NLD="navservername=%1, navserverinstance=%2, navservermanagementport=%3";DEA="navservername=%1, navserverinstance=%2, navservermanagementport=%3"';
+    BEGIN
+      CASE ApplicationSettings.ApplicationVersion OF
+        '7.0' :
+          WithInstance := FALSE;
+
+        '7.1' :
+          ExitValue := ctCommandParameters71;
+
+        '8.0', '9.0' :
+          ExitValue := ctCommandParameters80;
+
+      END;
+
+      IF WithInstance THEN BEGIN
+        ApplicationSettings.SetServerInstanceValues(ServerComputerName, ServerInstanceName, ManagementPort);
+        IF (ServerComputerName <> '') AND (ServerInstanceName <> '') AND (ManagementPort <> 0) THEN
+          ExitValue := ExitValue + ', ' + STRSUBSTNO(ctInstanceParameters, ServerComputerName, ServerInstanceName, ManagementPort);
+      END;
+    END;
+
+    LOCAL PROCEDURE AddSynchronizeParameter@35(VAR Parameters@1000 : Text);
+    VAR
+      ApplicationSettings@1001 : Codeunit 11102101;
+      ctParName71@1002 : TextConst 'DEU=validatetablechanges;ENU=validatetablechanges;ESP=validatetablechanges;FRA=validatetablechanges;NLD=validatetablechanges;DEA=validatetablechanges';
+      ctParName80@1003 : TextConst 'DEU=synchronizeschemachanges;ENU=synchronizeschemachanges;ESP=synchronizeschemachanges;FRA=synchronizeschemachanges;NLD=synchronizeschemachanges;DEA=synchronizeschemachanges';
+      ctToValue71@1004 : TextConst 'DEU=1;ENU=1;ESP=1;FRA=1;NLD=1;DEA=1';
+      ctToValue80@1005 : TextConst 'DEU=force;ENU=force;ESP=force;FRA=force;NLD=force;DEA=force';
+    BEGIN
+      CASE ApplicationSettings.ApplicationVersion OF
+        '7.1' :
+          ReplaceOrAddParameter(Parameters, ctParName71, ctToValue71);
+
+        '8.0', '9.0' :
+          BEGIN
+            ReplaceOrAddParameter(Parameters, ctParName80, ctToValue80);
+            ReplaceOrAddParameter(Parameters, ctParName80, ctToValue80);
+          END;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE ReplaceOrAddParameter@36(VAR Parameters@1000 : Text;ParName@1001 : Text;ToValue@1002 : Text);
+    VAR
+      Parameters2@1003 : Text;
+      Pos@1004 : Integer;
+      StartPos@1005 : Integer;
+      StopPos@1006 : Integer;
+      FindStatus@1007 : 'Parameter,Double Hyphen,Value';
+    BEGIN
+      Parameters2 := DELCHR(LOWERCASE(Parameters));
+
+      IF STRPOS(Parameters2, ParName + '=' + ToValue) > 0 THEN
+        EXIT;
+
+      IF STRPOS(Parameters2, ParName + '=') = 0 THEN BEGIN
+        Parameters := Parameters + ', ' + ParName + '=' + ToValue;
+        EXIT;
+      END;
+
+      StartPos := STRPOS(LOWERCASE(Parameters), ParName);
+      FOR Pos := StartPos TO STRLEN(Parameters) DO
+
+        CASE FindStatus OF
+
+          FindStatus::Parameter :
+            IF Parameters[Pos] = '=' THEN
+              FindStatus := FindStatus::"Double Hyphen";
+
+          FindStatus::"Double Hyphen" :
+            IF Parameters[Pos] <> ' ' THEN
+              FindStatus := FindStatus::Value;
+
+          FindStatus::Value :
+            IF Parameters[Pos] IN [',', ' '] THEN BEGIN
+              StopPos := Pos;
+              Pos := STRLEN(Parameters);
+            END;
+
+        END;
+
+      IF StopPos = 0 THEN
+        Parameters := COPYSTR(Parameters, 1, StartPos - 1) + ParName + '=' + ToValue
+      ELSE
+        Parameters := COPYSTR(Parameters, 1, StartPos - 1) + ParName + '=' + ToValue + COPYSTR(Parameters, StopPos);
+    END;
+
+    LOCAL PROCEDURE SynchronizeSchema@33() : Boolean;
+    VAR
+      ApplicationSettings@1000 : Codeunit 11102101;
+    BEGIN
+      EXIT(ApplicationSettings.ApplicationVersion IN ['7.1', '8.0', '9.0']);
+    END;
+
+    PROCEDURE GetLifeObject@29(VAR Object@1000 : Record 2000000001) ExitValue : Text;
+    VAR
+      FileHandler@1001 : Codeunit 11102097;
+      oFile@1002 : File;
+      TempFileName@1003 : Text;
+      ReadChar@1004 : Char;
+      ctCommand@1005 : TextConst 'DEU="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3""";ENU="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3""";ESP="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3""";FRA="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3""";NLD="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3""";DEA="command=exportobjects, filter=""Type=%1;ID=%2"", file=""%3"""';
+      SB@1006 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+    BEGIN
+      TempFileName := FileHandler.TempDirectory + '\temp.txt';
+      IF EXISTS(TempFileName) THEN
+        ERASE(TempFileName);
+
+      ExecuteCommand(STRSUBSTNO(ctCommand, Object.Type, Object.ID, TempFileName));
+      IF EXISTS(TempFileName) THEN BEGIN
+
+        SB := SB.StringBuilder;
+
+        oFile.OPEN(TempFileName);
+
+        WHILE oFile.READ(ReadChar) > 0 DO
+          SB.Append(ReadChar);
+
+        oFile.CLOSE;
+
+        ERASE(TempFileName);
+      END;
+
+      EXIT(SB.ToString);
+    END;
+
+    PROCEDURE Navigate@31(Object@1000 : Record 2000000001);
+    VAR
+      Navigate@1001 : Page 11175820;
+    BEGIN
+      Navigate.SetObject(Object);
+      Navigate.RUNMODAL;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

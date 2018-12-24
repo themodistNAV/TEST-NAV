@@ -1,0 +1,142 @@
+OBJECT Codeunit 9062624 Expenses Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      errInvoiceExists@1000000000 : TextConst 'ENU=Invoice for expenses %1 has already been created.;ENG=Invoice for expenses %1 has already been created.';
+      txtInvoiceCreated@1000000001 : TextConst 'ENU=Invoice %1 has been created.;ENG=Invoice %1 has been created.';
+      errNotApproved@1000000002 : TextConst 'ENU=Expenses for a week starting on %1 have not been approved.;ENG=Expenses for a week starting on %1 have not been approved.';
+
+    PROCEDURE NewExpenseEntry@1000000000();
+    VAR
+      ExpenseLine@1000000001 : Record 9062760;
+      ExpenseEntryCard@1000000000 : Page 9063124;
+    BEGIN
+      ExpenseLine.INIT();
+      ExpenseLine.InitRecord();
+      ExpenseLine.INSERT(TRUE);
+      COMMIT;
+      PAGE.RUNMODAL(PAGE::"Expense Entry Card", ExpenseLine);
+    END;
+
+    PROCEDURE CreateInvHeader@1000000001(VAR ExpenseHeader@1000000005 : Record 9062759);
+    VAR
+      LastVendorNo@1000000001 : Code[20];
+      PurchaseHeader@1000000002 : Record 38;
+      FileAttMgt@1000000000 : Codeunit 9062267;
+    BEGIN
+      IF (ExpenseHeader."Approval Status" <> ExpenseHeader."Approval Status"::Approved) THEN
+        ERROR(errNotApproved, ExpenseHeader."Starting Date");
+
+      IF (ExpenseHeader."Invoice No." <> '') THEN
+        ERROR(errInvoiceExists, ExpenseHeader."No.");
+
+      ExpenseHeader.TESTFIELD("Processing Status", ExpenseHeader."Processing Status"::Unprocessed);
+
+      PurchaseHeader.INIT;
+      PurchaseHeader.VALIDATE("Document Type", PurchaseHeader."Document Type"::Invoice);
+      PurchaseHeader.VALIDATE("No.", '');
+      PurchaseHeader.VALIDATE("Buy-from Vendor No.", ExpenseHeader."Vendor No.");
+      PurchaseHeader.VALIDATE("Order Date", TODAY);
+      PurchaseHeader.VALIDATE("Currency Code", '');
+      PurchaseHeader.VALIDATE("Prices Including VAT", TRUE);
+      PurchaseHeader.INSERT(TRUE);
+
+      ExpenseHeader."Processing Status" := ExpenseHeader."Processing Status"::Processed;
+      ExpenseHeader."Invoice No." := PurchaseHeader."No.";
+      ExpenseHeader.MODIFY(TRUE);
+
+      FileAttMgt.CopyToRecord(DATABASE::"Purchase Header", PurchaseHeader.GETPOSITION(),
+        DATABASE::"Expenses Header", ExpenseHeader.GETPOSITION());
+
+      CreateInvLines(ExpenseHeader, PurchaseHeader);
+
+      MESSAGE(STRSUBSTNO(txtInvoiceCreated, PurchaseHeader."No."));
+    END;
+
+    PROCEDURE CreateInvLines@1000000002(VAR ExpenseHeader@1000000000 : Record 9062759;PurchaseHeader@1000000001 : Record 38);
+    VAR
+      ExpenseLine@1000000002 : Record 9062760;
+      PurchaseLine@1000000003 : Record 39;
+      Catalog@1000000005 : Record 9062385;
+      FileAttachment@1000000009 : Record 9062272;
+      FIleAttMgt@1000000006 : Codeunit 9062267;
+      FileAttProc@1000000007 : Codeunit 9062600;
+      FileMgt@1000000008 : Codeunit 419;
+      LineNo@1000000004 : Integer;
+      DocType@1000000010 : Integer;
+      TempFileName@1000000011 : Text;
+      FileDescription@1000000012 : Text;
+      eFileDescription@1000000013 : TextConst 'ENU=Line %1 Picture.jpg;ENG=Line %1 Picture.jpg';
+    BEGIN
+      CLEAR(LineNo);
+      ExpenseLine.SETRANGE("Expense No.", ExpenseHeader."No.");
+      IF ExpenseLine.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+          Catalog.GET(ExpenseLine."Catalog Code");
+
+          LineNo += 1000;
+          PurchaseLine.INIT;
+          PurchaseLine."Document Type" := PurchaseHeader."Document Type";
+          PurchaseLine."Document No." := PurchaseHeader."No.";
+          PurchaseLine."Line No." := LineNo;
+          PurchaseLine.VALIDATE(Type, PurchaseLine.Type::"G/L Account");
+          PurchaseLine.VALIDATE("No.", Catalog."G/L Account (Purchase)");
+
+          PurchaseLine.VALIDATE("Gen. Prod. Posting Group", Catalog."Gen. Prod. Posting Group");
+          PurchaseLine.VALIDATE("VAT Prod. Posting Group", Catalog."VAT Prod. Post Group (Purch)");
+
+          PurchaseLine.Description := ExpenseLine.Description;
+          PurchaseLine.VALIDATE(Quantity, 1);
+          PurchaseLine.VALIDATE("Direct Unit Cost", ExpenseLine."Amount LCY");
+          PurchaseLine.INSERT(TRUE);
+
+          ExpenseLine.Status := ExpenseLine.Status::Processed;
+          ExpenseLine.MODIFY;
+
+          FIleAttMgt.CopyToRecord(DATABASE::"Purchase Header", PurchaseHeader.GETPOSITION(),
+            DATABASE::"Expenses Line", ExpenseLine.GETPOSITION());
+
+          //copy line picture to purchase document file attachments
+          ExpenseLine.CALCFIELDS(Picture);
+          IF (ExpenseLine.Picture.HASVALUE) THEN BEGIN
+            DocType := PurchaseHeader."Document Type";
+
+            FileAttachment.RESET();
+            FileAttachment.SETRANGE("Table ID", DATABASE::"Purchase Header");
+            FileAttachment.SETRANGE("Primary Key Value 1", FORMAT(DocType, 0, 9));
+            FileAttachment.SETRANGE("Primary Key Value 2", PurchaseHeader."No.");
+
+            TempFileName := FileMgt.ServerTempFileName('jpg');
+            FileDescription := STRSUBSTNO(eFileDescription, PurchaseLine."Line No.");
+
+            ExpenseLine.Picture.EXPORT(TempFileName);
+            FileAttProc.GetFromServer(FileAttachment, TempFileName, FileDescription, FileDescription, FALSE, FALSE);
+            IF (EXISTS(TempFileName)) THEN
+              ERASE(TempFileName);
+          END;
+
+        UNTIL ExpenseLine.NEXT() = 0;
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,273 @@
+OBJECT Codeunit 9062700 Questionnaire Session Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=24/05/16;
+    Time=11:47:07 AM;
+    Version List=NH2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      HtmlControlRequestProxy@1000000000 : Codeunit 9062665;
+      Initialized@1000000001 : Boolean;
+      errMessageNotSupported@1000000002 : TextConst 'ENU=Control message %1 not supported.;ENG=Control message %1 not supported.';
+      "--- Questionnaires ---"@1000000013 : Integer;
+      QuestId@1000000018 : Integer;
+      Questionnaire@1000000019 : Record 9062704;
+      CurrentPageNo@1000000003 : Integer;
+      WasError@1000000004 : Boolean;
+      ErrorLineNo@1000000005 : Integer;
+      ErrorText@1000000006 : Text;
+      cnfFinishQuestionnaire@1000000007 : TextConst 'ENU=Do you want to finish this questionnaire?;ENG=Do you want to finish this questionnaire?';
+      PreviewMode@1000000008 : Boolean;
+
+    PROCEDURE Initialize@1000000011(VAR Value@1000000000 : DotNet "'TheNavPeople.HtmlControlCommunication.9.0.0.0, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7c0c47cc7f65ff95'.TheNavPeople.HtmlControlCommunication.RequestMessageEvent";Height@1000000006 : Text);
+    VAR
+      ControlTemplate@1000000003 : Record 9062799;
+      UIManipulationMgt@1000000002 : Codeunit 9062672;
+      HtmlTemplateMgt@1000000001 : Codeunit 9062686;
+      TemplateCode@1000000004 : Code[50];
+      ViewCode@1000000005 : Code[50];
+    BEGIN
+      Initialized := FALSE;
+      PreviewMode := FALSE;
+      //QuestId := 0;
+      //CLEAR(Questionnaire);
+
+      //initialize control and libraries
+      HtmlControlRequestProxy.SetRequestEvent(Value);
+
+      //load template
+      TemplateCode := HtmlTemplateMgt.GetDefaultTemplate(ControlTemplate."Control Type"::Questionnaire);;
+      IF (TemplateCode <> '') THEN
+        ViewCode := HtmlTemplateMgt.GetDefaultView(TemplateCode);
+      HtmlControlRequestProxy.LoadView(TemplateCode, ViewCode);
+
+      //HtmlControlRequestProxy.AddScriptLink('libraries/jquery.ui.touch-punch/jquery.ui.touch-punch.min.js');
+      HtmlControlRequestProxy.AddScriptLink('libraries/bootstrap-3.3.6/js/bootstrap.min.js');
+      HtmlControlRequestProxy.AddStyleSheetLink('libraries/bootstrap-3.3.6/css/bootstrap.min.css');
+
+      //Send library references to the control add-in
+      HtmlControlRequestProxy.SendResourceLinkRequest();
+
+      //update client ui
+      UIManipulationMgt.ClearScript();
+      IF ((Height = '100%') OR (Height = '')) THEN
+        UIManipulationMgt.UseWindowHeight()
+      ELSE
+        UIManipulationMgt.SetHeightProperties(Height, Height, Height);
+      IF (UIManipulationMgt.HasScript) THEN
+        HtmlControlRequestProxy.SendJavaScriptRequest(UIManipulationMgt.GetScript);
+    END;
+
+    PROCEDURE LinksLoaded@1000000001();
+    BEGIN
+      Initialized := TRUE;
+      RenderContent('');
+    END;
+
+    PROCEDURE HandleControlMessage@1000000002(ControlMessage@1000000000 : DotNet "'TheNavPeople.HtmlControlCommunication.9.0.0.0, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7c0c47cc7f65ff95'.TheNavPeople.HtmlControlCommunication.ControlMessage";VAR ClosePage@1000000001 : Boolean);
+    VAR
+      CellIdText@1000000002 : Text;
+      CellIndexText@1000000003 : Text;
+      ColIdText@1000000004 : Text;
+    BEGIN
+      ClosePage := FALSE;
+      ClearError();
+      CASE (ControlMessage.Type) OF
+        'answer': OnAnswer(
+                    FORMAT(ControlMessage.SafeGetContent('quest')),
+                    FORMAT(ControlMessage.SafeGetContent('answer')),
+                    FORMAT(ControlMessage.SafeGetContent('focused')));
+        'nextPage': OnNextPage();
+        'prevPage': OnPrevPage();
+        'finishQuest': OnFinish(ClosePage);
+        'previewMode': SetPreviewMode(TRUE, FALSE);
+        'editMode': SetPreviewMode(FALSE, TRUE);
+        'lookup': OnLookup(FORMAT(ControlMessage.SafeGetContent('Result')));
+        ELSE
+          ERROR(errMessageNotSupported, ControlMessage.Type);
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Rendering ---"@1000000004();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE RenderContent@1000000007(FocusedElement@1000000003 : Text);
+    VAR
+      DataSource@1000000000 : TEMPORARY Record 9062810;
+      QuestionnaireCard@1000000002 : XMLport 9062317;
+      OutputStream@1000000001 : OutStream;
+    BEGIN
+      IF ((NOT(Initialized)) OR (Questionnaire."Questionnaire No." = 0)) THEN
+        EXIT;
+
+      DataSource.InitDataSources();
+      DataSource.InitNewDataSource('', '', OutputStream);
+
+      QuestionnaireCard.InitData();
+      QuestionnaireCard.SetError(WasError, ErrorText, ErrorLineNo);
+      QuestionnaireCard.RunFromNav(Questionnaire."Questionnaire No.", CurrentPageNo, PreviewMode, FocusedElement);
+      QuestionnaireCard.SETDESTINATION(OutputStream);
+      QuestionnaireCard.EXPORT();
+      CurrentPageNo := QuestionnaireCard.GetCurrentPageNo();
+      FocusedElement := QuestionnaireCard.GetFocusedElement();
+
+      DataSource.INSERT();
+
+      HtmlControlRequestProxy.RenderViewData(DataSource);
+
+      IF (FocusedElement <> '') THEN
+        HtmlControlRequestProxy.SendJavaScriptRequest('$("#' + FocusedElement + '").focus();');
+    END;
+
+    LOCAL PROCEDURE "--- Questionnaire Methods ---"@1000000009();
+    BEGIN
+    END;
+
+    PROCEDURE OpenQuestionnaire@1000000006(NewQuestionnaireId@1000000001 : Integer);
+    VAR
+      Totals@1000000000 : TEMPORARY Record 9062699;
+      ReloadPage@1000000002 : Boolean;
+    BEGIN
+      ReloadPage := (NewQuestionnaireId <> QuestId);
+      QuestId := NewQuestionnaireId;
+      Questionnaire.GET(QuestId);
+
+      IF (ReloadPage) THEN
+        RenderContent('');
+    END;
+
+    PROCEDURE SetPreviewMode@1000000010(NewPreviewModeVal@1000000000 : Boolean;GoToLastPage@1000000001 : Boolean);
+    BEGIN
+      IF (PreviewMode <> NewPreviewModeVal) THEN BEGIN
+        PreviewMode := NewPreviewModeVal;
+
+        IF (NOT(PreviewMode)) THEN BEGIN
+          CurrentPageNo := 1;
+          IF (GoToLastPage) THEN BEGIN
+            Questionnaire.FIND('=');
+            Questionnaire.CALCFIELDS("Last Active Page No.");
+            IF (Questionnaire."Last Active Page No." > 0) THEN
+              CurrentPageNo := Questionnaire."Last Active Page No.";
+          END;
+        END;
+
+        RenderContent('');
+      END;
+    END;
+
+    LOCAL PROCEDURE SetInputText@1000000013(VAR QuestLine@1000000000 : Record 9062705;InputText@1000000001 : Text) : Boolean;
+    VAR
+      IsError@1000000002 : Boolean;
+    BEGIN
+      QuestLine.SetSkipErrors(TRUE);
+      QuestLine.SetDateFormat('dd-MM-yyyy');
+      QuestLine.VALIDATE("Text Input", InputText);
+      IsError := QuestLine.GetError();
+      IF (IsError) THEN
+        SetError(TRUE, QuestLine.GetErrorText(), QuestLine."Line No.")
+      ELSE
+        QuestLine.MODIFY(TRUE);
+      EXIT(NOT(IsError));
+    END;
+
+    LOCAL PROCEDURE "--- Error Handling ---"@1000000008();
+    BEGIN
+    END;
+
+    PROCEDURE SetError@1000000024(NewError@1000000000 : Boolean;NewErrorText@1000000001 : Text;NewErrorLineNo@1000000002 : Integer);
+    BEGIN
+      WasError := NewError;
+      ErrorLineNo := NewErrorLineNo;
+      ErrorText := NewErrorText;
+    END;
+
+    PROCEDURE ClearError@1000000015();
+    BEGIN
+      SetError(FALSE, '', 0);
+    END;
+
+    LOCAL PROCEDURE "--- Event Handlers ---"@1000000000();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE OnAnswer@1000000003(LineNoText@1000000000 : Text;AnswerText@1000000002 : Text;FocusedId@1000000004 : Text);
+    VAR
+      QuestLine@1000000003 : Record 9062705;
+      LineNo@1000000001 : Integer;
+    BEGIN
+      IF (EVALUATE(LineNo, LineNoText)) THEN BEGIN
+        IF (QuestLine.GET(Questionnaire."Questionnaire No.", LineNo)) THEN BEGIN
+          SetInputText(QuestLine, AnswerText);
+        END;
+      END;
+      RenderContent(FocusedId);
+    END;
+
+    LOCAL PROCEDURE OnNextPage@1000000030();
+    BEGIN
+      CurrentPageNo := Questionnaire.GetNextActivePageNo(CurrentPageNo);
+      RenderContent('');
+    END;
+
+    LOCAL PROCEDURE OnPrevPage@1000000031();
+    BEGIN
+      CurrentPageNo := Questionnaire.GetPrevActivePageNo(CurrentPageNo);
+      RenderContent('');
+    END;
+
+    LOCAL PROCEDURE OnFinish@1000000032(VAR ClosePage@1000000000 : Boolean);
+    BEGIN
+      IF (CONFIRM(cnfFinishQuestionnaire)) THEN BEGIN
+        Questionnaire.FIND('=');
+        Questionnaire.VALIDATE(Finished, TRUE);
+        Questionnaire.MODIFY(TRUE);
+        RenderContent('');
+      END;
+    END;
+
+    LOCAL PROCEDURE OnLookup@1000000005(LineNoText@1000000000 : Text);
+    VAR
+      QuestLine@1000000002 : Record 9062705;
+      RunWithRecRef@1000000003 : Codeunit 9062239;
+      CriteriaMgt@1000000007 : Codeunit 9062462;
+      LineNo@1000000001 : Integer;
+      RecRef@1000000004 : RecordRef;
+      FldRef@1000000005 : FieldRef;
+    BEGIN
+      IF (EVALUATE(LineNo, LineNoText)) THEN BEGIN
+        IF (QuestLine.GET(Questionnaire."Questionnaire No.", LineNo)) THEN BEGIN
+          IF (QuestLine."Answer Table Id" <> 0) AND (QuestLine."Answer Field Id" <> 0) THEN BEGIN
+
+            RecRef.OPEN(QuestLine."Answer Table Id");
+            IF (QuestLine."Answer Criteria Id" <> 0) THEN
+              CriteriaMgt.ApplyCriteriaToRecRef(QuestLine."Answer Criteria Id", RecRef);
+            IF (RunWithRecRef.RunListPage(RecRef, TRUE)) THEN BEGIN
+              FldRef := RecRef.FIELD(QuestLine."Answer Field Id");
+              IF (SetInputText(QuestLine, FORMAT(FldRef.VALUE))) THEN
+                RenderContent('quest' + FORMAT(QuestLine."Line No.", 0, 9));
+            END;
+            RecRef.CLOSE();
+          END;
+        END;
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.15 JH 09/05/2016 - CfMD modifications
+      //DOC NA2016.16 AZ 24/05/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

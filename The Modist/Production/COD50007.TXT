@@ -1,0 +1,282 @@
+OBJECT Codeunit 50007 Integration Error Handler
+{
+  OBJECT-PROPERTIES
+  {
+    Date=31/01/17;
+    Time=[ 2:03:04 PM];
+    Modified=Yes;
+    Version List=OP9031;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE LogError@1000000001(IntegrationType@1000000000 : Code[10];IntegrationGroup@1000000001 : Code[10];IntegrationFunction@1000000002 : Code[10];SourceType@1000000003 : Integer;DocumentNo@1000000004 : Code[20];LineNo@1000000005 : Integer;ErrorText@1000000006 : Text;ErrorLocation@1000000007 : Text[100];StagingEntryNo@1000000008 : Integer;ErrCode@1000000010 : Text;FileName@1000000011 : Text);
+    VAR
+      IntegrationErrorLog@1000000009 : Record 50011;
+    BEGIN
+      //this function creates an entry in the integration error log
+      IF   (ErrCode <> 'DB:RecordExists') THEN
+        IF STRLEN(ErrorText) > 0 THEN BEGIN
+          IntegrationErrorLog.INIT;
+          IntegrationErrorLog."Integration Type" := IntegrationType;
+          IntegrationErrorLog."Integration Process Group" := IntegrationGroup;
+          IntegrationErrorLog."Integration Process Function" := IntegrationFunction;
+          IntegrationErrorLog."Source Type" := SourceType;
+          IntegrationErrorLog."Document No." := DocumentNo;
+          IntegrationErrorLog."Document Line No." := LineNo;
+          IntegrationErrorLog."Error Text" := COPYSTR(ErrorText,1,250);
+          IntegrationErrorLog."Error Code" := COPYSTR(ErrCode,1,250);
+          IntegrationErrorLog."Error Location" := ErrorLocation;
+          IntegrationErrorLog."Staging Entry No." := StagingEntryNo;
+          IntegrationErrorLog."Date Logged" := TODAY;
+          IntegrationErrorLog."Time Logged" := TIME;
+          IntegrationErrorLog.FileName := FileName;
+          IntegrationErrorLog.INSERT;
+        END;
+    END;
+
+    PROCEDURE ItemExists@1000000002(ItemNo@1000000000 : Code[20];VAR ErrorMessage@1000000001 : Text[250];VAR ErrorCode@1000000005 : Text) : Boolean;
+    VAR
+      Item@1000000002 : Record 27;
+      retVAL@1000000003 : Boolean;
+      ERRMSG@1000000004 : TextConst 'ENU=Item %1 does not exist in Dynamics NAV;ENG=Item %1 does not exist in Dynamics NAV';
+    BEGIN
+      ErrorCode := '1000';
+      retVAL:=FALSE;
+      IF NOT Item.GET(ItemNo) THEN BEGIN
+        ErrorMessage := STRSUBSTNO(ERRMSG,ItemNo);
+      END ELSE BEGIN
+        retVAL:=TRUE;
+      END;
+
+      EXIT(retVAL);
+    END;
+
+    PROCEDURE ItemVariantExists@1000000004(ItemNo@1000000000 : Code[20];VariantCode@1000000001 : Code[10];VAR ErrorMessage@1000000002 : Text[250];VAR ErrorCode@1000000006 : Text) : Boolean;
+    VAR
+      ItemVariant@1000000003 : Record 5401;
+      retVAL@1000000004 : Boolean;
+      ERRMSG@1000000005 : TextConst 'ENU=Item Variant %1 : %2 does not exist in Dynamics NAV;ENG=Item Variant %1 : %2 does not exist in Dynamics NAV';
+    BEGIN
+      ErrorCode := '1001';
+      retVAL:=FALSE;
+      IF NOT ItemVariant.GET(ItemNo,VariantCode) THEN BEGIN
+        ErrorMessage := STRSUBSTNO(ERRMSG,ItemNo,VariantCode);
+      END ELSE
+        retVAL:=TRUE;
+
+      EXIT(retVAL);
+    END;
+
+    PROCEDURE ItemBlocked@1000000006(VAR Item@1000000000 : Record 27;VAR ErrorMessage@1000000001 : Text;VAR ErrorCode@1000000004 : Text) : Boolean;
+    VAR
+      retVAL@1000000002 : Boolean;
+      ERRMSG@1000000003 : TextConst 'ENU=Item %1 is blocked;ENG=Item %1 is blocked';
+    BEGIN
+      //Check if item is blocked: assumes that ItemExists function is successful
+      ErrorCode := '1002';
+      retVAL:=FALSE;
+      IF Item.Blocked THEN BEGIN
+        ErrorMessage := STRSUBSTNO(ERRMSG,Item."No.");
+      END ELSE
+        retVAL:=TRUE;
+
+      EXIT(retVAL);
+    END;
+
+    PROCEDURE ItemHasInventoryPostingGroup@1000000008(VAR Item@1000000000 : Record 27;VAR ErrorMessage@1000000001 : Text;VAR ErrorCode@1000000004 : Text) : Boolean;
+    VAR
+      retVal@1000000002 : Boolean;
+      ERRMSG@1000000003 : TextConst 'ENU=Item %1 must have an Inventory Posting Group specified;ENG=Item %1 must have an Inventory Posting Group specified';
+    BEGIN
+      //If Item has inventory posting group specified
+      ErrorCode := '1003';
+      retVal:=TRUE;
+      IF Item."Inventory Posting Group" = '' THEN BEGIN
+        retVal := FALSE;
+        ErrorMessage := STRSUBSTNO(ERRMSG,Item."No.");
+        END;
+
+      EXIT(retVal);
+    END;
+
+    PROCEDURE ItemHasGenProdPostingGroup@1000000010(VAR item@1000000000 : Record 27;VAR ErrorMessage@1000000001 : Text;VAR ErrorCode@1000000006 : Text) : Boolean;
+    VAR
+      retVal@1000000002 : Boolean;
+      GenProductPostingGrp@1000000003 : Record 251;
+      BLANKGPPG@1000000004 : TextConst 'ENU=General Product Posting Group should not be blank for Item %1;ENG=General Product Posting Group should not be blank for Item %1';
+      INVALIDGPPG@1000000005 : TextConst 'ENU=General Product Posting Group %1 Does not exist;ENG=General Product Posting Group %1 Does not exist';
+    BEGIN
+      //Check if the item has a General Product Posting Group specified and if its valid
+      ErrorCode := '1004';
+      retVal:=TRUE;
+      IF item."Gen. Prod. Posting Group" <> '' THEN BEGIN
+        IF NOT GenProductPostingGrp.GET(item."Gen. Prod. Posting Group") THEN BEGIN
+          ErrorMessage := STRSUBSTNO(INVALIDGPPG,item."Gen. Prod. Posting Group");
+          retVal := FALSE;
+        END;
+      END ELSE BEGIN
+          ErrorMessage := STRSUBSTNO(BLANKGPPG,item."No.");
+          retVal := FALSE;
+      END;
+      EXIT(retVal);
+    END;
+
+    PROCEDURE ItemHasVATProdPostingGroup@1000000012(VAR Item@1000000000 : Record 27;VAR ErrorMessage@1000000001 : Text;VAR ErrorCode@1000000006 : Text) : Boolean;
+    VAR
+      retVal@1000000002 : Boolean;
+      VATProductPostingGrp@1000000003 : Record 324;
+      BLANKGPPG@1000000004 : TextConst 'ENU=VAT Product Posting Group should not be blank for Item %1;ENG=VAT Product Posting Group should not be blank for Item %1';
+      INVALIDGPPG@1000000005 : TextConst 'ENU=VAT Product Posting Group %1 Does not exist;ENG=VAT Product Posting Group %1 Does not exist';
+    BEGIN
+      //Check if the item has a VAT Product Posting Group specified and if its valid
+      ErrorCode := '1005';
+      retVal:=TRUE;
+      IF Item."VAT Prod. Posting Group" <> '' THEN BEGIN
+        IF NOT VATProductPostingGrp.GET(Item."VAT Prod. Posting Group") THEN BEGIN
+          ErrorMessage := STRSUBSTNO(INVALIDGPPG,Item."VAT Prod. Posting Group");
+          retVal := FALSE;
+        END;
+      END ELSE BEGIN
+          ErrorMessage := STRSUBSTNO(BLANKGPPG,Item."No.");
+          retVal := FALSE;
+      END;
+      EXIT(retVal);
+    END;
+
+    PROCEDURE GenPostingSetupExists@1000000014(GenBusPostGrp@1000000000 : Code[10];GenProdPostGrp@1000000001 : Code[10];VAR ErrorMessage@1000000002 : Text;VAR ErrorCode@1000000006 : Text) : Boolean;
+    VAR
+      GenPostingSetup@1000000003 : Record 252;
+      retVal@1000000004 : Boolean;
+      ERRMSG@1000000005 : TextConst 'ENU=General Posting Setup does not exist for combination of %1 and %2;ENG=General Posting Setup does not exist for combination of %1 and %2';
+    BEGIN
+      ErrorCode := '1006';
+      retVal:=FALSE;
+
+      IF NOT GenPostingSetup.GET(GenBusPostGrp, GenProdPostGrp) THEN BEGIN
+        ErrorMessage := STRSUBSTNO(ERRMSG,GenBusPostGrp, GenProdPostGrp);
+      END ELSE
+        retVal:=TRUE;
+
+      EXIT(retVal);
+    END;
+
+    PROCEDURE VATPostingSetupExists@1000000016(VATBusPostGrp@1000000000 : Code[10];VATProdPostGrp@1000000001 : Code[10];VAR ErrorMessage@1000000002 : Text;VAR ErrorCode@1000000006 : Text) : Boolean;
+    VAR
+      VATpostingSetup@1000000003 : Record 325;
+      retVAL@1000000004 : Boolean;
+      ERRMSG@1000000005 : TextConst 'ENU=VAT Posting Setup does not exist for combination of %1 and %2;ENG=VAT Posting Setup does not exist for combination of %1 and %2';
+    BEGIN
+      ErrorCode := '1007';
+      retVAL:=FALSE;
+
+      IF NOT VATpostingSetup.GET(VATBusPostGrp, VATProdPostGrp) THEN BEGIN
+        ErrorMessage := STRSUBSTNO(ERRMSG,VATBusPostGrp, VATProdPostGrp);
+      END ELSE
+        retVAL:=TRUE;
+
+      EXIT(retVAL);
+    END;
+
+    PROCEDURE QuantityOnInventory@1000000000(ItemNo@1000000000 : Code[20];VariantCode@1000000001 : Code[10];LocationCode@1000000006 : Code[10];QuantityToMove@1000000008 : Decimal;VAR ErrorMessage@1000000002 : Text[250];VAR ErrorCode@1000000010 : Text) : Boolean;
+    VAR
+      ItemVariant@1000000003 : Record 5401;
+      retVAL@1000000004 : Boolean;
+      ERRMSGITEM@1000000005 : TextConst 'ENU=You have insufficient quantity of Item %1 in Location %2;ENG=You have insufficient quantity of Item %1 in Location %2';
+      Item@1000000007 : Record 27;
+      ERRMSGITEMVAR@1000000009 : TextConst 'ENU=You have insufficient quantity of Item/Variant %1-%2  in Location %3;ENG=You have insufficient quantity of Item/Variant %1-%2  in Location %3';
+    BEGIN
+      //This function raises an error if there is insufficient inventory to move of an item or item/variant in a given Location
+      ErrorCode := '1008';
+      retVAL:=FALSE;
+      IF ItemVariant.GET(ItemNo,VariantCode) THEN BEGIN
+        ItemVariant.RESET;
+        ItemVariant.SETRANGE("Item No.",ItemNo);
+        ItemVariant.SETRANGE(Code,VariantCode);
+        ItemVariant.SETRANGE("Location Filter",LocationCode);
+        IF ItemVariant.FINDLAST THEN BEGIN
+          ItemVariant.CALCFIELDS(Inventory);
+          IF QuantityToMove > ItemVariant.Inventory THEN
+            ErrorMessage := STRSUBSTNO(ERRMSGITEMVAR,ItemNo,VariantCode,LocationCode)
+          ELSE
+            retVAL:=TRUE;
+        END;
+      END ELSE BEGIN
+        Item.RESET;
+        Item.SETRANGE("No.",ItemNo);
+        Item.SETRANGE("Location Filter",LocationCode);
+        IF Item.FINDLAST THEN BEGIN
+          Item.CALCFIELDS(Inventory);
+          IF QuantityToMove > Item.Inventory THEN
+            ErrorMessage := STRSUBSTNO(ERRMSGITEM,ItemNo, LocationCode,LocationCode)
+          ELSE
+            retVAL:=TRUE;
+        END;
+      END;
+
+      EXIT(retVAL);
+    END;
+
+    PROCEDURE LocationExists@1000000003(LocationCode@1000000000 : Code[10];VAR ErrorMessage@1000000002 : Text;VAR ErrorCode@1000000005 : Text) : Boolean;
+    VAR
+      Location@1000000001 : Record 14;
+      ERRMSG@1000000003 : TextConst 'ENU=Location %1 Does not exist;ENG=Location %1 Does not exist';
+      retVAL@1000000004 : Boolean;
+    BEGIN
+      //This function confirms the existance of a Location
+      ErrorCode := '1009';
+      retVAL:=FALSE;
+
+      IF NOT Location.GET(LocationCode) THEN BEGIN
+        ErrorMessage := STRSUBSTNO(ERRMSG,LocationCode);
+      END ELSE
+        retVAL:=TRUE;
+
+      EXIT(retVAL);
+    END;
+
+    PROCEDURE BinExists@1000000005(LocationCode@1000000000 : Code[10];BinCode@1000000001 : Code[10];VAR ErrorMessage@1000000003 : Text;VAR ErrorCode@1000000006 : Text) : Boolean;
+    VAR
+      Bin@1000000002 : Record 7354;
+      ERRMSG@1000000004 : TextConst 'ENU=Bin %1 in Location %2 does not exist;ENG=Bin %1 in Location %2 does not exist';
+      retVAL@1000000005 : Boolean;
+    BEGIN
+      //This function confirms the existance of a Bin within a Location
+      ErrorCode := '1010';
+      retVAL:=FALSE;
+      IF NOT Bin.GET(LocationCode,BinCode) THEN BEGIN
+        ErrorMessage := STRSUBSTNO(ERRMSG,BinCode,LocationCode);
+      END ELSE
+        retVAL:=TRUE;
+
+      EXIT(retVAL);
+    END;
+
+    PROCEDURE InventoryPostingSetupExists@1000000007(LocationCode@1000000000 : Code[10];InventoryPostingGroup@1000000001 : Code[10];VAR ErrorMessage@1000000005 : Text;VAR ErrorCode@1000000006 : Text) : Boolean;
+    VAR
+      InventoryPostingSetup@1000000002 : Record 5813;
+      retVal@1000000003 : Boolean;
+      ERRMSG@1000000004 : TextConst 'ENU=There is no Inventory Posting Setup for Location %1 Inventory Posting Group %2;ENG=There is no Inventory Posting Setup for Location %1 Inventory Posting Group %2';
+    BEGIN
+      //This function checks for an Inventory Posting Setup
+      ErrorCode := '1011';
+      retVal:=FALSE;
+      IF NOT InventoryPostingSetup.GET(LocationCode,InventoryPostingGroup) THEN BEGIN
+        ErrorMessage := STRSUBSTNO(ERRMSG,LocationCode,InventoryPostingGroup);
+      END ELSE
+        retVal:=TRUE;
+
+      EXIT(retVal);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

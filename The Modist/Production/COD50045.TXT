@@ -1,0 +1,389 @@
+OBJECT Codeunit 50045 The Modist Notification Mgmt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/12/18;
+    Time=12:56:13 PM;
+    Modified=Yes;
+    Version List=TM3002,TM3025;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            SalesCrMemoLineL@1000000000 : Record 115;
+          BEGIN
+            EmailItem.RESET;
+            EmailItem.SETCURRENTKEY(Sent);
+            EmailItem.SETRANGE(Sent,FALSE);
+            IF EmailItem.FINDSET THEN BEGIN
+              REPEAT
+                CLEARLASTERROR;
+                RecID := EmailItem."Record ID";
+                IF RecID.TABLENO = DATABASE::"Sales Header" THEN BEGIN
+                  IF RecRef.GET(RecID) THEN BEGIN
+                    RecRef.SETTABLE(SalesHeader);
+                    IF SalesHeader."Document Type" = SalesHeader."Document Type"::"Return Order" THEN BEGIN
+                      IF NOT EmailItem.Body.HASVALUE THEN
+                        EmailItem.SetBodyText(CreateReturnOrderNotificationBody(SalesHeader))
+                      ELSE
+                        EmailItem.CALCFIELDS(Body);
+                      IF EmailItem.TrySend(TRUE) THEN BEGIN
+                        EmailItem2 := EmailItem;
+                        EmailItem2."Error Message" := '';
+                        EmailItem2.Sent := TRUE;
+                        EmailItem2.MODIFY;
+                      END ELSE BEGIN
+                        EmailItem2 := EmailItem;
+                        EmailItem2."Error Message" := COPYSTR(GETLASTERRORTEXT,1,250);
+                        EmailItem2.Sent := FALSE;
+                        EmailItem2.MODIFY;
+                      END;
+                    END;
+                  END ELSE BEGIN
+                    EmailItem2 := EmailItem;
+                    EmailItem2.Sent := TRUE;
+                    EmailItem2.MODIFY;
+                  END;
+                END;
+                IF RecID.TABLENO = DATABASE::"Sales Cr.Memo Header" THEN BEGIN
+                  RecRef.GET(RecID);
+                  RecRef.SETTABLE(SalesCrMemoHeader);
+                  IF EmailItem.Subject = '' THEN BEGIN
+                    SalesCrMemoLineL.SETCURRENTKEY("Document No.", "Line No.");
+                    SalesCrMemoLineL.SETRANGE("Document No.", SalesCrMemoHeader."No.");
+                    SalesCrMemoLineL.SETRANGE(Type, SalesCrMemoLineL.Type::Item);
+                    IF SalesCrMemoLineL.FINDFIRST THEN
+                      EmailItem.Subject := STRSUBSTNO(C_Subject, SalesCrMemoHeader."Return Order No.",
+                                                      GetWarehouseReceiptNo(SalesCrMemoLineL."Document No.", SalesCrMemoLineL."Line No."))
+                  END;
+                  IF NOT EmailItem.Body.HASVALUE THEN
+                    EmailItem.SetBodyText(CreateCreditMemoNotificationBody(SalesCrMemoHeader))
+                  ELSE
+                    EmailItem.CALCFIELDS(Body);
+                  IF EmailItem.TrySend(TRUE) THEN BEGIN
+                    EmailItem2 := EmailItem;
+                    EmailItem2."Error Message" := '';
+                    EmailItem2.Sent := TRUE;
+                    EmailItem2.MODIFY;
+                  END ELSE BEGIN
+                    EmailItem2 := EmailItem;
+                    EmailItem2."Error Message" := COPYSTR(GETLASTERRORTEXT,1,250);
+                    EmailItem2.Sent := FALSE;
+                    EmailItem2.MODIFY;
+                  END;
+                END;
+                //DOC TM3025 ST 11/09/2018 -
+                IF RecID.TABLENO = DATABASE::"Internet Order Header" THEN BEGIN
+                  RecRef.GET(RecID);
+                  RecRef.SETTABLE(InternetOrderHeader);
+                  IF NOT EmailItem.Body.HASVALUE THEN
+                    EmailItem.SetBodyText(CreateInternetOrderLimitNotificationBody(InternetOrderHeader))
+                  ELSE
+                    EmailItem.CALCFIELDS(Body);
+                  IF EmailItem.TrySend(TRUE) THEN BEGIN
+                    EmailItem2 := EmailItem;
+                    EmailItem2."Error Message" := '';
+                    EmailItem2.Sent := TRUE;
+                    EmailItem2.MODIFY;
+                  END ELSE BEGIN
+                    EmailItem2 := EmailItem;
+                    EmailItem2."Error Message" := COPYSTR(GETLASTERRORTEXT,1,250);
+                    EmailItem2.Sent := FALSE;
+                    EmailItem2.MODIFY;
+                  END;
+                END;
+                //DOC TM3025 ST 11/09/2018 +
+              UNTIL EmailItem.NEXT=0;
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SalesHeader@1000000008 : Record 36;
+      SalesCrMemoHeader@1000000018 : Record 114;
+      SalesCrMemoLine@1000000019 : Record 115;
+      ValueEntry@1000000020 : Record 5802;
+      ItemLedgEntry@1000000021 : Record 32;
+      ReturnRcptLine@1000000022 : Record 6661;
+      ModistSetup@1000000001 : Record 50000;
+      NotificationTemplate@1000000000 : Record 1510;
+      EmailItem@1000000007 : Record 9500;
+      EmailItem2@1000000011 : Record 9500;
+      CountryRegion@1000000009 : Record 9;
+      PaymentMethod@1000000010 : Record 289;
+      InternetOrderHeader@1000000015 : Record 9021666;
+      InternetOrderLine@1000000012 : Record 9021667;
+      RecID@1000000013 : RecordID;
+      RecRef@1000000014 : RecordRef;
+      NotificationBodyString@1000000003 : DotNet "'mscorlib'.System.String";
+      NotificationBodyLinesString@1000000006 : DotNet "'mscorlib'.System.String";
+      NotificationBody@1000000002 : Text;
+      HtmlNewSalesLineTxt@1000000004 : TextConst 'ENU="<tr><td style=""width: 116.8px;"">%ItemNo%</td><td style=""width: 314.4px;"">%ItemDescription%</td><td style=""width: 75.2px; text-align: center;"">%Qty%</td></tr>"';
+      NotificationBodyLines@1000000005 : Text;
+      PaymentMethodDescription@1000000016 : Text;
+      CountryRegionName@1000000017 : Text;
+      HtmlNewSalesCrMemoLineTxt@1000000026 : TextConst 'ENU="<tr><td style=""width: 116.8px;"">%ItemNo%</td><td style=""width: 314.4px;"">%ItemDescription%</td><td style=""width: 75.2px; text-align: center;"">%Qty%</td><td style=""width: 75.2px; text-align: center;"">%Amount%</td></tr>"';
+      C_UserCurrencyError@1000000024 : TextConst 'ENU=%1 should be %2';
+      C_Subject@1000000025 : TextConst 'ENU=Order %1  is GRN''d %2';
+      C_InternetOrderAlert@1170000000 : TextConst 'ENU=Above US Threshold - %1 - %2';
+
+    LOCAL PROCEDURE CreateInternetOrderLimitNotificationBody@1170000004(InternetOrderHdrP@1170000000 : Record 9021666) : Text;
+    VAR
+      RecordRefL@1170000002 : RecordRef;
+      PageManagementL@1170000003 : Codeunit 700;
+      LCYAmountL@1170000004 : Decimal;
+      CurrencyExchangeRateL@1170000005 : Record 330;
+      TotalAmountL@1170000006 : Decimal;
+    BEGIN
+      //Doc TM3025 ST 11/09/2018 -
+      WITH InternetOrderHdrP DO BEGIN
+        ModistSetup.GET;
+        NotificationTemplate.GET(ModistSetup."IO Alert Template");
+        NotificationBody := NotificationTemplate.GetNotificationBody;
+        NotificationBodyString := NotificationBodyString.Copy(NotificationBody);
+        NotificationBodyString := NotificationBodyString.Replace('%OrderNo%', "Internet Order Reference");
+        NotificationBodyString := NotificationBodyString.Replace('%CustEmail%', "Bill-to E-Mail");
+        NotificationBodyString := NotificationBodyString.Replace('%ContactNo%', "Phone No.");
+        NotificationBodyString := NotificationBodyString.Replace('%ShippingAddress%', "Ship-to Address");
+        LCYAmountL := CurrencyExchangeRateL.ExchangeAmtFCYToLCY("Order Date", "Currency Code", Amount,
+                                                                CurrencyExchangeRateL.ExchangeRate("Order Date", "Currency Code"));
+        NotificationBodyString := NotificationBodyString.Replace('%HdrAmount%', FORMAT((ROUND(LCYAmountL, 0.01, '='))));
+        NotificationBodyString := NotificationBodyString.Replace('%Currency%', "Currency Code");
+        NotificationBodyLines := '';
+        InternetOrderLine.SETRANGE("Order Guid", "Order Guid");
+        IF InternetOrderLine.FINDSET THEN BEGIN
+          REPEAT
+            NotificationBodyLinesString := NotificationBodyLinesString.Copy(HtmlNewSalesCrMemoLineTxt);
+            NotificationBodyLinesString := NotificationBodyLinesString.Replace('%ItemNo%',InternetOrderLine."No.");
+            NotificationBodyLinesString := NotificationBodyLinesString.Replace('%ItemDescription%',InternetOrderLine.Description);
+            NotificationBodyLinesString := NotificationBodyLinesString.Replace('%Qty%',FORMAT(InternetOrderLine.Quantity));
+            LCYAmountL := ROUND(CurrencyExchangeRateL.ExchangeAmtFCYToLCY(InternetOrderHdrP."Order Date", InternetOrderHdrP."Currency Code", InternetOrderLine.Amount,
+                                                                CurrencyExchangeRateL.ExchangeRate(InternetOrderHdrP."Order Date", InternetOrderHdrP."Currency Code")),0.01, '=');
+            NotificationBodyLinesString := NotificationBodyLinesString.Replace('%Amount%',FORMAT(LCYAmountL));
+            NotificationBodyLines += NotificationBodyLinesString.ToString;
+          UNTIL InternetOrderLine.NEXT=0;
+        END;
+        NotificationBodyString := NotificationBodyString.Replace('%ItemLoop%',NotificationBodyLines);
+        RecordRefL.GETTABLE(InternetOrderHeader);
+        NotificationBodyString := NotificationBodyString.Replace('%WEBUrl%', PageManagementL.GetWebUrl(RecordRefL, 9021716));
+        NotificationBodyString := NotificationBodyString.Replace('%RTCUrl%', PageManagementL.GetRTCUrl(RecordRefL, 9021716));
+        EXIT(NotificationBodyString.ToString);
+      END;
+      //Doc TM3025 ST 11/09/2018 +
+    END;
+
+    [EventSubscriber(Codeunit,50025,OnAfterInternetOrderCreated2)]
+    PROCEDURE CreateInternetOrderLimitNotificationEntry@1170000022(VAR InternetHeader@1170000000 : Record 9021666);
+    VAR
+      CurrencyExchangeRateL@1170000002 : Record 330;
+      LCYAmountL@1170000003 : Decimal;
+      ModistSetupL@1170000004 : Record 50000;
+      lCountryRegion@1170000001 : Record 9;
+    BEGIN
+      //Doc TM3025 ST 11/09/2018 -
+      ModistSetupL.GET;
+      IF ModistSetupL."US Threshold Limit" = 0 THEN
+        EXIT;
+
+      IF NOT lCountryRegion.GET(InternetHeader."Ship-to Country Code") THEN
+        EXIT;
+
+      IF NOT lCountryRegion."Threshold Email Notification" THEN
+        EXIT;
+
+      LCYAmountL := CurrencyExchangeRateL.ExchangeAmtFCYToLCY(InternetHeader."Order Date", InternetHeader."Currency Code", InternetHeader.Amount,
+                                                              CurrencyExchangeRateL.ExchangeRate(InternetHeader."Order Date", InternetHeader."Currency Code"));
+      IF LCYAmountL > ModistSetupL."US Threshold Limit" THEN BEGIN
+        WITH InternetHeader DO BEGIN
+          IF (ISTEMPORARY) THEN
+            EXIT;
+          EmailItem.Init;
+          EmailItem."Send to" := 'red.bamba@themodist.com;dana.nasir@themodist.com;eman.yassin@themodist.com;wessam.kreidieh@themodist.com';
+          EmailItem."Send BCC" := 'amr.wafa@themodist.com';
+          EmailItem."Record ID" := RECORDID;
+          EmailItem."From Name" := COMPANYNAME;;
+          EmailItem."Plaintext Formatted" := FALSE;
+          EmailItem.Subject := STRSUBSTNO(C_InternetOrderAlert, "Internet Order Reference", ROUND(LCYAmountL, 0.01, '='));
+          EmailItem.Sent := FALSE;
+          EmailItem.INSERT;
+        END;
+      END;
+      //Doc TM3025 ST 11/09/2018 +
+    END;
+
+    PROCEDURE CreateReturnOrderNotificationBody@1000000000(pSalesHeader@1000000000 : Record 36) : Text;
+    BEGIN
+      WITH pSalesHeader DO BEGIN
+        PaymentMethodDescription := '';
+        CountryRegionName := '';
+        InternetOrderHeader.RESET;
+        InternetOrderHeader.SETRANGE("Internet Order Reference","No.");
+        IF InternetOrderHeader.ISEMPTY THEN
+          EXIT;
+
+        ModistSetup.GET;
+        ModistSetup.TESTFIELD("Return Notification Template");
+        IF "Ship-to Country/Region Code" <> '' THEN BEGIN
+          CountryRegion.GET("Ship-to Country/Region Code");
+          CountryRegionName := CountryRegion.Name;
+        END;
+        IF "Payment Method Code" <> '' THEN BEGIN
+          PaymentMethod.GET("Payment Method Code");
+          PaymentMethodDescription := PaymentMethod.Description;
+        END;
+        NotificationTemplate.GET(ModistSetup."Return Notification Template");
+        NotificationBody := NotificationTemplate.GetNotificationBody;
+        NotificationBodyString := NotificationBodyString.Copy(NotificationBody);
+        NotificationBodyString := NotificationBodyString.Replace('%CustomerNo%',"Sell-to Customer No.");
+        NotificationBodyString := NotificationBodyString.Replace('%CustomerName%',"Sell-to Customer Name");
+        NotificationBodyString := NotificationBodyString.Replace('%DocumentNo%',"No.");
+        NotificationBodyString := NotificationBodyString.Replace('%CountryName%',CountryRegionName);
+        NotificationBodyString := NotificationBodyString.Replace('%PaymentMethodCode%',PaymentMethodDescription);
+        NotificationBodyString := NotificationBodyString.Replace('%ReturnReasonDescription%',"Reason Code");
+        NotificationBodyLines := '';
+
+        InternetOrderLine.RESET;
+        InternetOrderLine.SETRANGE("Internet Order Reference","No.");
+        InternetOrderLine.SETRANGE("Line Type",InternetOrderLine."Line Type"::Item);
+        IF InternetOrderLine.FINDSET THEN BEGIN
+          REPEAT
+            NotificationBodyLinesString := NotificationBodyLinesString.Copy(HtmlNewSalesLineTxt);
+            NotificationBodyLinesString := NotificationBodyLinesString.Replace('%ItemNo%',InternetOrderLine."Line ID");
+            NotificationBodyLinesString := NotificationBodyLinesString.Replace('%ItemDescription%',InternetOrderLine.Description);
+            NotificationBodyLinesString := NotificationBodyLinesString.Replace('%Qty%',FORMAT(InternetOrderLine.Quantity));
+            NotificationBodyLines += NotificationBodyLinesString.ToString;
+          UNTIL InternetOrderLine.NEXT=0;
+        END;
+        NotificationBodyString := NotificationBodyString.Replace('%ItemLoop%',NotificationBodyLines);
+        EXIT(NotificationBodyString.ToString);
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnAfterInsertEvent,"",Skip,Skip)]
+    PROCEDURE OnAfterInsert_SalesReturnOrder_CreateNotificationEntry@1000000003(VAR Rec@1000000000 : Record 36;RunTrigger@1000000001 : Boolean);
+    BEGIN
+      WITH Rec DO BEGIN
+        IF (ISTEMPORARY) OR
+           ("Document Type" <> "Document Type"::"Return Order") //OR
+           //("Internet Order Reference" = '')
+        THEN
+          EXIT;
+        EmailItem.Init;
+        EmailItem."Send to" := 'personalservice@themodist.com';
+        EmailItem."Send BCC" := 'amr.wafa@themodist.com';
+        EmailItem."Record ID" := RECORDID;
+        EmailItem."From Name" := COMPANYNAME;;
+        EmailItem."Plaintext Formatted" := FALSE;
+        EmailItem.Subject := 'Customer Return: ' + "Origianl Order No.";
+        EmailItem.Sent := FALSE;
+        EmailItem.INSERT;
+      END;
+    END;
+
+    PROCEDURE CreateCreditMemoNotificationBody@1000000001(pSalesCrMemoHeader@1000000000 : Record 114) : Text;
+    VAR
+      AmountL@1000000001 : Decimal;
+      PageManagementL@1000000002 : Codeunit 700;
+      RecordRefL@1000000003 : RecordRef;
+    BEGIN
+      //Doc TM3002 ST 02/07/2018 -
+      WITH pSalesCrMemoHeader DO BEGIN
+        PaymentMethodDescription := '';
+        CountryRegionName := '';
+
+        CALCFIELDS("Amount Including VAT");
+
+        ModistSetup.GET;
+        ModistSetup.TESTFIELD("Cr. Memo Notification Template");
+        IF "Ship-to Country/Region Code" <> '' THEN BEGIN
+          CountryRegion.GET("Ship-to Country/Region Code");
+          CountryRegionName := CountryRegion.Name;
+        END;
+
+        NotificationTemplate.GET(ModistSetup."Cr. Memo Notification Template");
+        NotificationBody := NotificationTemplate.GetNotificationBody;
+        NotificationBodyString := NotificationBodyString.Copy(NotificationBody);
+        NotificationBodyString := NotificationBodyString.Replace('%CountryName%',CountryRegionName);
+        NotificationBodyString := NotificationBodyString.Replace('%ReturnReasonDescription%',"Reason Code");
+        NotificationBodyLines := '';
+
+        SalesCrMemoLine.SETRANGE("Document No.","No.");
+        SalesCrMemoLine.SETRANGE(Type, SalesCrMemoLine.Type::Item);
+        IF SalesCrMemoLine.FINDSET THEN BEGIN
+          REPEAT
+            NotificationBodyLinesString := NotificationBodyLinesString.Copy(HtmlNewSalesCrMemoLineTxt);
+            NotificationBodyLinesString := NotificationBodyLinesString.Replace('%ItemNo%',SalesCrMemoLine."No.");
+            NotificationBodyLinesString := NotificationBodyLinesString.Replace('%ItemDescription%',SalesCrMemoLine.Description);
+            NotificationBodyLinesString := NotificationBodyLinesString.Replace('%Qty%',FORMAT(SalesCrMemoLine.Quantity));
+            NotificationBodyLinesString := NotificationBodyLinesString.Replace('%Amount%',FORMAT(SalesCrMemoLine."Amount Including VAT"));
+            NotificationBodyLines += NotificationBodyLinesString.ToString;
+            AmountL += SalesCrMemoLine."Amount Including VAT";
+          UNTIL SalesCrMemoLine.NEXT=0;
+        END;
+        NotificationBodyString := NotificationBodyString.Replace('%AmountIncVAT%', FORMAT(AmountL) + ' ' + SalesCrMemoHeader."Currency Code");
+        NotificationBodyString := NotificationBodyString.Replace('%ItemLoop%',NotificationBodyLines);
+        RecordRefL.GETTABLE(SalesCrMemoHeader);
+        NotificationBodyString := NotificationBodyString.Replace('%WEBUrl%', PageManagementL.GetWebUrl(RecordRefL, 134));
+        NotificationBodyString := NotificationBodyString.Replace('%RTCUrl%', PageManagementL.GetRTCUrl(RecordRefL, 134));
+        EXIT(NotificationBodyString.ToString);
+      END;
+      //Doc TM3002 ST 02/07/2018 +
+    END;
+
+    [EventSubscriber(Table,114,OnAfterInsertEvent,"",Skip,Skip)]
+    PROCEDURE CreateCreditMemoNotificationEntry@1000000024(VAR Rec@1000000000 : Record 114;RunTrigger@1000000001 : Boolean);
+    BEGIN
+      //Doc TM3002 ST 02/07/2018 -
+      WITH Rec DO BEGIN
+        IF "Internet Order Reference" = '' THEN
+          EXIT;
+        IF (ISTEMPORARY) THEN
+          EXIT;
+        EmailItem.Init;
+        EmailItem."Send to" := 'personalservice@themodist.com';
+        EmailItem."Send BCC" := 'amr.wafa@themodist.com';
+        EmailItem."Record ID" := RECORDID;
+        EmailItem."From Name" := COMPANYNAME;;
+        EmailItem."Plaintext Formatted" := FALSE;
+      //  EmailItem.Subject := '';
+        EmailItem.Sent := FALSE;
+        EmailItem.INSERT;
+      END;
+      //Doc TM3002 ST 02/07/2018 +
+    END;
+
+    PROCEDURE GetWarehouseReceiptNo@1000000002(DocumentNoP@1000000000 : Code[20];LineNoP@1000000001 : Integer) : Code[20];
+    VAR
+      PostedWhseReceiptLineL@1000000002 : Record 7319;
+    BEGIN
+      //Doc TM3002 ST 02/07/2018 -
+      ValueEntry.SETCURRENTKEY("Document No.");
+      ValueEntry.SETRANGE("Document No.", DocumentNoP);
+      ValueEntry.SETRANGE("Document Type", ValueEntry."Document Type"::"Sales Credit Memo");
+      ValueEntry.SETRANGE("Document Line No.", LineNoP);
+      ValueEntry.SETFILTER("Invoiced Quantity",'<>0');
+      IF ValueEntry.FINDSET THEN
+        REPEAT
+          IF ItemLedgEntry.GET(ValueEntry."Item Ledger Entry No.") AND
+             (ItemLedgEntry."Document Type" = ItemLedgEntry."Document Type"::"Sales Return Receipt") THEN
+            IF ReturnRcptLine.GET(ItemLedgEntry."Document No.", ItemLedgEntry."Document Line No.") THEN BEGIN
+              PostedWhseReceiptLineL.SETCURRENTKEY("Posted Source No.");
+              PostedWhseReceiptLineL.SETRANGE("Posted Source No.", ReturnRcptLine."Document No.");
+              IF PostedWhseReceiptLineL.FINDFIRST THEN
+                EXIT(PostedWhseReceiptLineL."Whse. Receipt No.");
+            END;
+        UNTIL ValueEntry.NEXT = 0;
+      //Doc TM3002 ST 02/07/2018 +
+    END;
+
+    BEGIN
+    {
+      //Doc TM3002 ST 02/07/2018 - Added new function CreateCreditMemoNotificationBody & CreateCreditMemoNotificationEntry.
+      //Doc TM3025 ST 1/09/2018 - Added new function EmailAlertInternetOrder.
+    }
+    END.
+  }
+}
+

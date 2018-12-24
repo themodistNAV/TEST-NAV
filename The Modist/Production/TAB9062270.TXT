@@ -1,0 +1,376 @@
+OBJECT Table 9062270 File Attachment Queue
+{
+  OBJECT-PROPERTIES
+  {
+    Date=29/07/16;
+    Time=[ 9:36:26 AM];
+    Version List=NA2016.16.1;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=File Attachment Queue;
+               ENG=File Attachment Queue];
+    LookupPageID=Page9062312;
+    DrillDownPageID=Page9062312;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Code                ;Code50        ;CaptionML=[ENU=Code;
+                                                              ENG=Code] }
+    { 2   ;   ;Description         ;Text100       ;CaptionML=[ENU=Description;
+                                                              ENG=Description] }
+    { 3   ;   ;Folder Path         ;Text200       ;CaptionML=[ENU=Folder Path;
+                                                              ENG=Folder Path] }
+    { 10  ;   ;User ID             ;Code50        ;OnValidate=BEGIN
+                                                                "Contact No." := TNLUtils.GetUserContactNo("User ID");
+                                                              END;
+
+                                                   CaptionML=[ENU=User ID;
+                                                              ENG=User ID] }
+    { 11  ;   ;Contact No.         ;Code20        ;TableRelation=Contact.No.;
+                                                   CaptionML=[ENU=Contact No.;
+                                                              ENG=Contact No.] }
+    { 12  ;   ;Users Default Queue ;Boolean       ;CaptionML=[ENU=Users Default Queue;
+                                                              ENG=Users Default Queue] }
+    { 20  ;   ;Default Doc. Type   ;Code20        ;TableRelation="Document Type".Code;
+                                                   CaptionML=[ENU=Default Doc. Type;
+                                                              ENG=Default Doc. Type] }
+    { 30  ;   ;Process Automatically;Boolean      ;CaptionML=[ENU=Process Automatically;
+                                                              ENG=Process Automatically] }
+    { 40  ;   ;Storage Type        ;Option        ;CaptionML=[ENU=Storage Type;
+                                                              ENG=Storage Type];
+                                                   OptionCaptionML=[ENU=BLOB,FilePath;
+                                                                    ENG=BLOB,FilePath];
+                                                   OptionString=BLOB,FilePath }
+    { 41  ;   ;Storage FilePath    ;Text250       ;CaptionML=[ENU=Storage FilePath;
+                                                              ENG=Storage FilePath] }
+    { 1000;   ;No. Entries         ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("File Attachment Queue Entry" WHERE (Queue Code=FIELD(Code)));
+                                                   CaptionML=[ENU=No. Entries;
+                                                              ENG=No. Entries];
+                                                   BlankZero=Yes;
+                                                   Editable=No }
+    { 1001;   ;No. of Outstanding Entries;Integer ;FieldClass=FlowField;
+                                                   CalcFormula=Count("File Attachment Queue Entry" WHERE (Queue Code=FIELD(Code),
+                                                                                                          Processed=CONST(No),
+                                                                                                          AutoProcess Errored=CONST(No)));
+                                                   CaptionML=[ENU=No. of Outstanding Entries;
+                                                              ENG=No. of Outstanding Entries];
+                                                   BlankZero=Yes;
+                                                   Editable=No }
+    { 1002;   ;No. of Errored Entries;Integer     ;FieldClass=FlowField;
+                                                   CalcFormula=Count("File Attachment Queue Entry" WHERE (Queue Code=FIELD(Code),
+                                                                                                          AutoProcess Errored=CONST(Yes)));
+                                                   CaptionML=[ENU=No. of Errored Entries;
+                                                              ENG=No. of Errored Entries];
+                                                   BlankZero=Yes;
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Code                                    ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      Logger@1000000000 : Record 9062280;
+      TNLUtils@1000000001 : Codeunit 9062229;
+      WFlowIn@1000000002 : Codeunit 9062262;
+      SysB@1000000003 : Record 9062230;
+      mFileSystem@1000000004 : Codeunit 9062264;
+      tLogSource@1000000005 : TextConst 'ENU=FAQ;ENG=FAQ';
+      ContactNo@1000000006 : Code[20];
+      SenderEmail@1000000007 : Text[80];
+      String@1000000008 : Codeunit 9062236;
+
+    PROCEDURE RefreshUsersQueues@1000000000(User@1000000000 : Code[50]);
+    VAR
+      FAQ@1000000001 : Record 9062270;
+      TxtRefreshingQueues@1000000002 : TextConst 'ENU=Refreshing queues for user "%1";ENG=Refreshing queues for user "%1"';
+      TxtNoQueuesFound@1000000003 : TextConst 'ENU=No queues found for user "%1";ENG=No queues found for user "%1"';
+    BEGIN
+      Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtRefreshingQueues, User), USERID);
+      FAQ.SETRANGE("User ID",User);
+      IF FAQ.FINDSET THEN BEGIN
+        REPEAT
+          FAQ.RefreshQueueEntries;
+        UNTIL FAQ.NEXT = 0;
+      END ELSE
+        Logger.Log('FAQ', Logger.Type::Warning, STRSUBSTNO(TxtNoQueuesFound, User), USERID);
+    END;
+
+    PROCEDURE RefreshQueueEntries@1000000001();
+    VAR
+      Dir@1000000000 : Record 2000000022;
+      i@1000000001 : Integer;
+      TypeFilter@1000000002 : Text[100];
+      UserFilter@1000000006 : Text[100];
+      FAQEntry@1000000005 : Record 9062271;
+      FAQ@1000000003 : Record 9062270;
+      TxtReading@1000000004 : TextConst 'ENU=Reading "%1" for user "%2";ENG=Reading "%1" for user "%2"';
+      TxtFoundFiles@1000000007 : TextConst 'ENU=Found %1 files for user "%2" in "%3";ENG=Found %1 files for user "%2" in "%3"';
+      TxtCouldntFind@1000000008 : TextConst 'ENU=Couldn''t find "%1" for user "%2";ENG=Couldn''t find "%1" for user "%2"';
+      TxtCreated@1000000009 : TextConst 'ENU=Created "%1" for user "%2";ENG=Created "%1" for user "%2"';
+      TxtDeleting@1000000010 : TextConst 'ENU=Deleting "%1" for user "%2";ENG=Deleting "%1" for user "%2"';
+    BEGIN
+      Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtReading, "Folder Path", "User ID"), USERID);
+      //IF mFileSystem.DirectoryExists(mFileSystem.Client(), "Folder Path") THEN BEGIN
+      IF mFileSystem.FolderExists(FALSE, "Folder Path") THEN BEGIN
+        Dir.SETRANGE(Path,"Folder Path");
+        IF Dir.FINDSET THEN BEGIN
+          Dir.SETRANGE("Is a file",TRUE);
+          IF Dir.FINDSET THEN BEGIN
+            Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtFoundFiles, Dir.COUNT, "User ID", Dir.Path), USERID);
+            REPEAT
+              i += 1;
+              IF FILE.EXISTS(Dir.Path + '\' + Dir.Name) THEN BEGIN
+                IF COPYSTR(Dir.Name,1,1) <> '~' THEN
+                  AddEntry(Dir.Path + '\' + Dir.Name, Dir.Name, Dir.Name,"User ID",Code,FALSE,FALSE);
+              END;
+            UNTIL Dir.NEXT = 0;
+          END;
+        END;
+      END ELSE BEGIN
+        Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtCouldntFind, "Folder Path", "User ID"), USERID);
+        mFileSystem.CreateFolderStructure(FALSE, "Folder Path");
+        Logger.Log('FAQ', Logger.Type::Information, STRSUBSTNO(TxtCreated, "Folder Path", "User ID"), USERID);
+      END;
+
+      FAQEntry.SETRANGE("Queue Code",Code);
+      IF FAQEntry.FINDSET THEN BEGIN
+       REPEAT
+          IF NOT FILE.EXISTS(FAQEntry.FilePath) THEN BEGIN
+            Logger.Log('FAQ', Logger.Type::Information, STRSUBSTNO(TxtDeleting, FAQEntry.FilePath, FAQEntry."User ID"), USERID);
+            FAQEntry.DELETE;
+          END;
+        UNTIL FAQEntry.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE AddEntry@1000000003(thePath@1000000001 : Text[250];theName@1000000002 : Text[250];theDesc@1000000003 : Text[250];theUser@1000000005 : Code[50];theQueue@1000000000 : Code[50];Overwrite@1000000015 : Boolean;NotForAutoNAV@1000000020 : Boolean) EntryNo : Integer;
+    VAR
+      FAQ@1000000004 : Record 9062270;
+      FAQEntry@1000000013 : Record 9062271;
+      FAQEntry2@1000000016 : Record 9062271;
+      DestPath@1000000007 : Text[250];
+      DestFilePath@1000000008 : Text[30];
+      SystemBeh@1000000009 : Record 9062230;
+      ClientTempFile@1000000010 : Text[250];
+      servertempfile@1000000012 : Text[250];
+      FileMgmt@1000000011 : Codeunit 9062267;
+      theType@1000000014 : Code[20];
+      DocType@1000000017 : Code[20];
+      DocumentType@1000000018 : Record 9062268;
+      RecRef@1000000019 : RecordRef;
+      TxtQueueDoesNotExist@1000000022 : TextConst 'ENU=Could not add to queue "%1" as it does not exist;ENG=Could not add to queue "%1" as it does not exist';
+      TxtWillOverwriteEntry@1000000023 : TextConst 'ENU=Will overwrite entry %1;ENG=Will overwrite entry %1';
+      TxtCantUploadAFileToTheServer@1000000006 : TextConst 'ENU=Can''t upload "%1" file to the server.;ENG=Can''t upload "%1" file to the server.';
+      ParentDir@1000000021 : Text[1024];
+      TxtCreatedServerTempFile@1000000024 : TextConst 'ENU=Created server temporary file "%1";ENG=Created server temporary file "%1"';
+      TxtAddingEntry@1000000025 : TextConst 'ENU=Adding entry for "%1": "%2";ENG=Adding entry for "%1": "%2"';
+      TxtCreated@1000000026 : TextConst 'ENU=Created "%1" for user "%2";ENG=Created "%1" for user "%2"';
+      TxtDeleted@1000000027 : TextConst 'ENU=Deleted "%1" for user "%2";ENG=Deleted "%1" for user "%2"';
+      TxtMoved@1000000028 : TextConst 'ENU=Moved "%1" to "%2" for user "%3";ENG=Moved "%1" to "%2" for user "%3"';
+      TxtCreatingWorkflow@1000000029 : TextConst 'ENU=Creating workflow "%1" for file "%2" for user "%3";ENG=Creating workflow "%1" for file "%2" for user "%3"';
+      TxtEntryAdded@1000000030 : TextConst 'ENU=Entry added with description "%1";ENG=Entry added with description "%1"';
+      ExcelConverter@1000000032 : Codeunit 9062582;
+      ConvertDescription@1000000031 : Boolean;
+    BEGIN
+      IF NOT FAQ.GET(theQueue) THEN BEGIN
+        Logger.Log('FAQ', Logger.Type::Error, STRSUBSTNO(TxtQueueDoesNotExist, theQueue), USERID);
+        EXIT(-1);
+      END;
+
+      FAQEntry.SETRANGE("Queue Code",theQueue);
+      FAQEntry.SETFILTER(FilePath,'@' + COPYSTR(thePath,1,MAXSTRLEN(FAQEntry.FilePath))); //DOC NA2016.14 PC 01/03/2016
+      //FAQEntry.SETRANGE("User ID",theUser); //DOC NA2016.14 PC 01/03/2016
+      IF FAQEntry.FINDSET THEN BEGIN
+        IF NOT Overwrite THEN
+          EXIT(FAQEntry."Entry No.")
+        ELSE BEGIN
+          FAQEntry.DELETE;
+          Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtWillOverwriteEntry, FAQEntry."Entry No."), USERID);
+        END;
+      END;
+
+      IF UPPERCASE(mFileSystem.GetParentFolder(FALSE, thePath)) <> UPPERCASE(FAQ."Folder Path") THEN BEGIN //DOC PC 230113
+        servertempfile := mFileSystem.GetTempPathForFile(FALSE,mFileSystem.GetFileName(FALSE,thePath));
+        IF servertempfile <> thePath THEN BEGIN
+          mFileSystem.DeleteFileIfExists(FALSE,servertempfile);
+          mFileSystem.CopyFile(FALSE,thePath,servertempfile);
+        END;
+        IF (servertempfile = '') THEN
+        BEGIN
+          Logger.Log(tLogSource, Logger.Type::Error, STRSUBSTNO(TxtCantUploadAFileToTheServer, ClientTempFile), USERID);
+          COMMIT;
+          ERROR(STRSUBSTNO(TxtCantUploadAFileToTheServer, ClientTempFile));
+        END;
+
+        Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtCreatedServerTempFile, servertempfile), USERID);
+
+        thePath := servertempfile;
+
+      END; //DOC PC 230113
+
+      Logger.Log('FAQ', Logger.Type::Information, STRSUBSTNO(TxtAddingEntry, theUser, theDesc), USERID);
+      ParentDir := UPPERCASE(mFileSystem.GetParentFolder(FALSE, thePath));
+      IF UPPERCASE(mFileSystem.GetParentFolder(FALSE, thePath)) <> UPPERCASE(FAQ."Folder Path") THEN BEGIN
+        IF FAQ."Folder Path" <> '' THEN BEGIN
+          IF NOT mFileSystem.FolderExists(FALSE, FAQ."Folder Path") THEN BEGIN
+            mFileSystem.CreateFolderStructure(FALSE, FAQ."Folder Path");
+            Logger.Log('FAQ', Logger.Type::Information, STRSUBSTNO(TxtCreated, DestPath, theUser), USERID)
+          END;
+          IF NOT mFileSystem.FolderExists(FALSE, FAQ."Folder Path" + '\Manual\') THEN BEGIN
+            mFileSystem.CreateFolderStructure(FALSE, FAQ."Folder Path" + '\Manual');
+            Logger.Log('FAQ', Logger.Type::Information, STRSUBSTNO(TxtCreated, DestPath + '\Manual\', theUser), USERID)
+          END;
+
+          IF NOT NotForAutoNAV THEN
+            DestPath := FAQ."Folder Path" + '\' + mFileSystem.GetFileName(FALSE, thePath)
+          ELSE BEGIN
+            DestPath := FAQ."Folder Path" + '\Manual\' + mFileSystem.GetFileName(FALSE, thePath);
+          END;
+
+          IF mFileSystem.FileExists(FALSE, DestPath) THEN BEGIN
+            mFileSystem.DeleteFile(FALSE, DestPath);
+            Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtDeleted, DestPath, theUser), USERID);
+          END;
+          mFileSystem.MoveFile(FALSE, thePath,DestPath);
+          Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtMoved, thePath, DestPath, theUser), USERID);
+          thePath := DestPath;
+
+        END;
+      END;
+
+      ConvertDescription := (theName = theDesc);
+      IF (ExcelConverter.ConvertAdv(thePath, theName, FALSE)) THEN
+        IF (ConvertDescription) THEN
+          theDesc := theName;
+
+      FAQEntry2.INIT;
+      FAQEntry2.FilePath := thePath;
+      FAQEntry2.Filename := theName;
+      FAQEntry2."User ID" := theUser;
+      FAQEntry2."Contact No." := TNLUtils.GetUserContactNo(theUser);
+      FAQEntry2."Queue Code" := theQueue;
+      FAQEntry2.Description := theDesc;
+      FAQEntry2."Not for AutoNAV" := NotForAutoNAV;
+
+      FAQEntry2.IdentifyDocumentInfo;
+      IF FAQEntry2."Document Type" = '' THEN
+        FAQEntry2."Document Type" := COPYSTR(SystemBeh.GetText('DEFAULT_DOC_TYPE'), 1, MAXSTRLEN(FAQEntry2."Document Type"));
+      IF FAQEntry2."Document Type" = '' THEN
+        FAQEntry2."Document Type" := 'UNIDENTIFIED';
+
+      //DOC PC 080413 >>
+      IF FAQEntry2."Contact No." = '' THEN FAQEntry2."Contact No." := ContactNo;
+      IF FAQEntry2."Sender Email Address" = '' THEN FAQEntry2.VALIDATE("Sender Email Address",SenderEmail); //DOC PC 16/06/2014 NA2015.3
+      //DOC PC 080413 <<
+
+      FAQEntry2.INSERT(TRUE);
+
+      //Trigger workflow
+      IF FAQEntry2."Document Type" = 'NFORM' THEN
+        DocType := FAQEntry2."Form Code"
+      ELSE
+        DocType := FAQEntry2."Document Type";
+
+      IF DocumentType.GET(DocType) THEN BEGIN
+        //Trigger Workflow
+        IF (DocumentType."Trigger WFlow On" = DocumentType."Trigger WFlow On"::"Add to Queue") AND
+           (DocumentType."Workflow Code" <> '') THEN BEGIN
+          RecRef.OPEN(DATABASE::"File Attachment Queue Entry");
+          RecRef.SETPOSITION(FAQEntry2.GETPOSITION);
+          Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtCreatingWorkflow, DocumentType."Workflow Code", FAQEntry2.FilePath, "User ID"), USERID);
+          WFlowIn.Simple(DocumentType."Workflow Code",RecRef.GETPOSITION);
+        END;
+      END;
+
+      Logger.Log('FAQ', Logger.Type::Debug, STRSUBSTNO(TxtEntryAdded, FAQEntry2.Description), USERID);
+      EXIT(FAQEntry2."Entry No.");
+    END;
+
+    PROCEDURE GetUserDefaultQueue@1000000002(User@1000000000 : Code[50]) QueueCode : Code[50];
+    VAR
+      FAQ@1000000001 : Record 9062270;
+      DefFolder@1000000002 : Text[250];
+      TxtCreated@1000000003 : TextConst 'ENU=Created queue for user "%1". Code: "%2". Folder: "%3";ENG=Created queue for user "%1". Code: "%2". Folder: "%3"';
+      GenDevUtils@1000000004 : Codeunit 9062459;
+    BEGIN
+      FAQ.SETRANGE("User ID",User);
+      FAQ.SETRANGE("Users Default Queue",TRUE);
+      IF FAQ.FINDSET(FALSE,FALSE) THEN EXIT(FAQ.Code)
+      ELSE BEGIN
+        DefFolder := SysB.GetText('F_ATT_DEFAULT_FOLDER');
+        DefFolder := String.Replace(DefFolder,'[SERVICE]',GenDevUtils.GetServiceName(0));
+        DefFolder := String.Replace(DefFolder,'[TENANT]',TENANTID);
+        DefFolder := String.Replace(DefFolder,'[COMPANY]',COMPANYNAME); //DOC NA2016.16.1 PC 29/07/2016
+        DefFolder := DefFolder + '\' + User;
+        mFileSystem.CreateFolderStructure(FALSE, DefFolder);
+        FAQ.INIT;
+        FAQ.VALIDATE(Code,User);
+        FAQ.VALIDATE(Description,User + ' queue');
+        FAQ.VALIDATE("Folder Path",DefFolder);
+        FAQ.VALIDATE("User ID",User);
+        FAQ.VALIDATE("Users Default Queue",TRUE);
+        FAQ.VALIDATE("Process Automatically",TRUE);
+        FAQ.INSERT(TRUE);
+        Logger.Log('FAQ', Logger.Type::Information, STRSUBSTNO(TxtCreated, User, FAQ.Code, DefFolder), USERID);
+        COMMIT;
+        EXIT(FAQ.Code);
+      END;
+    END;
+
+    PROCEDURE SetContactAndEmail@1000000004(theContactNo@1000000000 : Code[20];theEmail@1000000001 : Text[80]);
+    BEGIN
+      ContactNo := theContactNo;
+      SenderEmail := theEmail;
+    END;
+
+    PROCEDURE GetStyle@9062229() : Text;
+    BEGIN
+      //DOC NA2016.10 - Returning visual style of the queue
+      //  <- The style
+
+      Rec.CALCFIELDS("No. of Outstanding Entries", "No. of Errored Entries");
+      IF (Rec."No. of Errored Entries" > 0) THEN
+        EXIT('Unfavorable')
+      ELSE IF (Rec."No. of Outstanding Entries" > 0) THEN
+        EXIT('StrongAccent')
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE OpenFolder@9062230();
+    BEGIN
+      //DOC NA2016.10 - Opening the queue folder
+
+      IF (Rec."Folder Path" <> '') THEN
+        HYPERLINK(Rec."Folder Path");
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  PC 24/02/2012 - Added code to create queue folder if not already created
+      //DOC NA2015.1  JH 02/09/2012 - Migrated to 2013
+      //DOC NA2015.1  PC 26/11/2012 - Extended "theUser" param on AddEntry and GetUserDefaultQueue to 50 chars
+      //DOC NA2015.1  PC 24/02/2012 - Changed references to User to 50 char
+      //DOC NA2015.1  PC 03/06/2014 - Changed '@' usage in File Path filter
+      //DOC NA2015.1  PC 03/06/2014 - Changes to support Web Client
+      //DOC NA2015.1  PC 25/06/2014 - Changes to support Windows Client over WAN
+      //DOC NA2015.4  JH 28/12/2014 - System behaviours renamed
+      //DOC NA2015.6  JH 31/03/2015 - Default document type
+      //DOC NA2015.9  JH 19/08/2015 - Excel converter added
+      //DOC NA2016.10 JH 27/08/2015 - Upgraded to 2016
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit
+      //DOC NA2016.14 PC 01/03/2016 - Changes to AddEntry function to fix issue with duplicate entries for 1 File
+      //DOC NA2016.15 JH 06/05/2016 - CfMD amendments
+      //DOC NA2016.16.1 PC 29/07/2016 - Added [COMPANY] to keywords which can be used in File Attachment Queue Folder Path
+    }
+    END.
+  }
+}
+

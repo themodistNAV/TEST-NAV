@@ -1,0 +1,175 @@
+OBJECT Codeunit 9062430 Load Test Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/07/16;
+    Time=[ 1:48:22 PM];
+    Version List=LT2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      cnfRunTest@1000000000 : TextConst 'ENU=Do you want to run load test ''%1''?;ENG=Do you want to run load test ''%1''?';
+      txtFinished@1000000001 : TextConst 'ENU=Load test finished. Duration: %1, processed records: %2, records with errors: %3.;ENG=Load test finished. Duration: %1, processed records: %2, records with errors: %3.';
+      txtBackgroundSessions@1000000002 : TextConst 'ENU=%1 background load test sessions started.;ENG=%1 background load test sessions started.';
+
+    LOCAL PROCEDURE "--- Initialization ---"@1000000009();
+    BEGIN
+    END;
+
+    PROCEDURE InitializeLoadTest@1000000010(VAR LoadTest@1000000000 : Record 9062460);
+    VAR
+      LoadTestEntry@1000000001 : TEMPORARY Record 9062461;
+    BEGIN
+      IF (LoadTest."Codeunit Id" <> 0) THEN BEGIN
+        LoadTestEntry.INIT();
+        LoadTestEntry."Entry No." := 0;
+        LoadTestEntry."Load Test Code" := LoadTest.Code;
+        LoadTestEntry.Mode := LoadTestEntry.Mode::Initialize;
+        CODEUNIT.RUN(LoadTest."Codeunit Id", LoadTestEntry);
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Ruinning Tests ---"@1000000007();
+    BEGIN
+    END;
+
+    PROCEDURE RunTest@1000000011(VAR LoadTest@1000000000 : Record 9062460);
+    VAR
+      LoadTestEntry@1000000001 : Record 9062461;
+      SessionIndex@1000000002 : Integer;
+    BEGIN
+      IF (NOT(CONFIRM(STRSUBSTNO(cnfRunTest, LoadTest.Code)))) THEN
+        EXIT;
+      IF (LoadTest."No. of Sessions" <= 1) THEN BEGIN
+        StartTest(LoadTest, LoadTestEntry);
+        CODEUNIT.RUN(LoadTest."Codeunit Id", LoadTestEntry);
+        LoadTestEntry.FIND('=');
+        MESSAGE(STRSUBSTNO(txtFinished, LoadTestEntry."Test Duration", LoadTestEntry."Processed Records", LoadTestEntry."Records with Errors"));
+      END ELSE BEGIN
+        FOR SessionIndex := 1 TO LoadTest."No. of Sessions" DO BEGIN
+          StartBackgroundTest(LoadTest);
+          IF (LoadTest."Session Start Delay [ms]" > 0) THEN
+            SLEEP(LoadTest."Session Start Delay [ms]");
+        END;
+        MESSAGE(STRSUBSTNO(txtBackgroundSessions, LoadTest."No. of Sessions"));
+      END;
+    END;
+
+    LOCAL PROCEDURE StartBackgroundTest@1000000012(VAR LoadTest@1000000000 : Record 9062460);
+    VAR
+      LoadTestEntry@1000000001 : Record 9062461;
+      TestSessionId@1000000002 : Integer;
+    BEGIN
+      StartTest(LoadTest, LoadTestEntry);
+      LoadTestEntry.SETRECFILTER();
+      SESSION.STARTSESSION(TestSessionId, LoadTest."Codeunit Id", COMPANYNAME, LoadTestEntry);
+    END;
+
+    PROCEDURE StartTest@1000000001(VAR LoadTest@1000000002 : Record 9062460;VAR LoadTestEntry@1000000001 : Record 9062461) : Integer;
+    BEGIN
+      LoadTestEntry.INIT();
+      LoadTestEntry."Entry No." := 0;
+      LoadTestEntry."Load Test Code" := LoadTest.Code;
+      LoadTestEntry."Transaction Delay [ms]" := LoadTest."Transaction Delay [ms]";
+      LoadTestEntry."Field Modification Delay [ms]" := LoadTest."Field Modification Delay [ms]";
+      LoadTestEntry.Mode := LoadTestEntry.Mode::Run;
+      LoadTestEntry.INSERT(TRUE);
+      COMMIT;
+
+      EXIT(LoadTestEntry."Entry No.");
+    END;
+
+    PROCEDURE FinishTest@1000000002(LoadTestEnytryNo@1000000000 : Integer);
+    VAR
+      LoadTestEntry@1000000001 : Record 9062461;
+    BEGIN
+      IF (LoadTestEntry.GET(LoadTestEnytryNo)) THEN BEGIN
+        LoadTestEntry.VALIDATE("End Date Time", CURRENTDATETIME);
+        LoadTestEntry.MODIFY();
+      END;
+      COMMIT;
+    END;
+
+    PROCEDURE AddRecordId@1000000000(VAR LoadTestEntry@1000000004 : Record 9062461;TestRecordId@1000000001 : RecordID);
+    VAR
+      LoadTestEntryRecord@1000000002 : Record 9062463;
+    BEGIN
+      LoadTestEntryRecord.INIT();
+      LoadTestEntryRecord."Entry No." := 0;
+      LoadTestEntryRecord."Load Test Entry No." := LoadTestEntry."Entry No.";
+      LoadTestEntryRecord."Load Test Code" := LoadTestEntry."Load Test Code";
+      LoadTestEntryRecord."Record Position" := TestRecordId;
+      LoadTestEntryRecord.INSERT();
+    END;
+
+    PROCEDURE AddRecordRef@1000000005(VAR LoadTestEntry@1000000001 : Record 9062461;RecordRef@1000000000 : RecordRef);
+    BEGIN
+      AddRecordId(LoadTestEntry, RecordRef.RECORDID);
+    END;
+
+    LOCAL PROCEDURE "--- Parameters ---"@1000000006();
+    BEGIN
+    END;
+
+    PROCEDURE ClearParameters@1000000004(LoadTestCode@1000000002 : Code[20]);
+    VAR
+      LoadTestParameter@1000000000 : Record 9062464;
+    BEGIN
+      LoadTestParameter.RESET();
+      LoadTestParameter.SETRANGE("Load Test Code", LoadTestCode);
+      LoadTestParameter.DELETEALL();
+    END;
+
+    PROCEDURE AddParameter@1000000003(LoadTestCode@1000000002 : Code[20];Code@1000000000 : Code[20];Description@1000000004 : Text;Value@1000000001 : Text);
+    VAR
+      LoadTestParameter@1000000003 : Record 9062464;
+    BEGIN
+      IF (NOT(LoadTestParameter.GET(LoadTestCode, Code))) THEN BEGIN
+        LoadTestParameter.INIT();
+        LoadTestParameter."Load Test Code" := LoadTestCode;
+        LoadTestParameter.Code := Code;
+        LoadTestParameter.Description := Description;
+        LoadTestParameter.Value := Value;
+        LoadTestParameter.INSERT();
+      END ELSE BEGIN
+        LoadTestParameter.Value := Value;
+        LoadTestParameter.MODIFY();
+      END;
+    END;
+
+    PROCEDURE GetParameter@1000000008(LoadTestCode@1000000002 : Code[20];Code@1000000000 : Code[20]) : Text;
+    VAR
+      LoadTestParameter@1000000001 : Record 9062464;
+    BEGIN
+      IF (LoadTestParameter.GET(LoadTestCode, Code)) THEN
+        EXIT(LoadTestParameter.Value);
+      EXIT('');
+    END;
+
+    PROCEDURE GetParameterInt@1000000013(LoadTestCode@1000000002 : Code[20];Code@1000000000 : Code[20]) : Integer;
+    VAR
+      LoadTestParameter@1000000001 : Record 9062464;
+      TextValue@1000000003 : Text;
+      Value@1000000004 : Integer;
+    BEGIN
+      LoadTestParameter.GET(LoadTestCode, Code);
+      TextValue := LoadTestParameter.Value;
+      EVALUATE(Value, TextValue);
+      EXIT(Value);
+    END;
+
+    BEGIN
+    {
+          //DOC LT2016.16 AZ 14/07/2016 - Created
+    }
+    END.
+  }
+}
+

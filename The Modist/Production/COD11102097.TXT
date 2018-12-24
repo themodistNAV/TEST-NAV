@@ -1,0 +1,870 @@
+OBJECT Codeunit 11102097 OM - File Handler
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            IODirectoryClient@1000 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory" RUNONCLIENT;
+            IODirectoryServer@1001 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+          BEGIN
+            CASE CheckDirectoryType OF
+              CheckDirectoryType::Client :
+                IODirectoryClient.GetFileSystemEntries(CheckDirectoryName);
+              CheckDirectoryType::Server :
+                IODirectoryServer.GetFileSystemEntries(CheckDirectoryName);
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      CheckDirectoryName@1000 : Text;
+      CheckDirectoryType@1001 : ' ,Client,Server';
+      FileHandlingType@1002 : ' ,Shared Path,RTC,Web Client';
+
+    LOCAL PROCEDURE GetFileHandlingType@1() : Integer;
+    VAR
+      Setup@1000 : Record 11102035;
+    BEGIN
+      IF NOT CanRunDotNet THEN
+        EXIT(FileHandlingType::"Web Client");
+
+      Setup.CustomGet;
+      IF Setup."Shared Path" THEN
+        EXIT(FileHandlingType::"Shared Path")
+      ELSE
+        EXIT(FileHandlingType::RTC);
+    END;
+
+    LOCAL PROCEDURE CanRunDotNet@2() : Boolean;
+    VAR
+      Mgt@1000 : Codeunit 11102035;
+    BEGIN
+      EXIT(Mgt.CanRunDotNet);
+    END;
+
+    PROCEDURE IsWebClient@3() : Boolean;
+    BEGIN
+      EXIT(NOT CanRunDotNet);
+    END;
+
+    PROCEDURE ErrorIfWebClient@4();
+    VAR
+      ctNotAvailable@1000 : TextConst 'DEU=This function is not available for this client.\Please use the RTC.;ENU=This function is not available for this client.\Please use the RTC.;ESP=This function is not available for this client.\Please use the RTC.;FRA=This function is not available for this client.\Please use the RTC.;NLD=Deze functie is niet beschikbaar voor deze client.\Gebruik de RTC.;DEA=This function is not available for this client.\Please use the RTC.';
+    BEGIN
+      IF IsWebClient THEN
+        ERROR(ctNotAvailable);
+    END;
+
+    PROCEDURE TempDirectory@5() ExitValue : Text;
+    BEGIN
+      IF GetFileHandlingType = FileHandlingType::"Shared Path" THEN
+        ExitValue := WorkingDirectory
+      ELSE
+        ExitValue := TEMPORARYPATH;
+
+      AddBackSlash(ExitValue);
+    END;
+
+    PROCEDURE WorkingDirectory@6() ExitValue : Text;
+    VAR
+      Setup@1000 : Record 11102035;
+    BEGIN
+      IF GetFileHandlingType = FileHandlingType::"Web Client" THEN
+        EXIT;
+
+      Setup.CustomGet;
+      IF Setup."Working Directory" <> '' THEN
+        ExitValue := Setup."Working Directory"
+      ELSE
+        IF Setup."Shared Path" THEN
+          ExitValue := TEMPORARYPATH
+        ELSE
+          ExitValue := ClientTempDirectory;
+
+      AddBackSlash(ExitValue);
+    END;
+
+    PROCEDURE FileNameServerPath@7(FileName@1000 : Text) : Text;
+    BEGIN
+      EXIT(TempDirectory + FileName);
+    END;
+
+    PROCEDURE DownloadToClient@8(ServerFileName@1000 : Text;ClientFileName@1001 : Text;DefaultFileName@1002 : Text) : Text;
+    VAR
+      FileDate@1003 : Date;
+      FileTime@1004 : Time;
+      FileName@1005 : Text;
+      ctAllFiles@1006 : TextConst 'DEU=All Files (*.*)|*.*;ENU=All Files (*.*)|*.*;ESP=All Files (*.*)|*.*;FRA=All Files (*.*)|*.*;NLD=Alle bestanden (*.*)|*.*;DEA=All Files (*.*)|*.*';
+      ctPathNotFound@1007 : TextConst 'DEU=Path not found:\%1;ENU=Path not found:\%1;ESP=Path not found:\%1;FRA=Path not found:\%1;NLD=Pad niet gevonden:\%1;DEA=Path not found:\%1';
+      IODirectory@1008 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory" RUNONCLIENT;
+      IOFile@1009 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File" RUNONCLIENT;
+    BEGIN
+      CASE GetFileHandlingType OF
+
+        FileHandlingType::"Shared Path" :
+          EXIT(ServerFileName);
+
+        FileHandlingType::RTC :
+          BEGIN
+
+            DOWNLOAD(ServerFileName, '', '<TEMP>', ctAllFiles, FileName);
+
+            IF ClientFileName = '' THEN
+              ClientFileName := WorkingDirectory + GetFileName(ServerFileName);
+
+            IF FileName <> ClientFileName THEN BEGIN
+              IF IOFile.Exists(ClientFileName) THEN
+                IOFile.Delete(ClientFileName);
+
+              IF NOT IODirectory.Exists(GetDirectoryName(ClientFileName)) THEN
+                ERROR(ctPathNotFound, GetDirectoryName(ClientFileName));
+
+              IOFile.Move(FileName, ClientFileName);
+
+              IF GETSTAMP(ServerFileName, FileDate, FileTime) THEN
+                IOFile.SetLastWriteTime(ClientFileName, CREATEDATETIME(FileDate, FileTime));
+
+            END;
+
+            EXIT(ClientFileName);
+
+          END;
+
+        FileHandlingType::"Web Client" :
+          BEGIN
+            DOWNLOAD(ServerFileName, '', '', ctAllFiles, DefaultFileName);
+            EXIT(DefaultFileName);
+          END;
+
+      END;
+    END;
+
+    PROCEDURE CreateServerDirectoryForDownload@40(ClientDirectoryName@1000 : Text) : Text;
+    BEGIN
+      CASE GetFileHandlingType OF
+
+        FileHandlingType::"Shared Path" :
+          EXIT(ClientDirectoryName);
+
+        FileHandlingType::RTC :
+          EXIT(CreateServerDirectory);
+
+        FileHandlingType::"Web Client" :
+          ErrorIfWebClient;
+
+      END;
+    END;
+
+    PROCEDURE DownloadDirectoryToClient@9(ServerDirectoryName@1000 : Text;ClientDirectoryName@1001 : Text) : Text;
+    VAR
+      ClientFileName@1002 : Text;
+      ServerFileName@1003 : Text;
+      SubDirectory@1004 : Text;
+      i@1005 : Integer;
+      FileArray@1006 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      IODirectory@1007 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+      IOFile@1008 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+    BEGIN
+      IF GetFileHandlingType = FileHandlingType::"Shared Path" THEN
+        EXIT(ServerDirectoryName);
+
+      AddBackSlash(ServerDirectoryName);
+
+      IF ClientDirectoryName = '' THEN
+        ClientDirectoryName := CreateClientDirectory;
+
+      CheckCreateClientDirectory(ClientDirectoryName);
+
+      FileArray := IODirectory.GetFileSystemEntries(ServerDirectoryName);
+      FOR i := 0 TO FileArray.Length - 1 DO BEGIN
+
+        ServerFileName := FileArray.GetValue(i);
+
+        CASE TRUE OF
+
+          IOFile.Exists(ServerFileName) :
+            BEGIN
+              ClientFileName := ClientDirectoryName + GetFileName(ServerFileName);
+              DownloadToClient(ServerFileName, ClientFileName, '');
+            END;
+
+          IODirectory.Exists(ServerFileName) :
+            BEGIN
+              AddBackSlash(ServerFileName);
+              SubDirectory := COPYSTR(ServerFileName, STRLEN(ServerDirectoryName) + 1);
+              DownloadDirectoryToClient(ServerFileName, ClientDirectoryName + SubDirectory);
+            END;
+
+          ELSE
+            ERROR(ServerFileName);
+        END;
+      END;
+
+      EXIT(ClientDirectoryName);
+    END;
+
+    PROCEDURE UploadToServer@10(ClientFileName@1000 : Text;ServerFileName@1001 : Text) : Text;
+    VAR
+      TmpServerFile@1002 : File;
+      TmpClientFileName@1003 : Text;
+      TmpServerFileName@1004 : Text;
+      ctAllFiles@1005 : TextConst 'DEU=All Files (*.*)|*.*;ENU=All Files (*.*)|*.*;ESP=All Files (*.*)|*.*;FRA=All Files (*.*)|*.*;NLD=Alle bestanden (*.*)|*.*;DEA=All Files (*.*)|*.*';
+      IOFile@1006 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File" RUNONCLIENT;
+    BEGIN
+      CASE GetFileHandlingType OF
+
+        FileHandlingType::"Shared Path" :
+          EXIT(ClientFileName);
+
+        FileHandlingType::RTC :
+          BEGIN
+            TmpServerFile.CREATETEMPFILE;
+            TmpServerFileName := TmpServerFile.NAME;
+            TmpServerFile.CLOSE;
+
+            TmpServerFile.CREATE(TmpServerFileName);
+            TmpServerFile.CLOSE;
+
+            DOWNLOAD(TmpServerFileName, '', '<TEMP>', ctAllFiles, TmpClientFileName);
+            ERASE(TmpServerFileName);
+
+            IOFile.Copy(ClientFileName, TmpClientFileName, TRUE);
+
+            UPLOAD('', '<TEMP>', ctAllFiles, GetFileName(TmpClientFileName), TmpServerFileName);
+
+            IF ServerFileName = '' THEN BEGIN
+              ServerFileName := TmpServerFileName;
+              CopyExtension(ClientFileName, ServerFileName);
+            END;
+
+            IF ServerFileName <> TmpServerFileName THEN BEGIN
+              IF EXISTS(ServerFileName) THEN
+                ERASE(ServerFileName);
+
+              RENAME(TmpServerFileName, ServerFileName);
+            END;
+          END;
+
+        FileHandlingType::"Web Client" :
+          EXIT(TEMPORARYPATH + GetFileName(ClientFileName));
+
+      END;
+
+      EXIT(ServerFileName);
+    END;
+
+    PROCEDURE ClientTempDirectory@11() ExitValue : Text;
+    VAR
+      oFile@1000 : File;
+      TmpClientFileName@1001 : Text;
+      TmpServerFileName@1002 : Text;
+      ctAllFiles@1003 : TextConst 'DEU=All Files (*.*)|*.*;ENU=All Files (*.*)|*.*;ESP=All Files (*.*)|*.*;FRA=All Files (*.*)|*.*;NLD=Alle bestanden (*.*)|*.*;DEA=All Files (*.*)|*.*';
+      IOFile@1004 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File" RUNONCLIENT;
+    BEGIN
+      oFile.CREATETEMPFILE;
+      TmpServerFileName := oFile.NAME;
+      oFile.CLOSE;
+      oFile.CREATE(TmpServerFileName);
+      oFile.CLOSE;
+
+      DOWNLOAD(TmpServerFileName, '', '<TEMP>', ctAllFiles, TmpClientFileName);
+      ERASE(TmpServerFileName);
+
+      ExitValue := GetDirectoryName(TmpClientFileName);
+      IOFile.Delete(TmpClientFileName);
+
+      AddBackSlash(ExitValue);
+    END;
+
+    PROCEDURE GetFileName@12(FileName@1000 : Text) : Text;
+    VAR
+      i@1001 : Integer;
+    BEGIN
+      FOR i := STRLEN(FileName) DOWNTO 1 DO
+        IF FileName[i] = '\' THEN
+          EXIT(COPYSTR(FileName, i + 1));
+
+      EXIT(FileName);
+    END;
+
+    LOCAL PROCEDURE CopyExtension@47(FromFileName@1000 : Text;VAR ToFileName@1001 : Text);
+    VAR
+      Extension@1002 : Text;
+    BEGIN
+      Extension := GetExtension(FromFileName);
+      SetExtension(ToFileName, Extension);
+    END;
+
+    PROCEDURE GetExtension@13(FileName@1000 : Text) : Text;
+    VAR
+      i@1001 : Integer;
+    BEGIN
+      FOR i := STRLEN(FileName) DOWNTO 1 DO
+        CASE FileName[i] OF
+          '\' : EXIT;
+          '.' : EXIT(COPYSTR(FileName, i + 1));
+        END;
+    END;
+
+    LOCAL PROCEDURE SetExtension@44(VAR FileName@1000 : Text;Extension@1001 : Text);
+    VAR
+      DotPos@1002 : Integer;
+      i@1003 : Integer;
+    BEGIN
+      FOR i := 1 TO STRLEN(FileName) DO
+        CASE FileName[i] OF
+          '\' : DotPos := 0;
+          '.' : DotPos := i;
+        END;
+
+      IF DotPos = 0 THEN
+        FileName := FileName + '.' + Extension
+      ELSE
+        FileName := DELSTR(FileName, DotPos) + '.' + Extension;
+    END;
+
+    PROCEDURE GetDirectoryName@14(FileName@1000 : Text) : Text;
+    VAR
+      i@1001 : Integer;
+    BEGIN
+      FOR i := STRLEN(FileName) DOWNTO 1 DO
+        IF FileName[i] = '\' THEN
+          EXIT(COPYSTR(FileName, 1, i));
+    END;
+
+    PROCEDURE CreateServerFileName@15(ClientFileName@1000 : Text;DefaultFileName@1001 : Text) ExitValue : Text;
+    BEGIN
+      CASE GetFileHandlingType OF
+        FileHandlingType::"Shared Path" :
+          EXIT(ClientFileName);
+
+        FileHandlingType::RTC :
+          BEGIN
+            ExitValue := TEMPORARYPATH + GetFileName(ClientFileName);
+            DeleteServerFile(ExitValue);
+          END;
+
+        FileHandlingType::"Web Client" :
+          BEGIN
+            ExitValue := CreateServerTempFileName(GetExtension(DefaultFileName));
+            DeleteServerFile(ExitValue);
+          END;
+
+      END;
+    END;
+
+    PROCEDURE CreateServerDirectory@16() : Text;
+    VAR
+      TempDirectory2@1000 : Text;
+      i@1001 : Integer;
+      IODirectory@1002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+    BEGIN
+      i := 1;
+
+      TempDirectory2 := TempDirectory;
+      WHILE IODirectory.Exists(TempDirectory2 + FORMAT(i) + '\') DO
+        i += 1;
+
+      IODirectory.CreateDirectory(TempDirectory2 + FORMAT(i) + '\');
+      EXIT(TempDirectory2 + FORMAT(i) + '\');
+    END;
+
+    LOCAL PROCEDURE CreateClientDirectory@17() : Text;
+    VAR
+      WorkingDirectory2@1000 : Text;
+      i@1001 : Integer;
+      IODirectory@1002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory" RUNONCLIENT;
+    BEGIN
+      IF GetFileHandlingType = FileHandlingType::"Shared Path" THEN
+        EXIT(CreateServerDirectory);
+
+      i := 1;
+
+      WorkingDirectory2 := WorkingDirectory;
+      WHILE IODirectory.Exists(WorkingDirectory2 + FORMAT(i) + '\') DO
+        i += 1;
+
+      IODirectory.CreateDirectory(WorkingDirectory2 + FORMAT(i) + '\');
+      EXIT(WorkingDirectory2 + FORMAT(i) + '\');
+    END;
+
+    PROCEDURE QueryReplace@18(ClientFileName@1000 : Text);
+    VAR
+      ctFileAlreadyExists@1001 : TextConst 'DEU=The %1 file already exists.\Do you want to replace the existing file?;ENU=The %1 file already exists.\Do you want to replace the existing file?;ESP=The %1 file already exists.\Do you want to replace the existing file?;FRA=The %1 file already exists.\Do you want to replace the existing file?;NLD=Bestand %1 bestaat reeds.\Wilt u het bestaande bestand vervangen?;DEA=The %1 file already exists.\Do you want to replace the existing file?';
+      IOClientFile@1002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File" RUNONCLIENT;
+      IOServerFile@1003 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+    BEGIN
+      CASE GetFileHandlingType OF
+
+        FileHandlingType::"Shared Path" :
+          IF IOServerFile.Exists(ClientFileName) THEN
+            IF NOT CONFIRM(ctFileAlreadyExists, TRUE, ClientFileName) THEN
+              ERROR('');
+
+        FileHandlingType::RTC :
+          IF IOClientFile.Exists(ClientFileName) THEN
+            IF NOT CONFIRM(ctFileAlreadyExists, TRUE, ClientFileName) THEN
+              ERROR('');
+
+      END;
+    END;
+
+    PROCEDURE DeleteServerFile@19(ServerFileName@1000 : Text);
+    BEGIN
+      IF EXISTS(ServerFileName) THEN
+        ERASE(ServerFileName);
+    END;
+
+    PROCEDURE DeleteClientFile@20(ClientFileName@1000 : Text);
+    VAR
+      IOFile@1001 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File" RUNONCLIENT;
+    BEGIN
+      CASE GetFileHandlingType OF
+
+        FileHandlingType::"Shared Path" :
+          DeleteServerFile(ClientFileName);
+
+        FileHandlingType::RTC :
+          IF IOFile.Exists(ClientFileName) THEN
+            IOFile.Delete(ClientFileName);
+
+        FileHandlingType::"Web Client" :
+          ErrorIfWebClient;
+      END;
+    END;
+
+    PROCEDURE CheckCreateClientDirectory@21(DirectoryName@1000 : Text);
+    VAR
+      Mgt@1001 : Codeunit 11102035;
+      DirectoryToCreate@1002 : Text;
+      SubDirectories@1003 : ARRAY [100] OF Text[120];
+      i@1004 : Integer;
+      ValidTillNo@1005 : Integer;
+      IODirectory@1006 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory" RUNONCLIENT;
+    BEGIN
+      CASE GetFileHandlingType OF
+
+        FileHandlingType::"Shared Path" :
+          CheckCreateServerDirectory(DirectoryName);
+
+        FileHandlingType::RTC :
+          IF NOT IODirectory.Exists(DirectoryName) THEN BEGIN
+            Mgt.Split(DirectoryName, '\', SubDirectories);
+
+            DirectoryToCreate := SubDirectories[1];
+            FOR i := 2 TO ARRAYLEN(SubDirectories) DO
+              IF (SubDirectories[i] <> '') OR (i < 3) THEN BEGIN
+                DirectoryToCreate += '\' + SubDirectories[i];
+                IF IODirectory.Exists(DirectoryToCreate) THEN
+                  ValidTillNo := i;
+              END;
+
+            DirectoryToCreate := SubDirectories[1];
+            FOR i := 2 TO ARRAYLEN(SubDirectories) DO
+              IF (SubDirectories[i] <> '') OR (i < 3) THEN BEGIN
+                DirectoryToCreate += '\' + SubDirectories[i];
+                IF (i > ValidTillNo) AND NOT IODirectory.Exists(DirectoryToCreate) THEN
+                  IODirectory.CreateDirectory(DirectoryToCreate);
+              END;
+
+          END;
+
+        FileHandlingType::"Web Client" :
+          ErrorIfWebClient;
+
+      END;
+    END;
+
+    PROCEDURE CheckCreateServerDirectory@22(DirectoryName@1000 : Text);
+    VAR
+      Mgt@1001 : Codeunit 11102035;
+      DirectoryToCreate@1002 : Text;
+      SubDirectories@1003 : ARRAY [100] OF Text[120];
+      i@1004 : Integer;
+      ValidTillNo@1005 : Integer;
+      IODirectory@1006 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+    BEGIN
+      IF NOT IODirectory.Exists(DirectoryName) THEN BEGIN
+        Mgt.Split(DirectoryName, '\', SubDirectories);
+
+        DirectoryToCreate := SubDirectories[1];
+        FOR i := 2 TO ARRAYLEN(SubDirectories) DO
+          IF (SubDirectories[i] <> '') OR (i < 3) THEN BEGIN
+            DirectoryToCreate += '\' + SubDirectories[i];
+            IF IODirectory.Exists(DirectoryToCreate) THEN
+              ValidTillNo := i;
+          END;
+
+        DirectoryToCreate := SubDirectories[1];
+        FOR i := 2 TO ARRAYLEN(SubDirectories) DO
+          IF (SubDirectories[i] <> '') OR (i < 3) THEN BEGIN
+            DirectoryToCreate += '\' + SubDirectories[i];
+            IF (i > ValidTillNo) AND NOT IODirectory.Exists(DirectoryToCreate) THEN
+              IODirectory.CreateDirectory(DirectoryToCreate);
+          END;
+
+      END;
+    END;
+
+    PROCEDURE TestServerDirectory@41(DirectoryName@1000 : Text);
+    VAR
+      ctPathNotFound@1001 : TextConst 'DEU=Path not found:\%1;ENU=Path not found:\%1;ESP=Path not found:\%1;FRA=Path not found:\%1;NLD=Pad niet gevonden:\%1;DEA=Path not found:\%1';
+      IODirectory@1002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+    BEGIN
+      IF NOT IODirectory.Exists(DirectoryName) THEN
+        ERROR(ctPathNotFound, DirectoryName);
+    END;
+
+    LOCAL PROCEDURE DeleteDirectory@23(DirectoryName@1000 : Text);
+    VAR
+      IODirectory@1001 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+    BEGIN
+      IODirectory.Delete(DirectoryName);
+    END;
+
+    PROCEDURE ClientDeleteDirectory@26(DirectoryName@1000 : Text);
+    VAR
+      IODirectory@1001 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory" RUNONCLIENT;
+    BEGIN
+      CASE GetFileHandlingType OF
+
+        FileHandlingType::"Shared Path" :
+          DeleteDirectory(DirectoryName);
+
+        FileHandlingType::RTC :
+          IODirectory.Delete(DirectoryName);
+
+        FileHandlingType::"Web Client" :
+          ErrorIfWebClient;
+      END;
+    END;
+
+    PROCEDURE RenameClientDirectory@27(OriginalDirectoryName@1000 : Text;NewDirectoryName@1001 : Text);
+    VAR
+      IODirectory@1002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory" RUNONCLIENT;
+    BEGIN
+      CASE GetFileHandlingType OF
+
+        FileHandlingType::"Shared Path" :
+          RenameServerDirectory(OriginalDirectoryName, NewDirectoryName);
+
+        FileHandlingType::RTC :
+          IODirectory.Move(OriginalDirectoryName, NewDirectoryName);
+
+        FileHandlingType::"Web Client" :
+          ErrorIfWebClient;
+      END;
+    END;
+
+    LOCAL PROCEDURE RenameServerDirectory@24(OriginalDirectoryName@1000 : Text;NewDirectoryName@1001 : Text);
+    VAR
+      IODirectory@1002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+    BEGIN
+      IODirectory.Move(OriginalDirectoryName, NewDirectoryName);
+    END;
+
+    PROCEDURE RenameClientFile@46(FromFileName@1000 : Text;ToFileName@1001 : Text);
+    VAR
+      IOFile@1002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File" RUNONCLIENT;
+    BEGIN
+      CASE GetFileHandlingType OF
+
+        FileHandlingType::"Shared Path" :
+          RENAME(FromFileName, ToFileName);
+
+        FileHandlingType::RTC :
+          IOFile.Move(FromFileName, ToFileName);
+
+        FileHandlingType::"Web Client" :
+          ErrorIfWebClient;
+      END;
+    END;
+
+    LOCAL PROCEDURE ServerDirectoryExists@25(DirectoryName@1000 : Text) : Boolean;
+    VAR
+      IODirectory@1001 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+    BEGIN
+      EXIT(IODirectory.Exists(DirectoryName));
+    END;
+
+    PROCEDURE ClientDirectoryExists@28(DirectoryName@1000 : Text) : Boolean;
+    VAR
+      IODirectory@1001 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory" RUNONCLIENT;
+    BEGIN
+      CASE GetFileHandlingType OF
+
+        FileHandlingType::"Shared Path" :
+          EXIT(ServerDirectoryExists(DirectoryName));
+
+        FileHandlingType::RTC :
+          EXIT(IODirectory.Exists(DirectoryName));
+
+        FileHandlingType::"Web Client" :
+          ErrorIfWebClient;
+      END;
+    END;
+
+    LOCAL PROCEDURE ServerFileNameExists@29(ServerFileName@1000 : Text) : Boolean;
+    VAR
+      IOFile@1001 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+    BEGIN
+      EXIT(IOFile.Exists(ServerFileName));
+    END;
+
+    PROCEDURE ClientFileNameExists@30(ClientFileName@1000 : Text) : Boolean;
+    VAR
+      IOFile@1001 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File" RUNONCLIENT;
+    BEGIN
+      CASE GetFileHandlingType OF
+
+        FileHandlingType::"Shared Path" :
+          EXIT(ServerFileNameExists(ClientFileName));
+
+        FileHandlingType::RTC :
+          EXIT(IOFile.Exists(ClientFileName));
+
+        FileHandlingType::"Web Client" :
+          ErrorIfWebClient;
+      END;
+    END;
+
+    PROCEDURE GetServerDirectoryContent@31(VAR TmpFile@1000 : TEMPORARY Record 11102094;ServerDirectoryName@1001 : Text);
+    VAR
+      ServerFileName@1002 : Text;
+      i@1003 : Integer;
+      FileArray@1004 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      IODirectory@1005 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+      IOFile@1006 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+    BEGIN
+      TmpFile.RESET;
+      TmpFile.DELETEALL;
+
+      FileArray := IODirectory.GetFileSystemEntries(ServerDirectoryName);
+      FOR i := 0 TO FileArray.Length - 1 DO BEGIN
+
+        ServerFileName := FileArray.GetValue(i);
+
+        CASE TRUE OF
+
+          IOFile.Exists(ServerFileName) :
+            BEGIN
+              TmpFile."Is a File" := TRUE;
+              TmpFile.Name := GetFileName(ServerFileName);
+              TmpFile.INSERT;
+            END;
+
+          IODirectory.Exists(ServerFileName) :
+            BEGIN
+              TmpFile."Is a File" := FALSE;
+              TmpFile.Name := COPYSTR(ServerFileName, STRLEN(ServerDirectoryName) + 1);
+              TmpFile.INSERT;
+            END;
+
+          ELSE
+            ERROR(ServerFileName);
+        END;
+      END;
+    END;
+
+    PROCEDURE GetClientDirectoryContent@32(VAR TmpFile@1000 : TEMPORARY Record 11102094;ServerDirectoryName@1001 : Text);
+    VAR
+      ServerFileName@1002 : Text;
+      i@1003 : Integer;
+      FileArray@1004 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      IODirectory@1005 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory" RUNONCLIENT;
+      IOFile@1006 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File" RUNONCLIENT;
+    BEGIN
+      CASE GetFileHandlingType OF
+
+        FileHandlingType::"Shared Path" :
+          GetServerDirectoryContent(TmpFile, ServerDirectoryName);
+
+        FileHandlingType::RTC :
+          BEGIN
+            TmpFile.RESET;
+            TmpFile.DELETEALL;
+
+            AddBackSlash(ServerDirectoryName);
+            FileArray := IODirectory.GetFileSystemEntries(ServerDirectoryName);
+            FOR i := 0 TO FileArray.Length - 1 DO BEGIN
+
+              ServerFileName := FileArray.GetValue(i);
+
+              CASE TRUE OF
+
+                IOFile.Exists(ServerFileName) :
+                  BEGIN
+                    TmpFile."Is a File" := TRUE;
+                    TmpFile.Name := GetFileName(ServerFileName);
+                    TmpFile.INSERT;
+                  END;
+
+                IODirectory.Exists(ServerFileName) :
+                  BEGIN
+                    TmpFile."Is a File" := FALSE;
+                    TmpFile.Name := COPYSTR(ServerFileName, STRLEN(ServerDirectoryName) + 1);
+                    TmpFile.INSERT;
+                  END;
+
+                ELSE
+                  ERROR(ServerFileName);
+              END;
+            END;
+          END;
+
+        FileHandlingType::"Web Client" :
+          ErrorIfWebClient;
+      END;
+    END;
+
+    PROCEDURE CreateServerTempFileName@33(Extension@1000 : Text) TmpServerFileName : Text;
+    VAR
+      TmpServerFile@1001 : File;
+      DotPos@1002 : Integer;
+    BEGIN
+      TmpServerFile.CREATETEMPFILE;
+      TmpServerFileName := TmpServerFile.NAME;
+      TmpServerFile.CLOSE;
+
+      IF Extension <> '' THEN BEGIN
+        DotPos := STRPOS(TmpServerFileName, '.');
+        IF DotPos > 0 THEN
+          TmpServerFileName := COPYSTR(TmpServerFileName, 1, DotPos - 1);
+        TmpServerFileName := TmpServerFileName + '.' + Extension;
+      END;
+
+      TmpServerFileName := TempDirectory + GetFileName(TmpServerFileName);
+    END;
+
+    PROCEDURE AddBackSlash@34(VAR Directory@1000 : Text);
+    BEGIN
+      IF Directory <> '' THEN
+        IF Directory[STRLEN(Directory)] <> '\' THEN
+          Directory += '\';
+    END;
+
+    PROCEDURE CheckUpdateExisting@35(SourceFileName@1000 : Text;TargetFileName@1001 : Text) : Text;
+    VAR
+      ctOverwriteExisting@1002 : TextConst 'DEU=Do you want to update the existing file?;ENU=Do you want to update the existing file?;ESP=Do you want to update the existing file?;FRA=Do you want to update the existing file?;NLD=Wilt u het bestaande bestand bijwerken?;DEA=Do you want to update the existing file?';
+    BEGIN
+      CASE GetFileHandlingType OF
+
+        FileHandlingType::"Shared Path" :
+          IF (TargetFileName = '') OR (TargetFileName = SourceFileName) THEN BEGIN
+            IF NOT CONFIRM(ctOverwriteExisting, TRUE) THEN
+              EXIT;
+            EXIT(InsertBeforeExtension(SourceFileName, '_new'));
+          END ELSE BEGIN
+            QueryReplace(TargetFileName);
+            EXIT(TargetFileName);
+          END;
+
+        FileHandlingType::RTC :
+          IF (TargetFileName = '') OR (TargetFileName = SourceFileName) THEN BEGIN
+            IF NOT CONFIRM(ctOverwriteExisting, TRUE) THEN
+              EXIT;
+            EXIT(SourceFileName);
+          END ELSE BEGIN
+            QueryReplace(TargetFileName);
+            EXIT(TargetFileName);
+          END;
+
+        FileHandlingType::"Web Client" :
+          EXIT(InsertBeforeExtension(SourceFileName, '_new'));
+      END;
+    END;
+
+    PROCEDURE FinalizeUpdateExisting@36(SourceFileName@1000 : Text) : Text;
+    VAR
+      NewFileName@1001 : Text;
+      TempFileName@1002 : Text;
+    BEGIN
+      IF GetFileHandlingType = FileHandlingType::"Shared Path" THEN BEGIN
+
+        NewFileName := InsertBeforeExtension(SourceFileName, '_new');
+        TempFileName := InsertBeforeExtension(SourceFileName, '_original');
+
+        IF NOT EXISTS(NewFileName) THEN
+          EXIT;
+
+        IF EXISTS(TempFileName) THEN
+          ERASE(TempFileName);
+
+        RENAME(SourceFileName, TempFileName);
+        RENAME(NewFileName, SourceFileName);
+        ERASE(TempFileName);
+
+      END;
+    END;
+
+    PROCEDURE InsertBeforeExtension@37(FileName@1000 : Text;Extra@1001 : Text) : Text;
+    VAR
+      i@1002 : Integer;
+    BEGIN
+      IF STRPOS(FileName, '.') = 0 THEN
+        EXIT(FileName + Extra);
+
+      FOR i := STRLEN(FileName) DOWNTO 1 DO
+        IF FileName[i] = '.' THEN
+          EXIT(INSSTR(FileName, Extra, i));
+    END;
+
+    LOCAL PROCEDURE GetServerLastTimeWrite@38(ServerFileName@1000 : Text) : DateTime;
+    VAR
+      IOFile@1001 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+    BEGIN
+      EXIT(IOFile.GetLastWriteTime(ServerFileName));
+    END;
+
+    PROCEDURE GetClientLastWriteTime@39(ClientFileName@1000 : Text) : DateTime;
+    VAR
+      IOFile@1001 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File" RUNONCLIENT;
+    BEGIN
+      CASE GetFileHandlingType OF
+
+        FileHandlingType::"Shared Path" :
+          EXIT(GetServerLastTimeWrite(ClientFileName));
+
+        FileHandlingType::RTC :
+          EXIT(IOFile.GetLastWriteTime(ClientFileName));
+
+        FileHandlingType::"Web Client" :
+          EXIT;
+
+      END;
+    END;
+
+    PROCEDURE CanAccessClientDirectory@42(ClientDirectoryName@1000 : Text) : Boolean;
+    VAR
+      FileHandler@1001 : Codeunit 11102097;
+    BEGIN
+      FileHandler.SetTestDirectory(CheckDirectoryType::Client, ClientDirectoryName);
+      EXIT(FileHandler.RUN);
+    END;
+
+    PROCEDURE CanAccessServerDirectory@45(ServerDirectoryName@1000 : Text) : Boolean;
+    VAR
+      FileHandler@1001 : Codeunit 11102097;
+    BEGIN
+      FileHandler.SetTestDirectory(CheckDirectoryType::Client, ServerDirectoryName);
+      EXIT(FileHandler.RUN);
+    END;
+
+    PROCEDURE SetTestDirectory@43(NewCheckDirectoryType@1000 : ' ,Client,Server';DirectoryName@1001 : Text);
+    BEGIN
+      CheckDirectoryType := NewCheckDirectoryType;
+      CheckDirectoryName := DirectoryName;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

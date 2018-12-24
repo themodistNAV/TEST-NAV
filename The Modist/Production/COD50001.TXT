@@ -1,0 +1,350 @@
+OBJECT Codeunit 50001 Inventory Delta Managment
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/11/18;
+    Time=12:02:11 PM;
+    Modified=Yes;
+    Version List=OP9031,TM0001;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            Filename@1000000000 : Text;
+          BEGIN
+            ClearLastErrors;
+            IF NOT CreateDelta(Filename) THEN
+              LogError(GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'CreateDelta'),GETLASTERRORCODE,Filename);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TempInventoryDelta@1000000000 : TEMPORARY Record 50017;
+      ERRLOCATION@1000000002 : TextConst 'ENU=%1\Codeunit 50001;ENG=%1\Codeunit 50010';
+      AvailableInventory@1000000001 : Decimal;
+
+    PROCEDURE PopulateInventory@1000000001(FullDelta@1000000007 : Boolean);
+    VAR
+      Style@1000000000 : Record 9087012;
+      Item@1000000001 : Record 27;
+      ItemVariant@1000000002 : Record 5401;
+      InventoryDelta@1000000003 : Record 50017;
+      ExportDateTime@1000000004 : DateTime;
+      IntegrationFunctions@1000000005 : Codeunit 50008;
+      ModistSetup@1000000006 : Record 50000;
+      LocationFilter@1000000008 : Text;
+      LineNo@1000000009 : Integer;
+    BEGIN
+      //A full inventory load is run once a day, the instruction to load a full inventory is driven by the FullDelta flag
+      //Clear down all previous days inventory records
+      LineNo:=0;
+      IF FullDelta THEN
+        IF InventoryDelta.FINDSET THEN
+          InventoryDelta.DELETEALL;
+
+      ModistSetup.GET;
+      ExportDateTime := CURRENTDATETIME();
+      LocationFilter := IntegrationFunctions.SaleableLocationFilter;
+
+      Style.FINDSET;
+      REPEAT
+        CLEAR(Item);
+        Item.SETRANGE("Style No.",Style."No.");
+        Item.SETFILTER("Location Filter",LocationFilter);
+        //Item.SETFILTER("No.",'00001..00015');
+        IF Item.FINDSET THEN BEGIN
+          REPEAT
+            AvailableInventory:=0;
+            //Item.CALCFIELDS(Inventory,"Qty. on Sales Order","Qty. on Internet Order");
+            Item.CALCFIELDS(Inventory,"Qty. on Sales Order","Qty. on Internet Order","Trans. Ord. Shipment (Qty.)","Qty. on Purch. Return"); //DOC TM0001 AW 12/03/2018
+            AvailableInventory := CalcInventory2(Item.Inventory,Item."Qty. on Sales Order",Item."Qty. on Internet Order",Item."Trans. Ord. Shipment (Qty.)",Item."Qty. on Purch. Return"); //DOC TM0001 AW 12/03/2018
+            ItemVariant.RESET;
+            ItemVariant.SETRANGE("Item No.",Item."No.");
+            ItemVariant.SETFILTER("Location Filter",LocationFilter);
+            IF ItemVariant.FINDSET THEN BEGIN
+              REPEAT
+                AvailableInventory:=0;
+                //ItemVariant.CALCFIELDS(Inventory,"Qty. on Sales Order","Qty. on Internet Order"); //DOC TM0001 AW 12/03/2018
+                ItemVariant.CALCFIELDS(Inventory,"Qty. on Sales Order","Qty. on Internet Order","Trans. Ord. Shipment (Qty.)","Qty. on Purch. Return"); //DOC TM0001 AW 12/03/2018
+                AvailableInventory := CalcInventory2(ItemVariant.Inventory,ItemVariant."Qty. on Sales Order",ItemVariant."Qty. on Internet Order",ItemVariant."Trans. Ord. Shipment (Qty.)",ItemVariant."Qty. on Purch. Return"); //DOC TM0001 AW 12/03/2018
+                IF (ItemVariant."Size Code" <> ModistSetup."One Size Code") THEN BEGIN
+                  LineNo:=LineNo+1;
+                  InsertInventoryLine(LineNo,Style."No.",Item."No.",ItemVariant.Code,AvailableInventory,ExportDateTime,1,FullDelta);
+                END ELSE BEGIN
+                  LineNo:=LineNo+1;
+                  InsertInventoryLine(LineNo,Style."No.",Item."No.",ItemVariant.Code,AvailableInventory,ExportDateTime,1,FullDelta);
+                END;
+              UNTIL ItemVariant.NEXT = 0;
+            END ELSE BEGIN
+              //there are no variants
+              LineNo:=LineNo+1;
+              InsertInventoryLine(LineNo,Style."No.",Item."No.",'',AvailableInventory,ExportDateTime,1,FullDelta);
+            END;
+          UNTIL Item.NEXT= 0;
+        END;
+      UNTIL Style.NEXT=0;
+    END;
+
+    LOCAL PROCEDURE InsertInventoryLine@1000000002(pLineNo@1000000008 : Integer;pStyle@1000000003 : Code[10];pItemNo@1000000001 : Code[20];pVariantCode@1000000002 : Code[10];pQuantity@1000000004 : Decimal;pPointInTime@1000000005 : DateTime;pDeltaNo@1000000007 : Integer;pIsFull@1000000006 : Boolean);
+    VAR
+      InventoryDelta@1000000000 : Record 50017;
+    BEGIN
+      IF pIsFull THEN BEGIN //we use this to load the first baseline delta
+        InventoryDelta.INIT;
+        InventoryDelta."Entry No." := pLineNo;
+        InventoryDelta.INSERT;
+        InventoryDelta."Delta No." := 1;
+        InventoryDelta."Style No." := pStyle;
+        InventoryDelta."Item No.":=pItemNo;
+        InventoryDelta."Variant Code":=pVariantCode;
+        IF pVariantCode <> '' THEN
+          InventoryDelta.SKUNumber:=pItemNo + '-' + pVariantCode
+        ELSE
+          InventoryDelta.SKUNumber:=pItemNo;
+        InventoryDelta.Quantity :=pQuantity;
+        InventoryDelta."Point in Time":=pPointInTime;
+        InventoryDelta."Last Delta No." := 1;
+        InventoryDelta.MODIFY;
+      END ELSE BEGIN //insert temporary inventory snapshot for delta
+        TempInventoryDelta.INIT;
+        TempInventoryDelta."Entry No." := pLineNo;
+        TempInventoryDelta.INSERT;
+        TempInventoryDelta."Delta No." := pDeltaNo;
+        TempInventoryDelta."Style No." := pStyle;
+        TempInventoryDelta."Item No.":=pItemNo;
+        TempInventoryDelta."Variant Code":=pVariantCode;
+        IF pVariantCode <> '' THEN
+          TempInventoryDelta.SKUNumber:=pItemNo + '-' + pVariantCode
+        ELSE
+          TempInventoryDelta.SKUNumber:=pItemNo;
+        TempInventoryDelta.Quantity :=pQuantity;
+        TempInventoryDelta."Point in Time":=pPointInTime;
+        TempInventoryDelta."Last Delta No." := pDeltaNo;
+        TempInventoryDelta.MODIFY;
+      END;
+    END;
+
+    [TryFunction]
+    PROCEDURE CreateDelta@1000000003(VAR pFileName@1000000009 : Text);
+    VAR
+      Style@1000000000 : Record 9087012;
+      Item@1000000001 : Record 27;
+      ItemVariant@1000000002 : Record 5401;
+      InventoryDelta@1000000003 : Record 50017;
+      ExportDateTime@1000000004 : DateTime;
+      IntegrationFunctions@1000000005 : Codeunit 50008;
+      ModistSetup@1000000006 : Record 50000;
+      NewDeltaNo@1000000007 : Integer;
+      PointInTime@1000000008 : DateTime;
+      DeltaCount@1000000010 : Integer;
+      LineNo@1000000011 : Integer;
+    BEGIN
+      LineNo:=0;
+      DeltaCount:=0;
+      PointInTime:=CURRENTDATETIME();
+      NewDeltaNo:=GetLatestDeltaNo()+1;
+
+      //1. Take an inventory snapshot into TempInventory record
+      PopulateInventory(FALSE);
+
+      //2. Iterate through the TempInventory containing the latest snapshot
+      //   and compare it to the last item/variant inventory position
+      //   if it has changed create a delta record for the item/variant
+      TempInventoryDelta.SETCURRENTKEY("Entry No.");
+      IF TempInventoryDelta.FINDSET THEN BEGIN
+        InventoryDelta.RESET;
+        IF InventoryDelta.FINDLAST THEN
+          LineNo := LineNo + InventoryDelta."Entry No.";
+        REPEAT
+          IF  TempInventoryDelta.Quantity <> LastItemQuantity(TempInventoryDelta."Item No.",TempInventoryDelta."Variant Code") THEN BEGIN
+            LineNo := LineNo + 1;
+            InsertDeltaLine(LineNo,TempInventoryDelta."Style No.",TempInventoryDelta."Item No.",TempInventoryDelta."Variant Code",TempInventoryDelta.Quantity,PointInTime,NewDeltaNo);
+            DeltaCount:=DeltaCount+1;
+          END;
+        UNTIL TempInventoryDelta.NEXT = 0;
+      END;
+
+      //3. Create the new delta file
+      IF DeltaCount > 0 THEN
+        CreateDeltaFile(NewDeltaNo,pFileName);
+    END;
+
+    LOCAL PROCEDURE GetLatestDeltaNo@1000000006() : Integer;
+    VAR
+      InvDelta@1000000000 : Record 50017;
+    BEGIN
+      InvDelta.RESET;
+      IF InvDelta.FINDLAST THEN
+        EXIT(InvDelta."Delta No.");
+    END;
+
+    LOCAL PROCEDURE LastItemQuantity@1000000009(ItemNo@1000000001 : Code[20];VariantCode@1000000002 : Code[10]) : Decimal;
+    VAR
+      InvDelta@1000000000 : Record 50017;
+      Qty@1000000003 : Decimal;
+    BEGIN
+      Qty := 0;
+      InvDelta.SETCURRENTKEY("Delta No.","Item No.","Variant Code");
+      InvDelta.SETRANGE("Item No.",ItemNo);
+      InvDelta.SETRANGE("Variant Code",VariantCode);
+      IF InvDelta.FINDLAST THEN BEGIN
+        Qty := InvDelta.Quantity;
+      END;
+
+      EXIT(Qty);
+    END;
+
+    LOCAL PROCEDURE CreateDeltaFile@1000000012(DeltaNo@1000000000 : Integer;VAR pFilename@1000000008 : Text);
+    VAR
+      InventoryDelta@1000000001 : Record 50017;
+      XMLDoc@1000000004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLWriter@1000000003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlWriter";
+      ModistSetup@1000000002 : Record 50000;
+      IntegrationProcessingGroup@1000000005 : Record 50007;
+      WebIntegrationManagement@1000000006 : Codeunit 50100;
+      FileName@1000000007 : Text;
+      IntegrationFunctions@1000000009 : Codeunit 50008;
+    BEGIN
+      ModistSetup.GET;
+
+      IntegrationProcessingGroup.GET(ModistSetup."Demandware Integration Type",ModistSetup."Demandware Inventory Group");
+
+      FileName := WebIntegrationManagement.InventoryDeltaFileName;
+      pFilename := FileName;
+
+      XMLWriter := XMLWriter.Create(FileName);
+
+      XMLWriter.WriteStartElement('inventory','http://www.demandware.com/xml/impex/inventory/2007-05-31');
+        XMLWriter.WriteStartElement('inventory-list');
+          XMLWriter.WriteStartElement('header');
+            XMLWriter.WriteAttributeString('list-id',IntegrationProcessingGroup."Primary Element ID");
+            XMLWriter.WriteElementString('default-instock','false');
+            XMLWriter.WriteElementString('description','Product Sku inventory');
+            XMLWriter.WriteElementString('use-bundle-inventory-only','false');
+            //XMLWriter.WriteElementString('on-order','false'); //DOC TM2011 AW 07/08/2018 -+
+            XMLWriter.WriteElementString('on-order','true'); //DOC TM2011 AW 07/08/2018 -+
+          XMLWriter.WriteEndElement; // </header>
+          XMLWriter.WriteStartElement('records');
+
+          InventoryDelta.SETCURRENTKEY("Delta No.","Item No.","Variant Code");
+          InventoryDelta.SETRANGE("Delta No.",DeltaNo);
+          IF InventoryDelta.FINDSET THEN BEGIN
+            REPEAT
+              XMLWriter.WriteStartElement('record');
+                XMLWriter.WriteAttributeString('product-id',InventoryDelta.SKUNumber);
+                XMLWriter.WriteElementString('allocation',FORMAT(InventoryDelta.Quantity,0,1));
+                XMLWriter.WriteElementString('perpetual',FORMAT(FALSE, 0, 9));
+                XMLWriter.WriteElementString('preorder-backorder-handling','none');
+                XMLWriter.WriteElementString('preorder-backorder-allocation',FORMAT(0, 0, 9));
+                //XMLWriter.WriteElementString('ats',FORMAT(InventoryDelta.Quantity,0,1)); //DOC TM2011 AW 07/08/2018 -+
+                //XMLWriter.WriteElementString('on-order',FORMAT(0, 0, 9)); //DOC TM2011 AW 07/08/2018 -+
+                //XMLWriter.WriteElementString('turnover',FORMAT(0, 0, 9)); //DOC TM2011 AW 07/08/2018 -+
+              XMLWriter.WriteEndElement; // </record>
+            UNTIL InventoryDelta.NEXT = 0;
+          END;
+
+          XMLWriter.WriteEndElement; // </records>
+        XMLWriter.WriteEndElement; // </inventory-list>
+      XMLWriter.WriteEndElement; // </inventory>
+      XMLWriter.Flush;
+      XMLWriter.Close;
+
+      IF IntegrationProcessingGroup."Enable SFTP Connect" THEN BEGIN //if we are ready to connect to sftp
+        WebIntegrationManagement.TransferFTPfiles(IntegrationProcessingGroup."Working Location",IntegrationProcessingGroup."Archive Location",'.xml',ModistSetup."FTP temporary file extension",
+                                                ModistSetup."Demandware Export SFTP Server",IntegrationProcessingGroup."FTP Folder",IntegrationProcessingGroup."FTP Archive Folder",TRUE);
+      END;
+
+      //Log integration
+      IntegrationFunctions.LogDMWInventoryDeltaUpload(FileName,'');
+    END;
+
+    LOCAL PROCEDURE ClearLastErrors@1000000008();
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+      IntegrationErrorLog@1000000001 : Record 50011;
+    BEGIN
+      //This function deletes all previous errors for the integration type and group
+      ModistSetup.GET;
+      IntegrationErrorLog.SETRANGE("Integration Type",ModistSetup."Demandware Integration Type");
+      IntegrationErrorLog.SETRANGE("Integration Process Group",ModistSetup."Demandware Inventory Group");
+      IF IntegrationErrorLog.FINDSET THEN
+        IntegrationErrorLog.DELETEALL;
+
+      CLEARLASTERROR;
+    END;
+
+    LOCAL PROCEDURE LogError@1000000015(ErrMessage@1000000002 : Text;ErrorLocation@1000000004 : Text;ErrCode@1000000005 : Text;Filename@1000000001 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+    BEGIN
+      //This function facilitates the logging of an error in the error log table by deriving the default values
+      //and applying the variable values
+      ModistSetup.GET;
+      ErrorHandler.LogError(ModistSetup."Demandware Integration Type",
+                            ModistSetup."Demandware Inv. Delta Group",
+                            '',
+                            0,
+                            '',
+                            0,
+                            ErrMessage,
+                            ErrorLocation,
+                            0,
+                            ErrCode,
+                            Filename);
+    END;
+
+    LOCAL PROCEDURE InsertDeltaLine@1000000000(pLineNo@1000000006 : Integer;pStyle@1000000003 : Code[10];pItemNo@1000000001 : Code[20];pVariantCode@1000000002 : Code[10];pQuantity@1000000004 : Decimal;pPointInTime@1000000005 : DateTime;pDeltaNo@1000000007 : Integer);
+    VAR
+      InventoryDelta@1000000000 : Record 50017;
+    BEGIN
+      //this function inserts a new Delta record
+      InventoryDelta.INIT;
+      InventoryDelta."Entry No." := pLineNo;
+      InventoryDelta.INSERT;
+      InventoryDelta."Delta No." := pDeltaNo;
+      InventoryDelta."Style No." := pStyle;
+      InventoryDelta."Item No.":=pItemNo;
+      InventoryDelta."Variant Code":=pVariantCode;
+      IF pVariantCode <> '' THEN
+        InventoryDelta.SKUNumber:=pItemNo + '-' + pVariantCode
+      ELSE
+        InventoryDelta.SKUNumber:=pItemNo;
+      InventoryDelta.Quantity :=pQuantity;
+      InventoryDelta."Point in Time":=pPointInTime;
+      InventoryDelta."Last Delta No." := pDeltaNo;
+      InventoryDelta.MODIFY;
+    END;
+
+    LOCAL PROCEDURE CalcInventory@1000000004(FullInventoryVal@1000000000 : Decimal;QtyOnSalesOrder@1000000001 : Decimal;QtyOnInternetOrder@1000000002 : Integer) : Decimal;
+    VAR
+      AvailableInventory@1000000003 : Decimal;
+    BEGIN
+      AvailableInventory := FullInventoryVal - (QtyOnSalesOrder + QtyOnInternetOrder);
+      IF AvailableInventory<0 THEN AvailableInventory:=0; //DOC OP10740 DS 01/06/2017 -+
+      EXIT(AvailableInventory);
+    END;
+
+    LOCAL PROCEDURE CalcInventory2@1000000007(FullInventoryVal@1000000000 : Decimal;QtyOnSalesOrder@1000000001 : Decimal;QtyOnInternetOrder@1000000002 : Decimal;QtyOnTransferOrder@1000000004 : Decimal;QtyOnPurchRetOrder@1170000000 : Decimal) : Decimal;
+    VAR
+      AvailableInventory@1000000003 : Decimal;
+    BEGIN
+      //DOC TM0001 AW 12/03/2018
+      AvailableInventory := FullInventoryVal - (QtyOnSalesOrder + QtyOnInternetOrder + QtyOnTransferOrder + QtyOnPurchRetOrder);
+      IF AvailableInventory<0 THEN AvailableInventory:=0; //DOC OP10740 DS 01/06/2017 -+
+      EXIT(AvailableInventory);
+    END;
+
+    BEGIN
+    {
+      //DOC TM0001 AW 12/03/2018
+      //DOC OP10740 DS 01/06/2017 - minor change to CalcInventory function - to not return negative values
+      //DOC TM2011 AW 07/08/2018 - Enhance inventory logic to DW
+    }
+    END.
+  }
+}
+

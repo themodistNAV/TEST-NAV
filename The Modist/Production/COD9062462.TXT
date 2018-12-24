@@ -1,0 +1,922 @@
+OBJECT Codeunit 9062462 Criteria Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/02/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.12;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Criteria@1000000000 : Record 9062626;
+      CriteriaField@1000000001 : Record 9062627;
+      CriteriaFieldTmp@1000000003 : TEMPORARY Record 9062627;
+      TableField@1000000004 : Record 9062231;
+      NameValueToolkit@9062231 : Codeunit 9062587;
+      ObjectFieldToolkit@1000000002 : Codeunit 9062343;
+      SmartFilterManagement@1000000006 : Codeunit 9062231;
+      String@1000000007 : Codeunit 9062236;
+      TnpToolkit@9062230 : Codeunit 9062230;
+      TnpUtils@9062229 : Codeunit 9062229;
+      FieldClass@1000000005 : Integer;
+
+    PROCEDURE "--- Criteria ---"@1000000006();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE TryToFindCriteria@1000000003(pCriteriaId@1000000000 : Integer;VAR pCriteria@1000000001 : Record 9062626) : Boolean;
+    BEGIN
+      //DOC NA2016.12 - Trying to find criteria
+      //  -> pCriteriaId: Criteria ID
+      //  <> pCriteria: Target criteria record
+      //  <- Result
+
+      IF (pCriteriaId = 0) THEN
+        EXIT(FALSE);
+      EXIT(pCriteria.GET(pCriteriaId));
+    END;
+
+    PROCEDURE CreateCriteria@1000000021() : Integer;
+    BEGIN
+      //DOC NA2016.12.JH - Creating criteria
+      //  <- ID of criteria created
+
+      EXIT(CreateCriteriaAttached(0, '', 0, TRUE));
+    END;
+
+    PROCEDURE CreateCriteriaAttached@1000000017(pAttachedToTableId@1000000001 : Integer;pAttachedToPosition@1000000000 : Text;pAttachedToFieldId@1000000003 : Integer;pAddTableNameToDescription@1000000002 : Boolean) : Integer;
+    BEGIN
+      //DOC NA2016.12 - Creating criteria (attached)
+      //  -> pAttachedToTableId: The table ID the criteria should be attached to
+      //  -> pAttachedToPosition: The position the criteria should be attached to
+      //  -> pAttachedToFieldId: Field ID the criteria should be attached to
+      //  -> pAddTableNameToDescription: Flag to add table name to description
+      //  <- ID of criteria created
+
+      CLEAR(Criteria);
+      Criteria.INIT();
+      Criteria.VALIDATE("Attached-to Table ID", pAttachedToTableId);
+      Criteria.VALIDATE("Attached-to Position", pAttachedToPosition);
+      Criteria.VALIDATE("Attached-to Field ID", pAttachedToFieldId);
+      Criteria.VALIDATE("Add Table Name to Description", pAddTableNameToDescription);
+      Criteria.INSERT(TRUE);
+
+      Criteria.UpdateAttachedToDescription();
+      Criteria.MODIFY(FALSE);
+
+      EXIT(Criteria.ID);
+    END;
+
+    PROCEDURE DeleteCriteria@1000000001(pCriteriaId@1000000000 : Integer);
+    BEGIN
+      //DOC NA2016.12 - Deleting criteria for given table ID and position
+      //  -> pCriteriaId: Criteria ID
+
+      IF (pCriteriaId <> 0) THEN
+        IF (Criteria.GET(pCriteriaId)) THEN
+          Criteria.DELETE(TRUE);
+    END;
+
+    PROCEDURE CloneCriteria@1000000004(pCriteria@1000000002 : Record 9062626) : Integer;
+    BEGIN
+      //DOC NA2016.12 - Cloning criteria
+      //  -> pCriteria: Criteria to clone
+      //  <- ID of criteria cloned
+
+      EXIT(CloneCriteriaAttached(pCriteria, 0, '', 0));
+    END;
+
+    PROCEDURE CloneCriteriaAttached@1000000025(pCriteria@1000000002 : Record 9062626;pAttachedToTableId@1000000001 : Integer;pAttachedToPosition@1000000000 : Text;pAttachedToFieldId@1000000004 : Integer) : Integer;
+    VAR
+      lCriteriaField@1000000003 : Record 9062627;
+    BEGIN
+      //DOC NA2016.12 - Cloning criteria (attached)
+      //  -> pCriteria: Criteria to clone
+      //  -> pAttachedToTableId: Table ID the cloned criteria should be attached to
+      //  -> pAttachedToPosition: Position the cloned criteria should be attached to
+      //  -> pAttachedToFieldId: Field ID the cloned criteria should be attached to
+      //  <- ID of criteria cloned
+
+      Criteria := pCriteria;
+      Criteria.ID := 0;
+      Criteria."Attached-to Position" := '';
+
+      Criteria.VALIDATE("Attached-to Table ID", pAttachedToTableId);
+      Criteria.VALIDATE("Attached-to Position", pAttachedToPosition);
+      Criteria.VALIDATE("Attached-to Field ID", pAttachedToFieldId);
+      Criteria.VALIDATE("Copied-from Criteria ID", pCriteria.ID);
+      Criteria.INSERT(TRUE);
+
+      lCriteriaField.RESET();
+      lCriteriaField.SETCURRENTKEY("Criteria ID");
+      lCriteriaField.SETRANGE("Criteria ID", pCriteria.ID);
+      IF (lCriteriaField.FINDSET()) THEN
+      REPEAT
+        CriteriaField := lCriteriaField;
+        CriteriaField.ID := 0;
+        CriteriaField.VALIDATE("Criteria ID", Criteria.ID);
+        CriteriaField.INSERT(TRUE);
+      UNTIL (lCriteriaField.NEXT() = 0);
+
+      Criteria.UpdateDescriptionAndView(TRUE);
+
+      EXIT(Criteria.ID);
+    END;
+
+    PROCEDURE ShowCriteria@1000000002(pCriteriaId@1000000001 : Integer);
+    BEGIN
+      //DOC NA2015.7 - Showing criteria
+      //  -> pCriteriaId: Criteria ID
+
+      ShowCriteriaAdvanced(pCriteriaId, FALSE, FALSE, TRUE);
+    END;
+
+    PROCEDURE ShowCriteriaAdvanced@1000000012(pCriteriaId@1000000001 : Integer;pHeaderHidden@1000000005 : Boolean;pTableReadOnly@1000000002 : Boolean;pRunModal@1000000004 : Boolean);
+    VAR
+      lCriteria@1000000000 : Record 9062626;
+      lCriteriaField@1000000007 : Record 9062627;
+      lCriteriaCard@1000000003 : Page 9062888;
+    BEGIN
+      //DOC NA2015.7 - Showing criteria (advanced version)
+      //  -> pCriteriaId: Criteria ID
+      //  -> pHeaderHidden: Header hidden flag
+      //  -> pTableReadOnly: Table Read only flag
+      //  -> pRunModal: Run modal flag
+
+      IF (pCriteriaId = 0) THEN
+        EXIT;
+
+      lCriteria.GET(pCriteriaId);
+      lCriteria.SETRECFILTER();
+
+      CLEAR(lCriteriaCard);
+      lCriteriaCard.SETTABLEVIEW(lCriteria);
+      lCriteriaCard.SETRECORD(lCriteria);
+      lCriteriaCard.SetHeaderHidden(pHeaderHidden);
+      lCriteriaCard.SetTableReadOnly(pTableReadOnly);
+      IF (pRunModal) THEN
+        lCriteriaCard.RUNMODAL()
+      ELSE
+        lCriteriaCard.RUN();
+    END;
+
+    PROCEDURE EditCriteria@1000000014(VAR pCriteriaId@1000000003 : Integer);
+    VAR
+      lTableId@1000000001 : Integer;
+    BEGIN
+      //DOC NA2016.12 - Editing criteria
+      //  <> pCriteriaId: Criteria ID (criteria can be created before editing)
+
+      EditCriteriaAdvanced(pCriteriaId, 0);
+    END;
+
+    PROCEDURE EditCriteriaAdvanced@1000000032(pCriteriaId@1000000003 : Integer;pTableId@1000000000 : Integer);
+    VAR
+      lTableId@1000000001 : Integer;
+    BEGIN
+      //DOC NA2016.12 - Editing criteria (advanced version)
+      //  <> pCriteriaId: Criteria ID (criteria can be created before editing)
+      //  -> pTableId: Table ID
+
+      EditCriteriaAttached(pCriteriaId, pTableId, 0, '', 0, TRUE);
+    END;
+
+    PROCEDURE EditCriteriaAttached@1000000015(VAR pCriteriaId@1000000000 : Integer;VAR pTableId@1000000001 : Integer;pAttachedToTableId@1000000003 : Integer;pAttachedToPosition@1000000004 : Text;pAttachedToFieldId@1000000008 : Integer;pAddTableNameToDescription@1000000006 : Boolean);
+    BEGIN
+      //DOC NA2016.12 - Editing criteria (attached)
+      //  <> pCriteriaId: Criteria ID (criteria can be created before editing)
+      //  -> pTableId: Table ID
+      //  -> pAttachedToTableId: The table ID the criteria should be attached to
+      //  -> pAttachedToPosition: The position the criteria should be attached to
+      //  -> pAttachedToFieldId: Field ID the criteria should be attached to
+      //  -> pAddTableNameToDescription: Flag to add table name to description
+
+      EditCriteriaAttachedAdvanced(pCriteriaId, pTableId, 0, pAttachedToTableId, pAttachedToPosition, pAttachedToFieldId, pAddTableNameToDescription);
+    END;
+
+    PROCEDURE EditCriteriaAttachedAdvanced@1000000023(VAR pCriteriaId@1000000000 : Integer;pTableId@1000000001 : Integer;pFilterSourceTableId@1000000009 : Integer;pAttachedToTableId@1000000003 : Integer;pAttachedToPosition@1000000004 : Text;pAttachedToFieldId@1000000008 : Integer;pAddTableNameToDescription@1000000006 : Boolean);
+    VAR
+      lCriteriaField@1000000007 : Record 9062627;
+      lModify@1000000005 : Boolean;
+      lCommit@1000000002 : Boolean;
+    BEGIN
+      //DOC NA2016.12 - Editing criteria (attached; advanced version)
+      //  <> pCriteriaId: Criteria ID (criteria can be created before editing)
+      //  -> pTableId: Table ID
+      //  -> pFilterSourceTableId: Filter source table ID
+      //  -> pAttachedToTableId: The table ID the criteria should be attached to
+      //  -> pAttachedToPosition: The position the criteria should be attached to
+      //  -> pAttachedToFieldId: Field ID the criteria should be attached to
+      //  -> pAddTableNameToDescription: Flag to add table name to description
+
+      IF (pCriteriaId <> 0) THEN
+        IF ( NOT (Criteria.GET(pCriteriaId))) THEN
+          pCriteriaId := 0;
+
+      IF (pCriteriaId = 0) THEN
+      BEGIN
+        pCriteriaId := CreateCriteriaAttached(pAttachedToTableId, pAttachedToPosition, pAttachedToFieldId, pAddTableNameToDescription);
+        lCommit := TRUE;
+      END;
+
+      Criteria.GET(pCriteriaId);
+
+      IF (Criteria."Table ID" <> pTableId) THEN
+      BEGIN
+        Criteria.VALIDATE("Table ID", pTableId);
+        lModify := TRUE;
+      END;
+      IF (Criteria."Field Class" <> FieldClass) THEN
+      BEGIN
+        Criteria.VALIDATE("Field Class", FieldClass);
+        lModify := TRUE;
+      END;
+      IF (Criteria."Filter Source Table Id" <> pFilterSourceTableId) THEN
+      BEGIN
+        Criteria.VALIDATE("Filter Source Table Id", pFilterSourceTableId);
+        lModify := TRUE;
+      END;
+      IF (lModify) THEN
+      BEGIN
+        Criteria.MODIFY(TRUE);
+        lCommit := TRUE;
+      END;
+      IF (lCommit) THEN
+        COMMIT;
+
+      ShowCriteriaAdvanced(pCriteriaId, pTableId <> 0, TRUE, TRUE);
+    END;
+
+    PROCEDURE "--- Record Functions ---"@1000000010();
+    BEGIN
+    END;
+
+    PROCEDURE ApplyCriteriaToRecRef@1000000011(pCriteriaId@1000000003 : Integer;VAR pRecordRef@1000000000 : RecordRef) : Boolean;
+    BEGIN
+      //DOC NA2016.12 - Applying criteria to record reference
+      //  -> pCriteriaId: Criteria ID
+      //  <> pRecordRef: Record reference to apply the criteria to
+      //  <- TRUE: Filtered, FALSE: Enhanced filtering left to apply (use "GetFilteredRecords" instead)
+
+      EXIT(ApplyCriteriaToRecRefAdv(pCriteriaId, FALSE, pRecordRef));
+    END;
+
+    PROCEDURE ApplyCriteriaToRecRefAdv@1000000000(pCriteriaId@1000000003 : Integer;pFieldByField@1000000002 : Boolean;VAR pRecordRef@1000000000 : RecordRef) : Boolean;
+    VAR
+      lEnhancedFieldDefinition@1000000007 : Record 9062327;
+      lEnhancedFieldValue@1000000006 : Record 9062328;
+      lRecordInFilter@1000000008 : Boolean;
+      lKeyRef@1000000005 : KeyRef;
+      lFieldRef@1000000011 : FieldRef;
+      lEnhancedFieldsProcessed@1000000009 : Boolean;
+      lFilter@1000000010 : Text;
+      lResult@1000000001 : Boolean;
+    BEGIN
+      //DOC NA2016.12 - Applying criteria to record reference (advanced version)
+      //  -> pCriteriaId: Criteria ID
+      //  -> pFieldByField: Flag telling the criteria should be applied field-by-field (instead of using saved view)
+      //  <> pRecordRef: Record reference to apply the criteria to
+      //  <- TRUE: Filtered, FALSE: Enhanced filtering left to apply (use "GetFilteredRecords" instead)
+
+      IF (pCriteriaId = 0) THEN
+        EXIT(TRUE);
+
+      lResult := FALSE;
+
+      CriteriaFieldTmp.RESET();
+      CriteriaFieldTmp.DELETEALL();
+
+      IF (TryToFindCriteria(pCriteriaId, Criteria)) THEN
+      BEGIN
+        ApplyCriteriaToRecRefInternal(Criteria, pFieldByField, pRecordRef);
+
+        CriteriaField.RESET();
+        CriteriaField.SETCURRENTKEY("Criteria ID");
+        CriteriaField.SETRANGE("Criteria ID", Criteria.ID);
+        CriteriaField.SETRANGE("Field Type", CriteriaField."Field Type"::"Enhanced Field");
+        IF ( NOT (CriteriaField.ISEMPTY)) THEN
+        BEGIN
+          CriteriaField.FINDSET();
+          REPEAT
+            CriteriaFieldTmp := CriteriaField;
+            CriteriaFieldTmp.INSERT();
+          UNTIL (CriteriaField.NEXT() = 0);
+
+          lEnhancedFieldsProcessed := FALSE;
+
+          lKeyRef := pRecordRef.KEYINDEX(1);
+          IF (lKeyRef.FIELDCOUNT = 1) THEN
+          BEGIN
+            CriteriaField.FINDSET();
+            REPEAT
+              lEnhancedFieldDefinition.GET(CriteriaField."Table ID", CriteriaField."Field ID");
+              IF (lEnhancedFieldDefinition.Editable) THEN
+              BEGIN
+                lEnhancedFieldsProcessed := TRUE;
+                lEnhancedFieldValue.RESET();
+                lEnhancedFieldValue.SETRANGE("Table No.", CriteriaField."Table ID");
+                lEnhancedFieldValue.SETRANGE("Enhanced Field No.", CriteriaField."Field ID");
+                IF (lFilter <> '') THEN
+                BEGIN
+                  lEnhancedFieldValue.SETFILTER("Primary Key Value 1", lFilter);
+                  lFilter := '';
+                END;
+                IF (CriteriaField.Value <> '') THEN
+                  CASE (lEnhancedFieldDefinition.Type) OF
+                    lEnhancedFieldDefinition.Type::Code:
+                      lEnhancedFieldValue.SETFILTER("Value as Code", CriteriaField.Value);
+                    lEnhancedFieldDefinition.Type::Text:
+                      lEnhancedFieldValue.SETFILTER("Value as Text", CriteriaField.Value);
+                    lEnhancedFieldDefinition.Type::Integer:
+                      lEnhancedFieldValue.SETFILTER("Value as Integer", CriteriaField.Value);
+                    lEnhancedFieldDefinition.Type::Decimal:
+                      lEnhancedFieldValue.SETFILTER("Value as Decimal", CriteriaField.Value);
+                    lEnhancedFieldDefinition.Type::Date:
+                      lEnhancedFieldValue.SETFILTER("Value as Date", CriteriaField.Value);
+                    lEnhancedFieldDefinition.Type::Time:
+                      lEnhancedFieldValue.SETFILTER("Value as Time", CriteriaField.Value);
+                    ELSE
+                      lEnhancedFieldValue.SETFILTER(Value, CriteriaField.Value);
+                  END;
+                IF (lEnhancedFieldValue.FINDSET()) THEN
+                REPEAT
+                  IF (lFilter <> '') THEN
+                    lFilter := lFilter + '|';
+                  lFilter := lFilter + lEnhancedFieldValue."Primary Key Value 1";
+                UNTIL (lEnhancedFieldValue.NEXT() = 0);
+                CriteriaFieldTmp.GET(CriteriaField.ID);
+                CriteriaFieldTmp.DELETE();
+              END;
+            UNTIL (CriteriaField.NEXT() = 0);
+            IF (lEnhancedFieldsProcessed) THEN
+            BEGIN
+              lFieldRef := lKeyRef.FIELDINDEX(1);
+              IF (lFilter <> '') THEN
+                lFieldRef.SETFILTER(lFilter)
+              ELSE
+                lFieldRef.SETFILTER('0&1');
+            END;
+          END;
+        END;
+      END
+      ELSE
+        lResult := TRUE;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE ApplyCriteriaToRecRefInternal@1000000018(VAR pCriteria@1000000000 : Record 9062626;pFieldByField@1000000006 : Boolean;VAR pRecordRef@1000000001 : RecordRef);
+    VAR
+      lCriteriaField@1000000002 : Record 9062627;
+      lEnhancedFieldDefinition@9062230 : Record 9062327;
+      lEnhancedFieldManagement@9062231 : Codeunit 9062298;
+      FldRef@1000000003 : FieldRef;
+      SrcRecRef@1000000005 : RecordRef;
+      SrcFldRef@1000000004 : FieldRef;
+      lFilter@9062229 : Text;
+      lUseSavedView@1000000007 : Boolean;
+      eNotSupported@1000000008 : TextConst 'ENU=Enhanced fields are not suppported as filter source.;ENG=Enhanced fields are not suppported as filter source.';
+    BEGIN
+      //DOC NA2016.12 - Applying criteria to record reference (internal version)
+      //  -> pCriteria: Criteria to apply
+      //  -> pFieldByField: Flag telling the criteria should be applied field-by-field (instead of using saved view)
+      //  <> pRecordRef: Record reference to apply the criteria to
+
+      lCriteriaField.RESET();
+      lCriteriaField.SETCURRENTKEY("Criteria ID");
+      lCriteriaField.SETRANGE("Criteria ID", pCriteria.ID);
+      lCriteriaField.SETRANGE("Field Type", lCriteriaField."Field Type"::Field);
+      lCriteriaField.SETFILTER("Filter Source", '%1|%2|%3',
+        lCriteriaField."Filter Source"::Field,
+        lCriteriaField."Filter Source"::"Enhanced Field",
+        lCriteriaField."Filter Source"::Record);
+
+      lUseSavedView := ((lCriteriaField.ISEMPTY()) AND (pCriteria.View <> '') AND ( NOT (pFieldByField)));
+
+      IF (lUseSavedView) THEN
+      BEGIN
+        lFilter := pCriteria.View;
+        lFilter := SmartFilterManagement.ApplySmartFilters(lFilter);
+        pRecordRef.SETVIEW(lFilter);
+      END
+      ELSE
+      BEGIN
+        lCriteriaField.RESET();
+        lCriteriaField.SETCURRENTKEY("Criteria ID");
+        lCriteriaField.SETRANGE("Criteria ID", pCriteria.ID);
+        lCriteriaField.SETRANGE("Field Type", lCriteriaField."Field Type"::Field);
+        IF (lCriteriaField.FINDSET()) THEN BEGIN
+          REPEAT
+            FldRef := pRecordRef.FIELD(lCriteriaField."Field ID");
+            CASE (lCriteriaField."Filter Source") OF
+              lCriteriaField."Filter Source"::Const,
+              lCriteriaField."Filter Source"::Filter:
+                BEGIN
+                  lFilter := lCriteriaField.Value;
+                  lFilter := SmartFilterManagement.ApplySmartFilters(lFilter);
+                  FldRef.SETFILTER(lFilter);
+                END;
+              lCriteriaField."Filter Source"::Field:
+                BEGIN
+                  SrcRecRef.OPEN(pCriteria."Filter Source Table Id");
+                  SrcRecRef.SETPOSITION(pCriteria."Filter Source Record Position");
+                  SrcRecRef.FIND('=');
+                  SrcFldRef := SrcRecRef.FIELD(lCriteriaField."Filter Source Field Id");
+                  FldRef.SETRANGE(SrcFldRef.VALUE);
+                  SrcRecRef.CLOSE();
+                END;
+              lCriteriaField."Filter Source"::"Enhanced Field":
+                ERROR(eNotSupported);
+              lCriteriaField."Filter Source"::Record:
+                BEGIN
+                  SrcRecRef.OPEN(lCriteriaField."Filter Source Table Id");
+                  SrcRecRef.SETPOSITION(lCriteriaField."Filter Source Record Position");
+                  SrcRecRef.FIND('=');
+                  SrcFldRef := SrcRecRef.FIELD(lCriteriaField."Filter Source Field Id");
+                  FldRef.SETRANGE(SrcFldRef.VALUE);
+                  SrcRecRef.CLOSE();
+                END;
+            END;
+          UNTIL (lCriteriaField.NEXT() = 0);
+        END;
+      END;
+    END;
+
+    PROCEDURE GetNotAppliedFields@1000000016(VAR pCriteriaField@1000000000 : Record 9062627) : Boolean;
+    VAR
+      lResult@1000000001 : Boolean;
+    BEGIN
+      //DOC NA2015.7 - Returning not applied fields
+      //  <> pCriteriaField: Target recordset
+
+      lResult := FALSE;
+
+      CriteriaFieldTmp.RESET();
+      IF (CriteriaFieldTmp.FINDSET()) THEN
+      BEGIN
+        REPEAT
+          pCriteriaField := CriteriaFieldTmp;
+          pCriteriaField.INSERT();
+        UNTIL (CriteriaFieldTmp.NEXT() = 0);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE GetFilteredRecords@1000000009(VAR pCriteriaId@1000000000 : Integer;VAR pRecordRef@1000000003 : RecordRef;VAR pPositionBuffer@1000000002 : Record 9062730;pSearchMode@1000000001 : 'First,Last,All,Random') : Boolean;
+    VAR
+      lEnhancedFieldsPresent@1000000007 : Boolean;
+      lRecordInFilter@1000000005 : Boolean;
+      lPositionID@1000000006 : Integer;
+      lCriteriaFound@1000000004 : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Returning filtered record positions in temporary table
+      //  <> pCriteriaId: Criteria ID
+      //  <> pRecordRef: RecordRef
+      //  <> pPositionBuffer: Target position buffer
+      //  -> pSearchMode: Search mode
+
+      lPositionID := 0;
+      lCriteriaFound := FALSE;
+      lEnhancedFieldsPresent := FALSE;
+
+      IF (pCriteriaId <> 0) THEN
+        lCriteriaFound := Criteria.GET(pCriteriaId);
+
+      IF (lCriteriaFound) THEN
+        IF (Criteria.View <> '') THEN
+          pRecordRef.SETVIEW(Criteria.View);
+
+      IF (pSearchMode = pSearchMode::Last) THEN
+        pRecordRef.ASCENDING := FALSE;
+
+      IF (lCriteriaFound) THEN BEGIN
+        CriteriaField.RESET();
+        CriteriaField.SETCURRENTKEY("Criteria ID");
+        CriteriaField.SETRANGE("Criteria ID", Criteria.ID);
+        CriteriaField.SETRANGE("Field Type", CriteriaField."Field Type"::"Enhanced Field");
+        lEnhancedFieldsPresent := ( NOT (CriteriaField.ISEMPTY));
+      END;
+
+      IF (pRecordRef.FINDSET()) THEN
+      REPEAT
+        lRecordInFilter := TRUE;
+        IF (lEnhancedFieldsPresent) THEN
+        BEGIN
+          IF (CriteriaField.FINDSET()) THEN
+          BEGIN
+            REPEAT
+              lRecordInFilter := EnhancedFieldValueInFilter(CriteriaField, pRecordRef.GETPOSITION(FALSE));
+            UNTIL ((CriteriaField.NEXT() = 0) OR ( NOT (lRecordInFilter)));
+          END;
+        END ELSE
+          lRecordInFilter := TRUE;
+
+        IF (lRecordInFilter) THEN
+        BEGIN
+          lPositionID += 1;
+          pPositionBuffer.ID := lPositionID;
+          pPositionBuffer.Value := pRecordRef.GETPOSITION(FALSE);
+          pPositionBuffer.INSERT();
+
+          IF (pSearchMode IN [pSearchMode::First, pSearchMode::Last]) THEN
+            EXIT(TRUE);
+
+        END;
+      UNTIL (pRecordRef.NEXT() = 0);
+
+      IF (lPositionID > 0) THEN BEGIN
+        IF (pSearchMode = pSearchMode::Random) THEN BEGIN
+          IF (lPositionID > 1) THEN BEGIN
+            RANDOMIZE();
+            lPositionID := RANDOM(lPositionID);
+
+            pPositionBuffer.RESET();
+            pPositionBuffer.FINDSET();
+            IF (lPositionID > 1) THEN
+              pPositionBuffer.NEXT(lPositionID - 1);
+          END;
+        END ELSE
+          pPositionBuffer.FINDFIRST();
+
+        pRecordRef.SETPOSITION(pPositionBuffer.Value);
+        pRecordRef.FIND('=');
+
+        EXIT(TRUE);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE RecordInFilter@1000000013(pCriteriaId@1000000001 : Integer;pTableId@1000000002 : Integer;pPosition@1000000003 : Text) : Boolean;
+    VAR
+      lRecordRef@1000000005 : RecordRef;
+      lResult@1000000004 : Boolean;
+    BEGIN
+      //DOC NA2016.12 - Answering whether the specified record is within the filer
+      //  -> pCriteriaId: Criteria ID
+      //  -> pTableID: Table ID (of the record)
+      //  -> pPosition: Position (of the record)
+      //  <- Result
+
+      lResult := FALSE;
+
+      IF ((pTableId = 0) OR (pPosition = '')) THEN
+        EXIT(lResult);
+
+      IF (TryToFindCriteria(pCriteriaId, Criteria)) THEN
+      BEGIN
+        lRecordRef.OPEN(pTableId);
+        lRecordRef.FILTERGROUP(2);
+        lRecordRef.SETPOSITION(pPosition);
+        lRecordRef.SETRECFILTER();
+        lRecordRef.FILTERGROUP(0);
+        IF (Criteria.View <> '') THEN
+          lRecordRef.SETVIEW(Criteria.View);
+        IF ( NOT (lRecordRef.ISEMPTY)) THEN
+        BEGIN
+          lResult := TRUE;
+          CriteriaField.RESET();
+          CriteriaField.SETCURRENTKEY("Criteria ID");
+          CriteriaField.SETRANGE("Criteria ID", Criteria.ID);
+          CriteriaField.SETRANGE("Field Type", CriteriaField."Field Type"::"Enhanced Field");
+          CriteriaField.SETFILTER(Value, '<>%1', '');
+          IF (CriteriaField.FINDSET()) THEN
+          REPEAT
+            lResult := EnhancedFieldValueInFilter(CriteriaField, lRecordRef.GETPOSITION(FALSE));
+          UNTIL ((CriteriaField.NEXT() = 0) OR ( NOT (lResult)));
+        END;
+        lRecordRef.CLOSE();
+      END
+      ELSE
+        lResult := TRUE;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE "--- Filters ---"@9062229();
+    BEGIN
+    END;
+
+    PROCEDURE FilterLookup@9062233(VAR pCriteriaField@1000000000 : Record 9062627) : Boolean;
+    VAR
+      lField@1000000001 : Record 2000000041;
+      lResult@1000000006 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Doing filter lookup if possible
+      //  <> pCriteriaField: The criteria field
+      //  <- Lookup result
+
+      IF ((pCriteriaField."Table ID" = 0) OR (pCriteriaField."Field ID" = 0)) THEN
+        EXIT;
+      IF ( NOT (lField.GET(pCriteriaField."Table ID", pCriteriaField."Field ID"))) THEN
+        EXIT;
+
+      lResult := FALSE;
+
+      CASE (lField.Type) OF
+        lField.Type::Option:
+          lResult := FilterLookupForOption(pCriteriaField);
+        lField.Type::Boolean:
+          lResult := FilterLookupForBoolean(pCriteriaField);
+        ELSE
+          lResult := FilterLookupForRelation(pCriteriaField);
+      END;
+
+      IF ( NOT (lResult)) THEN
+        lResult := FilterAssist(pCriteriaField);
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE FilterLookupForOption@9062232(VAR pCriteriaField@9062229 : Record 9062627) : Boolean;
+    VAR
+      lNameValueBufferTmp@1000000002 : TEMPORARY Record 9062730;
+      lNameValueBufferSelected@1000000006 : TEMPORARY Record 9062730;
+      lTableRef@1000000004 : RecordRef;
+      lFieldRef@1000000003 : FieldRef;
+      lResult@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Performing filter lookup for option field
+      //  <> pCriteriaField: Criteria field to perform lookup for
+      //  <- Lookup result
+
+      CASE (pCriteriaField."Field Type") OF
+        pCriteriaField."Field Type"::Field:
+          BEGIN
+            lTableRef.OPEN(pCriteriaField."Table ID");
+            lFieldRef := lTableRef.FIELD(pCriteriaField."Field ID");
+            String.SplitAdvanced(lFieldRef.OPTIONCAPTION, ',', TRUE, TRUE, lNameValueBufferTmp);
+            NameValueToolkit.SelectNameValueRecordsByName(lNameValueBufferTmp, pCriteriaField.Value, '|', FALSE, TRUE);
+            IF (NameValueToolkit.NameValueLookupWithSelection(lNameValueBufferTmp, FALSE)) THEN
+            BEGIN
+              lNameValueBufferSelected := lNameValueBufferTmp;
+              pCriteriaField.Value := '';
+              lNameValueBufferTmp.RESET();
+              lNameValueBufferTmp.SETRANGE(Selected, TRUE);
+              IF (lNameValueBufferTmp.FINDSET()) THEN
+                REPEAT
+                  IF (pCriteriaField.Value <> '') THEN
+                    pCriteriaField.Value := pCriteriaField.Value + '|';
+                  pCriteriaField.Value := pCriteriaField.Value + lNameValueBufferTmp.Name;
+                UNTIL (lNameValueBufferTmp.NEXT() = 0)
+              ELSE
+                pCriteriaField.Value := lNameValueBufferSelected.Name;
+              lResult := TRUE;
+            END;
+            lTableRef.CLOSE();
+          END;
+        pCriteriaField."Field Type"::"Enhanced Field":
+          BEGIN
+          END;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE FilterLookupForBoolean@9062231(VAR pCriteriaField@9062229 : Record 9062627) : Boolean;
+    VAR
+      lNameValueBufferTmp@1000000001 : TEMPORARY Record 9062730;
+      lResult@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Performing filter lookup for boolean field
+      //  <> pCriteriaField: Criteria field to perform lookup for
+      //  <- Lookup result
+
+      lResult := FALSE;
+
+      NameValueToolkit.AddToNameValueBuffer(lNameValueBufferTmp, 0, FORMAT(FALSE));
+      NameValueToolkit.AddToNameValueBuffer(lNameValueBufferTmp, 1, FORMAT(TRUE));
+      lNameValueBufferTmp.FINDFIRST();
+      IF (NameValueToolkit.NameValueLookup(lNameValueBufferTmp, FALSE)) THEN
+      BEGIN
+        pCriteriaField.Value := lNameValueBufferTmp.Name;
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE FilterLookupForRelation@9062234(VAR pCriteriaField@9062229 : Record 9062627) : Boolean;
+    VAR
+      lResult@9062230 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Performing filter lookup for relation
+      //  <> pCriteriaField: Criteria field to perform lookup for
+      //  <- Lookup result
+
+      lResult := FALSE;
+      EXIT(lResult);
+    END;
+
+    PROCEDURE FilterAssist@9062230(VAR pCriteriaField@1000000000 : Record 9062627) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Performing  filter assist
+      //  <> pCriteriaField: Criteria field to perform assist for
+      //  <- Assist result
+
+      EXIT(SmartFilterManagement.SmartFilterLookup(pCriteriaField.Value));
+    END;
+
+    PROCEDURE "--- Fields ---"@1000000007();
+    BEGIN
+    END;
+
+    PROCEDURE CreateCriteriaField@1000000020(pCriteriaId@1000000000 : Integer;pFieldId@1000000001 : Integer;pFieldValue@1000000002 : Text);
+    VAR
+      lTableFieldTmp@1000000003 : TEMPORARY Record 9062231;
+    BEGIN
+      //DOC NA2016.11 - Creating one criteria field
+      //  -> pCriteriaId: Criteria ID
+      //  -> pFieldId: Field ID
+      //  -> pFieldValue: Field value
+
+      CreateCriteriaFieldInternal(pCriteriaId, TableField."Field Type"::Field, pFieldId, pFieldValue);
+    END;
+
+    PROCEDURE CreateCriteriaEnhancedField@1000000026(pCriteriaId@1000000000 : Integer;pFieldType@1000000004 : Integer;pFieldId@1000000001 : Integer;pFieldValue@1000000002 : Text);
+    VAR
+      lTableFieldTmp@1000000003 : TEMPORARY Record 9062231;
+    BEGIN
+      //DOC NA2016.11 - Creating one criteria enhanced field
+      //  -> pCriteriaId: Criteria ID
+      //  -> pFieldId: Field ID
+      //  -> pFieldValue: Field value
+
+      CreateCriteriaFieldInternal(pCriteriaId, TableField."Field Type"::"Enhanced Field", pFieldId, pFieldValue);
+    END;
+
+    LOCAL PROCEDURE CreateCriteriaFieldInternal@1000000027(pCriteriaId@1000000000 : Integer;pFieldType@1000000004 : Integer;pFieldId@1000000001 : Integer;pFieldValue@1000000002 : Text);
+    VAR
+      lTableFieldTmp@1000000003 : TEMPORARY Record 9062231;
+    BEGIN
+      //DOC NA2016.11 - Creating one criteria field
+      //  -> pCriteriaId: Criteria ID
+      //  -> pFieldId: Field ID
+      //  -> pFieldValue: Field value
+
+      lTableFieldTmp."Field Type" := pFieldType;
+      lTableFieldTmp."Field ID" := pFieldId;
+      lTableFieldTmp."Field Value" := COPYSTR(pFieldValue, 1, MAXSTRLEN(lTableFieldTmp."Field Value"));
+      lTableFieldTmp.INSERT();
+
+      CreateCriteriaFields(pCriteriaId, lTableFieldTmp);
+    END;
+
+    PROCEDURE CreateCriteriaFields@1000000019(pCriteriaId@1000000000 : Integer;VAR pTableField@1000000002 : Record 9062231);
+    BEGIN
+      //DOC NA2016.11 - Creating criteria fields
+      //  -> pCriteriaId: The criteria ID
+      //  -> pTableField: Recordset with fields
+
+      Criteria.GET(pCriteriaId);
+      Criteria.TESTFIELD("Table ID");
+
+      IF (pTableField.FINDSET()) THEN
+      BEGIN
+        CriteriaField.RESET();
+        CriteriaField.SETCURRENTKEY("Criteria ID", "Table ID", "Field Type", "Field ID");
+        CriteriaField.SETRANGE("Criteria ID", Criteria.ID);
+        CriteriaField.SETRANGE("Table ID", Criteria."Table ID");
+        REPEAT
+          CriteriaField.SETRANGE("Field Type", pTableField."Field Type");
+          CriteriaField.SETRANGE("Field ID", pTableField."Field ID");
+          IF (CriteriaField.ISEMPTY) THEN
+          BEGIN
+            CLEAR(CriteriaField);
+            CriteriaField.INIT();
+            CriteriaField.VALIDATE("Criteria ID", Criteria.ID);
+            CriteriaField.VALIDATE("Table ID", Criteria."Table ID");
+            CriteriaField.VALIDATE("Field Type", pTableField."Field Type");
+            CriteriaField.VALIDATE("Field ID", pTableField."Field ID");
+            CriteriaField.VALIDATE(Sequence, CriteriaField.NewSequence());
+            CriteriaField.VALIDATE(Value, pTableField."Field Value");
+            CriteriaField.INSERT(TRUE);
+          END;
+        UNTIL (pTableField.NEXT() = 0);
+      END;
+    END;
+
+    PROCEDURE AddCriteriaFields@1000000008(pCriteriaId@1000000000 : Integer);
+    VAR
+      lTableFieldTmp@1000000001 : TEMPORARY Record 9062231;
+    BEGIN
+      //DOC NA2016.11 - Adding fields to criteria
+      //  -> pCriteriaId: The criteria ID
+
+      Criteria.GET(pCriteriaId);
+      Criteria.TESTFIELD("Table ID");
+
+      ObjectFieldToolkit.FieldLookupMultipleAdv(Criteria."Table ID", lTableFieldTmp);
+      CreateCriteriaFields(pCriteriaId, lTableFieldTmp);
+    END;
+
+    LOCAL PROCEDURE "--- Field Class Filtering ---"@1000000005();
+    BEGIN
+    END;
+
+    PROCEDURE GetFieldClass@1000000072() : Integer;
+    BEGIN
+      //DOC NA2016.12 - Returning current field class
+      //  <- The field class
+
+      EXIT(FieldClass);
+    END;
+
+    PROCEDURE SetFieldClass@1000000071(pFieldClass@1000000000 : Integer);
+    BEGIN
+      //DOC NA2016.12 - Setting field class
+      //  -> pFieldClass: The field class to set
+
+      FieldClass := pFieldClass;
+    END;
+
+    PROCEDURE "--- Tool Functions ---"@1000000028();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE EnhancedFieldValueInFilter@1000000029(pCriteriaField@1000000002 : Record 9062627;pPosition@1000000008 : Text) : Boolean;
+    VAR
+      lEnhancedFieldDefinition@1000000001 : Record 9062327;
+      lEnhancedFieldManagement@1000000000 : Codeunit 9062298;
+      lTextBuffer@1000000006 : TEMPORARY Record 9062730;
+      lIntegerBuffer@1000000009 : TEMPORARY Record 2000000026;
+      lDecimalBuffer@1000000003 : TEMPORARY Record 332;
+      lDateBuffer@1000000004 : TEMPORARY Record 2000000007;
+      lResult@1000000007 : Boolean;
+    BEGIN
+      //DOC NA2015.3 - Checking if enhanced field value is within the filter
+      //  -> pCriteriaField: The criteria field
+      //  -> pPosition: Position
+      //  <- Result
+
+      lResult := FALSE;
+
+      IF (pCriteriaField.Value <> '') THEN
+      BEGIN
+        lEnhancedFieldDefinition.GET(pCriteriaField."Table ID", pCriteriaField."Field ID");
+
+        CASE (lEnhancedFieldDefinition.Type) OF
+          lEnhancedFieldDefinition.Type::Text,
+          lEnhancedFieldDefinition.Type::Code:
+            BEGIN
+              lTextBuffer.Value := lEnhancedFieldManagement.GetFieldValue_Text(pCriteriaField."Table ID", pPosition, lEnhancedFieldDefinition.Name);
+              lTextBuffer.INSERT();
+              lTextBuffer.SETFILTER(Value, pCriteriaField.Value);
+              lResult := ( NOT (lTextBuffer.ISEMPTY));
+            END;
+          lEnhancedFieldDefinition.Type::Integer:
+            BEGIN
+              lIntegerBuffer.Number := lEnhancedFieldManagement.GetFieldValue_Integer(pCriteriaField."Table ID", pPosition, lEnhancedFieldDefinition.Name);
+              lIntegerBuffer.INSERT();
+              lIntegerBuffer.SETFILTER(Number, pCriteriaField.Value);
+              lResult := ( NOT (lIntegerBuffer.ISEMPTY));
+            END;
+          lEnhancedFieldDefinition.Type::Decimal:
+            BEGIN
+              lDecimalBuffer."Total Amount" := lEnhancedFieldManagement.GetFieldValue_Decimal(pCriteriaField."Table ID", pPosition, lEnhancedFieldDefinition.Name);
+              lDecimalBuffer.INSERT();
+              lDecimalBuffer.SETFILTER("Total Amount", pCriteriaField.Value);
+              lResult := ( NOT (lDecimalBuffer.ISEMPTY));
+            END;
+          lEnhancedFieldDefinition.Type::Date:
+            BEGIN
+              lDateBuffer."Period Start" := lEnhancedFieldManagement.GetFieldValue_Date(pCriteriaField."Table ID", pPosition, lEnhancedFieldDefinition.Name);
+              lDateBuffer.INSERT();
+              lDateBuffer.SETFILTER("Period Start", pCriteriaField.Value);
+              lResult := ( NOT (lDateBuffer.ISEMPTY));
+            END;
+        END;
+      END
+      ELSE
+        lResult := TRUE;
+
+      EXIT(lResult);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.3  JH 17/09/2014 - Created
+      //DOC NA2015.4  AZ 29/10/2014 - GetFilteredRecords2 functiona added
+      //DOC NA2015.4  PC 21/01/2015 - RecordInFilter_SpecificCriteria function added
+      //DOC NA2015.7  JH 15/05/2015 - Added functions to edit criteria; new "ApplyFilter"
+      //DOC NA2016.10 JH 28/08/2015 - Upgraded to 2016
+      //DOC NA2016.11 JH 13/11/2015 - New functions for manipulating fields
+      //DOC NA2016.12 AZ 07/12/2015 - Bugfixes
+      //DOC NA2016.12 AZ 08/12/2015 - Using Criteria IDs instead of Attached-to table no./position fields
+      //DOC NA2016.12 JH 22/01/2016 - Field class filtering added
+      //DOC NA2016.12 JH 28/01/2016 - Smart filters
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit
+    }
+    END.
+  }
+}
+

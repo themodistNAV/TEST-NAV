@@ -1,0 +1,456 @@
+OBJECT Codeunit 9021604 Split Multiple Int. Orders
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:16 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 9021609=m;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      IntOrderToCheck@1000000017 : Record 9021666;
+      InternetOrderHeadRec@1000000002 : Record 9021666;
+      NewIntHead@1000000013 : Record 9021666;
+      InternetOrderLine@1000000003 : Record 9021667;
+      NewIntLine@1000000014 : Record 9021667;
+      LinkedAtValWeb@1000000004 : Record 9021683;
+      LinkedAtValWeb1@1000000021 : Record 9021683;
+      InternetSetup@1000000005 : Record 9021609;
+      WebCommentLine@1000000023 : Record 9021665;
+      WebCommentLine1@1000000022 : Record 9021665;
+      IntOrdertoSalesYesNo@1000000006 : Codeunit 9021611;
+      FromManualProcess@1000000018 : Boolean;
+      OnlyNeedOneOrder@1000000011 : Boolean;
+      ThisIsTheFirstNewOrder@1000000026 : Boolean;
+      CombineBlankWith@1000000012 : ' ,Ambient,Chilled,Frozen';
+      NoOfLines@1000000000 : Integer;
+      NoFound@1000000015 : Integer;
+      NoOfSecs@1000000007 : Integer;
+      LinesAmount@1000000001 : Decimal;
+      LinesAmountIncTax@1000000016 : Decimal;
+      Text000@1000000019 : TextConst 'ENU=The Order will be split.  It will create %1 orders.  Are you sure you want to continue?;ENG=The Order will be split.  It will create %1 orders.  Are you sure you want to continue?';
+      Text001@1000000020 : TextConst 'ENU=Abandoned.;ENG=Abandoned.';
+      TimeStart@1000000008 : Time;
+      NewOrderGuidOfOriginal@1000000010 : Text[38];
+      OriginalOrderGuid@1000000025 : Text[38];
+      AmbientFound@1000000029 : Boolean;
+      ChilledFound@1000000028 : Boolean;
+      FrozenFound@1000000027 : Boolean;
+      TxtAmbientMarketPlace@1000000009 : TextConst 'ENU=AMBIENT;ENG=AMBIENT';
+      TxtChilledMarketPlace@1000000024 : TextConst 'ENU=CHILLED;ENG=CHILLED';
+      TxtFrozenMarketPlace@1000000030 : TextConst 'ENU=FROZEN;ENG=FROZEN';
+
+    PROCEDURE ProcessAllPossibleSplitOrders@1000000000();
+    BEGIN
+      //Function called from Internet Automation
+      LinkedAtValWeb.RESET;
+      LinkedAtValWeb.SETCURRENTKEY("Label Code","Table Name","Key Field String 1");
+      LinkedAtValWeb.SETRANGE("Table Name",'ShopSalesHeader');
+
+      InternetOrderHeadRec.RESET;
+      InternetOrderHeadRec.SETCURRENTKEY("Converted-To Document No.");
+      InternetOrderHeadRec.SETRANGE("Converted-To Document No.",'');
+      //Actually only want New documents but since New Document will have a blank "Converted to Doc No.
+      //this seems a good way of getting to the right records quickly without adding a key.
+      InternetOrderHeadRec.SETRANGE("Processing In Progress",FALSE);
+      InternetOrderHeadRec.SETRANGE(Status,InternetOrderHeadRec.Status::New);
+      InternetOrderHeadRec.SETFILTER("Label Code",'%1','COSTA');
+      IF InternetOrderHeadRec.FIND('-') THEN
+      REPEAT
+        IF InternetOrderHeadRec."No. Of Internet Order Lines" > 1 THEN BEGIN
+          InternetOrderLine.RESET;
+          InternetOrderLine.SETCURRENTKEY("Order Guid","Line No.");
+          InternetOrderLine.SETRANGE("Order Guid",InternetOrderHeadRec."Order Guid");
+          IF InternetOrderHeadRec."No. Of Internet Order Lines" = InternetOrderLine.COUNT THEN BEGIN
+            IF InternetOrderHeadRec."No. of Web Attributes" <> 0 THEN BEGIN
+              LinkedAtValWeb.SETRANGE("Label Code",InternetOrderHeadRec."Label Code");
+              LinkedAtValWeb.SETRANGE("Key Field String 1",InternetOrderHeadRec."Order Guid");
+              IF LinkedAtValWeb.COUNT = InternetOrderHeadRec."No. of Web Attributes" THEN
+                 CostaSplitOrderIfNecessary(InternetOrderHeadRec,FALSE);
+            END;
+          END;
+        END;
+      UNTIL InternetOrderHeadRec.NEXT = 0;
+    END;
+
+    PROCEDURE CostaSplitOrderIfNecessary@1000000001(CheckIntOrder@1000000000 : Record 9021666;ManualProcess@1000000001 : Boolean);
+    VAR
+      AmbientOrderGuid@1000000004 : Text[36];
+      ChilledOrderGuid@1000000003 : Text[36];
+      FrozenOrderGuid@1000000002 : Text[36];
+      BlankFound@1000000005 : Boolean;
+      LText000@1000000009 : TextConst 'ENU=The Internet Order Header says there should be %1 Linked Attribute Value Web entries but there are %2. (Split 0000);ENG=The Internet Order Header says there should be %1 Linked Attribute Value Web entries but there are %2. (Split 0000)';
+      TxtIllegalMarketPlaceCode@1000000006 : TextConst 'ENU=Illegal Market Place Code %1;ENG=Illegal Market Place Code %1';
+      TxtOnlyFound@1000000007 : TextConst 'ENU=Only found %1 and this should be at least 2.;ENG=Only found %1 and this should be at least 2.';
+    BEGIN
+      TimeStart := TIME;
+      FromManualProcess := ManualProcess;
+      IntOrderToCheck := CheckIntOrder;
+
+      IF FromManualProcess THEN BEGIN
+        IF IntOrderToCheck."No. of Web Attributes" <> 0 THEN BEGIN
+          LinkedAtValWeb.RESET;
+          LinkedAtValWeb.SETCURRENTKEY("Label Code","Table Name","Key Field String 1");
+          LinkedAtValWeb.SETRANGE("Label Code",IntOrderToCheck."Label Code");
+          LinkedAtValWeb.SETRANGE("Table Name",'ShopSalesHeader');
+          LinkedAtValWeb.SETRANGE("Key Field String 1",IntOrderToCheck."Order Guid");
+          NoFound := LinkedAtValWeb.COUNT;
+          IF NoFound <> IntOrderToCheck."No. of Web Attributes" THEN
+            ERROR(LText000,IntOrderToCheck."No. of Web Attributes",NoFound);
+        END;
+      END;
+
+      AmbientFound := FALSE;
+      ChilledFound := FALSE;
+      FrozenFound := FALSE;
+      BlankFound := FALSE;
+
+      IF IntOrderToCheck."No. Of Internet Order Lines" < 2 THEN BEGIN
+        //Only come here if from manual convert
+        //DOC EC2013.3.50 -
+        InternetOrderLine.RESET;
+        InternetOrderLine.SETCURRENTKEY("Order Guid","Line No.");
+        InternetOrderLine.SETRANGE("Order Guid",IntOrderToCheck."Order Guid");
+        IF InternetOrderLine.FIND('-') THEN
+        REPEAT
+          CASE InternetOrderLine."Market Place Code" OF
+            TxtAmbientMarketPlace : AmbientFound := TRUE;
+            TxtChilledMarketPlace : ChilledFound := TRUE;
+            TxtFrozenMarketPlace : FrozenFound := TRUE;
+          END;
+        UNTIL InternetOrderLine.NEXT = 0;
+        IF FrozenFound THEN BEGIN
+          IntOrderToCheck."Your Reference" := IntOrderToCheck."Your Reference" + 'F'
+        END ELSE BEGIN
+          IF ChilledFound THEN
+            IntOrderToCheck."Your Reference" := IntOrderToCheck."Your Reference" + 'C'
+          ELSE
+            IntOrderToCheck."Your Reference" := IntOrderToCheck."Your Reference" + 'A';
+        END;
+        IntOrderToCheck.MODIFY;
+        //DOC EC2013.3.50 +
+        IntOrdertoSalesYesNo.Code(IntOrderToCheck);
+        Finalise;
+      END ELSE BEGIN
+        AmbientOrderGuid := '';
+        ChilledOrderGuid := '';
+        FrozenOrderGuid := '';
+        InternetOrderLine.RESET;
+        InternetOrderLine.SETCURRENTKEY("Order Guid","Line No.");
+        InternetOrderLine.SETRANGE("Order Guid",IntOrderToCheck."Order Guid");
+        InternetOrderLine.FIND('-');
+        REPEAT
+          CASE InternetOrderLine."Market Place Code" OF
+            '' :  BlankFound := TRUE;
+            TxtAmbientMarketPlace : AmbientFound := TRUE;
+            TxtChilledMarketPlace : ChilledFound := TRUE;
+            TxtFrozenMarketPlace : FrozenFound := TRUE;
+            ELSE
+              ERROR(TxtIllegalMarketPlaceCode,InternetOrderLine."Market Place Code");
+          END;
+        UNTIL InternetOrderLine.NEXT = 0;
+
+        OnlyNeedOneOrder := FALSE;
+        CombineBlankWith := CombineBlankWith::" ";
+        NoFound := 0;
+        IF BlankFound THEN BEGIN
+          IF (AmbientFound = FALSE) AND (ChilledFound = FALSE) AND
+           (FrozenFound = FALSE) THEN BEGIN
+            OnlyNeedOneOrder := TRUE;
+          END ELSE BEGIN
+            IF AmbientFound THEN BEGIN
+              CombineBlankWith := CombineBlankWith::Ambient;
+              IF (ChilledFound = FALSE) AND (FrozenFound = FALSE) THEN
+                OnlyNeedOneOrder := TRUE;
+            END ELSE BEGIN
+              IF ChilledFound THEN BEGIN
+                CombineBlankWith := CombineBlankWith::Chilled;
+                IF FrozenFound = FALSE THEN
+                  OnlyNeedOneOrder := TRUE;
+              END ELSE BEGIN
+                CombineBlankWith := CombineBlankWith::Frozen;
+                OnlyNeedOneOrder := TRUE;
+              END;
+            END;
+          END;
+        END ELSE BEGIN
+          IF AmbientFound THEN BEGIN
+            IF (ChilledFound = FALSE) AND (FrozenFound = FALSE) THEN
+              OnlyNeedOneOrder := TRUE;
+          END ELSE BEGIN
+            IF ChilledFound THEN BEGIN
+              IF FrozenFound = FALSE THEN
+                OnlyNeedOneOrder := TRUE;
+            END ELSE
+              OnlyNeedOneOrder := TRUE;
+          END;
+        END;
+        IF OnlyNeedOneOrder THEN BEGIN
+          //DOC EC2013.3.50 -
+          IF FrozenFound THEN BEGIN
+            IntOrderToCheck."Your Reference" := IntOrderToCheck."Your Reference" + 'F'
+          END ELSE BEGIN
+            IF ChilledFound THEN
+              IntOrderToCheck."Your Reference" := IntOrderToCheck."Your Reference" + 'C'
+            ELSE
+              IntOrderToCheck."Your Reference" := IntOrderToCheck."Your Reference" + 'A';
+          END;
+          IntOrderToCheck.MODIFY;
+          //DOC EC2013.3.50 +
+
+          IF FromManualProcess THEN BEGIN
+            IntOrdertoSalesYesNo.Code(IntOrderToCheck);
+            Finalise;
+          END;
+        END ELSE BEGIN
+          IF FromManualProcess THEN BEGIN
+            IF AmbientFound THEN
+              NoFound := NoFound + 1;
+            IF ChilledFound THEN
+              NoFound := NoFound + 1;
+            IF FrozenFound THEN
+              NoFound := NoFound + 1;
+            IF NoFound < 2 THEN
+              ERROR(TxtOnlyFound,NoFound);
+            IF NOT CONFIRM(Text000,TRUE,NoFound) THEN
+              ERROR(Text001);
+          END;
+          //Now creating new Internet Headers and Lines
+
+          //Start of giving original order a new GUID
+          OriginalOrderGuid := IntOrderToCheck."Order Guid";
+          NewOrderGuidOfOriginal := CREATEGUID;
+          NewOrderGuidOfOriginal := COPYSTR(NewOrderGuidOfOriginal,2,36);
+          NewIntHead := IntOrderToCheck;
+          NewIntHead."Order Guid" := NewOrderGuidOfOriginal;
+          NewIntHead.INSERT;
+          IntOrderToCheck.DELETE;
+          IntOrderToCheck := NewIntHead;
+          InternetOrderLine.RESET;
+          InternetOrderLine.SETCURRENTKEY("Order Guid","Line No.");
+          InternetOrderLine.SETRANGE("Order Guid",OriginalOrderGuid);
+          InternetOrderLine.FIND('-');
+          REPEAT
+            NewIntLine := InternetOrderLine;
+            NewIntLine."Order Guid" := NewOrderGuidOfOriginal;
+            NewIntLine.MODIFY;
+          UNTIL InternetOrderLine.NEXT = 0;
+          InternetOrderLine.SETRANGE("Order Guid",NewOrderGuidOfOriginal);
+
+          LinkedAtValWeb.RESET;
+          LinkedAtValWeb.SETCURRENTKEY("Label Code","Table Name","Key Field String 1");
+          LinkedAtValWeb.SETRANGE("Label Code",IntOrderToCheck."Label Code");
+          LinkedAtValWeb.SETRANGE("Table Name",'ShopSalesHeader');
+          LinkedAtValWeb.SETRANGE("Key Field String 1",OriginalOrderGuid);
+          IF LinkedAtValWeb.FIND('-') THEN
+          REPEAT
+            LinkedAtValWeb1 := LinkedAtValWeb;
+            LinkedAtValWeb1."Key Field String 1" := NewOrderGuidOfOriginal;
+            LinkedAtValWeb1.MODIFY;
+          UNTIL LinkedAtValWeb.NEXT = 0;
+
+          WebCommentLine.RESET;
+          WebCommentLine.SETCURRENTKEY("Header Guid");
+          WebCommentLine.SETRANGE("Header Guid",OriginalOrderGuid);
+          IF WebCommentLine.FIND('-') THEN
+          REPEAT
+            WebCommentLine1 := WebCommentLine;
+            WebCommentLine1."Header Guid" := NewOrderGuidOfOriginal;
+            WebCommentLine1.MODIFY;
+          UNTIL WebCommentLine.NEXT = 0;
+          //End of giving original order a new GUID
+
+          ThisIsTheFirstNewOrder := TRUE;
+          IF AmbientFound THEN BEGIN
+            CreateNewHeader;
+            InternetOrderLine.SETFILTER("Market Place Code",'%1|%2','',TxtAmbientMarketPlace);
+            CreateNewLines;
+            NewIntHead."Your Reference" := NewIntHead."Your Reference" + 'A';
+            ModifyHeader;
+            AmbientOrderGuid := NewIntHead."Order Guid";
+            ThisIsTheFirstNewOrder := FALSE;
+          END;
+          IF ChilledFound THEN BEGIN
+            CreateNewHeader;
+            IF CombineBlankWith = CombineBlankWith::Chilled THEN
+              InternetOrderLine.SETFILTER("Market Place Code",'%1|%2','',TxtChilledMarketPlace)
+            ELSE
+              InternetOrderLine.SETFILTER("Market Place Code",'%1',TxtChilledMarketPlace);
+            CreateNewLines;
+            NewIntHead."Your Reference" := NewIntHead."Your Reference" + 'C';
+            ModifyHeader;
+            ChilledOrderGuid := NewIntHead."Order Guid";
+            ThisIsTheFirstNewOrder := FALSE;
+          END;
+          IF FrozenFound THEN BEGIN
+            CreateNewHeader;
+            IF CombineBlankWith = CombineBlankWith::Frozen THEN
+              InternetOrderLine.SETFILTER("Market Place Code",'%1|%2','',TxtFrozenMarketPlace)
+            ELSE
+              InternetOrderLine.SETFILTER("Market Place Code",'%1',TxtFrozenMarketPlace);
+            CreateNewLines;
+            NewIntHead."Your Reference" := NewIntHead."Your Reference" + 'F';
+            ModifyHeader;
+            FrozenOrderGuid := NewIntHead."Order Guid";
+            ThisIsTheFirstNewOrder := FALSE;
+          END;
+          IntOrderToCheck.Status := IntOrderToCheck.Status::Multiple;
+          IntOrderToCheck."Converted-To Document Type" :=
+                   IntOrderToCheck."Converted-To Document Type"::Multiple;
+          IntOrderToCheck."Converted-To Document No." :=
+                   IntOrderToCheck."Internet Order Reference";
+          IntOrderToCheck.MODIFY;
+          InternetOrderLine.SETRANGE("Market Place Code");
+          InternetOrderLine.MODIFYALL(Status,
+                            InternetOrderLine.Status::Multiple);
+          COMMIT; //Commit cos now processing new individual orders.
+          //If there is a failure in processing from now on, the individual orders
+          //would need processing individually.
+          IF FromManualProcess THEN BEGIN
+            IF AmbientOrderGuid <> '' THEN BEGIN
+              NewIntHead.GET(AmbientOrderGuid);
+              IntOrdertoSalesYesNo.Code(NewIntHead);
+            END;
+            IF ChilledOrderGuid <> '' THEN BEGIN
+              NewIntHead.GET(ChilledOrderGuid);
+              IntOrdertoSalesYesNo.Code(NewIntHead);
+            END;
+            IF FrozenOrderGuid <> '' THEN BEGIN
+              NewIntHead.GET(FrozenOrderGuid);
+              IntOrdertoSalesYesNo.Code(NewIntHead);
+            END;
+            Finalise;
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE CreateNewHeader@1000000003();
+    BEGIN
+      NoOfLines := 0;
+      LinesAmount := 0;
+      LinesAmountIncTax := 0;
+
+      NewIntHead.INIT;
+      NewIntHead.TRANSFERFIELDS(IntOrderToCheck);
+
+      IF ThisIsTheFirstNewOrder THEN BEGIN
+        NewIntHead."Order Guid" := OriginalOrderGuid;
+      END ELSE BEGIN
+        NewIntHead."Order Guid" := CREATEGUID;
+        NewIntHead."Order Guid" := COPYSTR(NewIntHead."Order Guid",2,36);
+      END;
+      NewIntHead.INSERT;
+    END;
+
+    PROCEDURE CreateNewLines@1000000004();
+    VAR
+      TxtNotFound@1000000000 : TextConst 'ENU=Internet Order Line not found;ENG=Internet Order Line not found';
+    BEGIN
+      IF InternetOrderLine.FIND('-') THEN
+        REPEAT
+          NewIntLine.INIT;
+          NewIntLine.TRANSFERFIELDS(InternetOrderLine);
+          NewIntLine."Order Line Guid" := CREATEGUID;
+          NewIntLine."Order Guid" := COPYSTR(NewIntLine."Order Line Guid",2,36);
+          NewIntLine."Order Guid" := NewIntHead."Order Guid";
+          NewIntLine.INSERT;
+          NoOfLines := NoOfLines + 1;
+          LinesAmount := LinesAmount + InternetOrderLine.Amount;
+          LinesAmountIncTax := LinesAmountIncTax + InternetOrderLine."Amount Including Tax";
+        UNTIL InternetOrderLine.NEXT = 0
+      ELSE
+        ERROR(TxtNotFound);
+    END;
+
+    PROCEDURE ModifyHeader@1000000006();
+    BEGIN
+      NewIntHead.Amount := LinesAmount;
+      NewIntHead."Amount Including Tax" := LinesAmountIncTax;
+      NewIntHead."No. Of Internet Order Lines" := NoOfLines;
+      IF ThisIsTheFirstNewOrder THEN BEGIN
+        NewIntHead.Amount := NewIntHead.Amount +
+          NewIntHead."Shipping Amount" +
+          NewIntHead."Handling Amount" +
+          NewIntHead."Payment Fee Amount" -
+          NewIntHead."Invoice Discount" -
+          NewIntHead."Total Discount Amt";
+        NewIntHead."Amount Including Tax" := NewIntHead."Amount Including Tax" +
+          NewIntHead."Handling Amount Including Tax" +
+          NewIntHead."Payment Fee Amount Incl. Tax" +
+          NewIntHead."Shipping Amount Incl. Tax" -
+          NewIntHead."Invoice Discount Incl. VAT" -
+          NewIntHead."Total Discount Amt Incl Tax";
+      END ELSE BEGIN
+        NewIntHead."Service Charge" := 0;
+        NewIntHead."Shipping Amount" := 0;
+        NewIntHead."Handling Amount" := 0;
+        NewIntHead."Payment Fee Amount" := 0;
+        NewIntHead."Invoice Discount" := 0;
+        NewIntHead."Handling Amount Including Tax" := 0;
+        NewIntHead."Payment Fee Amount Incl. Tax" := 0;
+        NewIntHead."Shipping Amount Incl. Tax" := 0;
+        NewIntHead."Invoice Discount Incl. VAT" := 0;
+        NewIntHead."Total Discount Amt" := 0;
+        NewIntHead."Total Discount Amt Incl Tax" := 0;
+      END;
+      NewIntHead.MODIFY;
+
+      LinkedAtValWeb.SETCURRENTKEY("Label Code","Table Name","Key Field String 1");
+      LinkedAtValWeb.SETRANGE("Label Code",IntOrderToCheck."Label Code");
+      LinkedAtValWeb.SETRANGE("Table Name",'ShopSalesHeader');
+      LinkedAtValWeb.SETRANGE("Key Field String 1",NewOrderGuidOfOriginal);
+      IF LinkedAtValWeb.FIND('-') THEN
+      REPEAT
+        LinkedAtValWeb1 := LinkedAtValWeb;
+        LinkedAtValWeb1.GUID := CREATEGUID;
+        LinkedAtValWeb1.GUID := COPYSTR(LinkedAtValWeb1.GUID,2,36);
+        LinkedAtValWeb1."Key Field String 1" := NewIntHead."Order Guid";
+        LinkedAtValWeb1.INSERT;
+      UNTIL LinkedAtValWeb.NEXT = 0;
+
+      WebCommentLine.SETCURRENTKEY("Header Guid");
+      WebCommentLine.SETRANGE("Header Guid",NewOrderGuidOfOriginal);
+      IF WebCommentLine.FIND('-') THEN
+      REPEAT
+        WebCommentLine1 := WebCommentLine;
+        WebCommentLine1."Comment Line Guid" := CREATEGUID;
+        WebCommentLine1."Comment Line Guid" := COPYSTR(WebCommentLine1."Comment Line Guid",2,36);
+        WebCommentLine1."Header Guid" := NewIntHead."Order Guid";
+        WebCommentLine1.INSERT;
+      UNTIL WebCommentLine.NEXT = 0;
+    END;
+
+    PROCEDURE Finalise@1000000002();
+    BEGIN
+      SELECTLATESTVERSION;
+      InternetSetup.GET;
+      NoOfSecs := ROUND((TIME-TimeStart)/100,1); //In 10ths of a sec
+      IF NoOfSecs > InternetSetup."Max Manual Process Time -10ths" THEN BEGIN
+        InternetSetup."Max Manual Process Time -10ths" := NoOfSecs;
+        InternetSetup.MODIFY;
+      END;
+      IF InternetSetup."Processing Mode" = InternetSetup."Processing Mode"::Manual THEN BEGIN
+        InternetSetup."Processing Mode" := InternetSetup."Processing Mode"::" ";
+        InternetSetup.MODIFY;
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC EC2013.3.40 MQ 20/02/2013 - GW130220 Creates multiple Internet Order Headers; Add Permission to Modify Internet Setup
+      //DOC EC2013.3.50 MQ 28/03/2013 - GW130328 Modified to add indicator to non split orders
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

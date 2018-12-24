@@ -1,0 +1,155 @@
+OBJECT Codeunit 9062582 Excel Converter
+{
+  OBJECT-PROPERTIES
+  {
+    Date=24/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.16;
+  }
+  PROPERTIES
+  {
+    TableNo=9062726;
+    OnRun=BEGIN
+            ConvertFromTo(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      FileSystem@1000000000 : Codeunit 9062264;
+      ExcelToolkit@1000000008 : DotNet "'TheNavPeople.OfficeToolkit.9.0.2.1, Version=9.0.2.1, Culture=neutral, PublicKeyToken=18c7c262b2c6458a'.TheNavPeople.OfficeToolkit.ExcelToolkit";
+      ExcelFileFormat@1000000001 : DotNet "'TheNavPeople.OfficeToolkit.9.0.2.1, Version=9.0.2.1, Culture=neutral, PublicKeyToken=18c7c262b2c6458a'.TheNavPeople.OfficeToolkit.ExcelFileFormat";
+      ExcelSaveAsAccessMode@1000000002 : DotNet "'TheNavPeople.OfficeToolkit.9.0.2.1, Version=9.0.2.1, Culture=neutral, PublicKeyToken=18c7c262b2c6458a'.TheNavPeople.OfficeToolkit.ExcelSaveAsAccessMode";
+      ExcelWorkbook@1000000003 : DotNet "'Microsoft.Office.Interop.Excel, Version=15.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c'.Microsoft.Office.Interop.Excel.Workbook";
+      LastErrorMessage@1000000004 : Text[1024];
+
+    PROCEDURE IsExcelToBeConverted@1000000001(pPath@1000000000 : Text[1024]) : Boolean;
+    VAR
+      lExtension@1000000001 : Text[1024];
+    BEGIN
+      //DOC NA2015.DEV - Returning if the path contains Excel to be converted
+      //  -> pPath: The path
+      //  <- Response
+
+      lExtension := FileSystem.GetExtension(FileSystem.Client, pPath);
+      lExtension := LOWERCASE(DELCHR(lExtension, '<>', ' '));
+
+      EXIT(lExtension = '.xls');
+    END;
+
+    PROCEDURE Convert@1000000000(VAR pPath@1000000000 : Text[1024];pSafe@1000000003 : Boolean) : Boolean;
+    VAR
+      lFileName@1000000001 : Text[1024];
+    BEGIN
+      //DOC NA2015.DEV - Converts Excel
+      //  <> pPath: Path (can be changed)
+      //  -> pSafe: TRUE = Run with error handling, FALSE = Be brave and just go for it
+      //  <- TRUE = Converted, FALSE = Nope
+
+      EXIT(ConvertAdv(pPath, lFileName, pSafe));
+    END;
+
+    PROCEDURE ConvertAdv@1000000009(VAR pPath@1000000002 : Text[1024];VAR pFileName@1000000000 : Text[1024];pSafe@1000000003 : Boolean) : Boolean;
+    VAR
+      lFileBuffer@1000000004 : Record 9062726;
+      lResult@1000000005 : Boolean;
+    BEGIN
+      //DOC NA2015.DEV - Converts Excel (advanced version with file name)
+      //  <> pPath: Path (can be changed)
+      //  -> pFileName: File name (can be changed)
+      //  -> pSafe: TRUE = Run with error handling, FALSE = Be brave and just go for it
+      //  <- TRUE = Converted, FALSE = Nope
+
+      LastErrorMessage := '';
+      lResult := FALSE;
+
+      IF ( NOT (IsExcelToBeConverted(pPath))) THEN
+        EXIT(lResult);
+
+      lFileBuffer."Source Path" := pPath;
+      lFileBuffer."Source File Name" := pFileName;
+
+      IF (pSafe) THEN
+      BEGIN
+        lResult := CODEUNIT.RUN(CODEUNIT::"Excel Converter", lFileBuffer);
+        IF ( NOT (lResult)) THEN
+          LastErrorMessage := GETLASTERRORTEXT();
+      END
+      ELSE
+      BEGIN
+        ConvertFromTo(lFileBuffer);
+        lResult := TRUE;
+      END;
+
+      IF (lResult) THEN
+      BEGIN
+        pPath := lFileBuffer."Destination Path";
+        pFileName := lFileBuffer."Destination File Name";
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE ConvertFromTo@1000000011(VAR pFileBuffer@1000000001 : Record 9062726);
+    VAR
+      lExcelFileFormat@1000000004 : DotNet "'TheNavPeople.OfficeToolkit.9.0.2.1, Version=9.0.2.1, Culture=neutral, PublicKeyToken=18c7c262b2c6458a'.TheNavPeople.OfficeToolkit.ExcelFileFormat";
+      lWorkbookContainsMacros@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2015.DEV - Converting Excel from path to path
+      //  -> pFileBuffer: File buffer information
+
+      IF ( NOT (ISNULL(ExcelToolkit))) THEN
+        CLEAR(ExcelToolkit);
+      ExcelToolkit := ExcelToolkit.ExcelToolkit();
+
+      ExcelWorkbook := ExcelToolkit.OpenWorkbook(pFileBuffer."Source Path");
+
+      //Macro detection is disabled because - for unknown reason - it doesn't work.
+      //lWorkbookContainsMacros := mExcelToolkit.WorkbookContainsMacros(mExcelWorkbook);
+      lWorkbookContainsMacros := FALSE;
+      IF (lWorkbookContainsMacros) THEN
+      BEGIN
+        lExcelFileFormat := ExcelFileFormat.OpenXMLWorkbookMacroEnabled;
+        pFileBuffer."Destination Extension" := '.xlsm'
+      END
+      ELSE
+      BEGIN
+        lExcelFileFormat := ExcelFileFormat.OpenXMLWorkbook;
+        pFileBuffer."Destination Extension" := '.xlsx';
+      END;
+
+      pFileBuffer."Destination File Name" :=
+        FileSystem.GetFileNameWithoutExtension(FileSystem.Client, pFileBuffer."Source Path") +
+        pFileBuffer."Destination Extension";
+      pFileBuffer."Destination Path" := FileSystem.Combine(FileSystem.Client,
+        FileSystem.GetFolderName(FileSystem.Client, pFileBuffer."Source Path"),
+        pFileBuffer."Destination File Name");
+
+      ExcelToolkit.SaveWorkbookAs(ExcelWorkbook, pFileBuffer."Destination Path", lExcelFileFormat, ExcelSaveAsAccessMode.Exclusive);
+      ExcelToolkit.CloseWorkbook(ExcelWorkbook);
+
+      ExcelToolkit.Dispose();
+      CLEAR(ExcelToolkit);
+
+      FileSystem.DeleteFileIfExists(FileSystem.Client, pFileBuffer."Source Path");
+    END;
+
+    PROCEDURE GetLastErrorMessage@1000000016() : Text[1024];
+    BEGIN
+      //DOC NA2015.DEV - Returning last error message
+      //  <- The message
+
+      EXIT(LastErrorMessage);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.9  JH 18/08/2015 - Created
+      //DOC NA2016.10 JH 28/08/2015 - Upgraded to 2016
+      //DOC NA2016.16 JH 18/05/2016 - CfMD amendments (new .NET library)
+    }
+    END.
+  }
+}
+

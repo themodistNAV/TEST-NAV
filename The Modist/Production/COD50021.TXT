@@ -1,0 +1,649 @@
+OBJECT Codeunit 50021 BRONTO Integration Managment
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/03/18;
+    Time=[ 5:18:06 PM];
+    Modified=Yes;
+    Version List=OP9031;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            IF CONFIRM('Get REST Auth Token?') THEN
+              GetRESTAuthToken(REST_AccessToken,REST_RefreshToken);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      REST_AccessToken@1000000000 : Text;
+      REST_RefreshToken@1000000001 : Text;
+      SOAP_SessionID@1000000002 : Text;
+      SOAP_ContactID@1000000003 : Text;
+      ModistSetup@1000000004 : Record 50000;
+      IntegProcGroup@1000000005 : Record 50007;
+
+    [TryFunction]
+    PROCEDURE GetRESTAuthToken@1000000001(VAR pAccessToken@1000000000 : Text;VAR pRefreshToken@1000000001 : Text);
+    VAR
+      clientID@1000000002 : Text;
+      clientSecret@1000000003 : Text;
+      serviceURL@1000000004 : Text;
+      xmlnodelist@1000000006 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      xmlnode@1000000007 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      i@1000000008 : Integer;
+      results@1000000009 : Text;
+      j@1000000010 : Integer;
+      HttpUtility@1000000011 : DotNet "'System.Web, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Web.HttpUtility";
+      xmlhttp@1000000012 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.XMLHTTPRequest";
+      xmlhttpclass@1000000013 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.XMLHTTPRequestClass";
+      String@1000000015 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      DataExchFieldTemp@1000000016 : TEMPORARY Record 1221;
+      DynamicsJSONMgt@1000000017 : Codeunit 9062670;
+      ErrorMessage@1000000018 : Text;
+      isError@1000000005 : Text[10];
+      errorCode@1000000014 : Integer;
+    BEGIN
+      //This function returns a REST authentication token as well as a refresh token to be used once the access token expires.
+      //Access token expires after 1 hour. Refresh token expires after 30 days.
+      ModistSetup.GET;
+      IntegProcGroup.GET(ModistSetup."BRONTO Integration Type",ModistSetup."BRONTO REST Auth Group");
+
+      clientID := IntegProcGroup."Auth Code";
+      clientSecret := IntegProcGroup."Auth Question";
+      serviceURL := IntegProcGroup.ServiceURL;
+
+      //clientID := 'e4a9a45515bdbb95d003b9b31687b80bad5324f4';
+      //clientSecret := '11d9863be83c1da64c92307e9324baa50ccfd21d';
+      //serviceURL := 'https://auth.bronto.com/oauth2/token';//+ 'grant_type=client_credentials&access_token=' + clientID + '&client_secret=' + clientSecret;
+
+      // Create XMLHTTP and SEND
+      xmlhttp := xmlhttpclass.XMLHTTPRequestClass;
+      xmlhttp.open('POST', serviceURL, FALSE,'','');
+      xmlhttp.setRequestHeader('Content-type','application/x-www-form-urlencoded');
+      xmlhttp.send('grant_type=client_credentials' + '&' +
+                   'client_id=' + clientID + '&' +
+                   'client_secret=' + clientSecret);
+
+      String := xmlhttp.responseText;;
+
+      DynamicsJSONMgt.ReadJSon(String,DataExchFieldTemp);
+      DataExchFieldTemp.RESET;
+      IF DataExchFieldTemp.FINDSET THEN BEGIN
+        REPEAT
+          CASE DataExchFieldTemp."Node ID" OF
+            'access_token' : pAccessToken := DataExchFieldTemp.Value;
+            'refresh_token': pRefreshToken := DataExchFieldTemp.Value;
+            'error_description' : ErrorMessage := DataExchFieldTemp.Value;
+          END;
+        UNTIL DataExchFieldTemp.NEXT = 0;
+      END;
+
+      IF ErrorMessage <> '' THEN
+        ERROR(ErrorMessage);
+
+      //MESSAGE('access_token = %1\refresh_token = %2',pAccessToken,pRefreshToken);
+    END;
+
+    [TryFunction]
+    PROCEDURE SOAPLogin@1000000006(VAR pSessionId@1000000000 : Text);
+    VAR
+      sb@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      HttpRequest@1000000002 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      ServicePointManager@1000000003 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.ServicePointManager";
+      SecurityProtocolType@1000000004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.SecurityProtocolType";
+      Convert@1000000005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.ASCIIEncoding";
+      XMLDoc@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      ByteArray@1000000007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      MemoryStream@1000000008 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.MemoryStream";
+      HttpResponse@1000000009 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+      nsmanager@1000000010 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+      XmlItem@1000000011 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      APIToken@1000000012 : Text;
+      MethodURL@1000000013 : Text;
+      streamReader@1000000014 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader";
+      Encoding@1000000015 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      NodeVal@1000000016 : Text;
+      xmlResult@1000000017 : Text;
+    BEGIN
+      ModistSetup.GET;
+      IntegProcGroup.GET(ModistSetup."BRONTO Integration Type",ModistSetup."BRONTO Messaging SOAP Group");
+
+      APIToken  := IntegProcGroup."Auth Code";
+      MethodURL := IntegProcGroup.ServiceURL;
+
+      //APIToken  := 'C8CA38A6-7D95-4416-9A8E-D36354C45C98';
+      //MethodURL := 'https://api.bronto.com/v4';
+
+      CLEAR(XMLDoc);
+      XMLDoc := XMLDoc.XmlDocument;
+
+      sb := sb.StringBuilder();
+
+      sb.Append('<?xml version="1.0" encoding="utf-8"?>');
+      sb.Append('<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:v4="http://api.bronto.com/v4">');
+      sb.Append('  <soapenv:Header/>');
+      sb.Append('    <soapenv:Body>');
+      sb.Append('      <v4:login>');
+      sb.Append('        <apiToken>' + APIToken + '</apiToken>');
+      sb.Append('      </v4:login>');
+      sb.Append('    </soapenv:Body>');
+      sb.Append('</soapenv:Envelope>');
+
+      //WriteTextToRTCFile(sb.ToString,'LoginEnvelope.txt');
+
+      HttpRequest := HttpRequest.Create(MethodURL);
+
+      ServicePointManager := ServicePointManager;
+      SecurityProtocolType:=SecurityProtocolType;
+      ServicePointManager.SecurityProtocol := SecurityProtocolType.Tls12;
+
+      HttpRequest.Method := 'POST';
+      HttpRequest.ContentType := 'text/xml; charset=utf-8';
+
+      Convert := Convert.ASCIIEncoding;
+      ByteArray := Convert.GetBytes(sb.ToString);
+      HttpRequest.ContentLength := ByteArray.Length;
+      MemoryStream := HttpRequest.GetRequestStream;
+      MemoryStream.Write(ByteArray,0,ByteArray.Length);
+      MemoryStream.Close;
+
+      HttpResponse := HttpRequest.GetResponse();
+      MemoryStream := HttpResponse.GetResponseStream;
+      streamReader := streamReader.StreamReader(MemoryStream,Encoding.UTF8);
+
+      xmlResult := streamReader.ReadToEnd();
+      XMLDoc.LoadXml(xmlResult);
+
+      MemoryStream.Close;
+
+      //WriteTextToRTCFile(xmlResult,'LoginResponse.txt');
+
+      nsmanager := nsmanager.XmlNamespaceManager(XMLDoc.NameTable);
+      nsmanager.AddNamespace('soap','http://schemas.xmlsoap.org/soap/envelope/');
+      nsmanager.AddNamespace('ns2','http://api.bronto.com/v4');
+
+      XmlItem := XMLDoc.SelectSingleNode('//ns2:loginResponse/return',nsmanager);
+      NodeVal := XmlItem.InnerText();
+
+      pSessionId := NodeVal;
+    END;
+
+    LOCAL PROCEDURE WriteTextToRTCFile@1000000002(FileContent@1000000000 : Text;FilePath@1000000001 : Text);
+    VAR
+      Name@1000000002 : Text;
+      ReturnValue@1000000003 : Boolean;
+      TempFile@1000000004 : File;
+      ToFile@1000000005 : Variant;
+      NewStream@1000000006 : InStream;
+    BEGIN
+      //utility function to write text to a file on the client PC
+      //this function pops up file dialog so the user can select a location to save the file
+      TempFile.TEXTMODE := TRUE;
+      TempFile.CREATETEMPFILE();
+      TempFile.WRITE(FileContent);
+      TempFile.CREATEINSTREAM(NewStream);
+      ToFile:=FilePath;
+
+      ReturnValue:=DOWNLOADFROMSTREAM(
+        NewStream,
+        'Save File to RoleTailored Client',
+        '',
+        'Text File *.txt| *.txt',
+        ToFile);
+      // Close the temporary file and delete it from NAV server.
+      TempFile.CLOSE();
+    END;
+
+    [TryFunction]
+    PROCEDURE SOAPLogout@1000000007(VAR pSessionId@1000000000 : Text);
+    VAR
+      sb@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      HttpRequest@1000000002 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      ServicePointManager@1000000003 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.ServicePointManager";
+      SecurityProtocolType@1000000004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.SecurityProtocolType";
+      Convert@1000000005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.ASCIIEncoding";
+      XMLDoc@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      ByteArray@1000000007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      MemoryStream@1000000008 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.MemoryStream";
+      HttpResponse@1000000009 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+      nsmanager@1000000010 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+      XmlItem@1000000011 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      APIToken@1000000012 : Text;
+      MethodURL@1000000013 : Text;
+      streamReader@1000000014 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader";
+      Encoding@1000000015 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      NodeVal@1000000016 : Text;
+      xmlResult@1000000017 : Text;
+      XmlItems@1000000018 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      i@1000000019 : Integer;
+      logoutSessionId@1000000020 : Text;
+      isError@1000000021 : Boolean;
+      errorCode@1000000022 : Text[10];
+      ERRTEXT@1000000023 : TextConst 'ENU=''The SOAP function logout failed with the following Error Code %1'';ENG=''The SOAP function logout failed with the following Error Code %1''';
+    BEGIN
+      //The logout function is used to immediately end an authenticated SOAP API session created by the SOAPLogin function
+
+      ModistSetup.GET;
+      IntegProcGroup.GET(ModistSetup."BRONTO Integration Type",ModistSetup."BRONTO Messaging SOAP Group");
+
+      APIToken  := IntegProcGroup."Auth Code";
+      MethodURL := IntegProcGroup.ServiceURL;
+
+      //APIToken  := 'C8CA38A6-7D95-4416-9A8E-D36354C45C98';
+      //MethodURL := 'https://api.bronto.com/v4';
+
+      CLEAR(XMLDoc);
+      XMLDoc := XMLDoc.XmlDocument;
+
+      sb := sb.StringBuilder();
+
+      sb.Append('<?xml version="1.0" encoding="utf-8"?>');
+      sb.Append('<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:v4="http://api.bronto.com/v4">');
+      sb.Append('   <soapenv:Header>');
+      sb.Append('      <v4:sessionHeader>');
+      sb.Append('         <sessionId>' + pSessionId + '</sessionId>');
+      sb.Append('         <disableHistory>?</disableHistory>');
+      sb.Append('      </v4:sessionHeader>');
+      sb.Append('   </soapenv:Header>');
+      sb.Append('   <soapenv:Body>');
+      sb.Append('      <v4:logout/>');
+      sb.Append('   </soapenv:Body>');
+      sb.Append('</soapenv:Envelope>');
+
+      //WriteTextToRTCFile(sb.ToString,'LoginEnvelope.txt');
+
+      HttpRequest := HttpRequest.Create(MethodURL);
+
+      ServicePointManager := ServicePointManager;
+      SecurityProtocolType:=SecurityProtocolType;
+      ServicePointManager.SecurityProtocol := SecurityProtocolType.Tls12;
+
+      HttpRequest.Method := 'POST';
+      HttpRequest.ContentType := 'text/xml; charset=utf-8';
+
+      Convert := Convert.ASCIIEncoding;
+      ByteArray := Convert.GetBytes(sb.ToString);
+      HttpRequest.ContentLength := ByteArray.Length;
+      MemoryStream := HttpRequest.GetRequestStream;
+      MemoryStream.Write(ByteArray,0,ByteArray.Length);
+      MemoryStream.Close;
+
+      HttpResponse := HttpRequest.GetResponse();
+      MemoryStream := HttpResponse.GetResponseStream;
+      streamReader := streamReader.StreamReader(MemoryStream,Encoding.UTF8);
+
+      xmlResult := streamReader.ReadToEnd();
+      XMLDoc.LoadXml(xmlResult);
+
+      MemoryStream.Close;
+
+      //WriteTextToRTCFile(xmlResult,'LoginResponse.txt');
+
+      nsmanager := nsmanager.XmlNamespaceManager(XMLDoc.NameTable);
+      nsmanager.AddNamespace('soap','http://schemas.xmlsoap.org/soap/envelope/');
+      nsmanager.AddNamespace('ns2','http://api.bronto.com/v4');
+
+      XmlItems := XMLDoc.SelectNodes('//ns2:logoutResponse/results',nsmanager);
+
+      FOR i := 0 TO XmlItems.Count - 1 DO BEGIN
+        logoutSessionId := RetrieveElementNS(XmlItems,'ns2:id',i,nsmanager);
+        isError := (RetrieveElementNS(XmlItems,'ns2:isError',i,nsmanager)<>'false');
+        errorCode := RetrieveElementNS(XmlItems,'ns2:errorCode',i,nsmanager);
+      END;
+
+      IF isError THEN
+        ERROR(STRSUBSTNO(ERRTEXT,logoutSessionId));
+    END;
+
+    LOCAL PROCEDURE RetrieveElementNS@1000000009(VAR XmlItems@1000000000 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";Which@1000000001 : Text;i@1000000002 : Integer;nsmgr@1000000003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager") : Text;
+    VAR
+      XmlItem@1000000004 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      NullObject@1000000005 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Object";
+    BEGIN
+      //utility function that extracts a value from an xml node
+      XmlItem := XmlItems.Item(i).SelectSingleNode(Which,nsmgr);
+      IF NOT ISNULL(XmlItem) THEN
+        EXIT(XmlItem.InnerText());
+    END;
+
+    [TryFunction]
+    PROCEDURE SOAP_AddOrUpdateContacts@1000000004(pSessionId@1000000000 : Text;pEmail@1000000024 : Text;VAR pContactID@1000000025 : Text);
+    VAR
+      sb@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      HttpRequest@1000000002 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      ServicePointManager@1000000003 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.ServicePointManager";
+      SecurityProtocolType@1000000004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.SecurityProtocolType";
+      Convert@1000000005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.ASCIIEncoding";
+      XMLDoc@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      ByteArray@1000000007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      MemoryStream@1000000008 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.MemoryStream";
+      HttpResponse@1000000009 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+      nsmanager@1000000010 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+      XmlItem@1000000011 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      APIToken@1000000012 : Text;
+      MethodURL@1000000013 : Text;
+      streamReader@1000000014 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader";
+      Encoding@1000000015 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      NodeVal@1000000016 : Text;
+      xmlResult@1000000017 : Text;
+      XmlItems@1000000018 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      i@1000000019 : Integer;
+      logoutSessionId@1000000020 : Text;
+      isError@1000000021 : Boolean;
+      errorCode@1000000022 : Text[10];
+      ERRTEXT@1000000023 : TextConst 'ENU=The SOAP function addOrUpdateContacts failed with the following Error %1;ENG=The SOAP function addOrUpdateContacts failed with the following Error %1';
+      errorText@1000000026 : Text;
+      tempName@1000000027 : Text;
+      Reader@1000000028 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlTextReader";
+      XmlNodeType@1000000029 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeType";
+      tempVal@1000000030 : Text;
+      tempNodeType@1000000031 : Text;
+      tempNodeName@1000000032 : Text;
+      StringReader@1000000033 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StringReader";
+    BEGIN
+      //The addOrUpdateContacts function allows us to retrieve a contactID which is required when we trigger a message through the API
+
+      ModistSetup.GET;
+      IntegProcGroup.GET(ModistSetup."BRONTO Integration Type",ModistSetup."BRONTO Messaging SOAP Group");
+
+      APIToken  := IntegProcGroup."Auth Code";
+      MethodURL := IntegProcGroup.ServiceURL;
+
+      //APIToken  := 'C8CA38A6-7D95-4416-9A8E-D36354C45C98';
+      //MethodURL := 'https://api.bronto.com/v4';
+
+      CLEAR(XMLDoc);
+      XMLDoc := XMLDoc.XmlDocument;
+
+      sb := sb.StringBuilder();
+
+      sb.Append('<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:v4="http://api.bronto.com/v4">');
+      sb.Append('   <soapenv:Header>');
+      sb.Append('      <v4:sessionHeader>');
+      sb.Append('         <sessionId>' + pSessionId + '</sessionId>');
+      sb.Append('      </v4:sessionHeader>');
+      sb.Append('   </soapenv:Header>');
+      sb.Append('   <soapenv:Body>');
+      sb.Append('      <v4:addOrUpdateContacts>');
+      sb.Append('         <contacts>');
+      sb.Append('            <email>' + pEmail + '</email>');
+      sb.Append('            <status>transactional</status>');
+      sb.Append('         </contacts>');
+      sb.Append('      </v4:addOrUpdateContacts>');
+      sb.Append('   </soapenv:Body>');
+      sb.Append('</soapenv:Envelope>');
+
+      //WriteTextToRTCFile(sb.ToString,'AddOrUpdateContacts.txt');
+
+      HttpRequest := HttpRequest.Create(MethodURL);
+
+      //handle SSL
+      ServicePointManager := ServicePointManager;
+      SecurityProtocolType:=SecurityProtocolType;
+      ServicePointManager.SecurityProtocol := SecurityProtocolType.Tls12;
+
+      HttpRequest.Method := 'POST';
+      HttpRequest.ContentType := 'text/xml; charset=utf-8';
+
+      Convert := Convert.ASCIIEncoding;
+      ByteArray := Convert.GetBytes(sb.ToString);
+      HttpRequest.ContentLength := ByteArray.Length;
+      MemoryStream := HttpRequest.GetRequestStream;
+      MemoryStream.Write(ByteArray,0,ByteArray.Length);
+      MemoryStream.Close;
+
+      HttpResponse := HttpRequest.GetResponse();
+      MemoryStream := HttpResponse.GetResponseStream;
+      streamReader := streamReader.StreamReader(MemoryStream,Encoding.UTF8);
+
+      xmlResult := streamReader.ReadToEnd();
+
+      MemoryStream.Close;
+      streamReader.Close;
+
+      StringReader:=StringReader.StringReader(xmlResult);
+      Reader := Reader.Create(StringReader);
+
+      Reader.MoveToContent;
+      WHILE (Reader.Read()) DO BEGIN
+        IF Reader.IsStartElement THEN BEGIN
+          tempNodeType := XmlNodeType.Element.ToString();
+          tempNodeName:=Reader.Name;
+          CASE Reader.NodeType.ToString() OF
+              XmlNodeType.Element.ToString() : BEGIN
+                IF Reader.Name = 'id' THEN
+                  pContactID := Reader.ReadElementString('id');
+                IF Reader.Name = 'errorCode' THEN
+                  errorCode := Reader.ReadElementString('errorCode');
+              END;
+          END;
+        END;
+      END;
+
+      Reader.Close;
+      CLEAR(Reader);
+    END;
+
+    [TryFunction]
+    PROCEDURE GetBrontoOrderRef@1000000005(pAccessToken@1000000000 : Text;pCustomerOrderId@1000000005 : Code[20];VAR pBrontoOrderRef@1000000001 : Text);
+    VAR
+      clientID@1000000002 : Text;
+      clientSecret@1000000003 : Text;
+      serviceURL@1000000004 : Text;
+      xmlnodelist@1000000006 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      xmlnode@1000000007 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      i@1000000008 : Integer;
+      results@1000000009 : Text;
+      j@1000000010 : Integer;
+      HttpUtility@1000000011 : DotNet "'System.Web, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Web.HttpUtility";
+      xmlhttp@1000000012 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.XMLHTTPRequest";
+      xmlhttpclass@1000000013 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.XMLHTTPRequestClass";
+      ResponseString@1000000015 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      DataExchFieldTemp@1000000016 : TEMPORARY Record 1221;
+      DynamicsJSONMgt@1000000017 : Codeunit 9062670;
+      ErrorMessage@1000000018 : Text;
+      HttpContent@1000000014 : DotNet "'System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.HttpContent";
+      HttpResponseMessage@1000000019 : DotNet "'System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.HttpResponseMessage";
+      URI@1000000020 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Uri";
+      HttpClient@1000000021 : DotNet "'System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.HttpClient";
+      HttpWebRequest@1000000022 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      Args@1000000023 : Text;
+      streamReader@1000000024 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader";
+      HttpResponse@1000000025 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+    BEGIN
+      //REST -
+      //This function retrieves the BRONTO Order reference by passing the demandware order no.
+      ModistSetup.GET;
+      IntegProcGroup.GET(ModistSetup."BRONTO Integration Type",ModistSetup."BRONTO Order REST Group");
+
+      clientID := IntegProcGroup."Auth Code";
+      serviceURL := IntegProcGroup.ServiceURL;
+      //clientID := 'e4a9a45515bdbb95d003b9b31687b80bad5324f4';
+      //serviceURL := 'https://rest.bronto.com/';
+      Args := 'orders?customerOrderId=' + pCustomerOrderId;
+
+      HttpWebRequest := HttpWebRequest.Create(serviceURL+Args);
+      HttpWebRequest.Method('GET');
+      HttpWebRequest.ContentType('text/xml; charset=utf-8');
+      HttpWebRequest.Headers.Add('Authorization','Bearer ' + pAccessToken);
+      HttpResponseMessage := HttpWebRequest.GetResponse();
+
+      HttpResponse := HttpWebRequest.GetResponse();
+      streamReader :=streamReader.StreamReader(HttpResponse.GetResponseStream);
+      ResponseString:=streamReader.ReadToEnd();
+
+      DynamicsJSONMgt.ReadJSon(ResponseString,DataExchFieldTemp);
+      DataExchFieldTemp.RESET;
+      IF DataExchFieldTemp.FINDSET THEN BEGIN
+        REPEAT
+          CASE DataExchFieldTemp."Node ID" OF
+            'orderId' : pBrontoOrderRef := DataExchFieldTemp.Value;
+          END;
+        UNTIL DataExchFieldTemp.NEXT = 0;
+      END;
+
+      IF ErrorMessage <> '' THEN
+        ERROR(ErrorMessage);
+    END;
+
+    [TryFunction]
+    PROCEDURE SOAP_AddDeliveries@1000000011(pSessionId@1000000000 : Text;pContactID@1000000025 : Text;pMessageID@1000000034 : Text;pOrderID@1000000035 : Text;pTrackingID@1000000036 : Text;VAR pConfirmationID@1000000037 : Text);
+    VAR
+      sb@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      HttpRequest@1000000002 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      ServicePointManager@1000000003 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.ServicePointManager";
+      SecurityProtocolType@1000000004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.SecurityProtocolType";
+      Convert@1000000005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.ASCIIEncoding";
+      XMLDoc@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      ByteArray@1000000007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      MemoryStream@1000000008 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.MemoryStream";
+      HttpResponse@1000000009 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+      nsmanager@1000000010 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+      XmlItem@1000000011 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      APIToken@1000000012 : Text;
+      MethodURL@1000000013 : Text;
+      streamReader@1000000014 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader";
+      Encoding@1000000015 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      NodeVal@1000000016 : Text;
+      xmlResult@1000000017 : Text;
+      XmlItems@1000000018 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      i@1000000019 : Integer;
+      logoutSessionId@1000000020 : Text;
+      isError@1000000021 : Text[10];
+      errorCode@1000000022 : Text[10];
+      ERRTEXT@1000000023 : TextConst 'ENU=The SOAP function SOAP_AddDeliveries failed with the following Error %1 ErrorCode %2;ENG=The SOAP function SOAP_AddDeliveries failed with the following Error %1 ErrorCode %2';
+      errorText@1000000026 : Text;
+      tempName@1000000027 : Text;
+      Reader@1000000028 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlTextReader";
+      XmlNodeType@1000000029 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeType";
+      tempVal@1000000030 : Text;
+      tempNodeType@1000000031 : Text;
+      tempNodeName@1000000032 : Text;
+      StringReader@1000000033 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StringReader";
+      SendDateTime@1000000024 : DateTime;
+      confID@1000000038 : Text[50];
+      XmlDoc2@1000000039 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+    BEGIN
+      //The addOrUpdateContacts function allows us to retrieve a contactID which is required when we trigger a message through the API
+
+      ModistSetup.GET;
+      IntegProcGroup.GET(ModistSetup."BRONTO Integration Type",ModistSetup."BRONTO Messaging SOAP Group");
+
+      APIToken  := IntegProcGroup."Auth Code";
+      MethodURL := IntegProcGroup.ServiceURL;
+
+      SendDateTime := CURRENTDATETIME();
+
+      CLEAR(XMLDoc);
+      XMLDoc := XMLDoc.XmlDocument;
+
+      sb := sb.StringBuilder();
+
+      sb.Append('<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:v4="http://api.bronto.com/v4">');
+      sb.Append('<soapenv:Header>');
+      sb.Append('      <v4:sessionHeader>');
+      sb.Append('         <sessionId>' + pSessionId + '</sessionId>');
+      sb.Append('      </v4:sessionHeader>');
+      sb.Append('</soapenv:Header>');
+      sb.Append('<soapenv:Body>');
+      sb.Append('<v4:addDeliveries>');
+      sb.Append('<deliveries>');
+      sb.Append('<start>' + FORMAT(SendDateTime, 0, 9) + '</start>');
+      sb.Append('<messageId>' + pMessageID + '</messageId>');
+      sb.Append('<type>transactional</type>');
+      sb.Append('<fromEmail>' + ModistSetup."BRONTO Email From" + '</fromEmail>');
+      sb.Append('<fromName>' + ModistSetup."BRONTO Email From Name" + '</fromName>');
+      sb.Append('<orderId>' + pOrderID + '</orderId>');
+      sb.Append('<recipients>');
+      sb.Append('<deliveryType>selected</deliveryType>');
+      sb.Append('<id>' + pContactID + '</id>');
+      sb.Append('<type>contact</type>');
+      sb.Append('</recipients>');
+      sb.Append('<fields>');
+      sb.Append('<name>TrackingID</name>');
+      sb.Append('<type>html</type>');
+      sb.Append('<content>' + pTrackingID + '</content>');
+      sb.Append('</fields>');
+      sb.Append('</deliveries>');
+      sb.Append('</v4:addDeliveries>');
+      sb.Append('</soapenv:Body>');
+      sb.Append('</soapenv:Envelope>');
+
+      //LF - uncomment the line below to write the soap envelope to a file
+      //WriteTextToRTCFile(sb.ToString,'AddDeliveriesRequest.txt');
+
+      XmlDoc2 := XmlDoc2.XmlDocument;
+      XmlDoc2.LoadXml(sb.ToString);
+      XmlDoc2.Save('F:\Bronto\request.xml');
+
+      HttpRequest := HttpRequest.Create(MethodURL);
+
+      //handle SSL
+      ServicePointManager := ServicePointManager;
+      SecurityProtocolType:=SecurityProtocolType;
+      ServicePointManager.SecurityProtocol := SecurityProtocolType.Tls12;
+
+      HttpRequest.Method := 'POST';
+      HttpRequest.ContentType := 'text/xml; charset=utf-8';
+
+      Convert := Convert.ASCIIEncoding;
+      ByteArray := Convert.GetBytes(sb.ToString);
+      HttpRequest.ContentLength := ByteArray.Length;
+      MemoryStream := HttpRequest.GetRequestStream;
+      MemoryStream.Write(ByteArray,0,ByteArray.Length);
+      MemoryStream.Close;
+
+      HttpResponse := HttpRequest.GetResponse();
+      MemoryStream := HttpResponse.GetResponseStream;
+      streamReader := streamReader.StreamReader(MemoryStream,Encoding.UTF8);
+
+      xmlResult := streamReader.ReadToEnd();
+
+      //LF - uncomment the line below to write the soap envelope to a file
+      //WriteTextToRTCFile(sb.ToString,'AddDeliveriesResponse.txt');
+
+      MemoryStream.Close;
+      streamReader.Close;
+
+      StringReader:=StringReader.StringReader(xmlResult);
+      Reader := Reader.Create(StringReader);
+
+      Reader.MoveToContent;
+      WHILE (Reader.Read()) DO BEGIN
+        IF Reader.IsStartElement THEN BEGIN
+          tempNodeType := XmlNodeType.Element.ToString();
+          tempNodeName:=Reader.Name;
+          CASE Reader.NodeType.ToString() OF
+              XmlNodeType.Element.ToString() : BEGIN
+                IF Reader.Name = 'id' THEN
+                  confID := Reader.ReadElementString('id');
+                IF Reader.Name = 'isError' THEN
+                  isError := Reader.ReadElementString('isError');
+                IF Reader.Name = 'errorCode' THEN
+                  errorCode := Reader.ReadElementString('errorCode');
+                IF Reader.Name = 'errorString' THEN
+                  errorText := Reader.ReadElementString('errorString');
+              END;
+          END;
+        END;
+      END;
+
+      //Raise error
+      IF (UPPERCASE(isError) = 'TRUE') THEN BEGIN
+        ERROR(STRSUBSTNO(ERRTEXT,errorText,errorCode));
+      END ELSE BEGIN
+        pConfirmationID := confID;
+      END;
+
+      Reader.Close;
+      CLEAR(Reader);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

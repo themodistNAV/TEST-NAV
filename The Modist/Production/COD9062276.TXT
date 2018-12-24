@@ -1,0 +1,206 @@
+OBJECT Codeunit 9062276 TNP Mail
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            test@1000000000 : Codeunit 9062270;
+          BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      FileSystem@1000000008 : Codeunit 9062264;
+      SMTPMail@1000000000 : Codeunit 9062688;
+      SysB@1000000002 : Record 9062230;
+      Logger@1000000003 : Record 9062280;
+      AttachmentsList@1000000004 : ARRAY [100,2] OF Text[1024];
+      AttachmentsCount@1000000005 : Integer;
+      Side@1000000007 : ' ,Client,Server';
+      mLastErrorMessage@1000000006 : Text;
+      BlobToolkit@1000000001 : Codeunit 9062242;
+
+    PROCEDURE NewMessage@1000000000(SenderName@1000000000 : Text[100];SenderAddress@1000000001 : Text[50];Recipient@1000000002 : Text[1024];Subject@1000000003 : Text[260];Body@1000000004 : Text[1024]);
+    BEGIN
+      SenderAddress := DELCHR(SenderAddress, '<>', ' ');
+      SMTPMail.CreateMessage(SenderName,SenderAddress,Recipient,Subject,Body,TRUE);
+    END;
+
+    PROCEDURE AddBodyLine@1000000001(BodyPart@1000000000 : Text);
+    BEGIN
+      SMTPMail.AppendBody(BodyPart);
+    END;
+
+    PROCEDURE Send@1000000002() Done : Boolean;
+    VAR
+      lAttachmentIndex@1000000000 : Integer;
+      xSendingMessage@1000000002 : TextConst 'ENU=Sending message via SMTPMail;ENG=Sending message via SMTPMail';
+      xDeletedAttachment@1000000003 : TextConst 'ENU=%1 attachment %2 has been deleted;ENG=%1 attachment %2 has been deleted';
+      xAttachmentNotFound@1000000006 : TextConst 'ENU=Attachment %1 not found, therefore not deleted;ENG=Attachment %1 not found, therefore not deleted';
+      xClient@1000000004 : TextConst 'ENU=Client;ENG=Client';
+      xServer@1000000005 : TextConst 'ENU=Server;ENG=Server';
+      xEMailSent@1000000007 : TextConst 'ENU=Cleared SMTPMail. E-mail has been sent successfully;ENG=Cleared SMTPMail. E-mail has been sent successfully';
+      xEMailSeningFailed@1000000008 : TextConst 'ENU=E-mail sending failed with message: "%1";ENG=E-mail sending failed with message: "%1"';
+      lMessage@1000000001 : Text[1024];
+    BEGIN
+      Logger.Log('MAIL', Logger.Type::Debug, xSendingMessage, USERID);
+      Done := SMTPMail.TrySend();
+      lAttachmentIndex := 0;
+      IF AttachmentsCount > 0 THEN
+        FOR lAttachmentIndex := 1 TO AttachmentsCount DO
+        BEGIN
+          IF (FileSystem.DeleteFileIfExists(FileSystem.Client, AttachmentsList[lAttachmentIndex][Side::Client])) THEN
+            lMessage := xDeletedAttachment
+          ELSE
+            lMessage := xAttachmentNotFound;
+          Logger.Log('MAIL', Logger.Type::Debug, STRSUBSTNO(lMessage, xClient, AttachmentsList[lAttachmentIndex][Side::Client]), USERID);
+          IF (FileSystem.DeleteFileIfExists(FileSystem.Client, AttachmentsList[lAttachmentIndex][Side::Server])) THEN
+            lMessage := xDeletedAttachment
+          ELSE
+            lMessage := xAttachmentNotFound;
+          Logger.Log('MAIL', Logger.Type::Debug, STRSUBSTNO(lMessage, xServer, AttachmentsList[lAttachmentIndex][Side::Server]), USERID);
+        END;
+
+      IF (Done) THEN
+        Logger.Log('MAIL', Logger.Type::Debug, xEMailSent, USERID)
+      ELSE
+      BEGIN
+        mLastErrorMessage := SMTPMail.GetLastSendMailErrorText();
+        Logger.Log('MAIL', Logger.Type::Error, STRSUBSTNO(xEMailSeningFailed, mLastErrorMessage), USERID());
+      END;
+
+      CLEAR(SMTPMail);
+
+      EXIT(Done);
+    END;
+
+    PROCEDURE AddAttachment@1000000003(pClientFilePath@1000000000 : Text[250]);
+    BEGIN
+      AddSmtpAttachment(pClientFilePath, FALSE);
+    END;
+
+    PROCEDURE AddTempAttachment@1000000006(pClientFilePath@1000000000 : Text[250]);
+    VAR
+      lServerFilePath@1000000001 : Text[250];
+      TxtAttachedFilePath@1000000002 : TextConst 'ENU=Attached file path "%1" to e-mail in position %2;ENG=Attached file path "%1" to e-mail in position %2';
+    BEGIN
+      lServerFilePath := AddSmtpAttachment(pClientFilePath, FALSE);
+
+      AttachmentsCount +=1 ;
+      AttachmentsList[AttachmentsCount][Side::Client] := pClientFilePath;
+      AttachmentsList[AttachmentsCount][Side::Server] := lServerFilePath;
+
+      Logger.Log('MAIL', Logger.Type::Debug, STRSUBSTNO(TxtAttachedFilePath, AttachmentsList[AttachmentsCount][1], AttachmentsCount), USERID);
+    END;
+
+    PROCEDURE AddFAttach@1000000004(AttachNo@1000000000 : Code[20]);
+    VAR
+      FilePath@1000000001 : Text[250];
+      FAttach@1000000002 : Record 9062272;
+      FSO@1000000003 : Automation "{420B2830-E718-11CF-893D-00A0C9054228} 1.0:{0D43FE01-F093-11CF-8940-00A0C9054228}:'Microsoft Scripting Runtime'.FileSystemObject";
+      TxtCouldNotGetAttachment@1000000004 : TextConst 'ENU=Could not get file attachment %1;ENG=Could not get file attachment %1';
+    BEGIN
+      IF NOT FAttach.GET(AttachNo) THEN ERROR(TxtCouldNotGetAttachment, AttachNo);
+      FilePath := FAttach.ExportServerFile(TRUE);
+      IF FilePath = '' THEN EXIT;
+      AddTempAttachment(FilePath);
+    END;
+
+    PROCEDURE AddDOCSEntry@1000000005(EntryID@1000000000 : Integer);
+    VAR
+      DOCS@1000000001 : Record 9062253;
+      FAttach@1000000002 : Record 9062272;
+    BEGIN
+      FAttach.SETRANGE("Table ID",DATABASE::"Document Library");
+      FAttach.SETRANGE("Primary Key Value 1",FORMAT(EntryID));
+      IF FAttach.FINDSET THEN BEGIN
+        REPEAT
+          AddFAttach(FAttach."No.");
+        UNTIL FAttach.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE AddSmtpAttachment@1000000007(pClientFilePath@1000000001 : Text[250];pOnlyIfFileExists@1000000002 : Boolean) : Text[250];
+    VAR
+      lClient@1000000004 : Boolean;
+      lClientFileName@1000000003 : Text[250];
+      lServerFilePath@1000000000 : Text[250];
+    BEGIN
+      //DOC NA2015.1 - Adding SMTP attachment
+      //  -> pClientFilePath: File path
+      //  -> pOnlyIfFileExists: Flag telling to add the attachment only if it exists
+
+      lClient := FileSystem.Client();
+
+      IF (pOnlyIfFileExists) THEN
+        IF ( NOT (FileSystem.FileExists(lClient, pClientFilePath))) THEN
+          EXIT;
+
+      IF (FileSystem.Client()) THEN
+      BEGIN
+        lClientFileName := FileSystem.GetFileName(lClient, pClientFilePath);
+        lServerFilePath := FileSystem.GetTempPathForFile(FALSE, lClientFileName);
+        FileSystem.UploadSilent(lClient, pClientFilePath, lServerFilePath);
+      END
+      ELSE
+        lServerFilePath := pClientFilePath;
+
+      SMTPMail.AddAttachment(lServerFilePath, '');
+
+      EXIT(lServerFilePath);
+    END;
+
+    PROCEDURE AddCC@9062229(pCC@9062229 : Text);
+    BEGIN
+      SMTPMail.AddCC(pCC);
+    END;
+
+    PROCEDURE AddBCC@9062230(pBCC@9062229 : Text);
+    BEGIN
+      SMTPMail.AddBCC(pBCC);
+    END;
+
+    PROCEDURE GetLastErrorMessage@1000000010() : Text;
+    BEGIN
+      //DOC NA2015.7 - Returning the last error message
+      //  <- The message
+
+      EXIT(mLastErrorMessage);
+    END;
+
+    PROCEDURE AddEmailAttachments@1000000008(VAR pEmailAttachment@1000000000 : Record 9062283);
+    VAR
+      FilePath@1000000001 : Text;
+    BEGIN
+      IF pEmailAttachment.FINDSET THEN
+        REPEAT
+          SMTPMail.AddAttachment(pEmailAttachment."File Path",pEmailAttachment."File Name");
+        UNTIL pEmailAttachment.NEXT = 0;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  PC 24/02/2012 - Added AddFAttach function for adding File Attachment to email as Attachment
+      //DOC NA2015.1  PC 24/02/2012 - Added AddDOCSEntry function for adding DOCS entries to email as attachment
+      //DOC NA2015.1  JH 10/08/2012 - Migrated to 2013
+      //DOC NA2015.4  JH 03/11/2014 - Upgraded to 2015
+      //DOC NA2015.4  JH 28/12/2014 - System behaviours renamed
+      //DOC NA2015.4  JH 16/02/2015 - Sender address trimmed
+      //DOC NA2015.7  JH 12/05/2015 - Proper error handling
+      //DOC NA2016.10 JH 26/08/2015 - Upgraded to 2016
+      //DOC NA2016.10 AZ 21/09/2015 - File Attachments modifications
+      //DOC NA2016.12 PC 05/02/2016 - Changed the SMTPMail var to use CU "Enhanced SMTP Mail" instead of CU "SMTP Mail"
+      //DOC NA2016.14 PC 02/03/2016 - "AddEmailAttachments" function added
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

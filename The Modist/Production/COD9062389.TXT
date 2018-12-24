@@ -1,0 +1,435 @@
+OBJECT Codeunit 9062389 Tag Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TNPUtils@1000000001 : Codeunit 9062229;
+      eCouldNotCreateTag@1000000002 : TextConst 'ENU=Sorry, could not create the tag "%1";ENG=Sorry, could not create the tag "%1"';
+      TagRecSelectionMgt@1000000000 : Codeunit 9062390;
+      eCountNotFindTag@1000000003 : TextConst 'ENU=Sorry, I couldn''t find the tag "%1";ENG=Sorry, I couldn''t find the tag "%1"';
+      Fav_Identifier@1000000004 : TextConst 'ENU={Fav};ENG={Fav}';
+      CW_Identifier@1000000005 : TextConst 'ENU={Curr};ENG={Curr}';
+      Fav_FullName@1000000006 : TextConst 'ENU=- Favourites;ENG=- Favourites';
+      CW_FullName@1000000007 : TextConst 'ENU=- Currently Working With;ENG=- Currently Working With';
+      msgRecordsTagged@9062229 : TextConst 'ENU=%1 records have been tagged.;ENG=%1 records have been tagged.';
+      msgRecordTagged@9062230 : TextConst 'ENU=1 record has been tagged.;ENG=1 record has been tagged.';
+      cnfMakePublic@9062231 : TextConst 'ENU=Do you want to make tag "%1" public?;ENG=Do you want to make tag "%1" public?';
+      cnfMakePrivate@9062232 : TextConst 'ENU="Do you want to make tag %1 private? ";ENG="Do you want to make tag %1 private? "';
+      cnfPublicTagExists@9062233 : TextConst 'ENU=Public tag "%1" already exists. Do you want to merge public and private tags?;ENG=Public tag "%1" already exists. Do you want to merge public and private tags?';
+      cnfPrivateTagExists@9062234 : TextConst 'ENU=Private tag "%1" already exists. Do you want to merge public and private tags?;ENG=Private tag "%1" already exists. Do you want to merge public and private tags?';
+      txtTagsMergedPub@9062235 : TextConst 'ENU=%1 tags has been merged with public tag %2.;ENG=%1 tags has been merged with public tag %2.';
+      txtTagsMergedPriv@9062236 : TextConst 'ENU=%1 tags has been merged with private tag %2.;ENG=%1 tags has been merged with private tag %2.';
+
+    PROCEDURE TagRecordsWithUI@9062230(VAR Records@9062229 : RecordRef);
+    VAR
+      Tag@9062232 : Record 9062492;
+      TagSelection@9062231 : Page 9062690;
+      ProcessedTags@9062230 : Integer;
+    BEGIN
+      CLEAR(TagSelection);
+      TagSelection.SetTableNo(Records.NUMBER);
+      IF (TagSelection.RUNMODAL() IN [ACTION::OK, ACTION::LookupOK]) THEN BEGIN
+        TagSelection.GetSelectedTag(Tag);
+        ProcessedTags := TagRecords(Tag, Records, TRUE);
+      END;
+      Records.CLOSE();
+    END;
+
+    PROCEDURE TagRecords@9062229(VAR Tag@9062234 : Record 9062492;VAR Records@9062229 : RecordRef;SwitchTags@1000000000 : Boolean) : Integer;
+    VAR
+      RecordsTagged@9062231 : Integer;
+    BEGIN
+      RecordsTagged := Records.COUNT;
+      IF (SwitchTags) THEN
+        SwitchTags := AllRecordsTagged(Tag, Records);
+      IF (Records.FINDSET()) THEN BEGIN
+        REPEAT
+          TagRecordRefEntry(Tag, Records, SwitchTags);
+        UNTIL (Records.NEXT() = 0);
+      END;
+      EXIT(RecordsTagged);
+    END;
+
+    PROCEDURE TagRecordRefEntry@9062231(VAR Tag@9062229 : Record 9062492;VAR RecordRef@9062230 : RecordRef;SwitchTag@9062235 : Boolean);
+    VAR
+      TagEntry@9062234 : Record 9062493;
+      PrimaryKeyRef@9062231 : KeyRef;
+      FieldRef@9062232 : FieldRef;
+      PositionText@9062233 : Text;
+      i@9062236 : Integer;
+    BEGIN
+      PositionText := RecordRef.GETPOSITION(TRUE);
+      IF (NOT(TagEntry.GET(Tag.Code, Tag."Table No.", Tag."User ID", PositionText))) THEN BEGIN
+        InitTagEntry(Tag, TagEntry);
+        TagEntry.VALIDATE("Position Text", PositionText);
+
+        PrimaryKeyRef := RecordRef.KEYINDEX(1);
+        FOR i:=1 TO PrimaryKeyRef.FIELDCOUNT DO BEGIN
+          FieldRef := PrimaryKeyRef.FIELDINDEX(i);
+          SetTagEntryKeyField(TagEntry, i, FORMAT(FieldRef.VALUE));
+        END;
+
+        TagEntry.INSERT(TRUE);
+      END ELSE IF (SwitchTag) THEN
+        TagEntry.DELETE();
+    END;
+
+    PROCEDURE TagFilteredRecord@9062232(VAR Tag@9062229 : Record 9062492);
+    VAR
+      TagEntry@9062232 : Record 9062493;
+      ExistingTagEntry@9062233 : Record 9062493;
+      i@9062230 : Integer;
+      FilterFound@9062231 : Boolean;
+    BEGIN
+      InitTagEntry(Tag, TagEntry);
+      FOR i:=0 TO 20 DO BEGIN
+        Tag.FILTERGROUP(i);
+        IF (Tag.GETFILTER("Primary Key 1 Filter") <> '') THEN BEGIN
+          TagEntry."Primary Key 1" := Tag.GETRANGEMIN("Primary Key 1 Filter");
+          IF (Tag.GETFILTER("Primary Key 2 Filter") <> '') THEN
+            TagEntry."Primary Key 2" := Tag.GETRANGEMIN("Primary Key 2 Filter");
+          IF (Tag.GETFILTER("Primary Key 3 Filter") <> '') THEN
+            TagEntry."Primary Key 3" := Tag.GETRANGEMIN("Primary Key 3 Filter");
+          IF (Tag.GETFILTER("Primary Key 4 Filter") <> '') THEN
+            TagEntry."Primary Key 4" := Tag.GETRANGEMIN("Primary Key 4 Filter");
+          IF (Tag.GETFILTER("Primary Key 5 Filter") <> '') THEN
+            TagEntry."Primary Key 5" := Tag.GETRANGEMIN("Primary Key 5 Filter");
+          TagEntry.SetPositionText();
+
+          IF (ExistingTagEntry.GET(TagEntry."Tag Code", TagEntry."Table No.", TagEntry."User ID", TagEntry."Position Text")) THEN
+            ExistingTagEntry.DELETE()
+          ELSE
+            TagEntry.INSERT(TRUE);
+          Tag.FILTERGROUP(0);
+          EXIT;
+        END;
+      END;
+      Tag.FILTERGROUP(0);
+    END;
+
+    PROCEDURE SwitchTagWithUI@9062236(TagTableNo@9062229 : Integer;PrimaryKey1@9062230 : Text;PrimaryKey2@9062231 : Text;PrimaryKey3@9062232 : Text;PrimaryKey4@9062233 : Text;PrimaryKey5@9062234 : Text);
+    VAR
+      Tag@9062236 : Record 9062492;
+      TagSelection@9062235 : Page 9062690;
+    BEGIN
+      CLEAR(TagSelection);
+      TagSelection.SetTableNo(TagTableNo);
+      IF (TagSelection.RUNMODAL() IN [ACTION::OK, ACTION::LookupOK]) THEN BEGIN
+        TagSelection.GetSelectedTag(Tag);
+        SwitchTag(Tag, PrimaryKey1, PrimaryKey2, PrimaryKey3, PrimaryKey4, PrimaryKey5);
+      END;
+    END;
+
+    PROCEDURE SwitchTag@9062235(VAR Tag@9062229 : Record 9062492;PrimaryKey1@9062230 : Text;PrimaryKey2@9062231 : Text;PrimaryKey3@9062232 : Text;PrimaryKey4@9062233 : Text;PrimaryKey5@9062234 : Text);
+    VAR
+      TagEntry@9062235 : Record 9062493;
+      ExistingTagEntry@9062236 : Record 9062493;
+    BEGIN
+      InitTagEntry(Tag, TagEntry);
+      IF (PrimaryKey1 <> '') THEN
+        TagEntry."Primary Key 1" := PrimaryKey1;
+      IF (PrimaryKey2 <> '') THEN
+        TagEntry."Primary Key 2" := PrimaryKey2;
+      IF (PrimaryKey3 <> '') THEN
+        TagEntry."Primary Key 3" := PrimaryKey3;
+      IF (PrimaryKey4 <> '') THEN
+        TagEntry."Primary Key 4" := PrimaryKey4;
+      IF (PrimaryKey5 <> '') THEN
+        TagEntry."Primary Key 5" := PrimaryKey5;
+      TagEntry.SetPositionText();
+
+      IF (ExistingTagEntry.GET(TagEntry."Tag Code", TagEntry."Table No.", TagEntry."User ID", TagEntry."Position Text")) THEN
+        ExistingTagEntry.DELETE()
+      ELSE
+        TagEntry.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE InitTagEntry@9062233(VAR Tag@9062229 : Record 9062492;VAR TagEntry@9062230 : Record 9062493);
+    BEGIN
+      TagEntry.INIT();
+      TagEntry."Tag Code" := Tag.Code;
+      TagEntry."Table No." := Tag."Table No.";
+      TagEntry.VALIDATE("User ID", Tag."User ID");
+    END;
+
+    PROCEDURE AllRecordsTagged@9062239(VAR Tag@9062229 : Record 9062492;VAR Records@9062230 : RecordRef) : Boolean;
+    VAR
+      TagEntry@9062232 : Record 9062493;
+      PositionText@9062231 : Text;
+    BEGIN
+      IF (Records.FINDSET()) THEN BEGIN
+        REPEAT
+          PositionText := Records.GETPOSITION(FALSE);
+          IF (NOT(TagEntry.GET(Tag.Code, Tag."Table No.", Tag."User ID", PositionText))) THEN
+            EXIT(FALSE);
+        UNTIL (Records.NEXT() = 0);
+      END;
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE SetTagEntryKeyField@9062234(VAR TagEntry@9062231 : Record 9062493;FieldIndex@9062229 : Integer;FieldValue@9062230 : Text);
+    BEGIN
+      CASE (FieldIndex) OF
+        1: TagEntry."Primary Key 1" := FieldValue;
+        2: TagEntry."Primary Key 2" := FieldValue;
+        3: TagEntry."Primary Key 3" := FieldValue;
+        4: TagEntry."Primary Key 4" := FieldValue;
+        5: TagEntry."Primary Key 5" := FieldValue;
+      END;
+    END;
+
+    LOCAL PROCEDURE TaggedEntriesToTempRecRef@9062238(VAR Tag@9062230 : Record 9062492;VAR TaggedRecRef@9062229 : RecordRef);
+    VAR
+      TagEntry@9062231 : Record 9062493;
+      RecRef@9062232 : RecordRef;
+      SrcField@9062234 : FieldRef;
+      DestField@9062235 : FieldRef;
+      i@9062233 : Integer;
+    BEGIN
+      RecRef.OPEN(Tag."Table No.");
+      TaggedRecRef.OPEN(Tag."Table No.", TRUE);
+      TagEntry.RESET();
+      TagEntry.SETRANGE("Tag Code", Tag.Code);
+      TagEntry.SETRANGE("Table No.", Tag."Table No.");
+      TagEntry.SETRANGE("User ID", Tag."User ID");
+      IF (TagEntry.FINDSET()) THEN BEGIN
+        REPEAT
+          RecRef.SETPOSITION(TagEntry."Position Text");
+          IF (RecRef.FIND('=')) THEN BEGIN
+            FOR i:=1 TO RecRef.FIELDCOUNT DO BEGIN
+              SrcField := RecRef.FIELDINDEX(i);
+              DestField := TaggedRecRef.FIELDINDEX(i);
+              DestField.VALUE := SrcField.VALUE;
+            END;
+            TaggedRecRef.INSERT();
+          END;
+        UNTIL (TagEntry.NEXT() = 0);
+      END;
+      RecRef.CLOSE();
+    END;
+
+    PROCEDURE ShowTaggedEntries@9062237(VAR Tag@9062229 : Record 9062492);
+    VAR
+      TagEntry@9062230 : Record 9062493;
+      RecRef@9062231 : RecordRef;
+      TaggedRecRef@9062232 : RecordRef;
+      RecRefVariant@9062233 : Variant;
+    BEGIN
+      TaggedEntriesToTempRecRef(Tag, TaggedRecRef);
+      RecRefVariant := TaggedRecRef;
+      CASE (Tag."Table No.") OF
+        DATABASE::Customer:
+          PAGE.RUN(PAGE::"Customer List (Enhanced)", RecRefVariant);
+        DATABASE::Vendor:
+          PAGE.RUN(PAGE::"Vendor List (Enhanced)", RecRefVariant);
+        ELSE
+          PAGE.RUN(0, RecRefVariant);
+      END;
+      TaggedRecRef.CLOSE();
+    END;
+
+    PROCEDURE GetTagEntryDescription@1000000004(TagName@1000000006 : Text[50];TableNo@1000000005 : Integer;PK1@1000000004 : Text[250];PK2@1000000003 : Text[250];PK3@1000000002 : Text[250];PK4@1000000001 : Text[250];PK5@1000000000 : Text[250]) : Text[250];
+    VAR
+      TagEntry@1000000007 : Record 9062493;
+    BEGIN
+      IF TagName[1] = '#' THEN
+        TagName := COPYSTR(TagName,2);
+      TagEntry.SETRANGE("Tag Code",TagName);
+      TagEntry.SETRANGE("Table No.",TableNo);
+      TagEntry.SETFILTER("User Short Code",PK1);
+      TagEntry.SETFILTER("Position Text",PK2);
+      TagEntry.SETFILTER("Primary Key 1",PK3);
+      TagEntry.SETFILTER("Primary Key 2",PK4);
+      TagEntry.SETFILTER("Primary Key 3",PK5);
+
+      IF TagEntry.FINDSET THEN EXIT(TagEntry."Primary Key 4");
+    END;
+
+    PROCEDURE CombineTags@1000000005(TagToKeep@1000000000 : Code[50];TagToMerge@1000000001 : Code[50]);
+    VAR
+      TagEntriesKeep@1000000002 : Record 9062493;
+      TagEntriesMerge@1000000003 : Record 9062493;
+    BEGIN
+      IF TagToKeep[1] = '#' THEN BEGIN
+        IF STRLEN(TagToKeep) = 1 THEN ERROR(eCountNotFindTag,TagToKeep);
+        TagToKeep := COPYSTR(TagToKeep,2);
+      END;
+
+      IF TagToMerge[1] = '#' THEN BEGIN
+        IF STRLEN(TagToMerge) = 1 THEN ERROR(eCountNotFindTag,TagToMerge);
+        TagToMerge := COPYSTR(TagToKeep,2);
+      END;
+
+      TagEntriesMerge.SETRANGE("Tag Code",TagToMerge);
+      IF TagEntriesMerge.FINDSET(TRUE,TRUE) THEN BEGIN
+        REPEAT
+          IF NOT TagEntriesKeep.GET(TagToKeep,TagEntriesMerge."Table No.",TagEntriesMerge."User ID") THEN BEGIN
+            TagEntriesKeep.INIT;
+            TagEntriesKeep.TRANSFERFIELDS(TagEntriesMerge,TRUE);
+            TagEntriesKeep.VALIDATE("Tag Code",TagToKeep);
+            TagEntriesKeep.VALIDATE("Table No.",TagEntriesMerge."Table No.");
+            TagEntriesKeep.VALIDATE("User ID",TagEntriesMerge."User ID");
+            TagEntriesKeep.INSERT(TRUE);
+          END;
+        UNTIL TagEntriesMerge.NEXT = 0;
+
+        TagEntriesMerge.DELETEALL(TRUE);
+      END;
+    END;
+
+    PROCEDURE MakePublic@9062240(VAR Tag@9062229 : Record 9062492;WithUI@9062230 : Boolean);
+    VAR
+      NewTag@9062232 : Record 9062492;
+      NewTagExists@9062231 : Boolean;
+    BEGIN
+      IF (Tag.Visibility = Tag.Visibility::Public) THEN
+        EXIT;
+      IF (WithUI) THEN
+        IF (NOT(CONFIRM(STRSUBSTNO(cnfMakePublic, Tag.Name)))) THEN
+          EXIT;
+      NewTagExists := NewTag.GET(Tag.Code, Tag."Table No.", '');
+      IF (WithUI) AND (NewTagExists) THEN
+        IF (NOT(CONFIRM(STRSUBSTNO(cnfPublicTagExists, Tag.Name)))) THEN
+          EXIT;
+      IF (NOT(NewTagExists)) THEN BEGIN
+        NewTag.TRANSFERFIELDS(Tag);
+        NewTag.VALIDATE("User ID", '');
+        NewTag.VALIDATE("Created By User ID", USERID);
+        NewTag.VALIDATE(Visibility, Tag.Visibility::Public);
+        NewTag.INSERT(TRUE);
+      END;
+      MergeTag(Tag, NewTag);
+    END;
+
+    PROCEDURE MakePrivate@9062241(VAR Tag@9062230 : Record 9062492;WithUI@9062229 : Boolean);
+    VAR
+      NewTag@9062231 : Record 9062492;
+      NewTagExists@9062232 : Boolean;
+    BEGIN
+      IF (Tag.Visibility = Tag.Visibility::Private) THEN
+        EXIT;
+      IF (WithUI) THEN
+        IF (NOT(CONFIRM(STRSUBSTNO(cnfMakePrivate, Tag.Name)))) THEN
+          EXIT;
+      NewTagExists := NewTag.GET(Tag.Code, Tag."Table No.", USERID);
+      IF ((WithUI) AND (NewTagExists)) THEN
+        IF (NOT(CONFIRM(STRSUBSTNO(cnfPrivateTagExists, Tag.Name)))) THEN
+          EXIT;
+      IF (NOT(NewTagExists)) THEN BEGIN
+        NewTag.TRANSFERFIELDS(Tag);
+        NewTag.VALIDATE("User ID", USERID);
+        NewTag.VALIDATE("Created By User ID", USERID);
+        NewTag.VALIDATE(Visibility, Tag.Visibility::Private);
+        NewTag.INSERT(TRUE);
+      END;
+      MergeTag(Tag, NewTag);
+    END;
+
+    LOCAL PROCEDURE MergeTag@9062245(VAR SourceTag@9062229 : Record 9062492;VAR DestTag@9062230 : Record 9062492);
+    BEGIN
+      IF (MergeTagEntries(SourceTag, DestTag)) THEN
+        SourceTag.DELETE();
+    END;
+
+    PROCEDURE MergeTagList@9062243(VAR SourceTags@9062229 : Record 9062492;VAR DestTag@9062230 : Record 9062492) : Integer;
+    VAR
+      Tag@9062231 : Record 9062492;
+      MergedTagsBuffer@9062232 : TEMPORARY Record 9062492;
+      MergedTagsCount@9062233 : Integer;
+    BEGIN
+      MergedTagsCount := 0;
+      IF (SourceTags.FINDSET()) THEN BEGIN
+        REPEAT
+          IF (MergeTagEntries(SourceTags, DestTag)) THEN BEGIN
+            MergedTagsBuffer.TRANSFERFIELDS(SourceTags);
+            MergedTagsBuffer.INSERT();
+            MergedTagsCount += 1;
+          END;
+        UNTIL (SourceTags.NEXT() = 0);
+      END;
+
+      IF (MergedTagsBuffer.FINDSET()) THEN BEGIN
+        REPEAT
+          Tag.GET(MergedTagsBuffer.Code, MergedTagsBuffer."Table No.", MergedTagsBuffer."User ID");
+          Tag.DELETE();
+        UNTIL (MergedTagsBuffer.NEXT() = 0);
+      END;
+
+      EXIT(MergedTagsCount);
+    END;
+
+    PROCEDURE MergeTagsWithUI@9062242(VAR Tag@9062233 : Record 9062492);
+    VAR
+      SourceTags@9062229 : Record 9062492;
+      DestTag@9062230 : Record 9062492;
+      TagsSelection@9062232 : Page 9062691;
+      MergedTagsCount@9062231 : Integer;
+    BEGIN
+      TagsSelection.SetSelectedTag(Tag);
+      IF (TagsSelection.RUNMODAL() IN [ACTION::OK, ACTION::LookupOK]) THEN BEGIN
+        TagsSelection.GetSelectedTags(SourceTags, DestTag);
+        MergedTagsCount := MergeTagList(SourceTags, DestTag);
+        CASE (DestTag.Visibility) OF
+          DestTag.Visibility::Public: MESSAGE(STRSUBSTNO(txtTagsMergedPub, MergedTagsCount));
+          DestTag.Visibility::Private: MESSAGE(STRSUBSTNO(txtTagsMergedPriv, MergedTagsCount));
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE MergeTagEntries@9062244(VAR SourceTag@9062230 : Record 9062492;VAR DestTag@9062229 : Record 9062492) : Boolean;
+    VAR
+      SourceTagEntry@9062232 : Record 9062493;
+      DestTagEntry@9062231 : Record 9062493;
+    BEGIN
+      IF ((SourceTag.Code = DestTag.Code) AND
+        (SourceTag."Table No." = DestTag."Table No.") AND
+        (SourceTag."User ID" = DestTag."User ID"))
+      THEN
+        EXIT(FALSE);
+
+      IF (SourceTag."Table No." <> DestTag."Table No.") THEN
+        EXIT(FALSE);
+
+      SourceTagEntry.RESET();
+      SourceTagEntry.SETRANGE("Tag Code", SourceTag.Code);
+      SourceTagEntry.SETRANGE("Table No.", SourceTag."Table No.");
+      SourceTagEntry.SETRANGE("User ID", SourceTag."User ID");
+      IF (SourceTagEntry.FINDSET()) THEN BEGIN
+        REPEAT
+          IF (NOT(DestTagEntry.GET(DestTag.Code, DestTag."Table No.", DestTag."User ID", SourceTagEntry."Position Text"))) THEN BEGIN
+            DestTagEntry.TRANSFERFIELDS(SourceTagEntry);
+            DestTagEntry."Tag Code" := DestTag.Code;
+            DestTagEntry."Table No." := DestTag."Table No.";
+            DestTagEntry."User ID" := DestTag."User ID";
+            DestTagEntry.VALIDATE("Created By User ID", USERID);
+            DestTagEntry.INSERT();
+          END;
+        UNTIL (SourceTagEntry.NEXT() = 0);
+      END;
+      SourceTagEntry.DELETEALL();
+      EXIT(TRUE);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.4  AP 11/03/2015 - Added Table No. to the Tag Record
+      //DOC NA2015.5  AP 11/03/2015 - Remove creating multi tags from sentence
+      //DOC NA2016.10 JH 01/09/2015 - Upgraded to 2016
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,1339 @@
+OBJECT Codeunit 11102061 OM - Auto Apply Guidelines
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE AutocorrectObjects@1(VAR Object@1000 : Record 2000000001);
+    VAR
+      Progressbar@1001 : Codeunit 11102044;
+      ctAutocorrectGuidelines@1002 : TextConst 'DEU=Auto apply guidelines...;ENU=Auto apply guidelines...;ESP=Auto apply guidelines...;FRA=Auto apply guidelines...;NLD=Richtlijnen toepassen...;DEA=Auto apply guidelines...';
+    BEGIN
+      Progressbar.Open(ctAutocorrectGuidelines, 1);
+      Progressbar.BarSize := Object.COUNT * 6;
+
+      IF Object.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+          Progressbar.Text1Object := Object;
+
+          AutocorrectObject(Object, Progressbar);
+
+        UNTIL Object.NEXT = 0;
+    END;
+
+    PROCEDURE AutocorrectCode@2(VAR Object@1000 : Record 2000000001;VAR CALHistoryLine@1001 : Record 11102053;VAR CheckGuidelinesComment@1002 : Record 11102081;VAR SelectedCALHistoryLine@1003 : Record 11102053) : Boolean;
+    VAR
+      TmpCALHistoryLine@1004 : ARRAY [2] OF TEMPORARY Record 11102053;
+      CheckGuidelinesMgt@1005 : Codeunit 11102060;
+      LineCounter@1006 : Integer;
+      PrevLineNo@1007 : Integer;
+    BEGIN
+      IF CALHistoryLine.FINDSET THEN
+        REPEAT
+          TmpCALHistoryLine[1] := CALHistoryLine;
+          TmpCALHistoryLine[1]."Line No." := CALHistoryLine."Line No." * 10;
+          TmpCALHistoryLine[1].INSERT;
+        UNTIL CALHistoryLine.NEXT = 0;
+
+      IF AutocorrectFunctions(TmpCALHistoryLine, SelectedCALHistoryLine) OR
+         CorrectCaptions(Object, TmpCALHistoryLine, SelectedCALHistoryLine) OR
+         AutocorrectProperties(Object, TmpCALHistoryLine[1], SelectedCALHistoryLine)
+      THEN BEGIN
+        CALHistoryLine.RESET;
+        CALHistoryLine.DELETEALL;
+        TmpCALHistoryLine[1].RESET;
+        IF TmpCALHistoryLine[1].FINDSET THEN
+          REPEAT
+            CALHistoryLine := TmpCALHistoryLine[1];
+            IF PrevLineNo <> TmpCALHistoryLine[1]."Line No." THEN BEGIN
+              PrevLineNo := TmpCALHistoryLine[1]."Line No.";
+              LineCounter += 1;
+            END;
+
+            CALHistoryLine."Line No." := LineCounter;
+            CALHistoryLine.INSERT;
+          UNTIL TmpCALHistoryLine[1].NEXT = 0;
+
+        CheckGuidelinesComment.RESET;
+        CheckGuidelinesComment.DELETEALL;
+        CheckGuidelinesMgt.Initialize;
+        CheckGuidelinesMgt.AnalyseObject(Object, CALHistoryLine, CheckGuidelinesComment);
+
+        EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE AutocorrectObject@3(VAR Object@1000 : Record 2000000001;VAR Progressbar@1001 : Codeunit 11102044);
+    VAR
+      Setup@1002 : Record 11102035;
+      CALHistoryObject@1003 : Record 11102052;
+      CALHistoryLine@1004 : Record 11102053;
+      TmpCALHistoryLine@1005 : ARRAY [2] OF TEMPORARY Record 11102053;
+      TmpSelectedCALHistoryLine@1006 : TEMPORARY Record 11102053;
+      Object2@1007 : Record 2000000001;
+      ObjectMgt@1008 : Codeunit 11102046;
+      SourceControl@1009 : Codeunit 11102050;
+      CheckGuidelinesMgt@1010 : Codeunit 11102060;
+      FileHandler@1011 : Codeunit 11102097;
+      Directory@1012 : Text;
+      FileName@1013 : Text;
+      SaveObject@1014 : Boolean;
+      ctAutocorrectFileName@1015 : TextConst 'DEU=AutocorrectObject.txt;ENU=AutocorrectObject.txt;ESP=AutocorrectObject.txt;FRA=AutocorrectObject.txt;NLD=AutocorrectObject.txt;DEA=AutocorrectObject.txt';
+      ctUpdatingFailed@1016 : TextConst 'DEU=Updating of object %1 %2 %3 failed.;ENU=Updating of object %1 %2 %3 failed.;ESP=Updating of object %1 %2 %3 failed.;FRA=Updating of object %1 %2 %3 failed.;NLD=Bijwerken van object %1 %2 %3 mislukt.;DEA=Updating of object %1 %2 %3 failed.';
+    BEGIN
+      Directory := FileHandler.TempDirectory;
+      FileName := Directory + ctAutocorrectFileName;
+
+      IF NOT SourceControl.CheckObjectBeforeChanging(Object, Progressbar) THEN
+        EXIT;
+
+      CALHistoryObject.GoToLastRecord(Object.Type, Object.ID);
+
+      CALHistoryLine.SETRANGE("Entry No.", CALHistoryObject."Entry No.");
+      IF CALHistoryLine.FINDSET THEN
+        REPEAT
+          TmpCALHistoryLine[1] := CALHistoryLine;
+          TmpCALHistoryLine[1]."Entry No." := 0;
+          TmpCALHistoryLine[1]."Line No." := CALHistoryLine."Line No." * 10;
+          TmpCALHistoryLine[1].INSERT;
+        UNTIL CALHistoryLine.NEXT = 0;
+
+      Progressbar.AddToBar(1);
+
+      IF AutocorrectFunctions(TmpCALHistoryLine, TmpSelectedCALHistoryLine) THEN
+        SaveObject := TRUE;
+
+      IF AutocorrectProperties(Object, TmpCALHistoryLine[1], TmpSelectedCALHistoryLine) THEN
+        SaveObject := TRUE;
+
+      Setup.CustomGet;
+      IF Setup."Check Missing Captions" THEN
+        IF CorrectCaptions(Object, TmpCALHistoryLine, TmpSelectedCALHistoryLine) THEN
+          SaveObject := TRUE;
+
+      IF SaveObject THEN BEGIN
+
+        Object2.GET(Object.Type, '', Object.ID);
+        Object2."Version List" := '! CHECK OBJECT VALID !';
+        ObjectMgt.UpdateObject(Object2, FALSE);
+
+        TmpCALHistoryLine[1].RESET;
+        SourceControl.UpdateObject(Object, FALSE, TmpCALHistoryLine[1], TmpCALHistoryLine[1]);
+
+        Object2.GET(Object.Type, '', Object.ID);
+        IF Object2."Version List" = '! CHECK OBJECT VALID !' THEN
+          ERROR(ctUpdatingFailed, Object2.Type, Object2.ID, Object2.Name);
+
+      END;
+
+      CheckGuidelinesMgt.Initialize;
+      CheckGuidelinesMgt.AnalyseAndSaveObject(Object2);
+    END;
+
+    LOCAL PROCEDURE AutocorrectFunctions@4(VAR CALHistoryLine@1000 : ARRAY [2] OF Record 11102053;VAR SelectedCALHistoryLine@1001 : Record 11102053) ExitValue : Boolean;
+    VAR
+      Object@1002 : Record 2000000001;
+      Mgt@1003 : Codeunit 11102035;
+      CheckGuidelinesMgt@1004 : Codeunit 11102060;
+      NextDataItemVarName@1005 : Text;
+      PropertyValue@1006 : Text;
+      NextDataItemTable@1007 : Integer;
+      FunctionType@1008 : ' ,Function,Trigger';
+      DoFunction@1009 : Boolean;
+    BEGIN
+      CALHistoryLine[1].RESET;
+      CALHistoryLine[1].SETRANGE("Sub Line No.", 1);
+      IF CALHistoryLine[1].FINDSET THEN
+        REPEAT
+          FunctionType := FunctionType::" ";
+
+          IF COPYSTR(CALHistoryLine[1].Code, 7, 1) = '{' THEN BEGIN
+            NextDataItemTable := 0;
+            NextDataItemVarName := '';
+          END;
+
+          IF COPYSTR(CALHistoryLine[1].Code, 9, 14) = 'DataItemTable=' THEN BEGIN
+            PropertyValue := COPYSTR(CALHistoryLine[1].Code, 28);
+            PropertyValue := DELSTR(PropertyValue, STRLEN(PropertyValue));
+            EVALUATE(NextDataItemTable, PropertyValue);
+            IF Object.GET(Object.Type::Table, '', NextDataItemTable) THEN
+              NextDataItemVarName := Object.Name;
+          END;
+
+          IF COPYSTR(CALHistoryLine[1].Code, 9, 16) = 'DataItemVarName=' THEN
+            CheckGuidelinesMgt.GetPropertyValue(CALHistoryLine[1], NextDataItemVarName);
+
+          IF COPYSTR(CALHistoryLine[1].Code, 7, 1) = '}' THEN BEGIN
+            NextDataItemTable := 0;
+            NextDataItemVarName := '';
+          END;
+
+          IF DELSTR(CALHistoryLine[1].Code, 15) = '    PROCEDURE ' THEN
+            FunctionType := FunctionType::"Function";
+
+          IF DELSTR(CALHistoryLine[1].Code, 21) = '    LOCAL PROCEDURE ' THEN
+            FunctionType := FunctionType::"Function";
+
+          IF DELSTR(CALHistoryLine[1].Code, 11) = '    EVENT ' THEN
+            FunctionType := FunctionType::"Function";
+
+          IF STRLEN(CALHistoryLine[1].Code) > 5 THEN BEGIN
+            IF COPYSTR(CALHistoryLine[1].Code, STRLEN(CALHistoryLine[1].Code) - 5) = '=BEGIN' THEN
+              FunctionType := FunctionType::Trigger;
+
+            IF COPYSTR(CALHistoryLine[1].Code, STRLEN(CALHistoryLine[1].Code) - 3) = '=VAR' THEN
+              FunctionType := FunctionType::Trigger;
+          END;
+
+          IF FunctionType <> FunctionType::" " THEN BEGIN
+
+            DoFunction := SelectedCALHistoryLine.ISEMPTY;
+            IF NOT DoFunction THEN
+              DoFunction := FunctionIsSelected(CALHistoryLine, SelectedCALHistoryLine);
+
+            IF DoFunction THEN
+              IF AutocorrectFunction(CALHistoryLine, SelectedCALHistoryLine, FunctionType, Mgt.AddQuotes(NextDataItemVarName)) THEN
+                ExitValue := TRUE;
+
+          END;
+
+          CALHistoryLine[1].SETRANGE("Sub Line No.", 1);
+
+        UNTIL CALHistoryLine[1].NEXT = 0;
+
+      CALHistoryLine[1].RESET;
+    END;
+
+    LOCAL PROCEDURE AutocorrectFunction@5(VAR CALHistoryLine@1000 : ARRAY [2] OF Record 11102053;VAR SelectedCALHistoryLine@1001 : Record 11102053;FunctionType@1002 : ' ,Function,Trigger';RecName@1003 : Text) ExitValue : Boolean;
+    VAR
+      FirstCALHistoryLine@1004 : Record 11102053;
+      LastCALHistoryLine@1005 : Record 11102053;
+      TmpVariableBuffer@1006 : TEMPORARY Record 11102062;
+      TmpCheckGuidelinesComment@1007 : TEMPORARY Record 11102081;
+      CheckGuidelinesMgt@1008 : Codeunit 11102060;
+      FirstCharacter@1009 : Integer;
+      LoopCounter@1010 : Integer;
+      StopLoop@1011 : Boolean;
+    BEGIN
+      CALHistoryLine[1].RESET;
+      CALHistoryLine[1].SETRANGE("Sub Line No.", 1);
+
+      CASE FunctionType OF
+        FunctionType::"Function" :
+          BEGIN
+            FirstCharacter := 5;
+            CALHistoryLine[1].NEXT;
+          END;
+
+        FunctionType::Trigger :
+          IF COPYSTR(CALHistoryLine[1].Code, STRLEN(CALHistoryLine[1].Code) - 2) = 'VAR' THEN
+            FirstCharacter := STRLEN(CALHistoryLine[1].Code) - 2
+          ELSE
+            FirstCharacter := STRLEN(CALHistoryLine[1].Code) - 4;
+      END;
+
+      IF COPYSTR(CALHistoryLine[1].Code, STRLEN(CALHistoryLine[1].Code) - 2) = 'VAR' THEN BEGIN
+
+        CALHistoryLine[1].SETFILTER("Line No.", '>%1', CALHistoryLine[1]."Line No.");
+        IF CALHistoryLine[1].FINDSET THEN
+          REPEAT
+
+            IF STRLEN(CALHistoryLine[1].Code) > 4 THEN
+              StopLoop := COPYSTR(CALHistoryLine[1].Code, STRLEN(CALHistoryLine[1].Code) - 4) = 'BEGIN';
+
+            IF NOT StopLoop THEN
+              StopLoop := CALHistoryLine[1].NEXT = 0;
+
+          UNTIL StopLoop;
+      END;
+
+      FirstCALHistoryLine := CALHistoryLine[1];
+      CheckGuidelinesMgt.Initialize;
+      CheckGuidelinesMgt.AnalyseCode(
+        CALHistoryLine[1], TmpCheckGuidelinesComment, TmpVariableBuffer, FirstCharacter + 2, RecName, 0, '');
+      LastCALHistoryLine := CALHistoryLine[1];
+
+      LoopCounter := 1;
+
+      DeleteNotSelectedComments(TmpCheckGuidelinesComment, SelectedCALHistoryLine);
+
+      WHILE NOT TmpCheckGuidelinesComment.ISEMPTY AND (LoopCounter <= 3) DO BEGIN
+
+        ExitValue := ExitValue OR CorrectGroup1(TmpCheckGuidelinesComment, CALHistoryLine);
+        ExitValue := ExitValue OR CorrectGroup2(TmpCheckGuidelinesComment, CALHistoryLine, LoopCounter);
+        ExitValue := ExitValue OR CorrectGroup3(TmpCheckGuidelinesComment, CALHistoryLine);
+
+        CALHistoryLine[1].RESET;
+        CALHistoryLine[1] := FirstCALHistoryLine;
+        TmpCheckGuidelinesComment.SETCURRENTKEY("Object Type", "Object No.", "C/AL Line No.", "Autocorrect Parameter");
+        TmpCheckGuidelinesComment.SETRANGE("Autocorrect Group", 4);
+        IF NOT TmpCheckGuidelinesComment.ISEMPTY THEN
+          ExitValue := ExitValue OR CorrectGroup4(CALHistoryLine[1], SelectedCALHistoryLine, FirstCharacter + 2);
+
+        TmpCheckGuidelinesComment.RESET;
+        TmpCheckGuidelinesComment.DELETEALL;
+
+        CALHistoryLine[1] := FirstCALHistoryLine;
+
+        CheckGuidelinesMgt.AnalyseCode(
+          CALHistoryLine[1], TmpCheckGuidelinesComment, TmpVariableBuffer, FirstCharacter + 2, RecName, 0, '');
+        DeleteNotSelectedComments(TmpCheckGuidelinesComment, SelectedCALHistoryLine);
+
+        LoopCounter += 1;
+      END;
+
+      TmpCheckGuidelinesComment.SETCURRENTKEY("Object Type", "Object No.", "C/AL Line No.", "Autocorrect Parameter");
+      TmpCheckGuidelinesComment.SETRANGE("Autocorrect Group");
+
+      CALHistoryLine[1] := LastCALHistoryLine;
+    END;
+
+    LOCAL PROCEDURE CorrectGroup1@6(VAR CheckGuidelinesComment@1000 : Record 11102081;VAR CALHistoryLine@1001 : ARRAY [2] OF Record 11102053) ExitValue : Boolean;
+    VAR
+      Setup@1002 : Record 11102035;
+      Mgt@1003 : Codeunit 11102035;
+      CodeLine@1004 : Text;
+      CommentLine@1005 : Text;
+      OriginalCodeLine@1006 : Text;
+      StartOfTableName@1007 : Integer;
+    BEGIN
+      WITH CheckGuidelinesComment DO BEGIN
+
+        SETCURRENTKEY("Object Type", "Object No.", "C/AL Line No.", "Autocorrect Parameter");
+        SETRANGE("Autocorrect Group", 1);
+        IF FINDLAST THEN
+          REPEAT
+
+            GetCodeLine(CALHistoryLine[1], "C/AL Line No.", CodeLine, CommentLine);
+
+            OriginalCodeLine := CodeLine;
+
+            CASE "Comment No." OF
+
+              Setup.FIELDNO("Check Missing ;") :
+                IF "Autocorrect Parameter" = 1 THEN
+                  CodeLine += ';'
+                ELSE
+                  CodeLine := DELSTR(CodeLine, STRLEN(CodeLine));
+
+              Setup.FIELDNO("Check Missing Spaces") :
+                CodeLine := INSSTR(CodeLine, ' ', "Autocorrect Parameter");
+
+              Setup.FIELDNO("Check Redundant ()") :
+                IF COPYSTR(CodeLine, "Autocorrect Parameter", 2) = '()' THEN
+                  CodeLine := DELSTR(CodeLine, "Autocorrect Parameter", 2)
+                ELSE BEGIN
+                  CodeLine := DELSTR(CodeLine, "Autocorrect Parameter", 1);
+                  IF (COPYSTR(CodeLine, "Autocorrect Parameter" - 1, 1) <> ' ') AND
+                     NOT (COPYSTR(CodeLine, "Autocorrect Parameter", 1) IN [' ', ')', ']', ';'])
+                  THEN
+                    CodeLine := INSSTR(CodeLine, ' ', "Autocorrect Parameter");
+                END;
+
+              Setup.FIELDNO("Check Redundant Spaces") :
+                CodeLine := DELSTR(CodeLine, "Autocorrect Parameter", 1);
+
+              Setup.FIELDNO("Check = TRUE") :
+                CASE TRUE OF
+                  STRPOS(CodeLine, ' = TRUE') > 0 :
+                    CodeLine := Mgt.Replace(CodeLine, ' = TRUE', '');
+                  STRPOS(CodeLine, '= TRUE') > 0 :
+                    CodeLine := Mgt.Replace(CodeLine, '= TRUE', '');
+                  STRPOS(CodeLine, '=TRUE') > 0 :
+                    CodeLine := Mgt.Replace(CodeLine, '=TRUE', '');
+                END;
+
+              Setup.FIELDNO("Check Table Name in SETRANGE"),
+              Setup.FIELDNO("Check Redundant Table Name") :
+                BEGIN
+                  StartOfTableName := GetStartPosOfTablename(CodeLine, "Autocorrect Parameter");
+                  IF StartOfTableName <> 0 THEN
+                    CodeLine := DELSTR(CodeLine, StartOfTableName, "Autocorrect Parameter" - StartOfTableName + 1);
+                END;
+
+              Setup.FIELDNO("Check Empty Lines") :
+                BEGIN
+                  CALHistoryLine[2].SETRANGE("Line No.", CALHistoryLine[1]."Line No.");
+                  CALHistoryLine[2].DELETEALL;
+                  ExitValue := TRUE;
+                END;
+
+              Setup.FIELDNO("Space after Comma") :
+                IF "Autocorrect Parameter 2" = 0 THEN
+                  CodeLine := INSSTR(CodeLine, ' ', "Autocorrect Parameter")
+                ELSE
+                  CodeLine := DELSTR(CodeLine, "Autocorrect Parameter", 1);
+
+            END;
+
+            IF CodeLine <> OriginalCodeLine THEN BEGIN
+              SetCodeLine(CALHistoryLine[1], "C/AL Line No.", CodeLine, CommentLine);
+              ExitValue := TRUE;
+            END;
+
+            DeleteRelatedComments(CheckGuidelinesComment);
+
+          UNTIL NEXT(-1) = 0;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE CorrectGroup2@7(VAR CheckGuidelinesComment@1000 : Record 11102081;VAR CALHistoryLine@1001 : ARRAY [2] OF Record 11102053;LoopCounter@1002 : Integer) ExitValue : Boolean;
+    VAR
+      Setup@1003 : Record 11102035;
+      CodeLine@1004 : Text;
+      CommentLine@1005 : Text;
+      NextCodeLine@1006 : Text;
+      NextCommentLine@1007 : Text;
+      OriginalCodeLine@1008 : Text;
+      PrevCodeLine@1009 : Text;
+      PrevCommentLine@1010 : Text;
+      NoOfSpaces@1011 : Integer;
+      SplitPos@1012 : Integer;
+    BEGIN
+      WITH CheckGuidelinesComment DO BEGIN
+
+        SETCURRENTKEY("Object Type", "Object No.", "C/AL Line No.", "Autocorrect Parameter");
+        SETRANGE("Autocorrect Group", 2);
+        IF FINDSET THEN
+          REPEAT
+
+            GetCodeLine(CALHistoryLine[1], "C/AL Line No.", CodeLine, CommentLine);
+            OriginalCodeLine := CodeLine;
+
+            CASE "Comment No." OF
+
+              Setup.FIELDNO("Check Wrong IF THEN Use") :
+
+                CASE "Autocorrect Parameter" OF
+                  1, 3 :
+                    BEGIN
+                      IF "Autocorrect Parameter" = 1 THEN BEGIN
+                        SplitPos := STRPOS(CodeLine, ' THEN');
+                        IF SplitPos = 0 THEN
+                          SplitPos := STRPOS(CodeLine, 'THEN')
+                        ELSE
+                          SplitPos += 1;
+                      END;
+
+                      IF "Autocorrect Parameter" = 3 THEN BEGIN
+                        SplitPos := STRPOS(CodeLine, ' DO');
+                        IF SplitPos = 0 THEN
+                          SplitPos := STRPOS(CodeLine, 'DO')
+                        ELSE
+                          SplitPos += 1;
+                      END;
+
+                      IF SplitPos > 0 THEN BEGIN
+                        NextCodeLine := COPYSTR(CodeLine, SplitPos);
+                        CodeLine := DELSTR(CodeLine, SplitPos);
+                        NoOfSpaces := STRLEN(CodeLine) - STRLEN(DELCHR(CodeLine, '<')) + 1;
+                        NextCodeLine := PADSTR('', NoOfSpaces) + NextCodeLine;
+                        NextCommentLine := CommentLine;
+                        CommentLine := '';
+                        SetCodeLine(CALHistoryLine[1], "C/AL Line No." + NewLineNo(LoopCounter), NextCodeLine, NextCommentLine);
+
+                        MoveBeginComment(CheckGuidelinesComment, "C/AL Line No.", "C/AL Line No." + NewLineNo(LoopCounter));
+
+                      END;
+
+                    END;
+
+                  2 :
+                    IF GotoPreviousLine(CALHistoryLine) THEN BEGIN
+                      GetCodeLine(CALHistoryLine[2], CALHistoryLine[2]."Line No.", PrevCodeLine, PrevCommentLine);
+                      CodeLine := PrevCodeLine + ' ' + DELCHR(CodeLine);
+                      CALHistoryLine[2].SETRANGE("Line No.", CALHistoryLine[2]."Line No.");
+                      CALHistoryLine[2].DELETEALL;
+
+                      MoveEndComment(CheckGuidelinesComment, CALHistoryLine[2]."Line No.", "C/AL Line No.");
+
+                    END;
+
+                  4 :
+                    BEGIN
+
+                      NextCodeLine := COPYSTR(CodeLine, "Autocorrect Parameter 2");
+                      CodeLine := DELSTR(CodeLine, "Autocorrect Parameter 2");
+                      NoOfSpaces := STRLEN(CodeLine) - STRLEN(DELCHR(CodeLine, '<')) + 1;
+                      NextCodeLine := PADSTR('', NoOfSpaces) + NextCodeLine;
+
+                      NextCommentLine := CommentLine;
+                      CommentLine := '';
+
+                      SetCodeLine(CALHistoryLine[1], "C/AL Line No." + NewLineNo(LoopCounter), NextCodeLine, NextCommentLine);
+
+                      MoveBeginComment(CheckGuidelinesComment, "C/AL Line No.", "C/AL Line No." + NewLineNo(LoopCounter));
+
+                    END;
+
+                END;
+
+              Setup.FIELDNO("Check Wrong Line Break") :
+                CASE "Autocorrect Parameter 2" OF
+                  0 :
+                    BEGIN
+                      NextCodeLine := COPYSTR(CodeLine, "Autocorrect Parameter");
+                      CodeLine := DELSTR(CodeLine, "Autocorrect Parameter");
+                      NoOfSpaces := STRLEN(CodeLine) - STRLEN(DELCHR(CodeLine, '<'));
+                      CASE TRUE OF
+                        DELSTR(DELCHR(CodeLine), 3) = 'IF' :
+                          NoOfSpaces += 3;
+                        DELSTR(DELCHR(CodeLine), 3) = 'FOR' :
+                          NoOfSpaces += 4;
+                        DELSTR(DELCHR(CodeLine), 3) = 'UNTIL' :
+                          NoOfSpaces += 6;
+                        DELSTR(DELCHR(CodeLine), 3) = 'WHILE' :
+                          NoOfSpaces += 6;
+                      END;
+
+                      NextCodeLine := PADSTR('', NoOfSpaces) + NextCodeLine;
+
+                      NextCommentLine := CommentLine;
+                      CommentLine := '';
+
+                      SetCodeLine(CALHistoryLine[1], "C/AL Line No." + NewLineNo(LoopCounter), NextCodeLine, NextCommentLine);
+
+                      MoveBeginComment(CheckGuidelinesComment, "C/AL Line No.", "C/AL Line No." + NewLineNo(LoopCounter));
+                    END;
+                  1 :
+                    IF GotoPreviousLine(CALHistoryLine) THEN BEGIN
+                      GetCodeLine(CALHistoryLine[2], CALHistoryLine[2]."Line No.", PrevCodeLine, PrevCommentLine);
+                      PrevCodeLine += ',';
+                      SetCodeLine(CALHistoryLine[2], CALHistoryLine[2]."Line No.", PrevCodeLine, PrevCommentLine);
+                      CodeLine := DELSTR(CodeLine, "Autocorrect Parameter", 1);
+                    END;
+                END;
+
+            END;
+
+            IF CodeLine <> OriginalCodeLine THEN BEGIN
+              SetCodeLine(CALHistoryLine[1], "C/AL Line No.", CodeLine, CommentLine);
+              ExitValue := TRUE;
+            END;
+
+            DeleteRelatedComments(CheckGuidelinesComment);
+
+          UNTIL NEXT = 0;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE CorrectGroup3@8(VAR CheckGuidelinesComment@1000 : Record 11102081;VAR CALHistoryLine@1001 : ARRAY [2] OF Record 11102053) ExitValue : Boolean;
+    VAR
+      Setup@1002 : Record 11102035;
+      Mgt@1003 : Codeunit 11102035;
+      CodeLine@1004 : Text;
+      CommentLine@1005 : Text;
+      OriginalCodeLine@1006 : Text;
+      PrevCodeLine@1007 : Text;
+      PrevCommentLine@1008 : Text;
+      RemoveSemicolon@1009 : Boolean;
+    BEGIN
+      WITH CheckGuidelinesComment DO BEGIN
+
+        SETCURRENTKEY("Object Type", "Object No.", "C/AL Line No.", "Autocorrect Parameter");
+        SETRANGE("Autocorrect Group", 3);
+        IF FINDSET THEN
+          REPEAT
+
+            GetCodeLine(CALHistoryLine[1], "C/AL Line No.", CodeLine, CommentLine);
+            OriginalCodeLine := CodeLine;
+
+            CASE "Comment No." OF
+
+              Setup.FIELDNO("Check Unnecessary BEGIN END") :
+
+                IF "Autocorrect Parameter" = 1 THEN
+                  CodeLine := Mgt.Replace(CodeLine, 'BEGIN', '')
+                ELSE BEGIN
+                  RemoveSemicolon := STRPOS(CodeLine, 'END ELSE') > 0;
+                  CASE TRUE OF
+                    STRPOS(CodeLine, 'END;') > 0 :
+                      CodeLine := Mgt.Replace(CodeLine, 'END;', '');
+                    STRPOS(CodeLine, 'END ELSE') > 0 :
+                      CodeLine := Mgt.Replace(CodeLine, 'END ELSE', 'ELSE');
+                    ELSE
+                      CodeLine := Mgt.Replace(CodeLine, 'END', '');
+                  END;
+
+                  IF NOT RemoveSemicolon THEN
+                    IF GotoNextLine(CALHistoryLine) THEN
+                      RemoveSemicolon := STRPOS(DELCHR(CALHistoryLine[2].Code), 'ELSE') = 1;
+
+                  IF RemoveSemicolon THEN
+                    IF GotoPreviousLine(CALHistoryLine) THEN BEGIN
+                      GetCodeLine(CALHistoryLine[2], CALHistoryLine[2]."Line No.", PrevCodeLine, PrevCommentLine);
+                      PrevCodeLine := DELCHR(PrevCodeLine, '>');
+                      IF PrevCodeLine[STRLEN(PrevCodeLine)] = ';' THEN BEGIN
+                        PrevCodeLine := DELSTR(PrevCodeLine, STRLEN(PrevCodeLine));
+                        SetCodeLine(CALHistoryLine[2], CALHistoryLine[2]."Line No.", PrevCodeLine, PrevCommentLine);
+                      END;
+                    END;
+
+                END;
+
+            END;
+
+            IF CodeLine <> OriginalCodeLine THEN BEGIN
+              SetCodeLine(CALHistoryLine[1], "C/AL Line No.", CodeLine, CommentLine);
+              ExitValue := TRUE;
+            END;
+
+            DeleteRelatedComments(CheckGuidelinesComment);
+
+          UNTIL NEXT = 0;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE CorrectGroup4@9(VAR CALHistoryLine@1000 : Record 11102053;VAR SelectedCALHistoryLine@1001 : Record 11102053;StartIndent@1002 : Integer) ExitValue : Boolean;
+    VAR
+      TmpComment@1003 : TEMPORARY Record 11102081;
+      CheckGuidelinesMgt@1004 : Codeunit 11102060;
+      CodeLine@1005 : Text;
+      IndentRecName@1006 : ARRAY [500] OF Text[100];
+      OriginalCodeLine@1007 : Text;
+      PreviousCodeLine@1008 : Text;
+      RecName2@1009 : Text;
+      DummyIdentifier@1010 : Code[100];
+      LastCharacterPreviousLine@1011 : Char;
+      AllowedMaxIndent@1012 : Integer;
+      AllowedMinIndent@1013 : Integer;
+      CurrentIndent@1014 : Integer;
+      CurrentIndentCounter@1015 : Integer;
+      EmptyLineCounter@1016 : Integer;
+      ExpectedIndent@1017 : Integer;
+      i@1018 : Integer;
+      Indent@1019 : ARRAY [500] OF Integer;
+      IndentCALLineNo@1020 : ARRAY [500] OF Integer;
+      IndentCauseCounter@1021 : Integer;
+      IndentExpectedIndent@1022 : ARRAY [500] OF Integer;
+      LineBreakStartAt@1023 : Integer;
+      PreviousCorrection@1024 : Integer;
+      PreviousIndent@1025 : Integer;
+      PreviousLineBreakStartAt@1026 : Integer;
+      GoBack@1027 : ' ,Begin,If,While';
+      IndentIsBegin@1028 : ARRAY [500] OF ' ,Begin,If,If Begin,While';
+      IndentOpenEnd@1029 : ARRAY [500] OF Boolean;
+      LineCanBeModified@1030 : Boolean;
+      SelectedCode@1031 : Boolean;
+      SkipCheck@1032 : Boolean;
+      StopLoop@1033 : Boolean;
+      StopLoop2@1034 : Boolean;
+      WrongThenUse@1035 : Boolean;
+    BEGIN
+      EmptyLineCounter := 1;
+
+      SelectedCode := NOT SelectedCALHistoryLine.ISEMPTY;
+
+      REPEAT
+        StopLoop := CALHistoryLine.NEXT = 0;
+        IF NOT StopLoop THEN BEGIN
+          StopLoop := COPYSTR(CALHistoryLine.Code, StartIndent - 2, 3) = 'END';
+
+          IF NOT StopLoop THEN BEGIN
+            CALHistoryLine.SETRANGE("Line No.", CALHistoryLine."Line No.");
+            CodeLine := CALHistoryLine.Code;
+            WHILE CALHistoryLine.NEXT <> 0 DO
+              IF STRLEN(CodeLine + CALHistoryLine.Code) < 1024 THEN
+                CodeLine += CALHistoryLine.Code;
+            CALHistoryLine.SETRANGE("Line No.");
+
+            CodeLine := DELCHR(CodeLine, '>');
+            OriginalCodeLine := CodeLine;
+
+            IF PreviousCorrection > 0 THEN
+              CodeLine := PADSTR('', PreviousCorrection) + CodeLine;
+
+            IF PreviousCorrection < 0 THEN
+              IF DELCHR(DELSTR(CodeLine, StartIndent - PreviousCorrection)) = '' THEN
+                CodeLine := COPYSTR(CodeLine, - PreviousCorrection + 1);
+
+            WrongThenUse := FALSE;
+
+            IF CodeLine = '' THEN
+              EmptyLineCounter += 1
+            ELSE
+              EmptyLineCounter := 0;
+
+            IndentCauseCounter += 1;
+            CurrentIndentCounter := IndentCauseCounter;
+
+            IF (STRPOS(DELCHR(CodeLine), '//') = 1) OR (DELCHR(CodeLine) = '}') THEN
+              CodeLine := '';
+
+            FOR i := 1 TO IndentCauseCounter - 1 DO
+              IF IndentRecName[i] <> '' THEN
+                RecName2 := IndentRecName[i];
+
+            CheckGuidelinesMgt.GetLineProperties(
+              CodeLine, TmpComment, Indent[IndentCauseCounter], IndentIsBegin[IndentCauseCounter], GoBack,
+              IndentOpenEnd[IndentCauseCounter], IndentExpectedIndent[IndentCauseCounter], IndentRecName[IndentCauseCounter],
+              LineBreakStartAt, CALHistoryLine."Line No.", RecName2, DummyIdentifier);
+
+            Indent[IndentCauseCounter] -= StartIndent;
+            IF Indent[IndentCauseCounter] < 0 THEN
+              Indent[IndentCauseCounter] := 0;
+
+            IndentCALLineNo[IndentCauseCounter] := CALHistoryLine."Line No.";
+
+            CurrentIndent := Indent[IndentCauseCounter];
+
+            SkipCheck := CodeLine = '';
+
+            IF NOT IndentOpenEnd[IndentCauseCounter] AND
+               (GoBack = GoBack::" ")
+            THEN
+              IF IndentCauseCounter > 2 THEN
+                SkipCheck :=
+                  (NOT IndentOpenEnd[IndentCauseCounter - 1]) AND
+                  (Indent[IndentCauseCounter - 1] = Indent[IndentCauseCounter]);
+
+            IF SkipCheck THEN
+              IndentCauseCounter -= 1
+            ELSE BEGIN
+
+              CASE GoBack OF
+                GoBack::"If" :
+                  IF STRPOS(CodeLine, 'THEN') > 0 THEN
+                    IF STRPOS(DELCHR(CodeLine), 'THEN') <> 1 THEN BEGIN
+                      IF STRPOS(DELCHR(CodeLine), 'ELSE') <> 1 THEN
+                        WrongThenUse := TRUE;
+
+                      CheckGuidelinesMgt.GoToPreviousIf(IndentCauseCounter, IndentIsBegin);
+                      IF IndentCauseCounter >= 0 THEN
+                        Indent[CurrentIndentCounter] := Indent[IndentCauseCounter];
+                      IndentCauseCounter := CurrentIndentCounter;
+                    END;
+
+                GoBack::"Begin" :
+                  BEGIN
+                    CheckGuidelinesMgt.GoToPreviousBegin(IndentCauseCounter, IndentIsBegin);
+                    IndentCauseCounter := CurrentIndentCounter;
+                  END;
+              END;
+
+              ExpectedIndent := -0;
+              IF PreviousCodeLine <> '' THEN
+                LastCharacterPreviousLine := PreviousCodeLine[STRLEN(PreviousCodeLine)];
+
+              IF LastCharacterPreviousLine = ':' THEN
+                ExpectedIndent := CheckGuidelinesMgt.GetIndentPreviousBegin(IndentCauseCounter, IndentIsBegin, Indent) + 4
+              ELSE
+                CASE GoBack OF
+
+                  GoBack::" " :
+                    IF IndentCauseCounter > 1 THEN
+                      IF IndentOpenEnd[IndentCauseCounter - 1] THEN
+                        ExpectedIndent := Indent[IndentCauseCounter - 1] + IndentExpectedIndent[IndentCauseCounter - 1]
+                      ELSE
+                        ExpectedIndent := Indent[IndentCauseCounter - 1];
+
+                  GoBack::"Begin" :
+                    BEGIN
+                      StopLoop2 := FALSE;
+                      i := IndentCauseCounter - 1;
+                      WHILE (i > 0) AND NOT StopLoop2 DO
+                        IF IndentIsBegin[i] IN [IndentIsBegin[i]::"Begin", IndentIsBegin[i]::"If Begin"] THEN BEGIN
+                          StopLoop2 := TRUE;
+                          ExpectedIndent := Indent[i];
+                        END ELSE
+                          i -= 1;
+                    END;
+
+                  GoBack::"If" :
+                    BEGIN
+                      StopLoop2 := FALSE;
+                      i := IndentCauseCounter - 1;
+                      WHILE (i > 0) AND NOT StopLoop2 DO
+                        CASE IndentIsBegin[i] OF
+                          IndentIsBegin[i]::" ", IndentIsBegin[i]::"While" :
+                            i -= 1;
+
+                          IndentIsBegin[i]::"Begin", IndentIsBegin[i]::"If Begin" :
+                            BEGIN
+                              StopLoop2 := TRUE;
+                              ExpectedIndent := Indent[i] + 2;
+                            END;
+
+                          IndentIsBegin[i]::"If" :
+                            BEGIN
+                              StopLoop2 := TRUE;
+                              ExpectedIndent := Indent[i];
+                            END;
+                        END;
+                    END;
+
+                  GoBack::"While" :
+                    BEGIN
+                      StopLoop2 := FALSE;
+                      i := IndentCauseCounter - 1;
+                      WHILE (i > 0) AND NOT StopLoop2 DO
+                        CASE IndentIsBegin[i] OF
+                          IndentIsBegin[i]::" ", IndentIsBegin[i]::"If" :
+                            i -= 1;
+
+                          IndentIsBegin[i]::"Begin", IndentIsBegin[i]::"If Begin" :
+                            BEGIN
+                              StopLoop2 := TRUE;
+                              ExpectedIndent := Indent[i] + 2;
+                            END;
+
+                          IndentIsBegin[i]::"While" :
+                            BEGIN
+                              StopLoop2 := TRUE;
+                              ExpectedIndent := Indent[i];
+                            END;
+                        END;
+                    END;
+
+                END;
+
+              IF GoBack <> GoBack::" " THEN BEGIN
+                CASE GoBack OF
+
+                  GoBack::"Begin" :
+                    CheckGuidelinesMgt.GoToPreviousBegin(IndentCauseCounter, IndentIsBegin);
+
+                  GoBack::"If" :
+                    CheckGuidelinesMgt.GoToPreviousIf(IndentCauseCounter, IndentIsBegin);
+
+                  GoBack::"While" :
+                    CheckGuidelinesMgt.GoToPreviousWhile(IndentCauseCounter, IndentIsBegin);
+
+                END;
+
+                IF (GoBack IN [GoBack::"If", GoBack::"While"]) AND
+                   (IndentIsBegin[IndentCauseCounter] IN
+                     [IndentIsBegin[IndentCauseCounter]::"Begin", IndentIsBegin[IndentCauseCounter]::"If Begin"])
+                THEN
+                  IndentCauseCounter += 1
+                ELSE
+                  IF IndentCauseCounter = 0 THEN
+                    IndentCauseCounter := 1;
+
+                Indent[IndentCauseCounter] := Indent[CurrentIndentCounter];
+                IndentIsBegin[IndentCauseCounter] := IndentIsBegin[CurrentIndentCounter];
+                IndentOpenEnd[IndentCauseCounter] := IndentOpenEnd[CurrentIndentCounter];
+                IndentExpectedIndent[IndentCauseCounter] := IndentExpectedIndent[CurrentIndentCounter];
+                IndentCALLineNo[IndentCauseCounter] := IndentCALLineNo[CurrentIndentCounter];
+                IndentRecName[IndentCauseCounter] := '';
+
+                CurrentIndentCounter := IndentCauseCounter;
+
+                IF (GoBack IN [GoBack::"If", GoBack::"While"]) AND
+                   (IndentIsBegin[IndentCauseCounter] = IndentIsBegin[IndentCauseCounter]::" ") AND
+                   (PreviousLineBreakStartAt <> 0)
+                THEN
+                  IndentIsBegin[IndentCauseCounter] := IndentIsBegin[IndentCauseCounter];
+
+              END;
+
+              IF NOT IndentOpenEnd[CurrentIndentCounter] THEN
+                CheckGuidelinesMgt.GoToStartOfBlock(IndentCauseCounter, IndentOpenEnd, IndentIsBegin);
+
+              LineCanBeModified := TRUE;
+              IF SelectedCode THEN BEGIN
+                SelectedCALHistoryLine.SETRANGE("Line No.", ROUND(CALHistoryLine."Line No." / 10, 1, '<'));
+                LineCanBeModified := NOT SelectedCALHistoryLine.ISEMPTY;
+                SelectedCALHistoryLine.SETRANGE("Line No.");
+              END;
+
+              IF LineCanBeModified THEN
+                IF (CurrentIndent <> ExpectedIndent) AND (LineBreakStartAt > 0) AND (PreviousLineBreakStartAt > 0) THEN BEGIN
+
+                  IF PreviousIndent < PreviousLineBreakStartAt - StartIndent THEN
+                    PreviousIndent := PreviousLineBreakStartAt - StartIndent;
+
+                  AllowedMinIndent := PreviousLineBreakStartAt - StartIndent;
+                  AllowedMaxIndent := PreviousIndent + 2;
+
+                  IF CurrentIndent < AllowedMinIndent THEN BEGIN
+                    CodeLine := PADSTR('', AllowedMinIndent - CurrentIndent) + CodeLine;
+                    Indent[CurrentIndentCounter] += AllowedMinIndent - CurrentIndent;
+                    IF LineBreakStartAt <> 0 THEN
+                      LineBreakStartAt += AllowedMinIndent - CurrentIndent;
+                  END ELSE
+                    IF CurrentIndent > AllowedMaxIndent THEN BEGIN
+                      CodeLine := COPYSTR(CodeLine, CurrentIndent - AllowedMaxIndent + 1);
+                      Indent[CurrentIndentCounter] -= CurrentIndent - AllowedMaxIndent;
+                      IF LineBreakStartAt <> 0 THEN
+                        LineBreakStartAt -= CurrentIndent - AllowedMaxIndent;
+                    END;
+
+                END ELSE
+                  IF CurrentIndent <> ExpectedIndent THEN
+                    IF CurrentIndent > ExpectedIndent THEN BEGIN
+                      IF NOT WrongThenUse THEN BEGIN
+                        CodeLine := COPYSTR(CodeLine, CurrentIndent - ExpectedIndent + 1);
+                        Indent[CurrentIndentCounter] -= CurrentIndent - ExpectedIndent;
+                        IF LineBreakStartAt <> 0 THEN
+                          LineBreakStartAt -= CurrentIndent - ExpectedIndent;
+                      END;
+                    END ELSE BEGIN
+                      CodeLine := PADSTR('', ExpectedIndent - CurrentIndent) + CodeLine;
+                      Indent[CurrentIndentCounter] += ExpectedIndent - CurrentIndent;
+                      IF LineBreakStartAt <> 0 THEN
+                        LineBreakStartAt += ExpectedIndent - CurrentIndent;
+                    END;
+
+              PreviousCorrection := 0;
+
+              IF CodeLine <> OriginalCodeLine THEN BEGIN
+                SetCodeLine(CALHistoryLine, CALHistoryLine."Line No.", CodeLine, '');
+                CALHistoryLine.SETRANGE("Line No.");
+                ExitValue := TRUE;
+                IF IndentOpenEnd[CurrentIndentCounter] THEN
+                  PreviousCorrection := STRLEN(CodeLine) - STRLEN(OriginalCodeLine);
+              END;
+
+              IF NOT IndentOpenEnd[CurrentIndentCounter] THEN
+                LineBreakStartAt := 0;
+
+              PreviousIndent := Indent[CurrentIndentCounter];
+              PreviousLineBreakStartAt := LineBreakStartAt;
+              PreviousCodeLine := CodeLine;
+
+            END;
+          END;
+
+        END;
+      UNTIL StopLoop;
+    END;
+
+    PROCEDURE CorrectCaptions@10(VAR Object@1000 : Record 2000000001;VAR CALHistoryLine@1001 : ARRAY [2] OF Record 11102053;VAR SelectedCALHistoryLine@1002 : Record 11102053) ExitValue : Boolean;
+    VAR
+      Buffer@1003 : TEMPORARY Record 11102068;
+      TmpLine@1004 : ARRAY [2] OF TEMPORARY Record 11102068;
+      TranslationMgt@1005 : Codeunit 11102051;
+      FromCALLineNo@1006 : Integer;
+      TillCALLineNo@1007 : Integer;
+    BEGIN
+      IF CALHistoryLine[1].FINDFIRST THEN BEGIN
+
+        IF SelectedCALHistoryLine.FINDFIRST THEN
+          FromCALLineNo := SelectedCALHistoryLine."Line No.";
+
+        IF SelectedCALHistoryLine.FINDLAST THEN
+          TillCALLineNo := SelectedCALHistoryLine."Line No."
+        ELSE
+          TillCALLineNo := 9999999;
+
+        TranslationMgt.ImportCALLines(Object, CALHistoryLine[1], Buffer, TRUE);
+        IF Buffer.FINDSET THEN
+          REPEAT
+            Buffer."C/AL Line No." := ROUND(Buffer."C/AL Line No." / 10, 1);
+            Buffer.MODIFY;
+          UNTIL Buffer.NEXT = 0;
+
+        TranslationMgt.FinalizeBuffer(Buffer, TmpLine, Object.Type, Object.ID);
+        TranslationMgt.AddMandatoryLanguages(TmpLine);
+
+        TmpLine[1].SETCURRENTKEY("Caption Entry No.");
+        TmpLine[1].SETRANGE("C/AL Line No.", FromCALLineNo, TillCALLineNo);
+
+        IF TmpLine[1].FINDSET THEN
+          REPEAT
+
+            TmpLine[2].RESET;
+            TmpLine[2].SETCURRENTKEY("Caption Entry No.");
+            TmpLine[2].SETRANGE("Caption Entry No.", TmpLine[1]."Caption Entry No.");
+            TmpLine[2].SETFILTER("Calculated Caption 1", '<>%1', '');
+            TmpLine[2].SETRANGE("Missing Caption", TRUE);
+            IF TmpLine[2].FINDSET THEN BEGIN
+              REPEAT
+                TmpLine[2].FillCaption(TmpLine[2].TotalCalculatedCaption);
+                TmpLine[2].MODIFY;
+              UNTIL TmpLine[2].NEXT = 0;
+              TranslationMgt.WriteLineToCAL(TmpLine, CALHistoryLine);
+              ExitValue := TRUE;
+            END;
+
+            TmpLine[1].SETFILTER("Caption Entry No.", '>%1', TmpLine[1]."Caption Entry No.");
+          UNTIL TmpLine[1].NEXT = 0;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE GetCodeLine@11(VAR CALHistoryLine@1000 : Record 11102053;LineNo@1001 : Integer;VAR CodeLine@1002 : Text;VAR CommentLine@1003 : Text);
+    VAR
+      Char@1004 : Char;
+      i@1005 : Integer;
+      RemarkOpen@1006 : Integer;
+      TextOpen@1007 : Boolean;
+      VariableOpen@1008 : Boolean;
+    BEGIN
+      CodeLine := '';
+      CALHistoryLine.SETRANGE("Line No.", LineNo);
+      IF CALHistoryLine.FINDSET THEN
+        REPEAT
+          IF STRLEN(CodeLine + CALHistoryLine.Code) < 1024 THEN
+            CodeLine += CALHistoryLine.Code;
+        UNTIL CALHistoryLine.NEXT = 0;
+
+      CommentLine := '';
+
+      FOR i := 1 TO STRLEN(CodeLine) DO BEGIN
+
+        Char := CodeLine[i];
+
+        CASE TRUE OF
+
+          RemarkOpen > 0 :
+            BEGIN
+              IF Char = '{' THEN
+                RemarkOpen += 1;
+              IF Char = '}' THEN
+                RemarkOpen -= 1;
+            END;
+
+          TextOpen :
+            IF Char = '''' THEN
+              TextOpen := FALSE;
+
+          VariableOpen :
+            IF Char = '"' THEN
+              VariableOpen := FALSE;
+
+          Char = '''' :
+            TextOpen := TRUE;
+
+          Char = '"' :
+            VariableOpen := TRUE;
+
+          Char = '{' :
+            RemarkOpen += 1;
+
+          Char = '/' :
+            IF CodeLine[i + 1] = '/' THEN BEGIN
+              CommentLine := COPYSTR(CodeLine, i);
+              CodeLine := DELSTR(CodeLine, i);
+              EXIT;
+            END;
+
+        END;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE SetCodeLine@12(VAR CALHistoryLine@1000 : Record 11102053;LineNo@1001 : Integer;CodeLine@1002 : Text;CommentLine@1003 : Text);
+    VAR
+      NewCodeLine@1004 : Text;
+      SubLineCounter@1005 : Integer;
+    BEGIN
+      CALHistoryLine.SETRANGE("Line No.", LineNo);
+      CALHistoryLine.DELETEALL;
+
+      IF CommentLine = '' THEN
+        NewCodeLine := DELCHR(CodeLine, '>')
+      ELSE
+        NewCodeLine := DELCHR(CodeLine, '>') + ' ' + CommentLine;
+
+      IF DELCHR(NewCodeLine) <> '' THEN
+        WHILE NewCodeLine <> '' DO BEGIN
+          SubLineCounter += 1;
+          CALHistoryLine."Line No." := LineNo;
+          CALHistoryLine."Sub Line No." := SubLineCounter;
+          CALHistoryLine.Code := DELSTR(NewCodeLine, 251);
+          CALHistoryLine.INSERT;
+          NewCodeLine := COPYSTR(NewCodeLine, 251);
+        END;
+    END;
+
+    LOCAL PROCEDURE GotoPreviousLine@13(VAR CALHistoryLine@1000 : ARRAY [2] OF Record 11102053) : Boolean;
+    VAR
+      PrevCodeLine@1001 : Text;
+      PrevCommentLine@1002 : Text;
+      StopLoop@1003 : Boolean;
+    BEGIN
+      CALHistoryLine[2].RESET;
+      CALHistoryLine[2].SETFILTER("Line No.", '<%1', CALHistoryLine[1]."Line No.");
+      IF CALHistoryLine[2].FINDLAST THEN BEGIN
+        StopLoop := FALSE;
+        REPEAT
+          GetCodeLine(CALHistoryLine[2], CALHistoryLine[2]."Line No.", PrevCodeLine, PrevCommentLine);
+          StopLoop := DELCHR(PrevCodeLine) <> '';
+          IF NOT StopLoop THEN BEGIN
+            CALHistoryLine[2].SETRANGE("Line No.");
+            StopLoop := CALHistoryLine[2].NEXT(-1) = 0;
+          END;
+        UNTIL StopLoop;
+        EXIT(DELCHR(PrevCodeLine) <> '');
+      END;
+    END;
+
+    LOCAL PROCEDURE GotoNextLine@14(VAR CALHistoryLine@1000 : ARRAY [2] OF Record 11102053) : Boolean;
+    VAR
+      NextCodeLine@1001 : Text;
+      NextCommentLine@1002 : Text;
+      StopLoop@1003 : Boolean;
+    BEGIN
+      CALHistoryLine[2].RESET;
+      CALHistoryLine[2].SETFILTER("Line No.", '>%1', CALHistoryLine[1]."Line No.");
+      IF CALHistoryLine[2].FINDFIRST THEN BEGIN
+        StopLoop := FALSE;
+        REPEAT
+          GetCodeLine(CALHistoryLine[2], CALHistoryLine[2]."Line No.", NextCodeLine, NextCommentLine);
+          StopLoop := DELCHR(NextCodeLine) <> '';
+          IF NOT StopLoop THEN BEGIN
+            CALHistoryLine[2].SETRANGE("Line No.");
+            StopLoop := CALHistoryLine[2].NEXT = 0;
+          END;
+        UNTIL StopLoop;
+        EXIT(DELCHR(NextCodeLine) <> '');
+      END;
+    END;
+
+    LOCAL PROCEDURE GetStartPosOfTablename@15(CodeLine@1000 : Text;StartPos@1001 : Integer) : Integer;
+    VAR
+      LoopPos@1002 : Integer;
+      SearchQuote@1003 : Boolean;
+    BEGIN
+      IF CodeLine[StartPos] <> '.' THEN
+        EXIT(0);
+
+      SearchQuote := CodeLine[StartPos - 1] = '"';
+
+      IF SearchQuote THEN
+        LoopPos := StartPos - 2
+      ELSE
+        LoopPos := StartPos - 1;
+
+      WHILE LoopPos > 1 DO BEGIN
+
+        IF SearchQuote THEN BEGIN
+          IF CodeLine[LoopPos] = '"' THEN
+            EXIT(LoopPos);
+        END ELSE
+          IF CodeLine[LoopPos] IN ['/', ';', ':', '.', ',', '(', ')', '[', ']', ' ', '=', '+', '-', '*', '/', '>', '<'] THEN
+            EXIT(LoopPos + 1);
+
+        LoopPos -= 1;
+      END;
+    END;
+
+    LOCAL PROCEDURE DeleteRelatedComments@16(VAR CheckGuidelinesComment@1000 : Record 11102081);
+    VAR
+      Setup@1001 : Record 11102035;
+      OriginalFilter@1002 : Text;
+    BEGIN
+      WITH CheckGuidelinesComment DO BEGIN
+        OriginalFilter := GETFILTER("Autocorrect Group");
+
+        SETFILTER("Autocorrect Group", '>=2');
+        SETRANGE("C/AL Line No.", "C/AL Line No.", "C/AL Line No." + 9);
+
+        SETFILTER("Comment No.", '%1|%2', Setup.FIELDNO("Check Wrong IF THEN Use"), Setup.FIELDNO("Check Wrong Line Break"));
+        DELETEALL;
+
+        SETRANGE("C/AL Line No.");
+        SETFILTER("Autocorrect Group", OriginalFilter);
+        SETRANGE("Comment No.");
+
+      END;
+    END;
+
+    LOCAL PROCEDURE NewLineNo@17(LoopCounter@1000 : Integer) : Integer;
+    VAR
+      ctAddGap@1001 : TextConst 'DEU=Add gap.;ENU=Add gap.;ESP=Add gap.;FRA=Add gap.;NLD=Creeer tussenruimte.;DEA=Add gap.';
+    BEGIN
+      CASE LoopCounter OF
+        1 : EXIT(4);
+        2 : EXIT(2);
+        3 : EXIT(1);
+        ELSE
+          ERROR(ctAddGap);
+      END;
+    END;
+
+    LOCAL PROCEDURE MoveBeginComment@18(VAR CheckGuidelinesComment@1000 : Record 11102081;FromLineNo@1001 : Integer;NewLineNo2@1002 : Integer);
+    VAR
+      Setup@1003 : Record 11102035;
+      CheckGuidelinesComment2@1004 : Record 11102081;
+    BEGIN
+      WITH CheckGuidelinesComment DO BEGIN
+        CheckGuidelinesComment2 := CheckGuidelinesComment;
+        RESET;
+        SETRANGE("Autocorrect Group", 3);
+        SETRANGE("Comment No.", Setup.FIELDNO("Check Unnecessary BEGIN END"));
+        SETRANGE("Autocorrect Parameter", 1);
+        SETRANGE("C/AL Line No.", FromLineNo);
+        MODIFYALL("C/AL Line No.", NewLineNo2);
+
+        RESET;
+        SETCURRENTKEY("Object Type", "Object No.", "C/AL Line No.", "Autocorrect Parameter");
+        SETRANGE("Autocorrect Group", 2);
+        SETRANGE("Comment No.");
+        SETRANGE("Autocorrect Parameter");
+        CheckGuidelinesComment := CheckGuidelinesComment2;
+      END;
+    END;
+
+    LOCAL PROCEDURE MoveEndComment@19(VAR CheckGuidelinesComment@1000 : Record 11102081;FromLineNo@1001 : Integer;NewLineNo2@1002 : Integer);
+    VAR
+      Setup@1003 : Record 11102035;
+      CheckGuidelinesComment2@1004 : Record 11102081;
+    BEGIN
+      WITH CheckGuidelinesComment DO BEGIN
+        CheckGuidelinesComment2 := CheckGuidelinesComment;
+        RESET;
+        SETRANGE("Autocorrect Group", 3);
+        SETRANGE("Comment No.", Setup.FIELDNO("Check Unnecessary BEGIN END"));
+        SETRANGE("Autocorrect Parameter", 2);
+        SETRANGE("C/AL Line No.", FromLineNo);
+        MODIFYALL("C/AL Line No.", NewLineNo2);
+
+        RESET;
+        SETCURRENTKEY("Object Type", "Object No.", "C/AL Line No.", "Autocorrect Parameter");
+        SETRANGE("Autocorrect Group", 2);
+        SETRANGE("Comment No.");
+        SETRANGE("Autocorrect Parameter");
+        CheckGuidelinesComment := CheckGuidelinesComment2;
+      END;
+    END;
+
+    LOCAL PROCEDURE FunctionIsSelected@20(VAR CALHistoryLine@1000 : ARRAY [2] OF Record 11102053;VAR SelectedCALHistoryLine@1001 : Record 11102053) ExitValue : Boolean;
+    VAR
+      EndPos@1002 : Integer;
+    BEGIN
+      CASE TRUE OF
+
+        COPYSTR(CALHistoryLine[1].Code, STRLEN(CALHistoryLine[1].Code) - 3) = '=VAR' :
+          EndPos := STRLEN(CALHistoryLine[1].Code) - 3;
+
+        COPYSTR(CALHistoryLine[1].Code, STRLEN(CALHistoryLine[1].Code) - 5) = '=BEGIN' :
+          EndPos := STRLEN(CALHistoryLine[1].Code) - 5;
+
+        ELSE
+          EndPos := 4;
+
+      END;
+
+      CALHistoryLine[2].RESET;
+      CALHistoryLine[2].SETRANGE("Entry No.", 0);
+      CALHistoryLine[2].SETFILTER("Line No.", '>%1', CALHistoryLine[1]."Line No.");
+      CALHistoryLine[2].SETFILTER(Code, '%1', PADSTR('', EndPos) + 'END;');
+      IF CALHistoryLine[2].FINDFIRST THEN BEGIN
+        SelectedCALHistoryLine.SETRANGE("Line No.", CALHistoryLine[1]."Line No." / 10, CALHistoryLine[2]."Line No." / 10);
+        ExitValue := NOT SelectedCALHistoryLine.ISEMPTY;
+        SelectedCALHistoryLine.SETRANGE("Line No.");
+      END;
+    END;
+
+    LOCAL PROCEDURE DeleteNotSelectedComments@21(VAR TmpCheckGuidelinesComment@1000 : TEMPORARY Record 11102081;VAR SelectedCALHistoryLine@1001 : Record 11102053);
+    BEGIN
+      IF NOT SelectedCALHistoryLine.ISEMPTY THEN BEGIN
+        IF TmpCheckGuidelinesComment.FINDSET THEN
+          REPEAT
+            SelectedCALHistoryLine.SETRANGE("Line No.", ROUND(TmpCheckGuidelinesComment."C/AL Line No." / 10, 1, '<'));
+            IF SelectedCALHistoryLine.ISEMPTY THEN
+              TmpCheckGuidelinesComment.DELETE;
+          UNTIL TmpCheckGuidelinesComment.NEXT = 0;
+        SelectedCALHistoryLine.SETRANGE("Line No.");
+      END;
+    END;
+
+    PROCEDURE GlueLine@22(VAR CheckGuidelinesComment@1000 : Record 11102081;VAR CALHistoryLine@1001 : Record 11102053;CurrentLineNo@1002 : Integer) ExitValue : Boolean;
+    VAR
+      Setup@1003 : Record 11102035;
+      CodeLine@1004 : Text;
+      CommentLine@1005 : Text;
+      TillLine@1006 : Integer;
+      AddSpace@1007 : Boolean;
+    BEGIN
+      Setup.CustomGet;
+
+      WITH CheckGuidelinesComment DO BEGIN
+
+        RESET;
+        SETRANGE("Comment No.", Setup.FIELDNO("Check Broken Lines"));
+        SETFILTER("C/AL Line No.", '<=%1', CurrentLineNo);
+        SETFILTER("Autocorrect Parameter", '>=%1', CurrentLineNo - 1);
+        IF FINDFIRST THEN BEGIN
+
+          GetCodeLine(CALHistoryLine, "C/AL Line No.", CodeLine, CommentLine);
+
+          IF CALHistoryLine."Line No." = "Autocorrect Parameter" THEN
+            TillLine := "Autocorrect Parameter" + 1
+          ELSE
+            TillLine := "Autocorrect Parameter";
+
+          CALHistoryLine.SETRANGE("Line No.", CALHistoryLine."Line No." + 1, TillLine);
+          IF CALHistoryLine.FINDSET THEN
+            REPEAT
+              AddSpace := TRUE;
+              CASE CodeLine[STRLEN(CodeLine)] OF
+                ',' : AddSpace := Setup."Space after Comma" = Setup."Space after Comma"::Mandatory;
+                '(' : AddSpace := FALSE;
+              END;
+              IF AddSpace THEN
+                CodeLine := CodeLine + ' ';
+              CodeLine := CodeLine + DELCHR(CALHistoryLine.Code, '<>');
+              CALHistoryLine.DELETE;
+            UNTIL CALHistoryLine.NEXT = 0;
+
+          CALHistoryLine.RESET;
+          IF CALHistoryLine.NEXT <> 0 THEN
+            IF DELCHR(CALHistoryLine.Code, '<>') IN ['THEN', 'THEN BEGIN'] THEN BEGIN
+              IF STRLEN(CodeLine + ' ' + DELCHR(CALHistoryLine.Code, '<>')) - "Autocorrect Parameter 2" < 130 THEN BEGIN
+                CodeLine := CodeLine + ' ' + DELCHR(CALHistoryLine.Code, '<>');
+                CALHistoryLine.DELETE;
+              END;
+            END;
+
+          SetCodeLine(CALHistoryLine, "C/AL Line No.", CodeLine, CommentLine);
+
+          DELETE;
+          ExitValue := TRUE;
+        END;
+
+        RESET;
+        CALHistoryLine.RESET;
+      END;
+    END;
+
+    LOCAL PROCEDURE AutocorrectProperties@23(VAR Object@1000 : Record 2000000001;VAR CALHistoryLine@1001 : Record 11102053;VAR SelectedCALHistoryLine@1002 : Record 11102053) ExitValue : Boolean;
+    VAR
+      Setup@1003 : Record 11102035;
+      TmpComment@1004 : TEMPORARY Record 11102081;
+      CheckGuidelinesMgt@1005 : Codeunit 11102060;
+    BEGIN
+      CheckGuidelinesMgt.Initialize;
+      CALHistoryLine.RESET;
+      CheckGuidelinesMgt.AnalyseTransportChecks(Object, CALHistoryLine, TmpComment);
+      TmpComment.SETRANGE("Comment No.", Setup.FIELDNO("Check Indirect Permissions"));
+
+      CALHistoryLine.RESET;
+      DeleteNotSelectedComments(TmpComment, SelectedCALHistoryLine);
+      IF TmpComment.FINDSET THEN
+        REPEAT
+          CALHistoryLine.SETRANGE("Line No.", TmpComment."C/AL Line No.");
+          IF CALHistoryLine.FINDFIRST THEN BEGIN
+            CALHistoryLine.Code := DELSTR(CALHistoryLine.Code, 17, STRLEN(CALHistoryLine.Code) - 17);
+            CALHistoryLine.Code := DELCHR(CALHistoryLine.Code, '=', ',');
+            CALHistoryLine.Code := DELCHR(CALHistoryLine.Code, '<>', ' ');
+            CALHistoryLine.MODIFY;
+            ExitValue := TRUE;
+          END;
+
+        UNTIL TmpComment.NEXT = 0;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

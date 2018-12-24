@@ -1,0 +1,241 @@
+OBJECT Report 50014 Import Price Book
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/04/18;
+    Time=[ 1:53:15 PM];
+    Modified=Yes;
+    Version List=TM0022;
+  }
+  PROPERTIES
+  {
+    ProcessingOnly=Yes;
+  }
+  DATASET
+  {
+    { 1000000000;;DataItem;                  ;
+               DataItemTable=Table2000000026;
+               DataItemTableView=SORTING(Number);
+               MaxIteration=2;
+               OnPreDataItem=BEGIN
+                               IF (ServerFileName = '') THEN
+                                 ERROR(Text001);
+
+                               ModistSetup.GET;
+                               i := 1;
+
+                               IF StartingDate = 0D THEN
+                                 StartingDate := WORKDATE;
+
+                               Window.OPEN('Importing Price Sheet.....' + '@1@@@@@@@@@@@@');
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  ProgressBar := 0;
+                                  Window.UPDATE(1,0);
+                                  IF i = 1 THEN
+                                    SheetName := ModistSetup."Price Book Full Sheet Name"
+                                  ELSE
+                                    SheetName := ModistSetup."Price Book Sale Sheet Name";
+
+                                  i += 1;
+
+                                  ExcelBuffer.RESET;
+                                  ExcelBuffer.DELETEALL;
+                                  ExcelBuffer2.RESET;
+                                  ExcelBuffer2.DELETEALL;
+                                  ExcelBuffer3.RESET;
+                                  ExcelBuffer3.DELETEALL;
+
+                                  CLEAR(ExcelBuffer);
+                                  CLEAR(ExcelBuffer2);
+                                  CLEAR(ExcelBuffer3);
+
+                                  IF NOT OpenExcel THEN
+                                    CurrReport.SKIP;
+
+                                  RowNo := 1;
+                                  ColNo := PricesColNo;
+
+                                  ExcelBuffer.RESET;
+                                  ExcelBuffer3.COPY(ExcelBuffer,TRUE);
+
+                                  ExcelBuffer.SETRANGE("Row No.",RowNo);
+                                  ExcelBuffer.SETFILTER("Column No.",'>=%1',ColNo);
+                                  IF ExcelBuffer.FINDSET THEN BEGIN
+                                    REPEAT
+                                      ExcelBuffer2.INIT;
+                                      ExcelBuffer2 := ExcelBuffer;
+                                      IF Currency.GET(ExcelBuffer."Cell Value as Text") THEN
+                                        ExcelBuffer2.Comment := Currency.TABLENAME
+                                      ELSE IF CustomerPriceGroup.GET(ExcelBuffer."Cell Value as Text") THEN
+                                        ExcelBuffer2.Comment := CustomerPriceGroup.TABLENAME;
+                                      IF ExcelBuffer2.Comment <> '' THEN BEGIN
+                                          ExcelBuffer2.INSERT;
+                                      END;
+                                    UNTIL ExcelBuffer.NEXT=0;
+                                  END;
+                                  ExcelBuffer2.RESET;
+
+                                  RowNo := 2;
+                                  ColNo := 1;
+
+                                  //Loop Items
+                                  ExcelBuffer.RESET;
+                                  ExcelBuffer.SETRANGE("Column No.",ColNo);
+                                  ExcelBuffer.SETFILTER("Row No.",'>=%1',RowNo);
+                                  TotalRecNo := ExcelBuffer.COUNT;
+                                  IF ExcelBuffer.FINDSET THEN BEGIN
+                                    REPEAT
+                                      ProgressBar += 1;
+                                      Window.UPDATE(1,ROUND(ProgressBar / TotalRecNo * 10000,1));
+                                      ExcelBuffer2.FINDSET;
+                                      REPEAT
+                                        IF ExcelBuffer3.GET(ExcelBuffer."Row No.",ExcelBuffer2."Column No.") THEN BEGIN
+                                          CASE ExcelBuffer2.Comment OF
+                                            Currency.TABLENAME:
+                                              BEGIN
+                                                CreateSalesPrice(SheetName,ExcelBuffer."Cell Value as Text",ExcelBuffer3."Cell Value as Text",ExcelBuffer2."Cell Value as Text");
+                                              END;
+                                            CustomerPriceGroup.TABLENAME:
+                                              BEGIN
+                                                CustomerPriceGroup.GET(ExcelBuffer2."Cell Value as Text");
+                                                CustomerPriceGroup.TESTFIELD("Default Pricebook Currency");
+                                                CreateSalesPrice(CustomerPriceGroup.Code,ExcelBuffer."Cell Value as Text",ExcelBuffer3."Cell Value as Text",CustomerPriceGroup."Default Pricebook Currency");
+                                              END;
+                                          END;
+                                        END;
+                                      UNTIL ExcelBuffer2.NEXT=0;
+                                    UNTIL ExcelBuffer.NEXT=0;
+                                  END;
+                                END;
+
+               OnPostDataItem=BEGIN
+                                Window.CLOSE;
+                                MESSAGE(Text002);
+                              END;
+                               }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      OnOpenPage=BEGIN
+                   PricesColNo := 2
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1000000000;;Container;
+                  Name=ContentArea1;
+                  ContainerType=ContentArea }
+
+      { 1000000001;1;Group  ;
+                  Name=Options;
+                  GroupType=Group }
+
+      { 1000000004;2;Field  ;
+                  CaptionML=ENU=Start Date;
+                  SourceExpr=StartingDate }
+
+      { 1000000003;2;Field  ;
+                  CaptionML=ENU=File Name;
+                  SourceExpr=ServerFileName;
+                  OnAssistEdit=BEGIN
+                                 ServerFileName := FileMgt.UploadFile(Text006,ExcelFileExtensionTok);
+                               END;
+                                }
+
+      { 1000000002;2;Field  ;
+                  CaptionML=ENU=Prices Column No.;
+                  SourceExpr=PricesColNo;
+                  Visible=FALSE }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      Item@1000000015 : Record 27;
+      Currency@1000000013 : Record 4;
+      CustomerPriceGroup@1000000014 : Record 6;
+      ModistSetup@1000000010 : Record 50000;
+      ExcelBuffer@1000000006 : TEMPORARY Record 370;
+      ExcelBuffer2@1000000016 : TEMPORARY Record 370;
+      ExcelBuffer3@1000000018 : TEMPORARY Record 370;
+      SalesPrice@1000000019 : Record 7002;
+      FileMgt@1000000002 : Codeunit 419;
+      RowNo@1000000007 : Integer;
+      ColNo@1000000008 : Integer;
+      PricesColNo@1000000012 : Integer;
+      i@1000000021 : Integer;
+      ProgressBar@1000000023 : Integer;
+      TotalRecNo@1000000024 : Integer;
+      ServerFileName@1000000001 : Text;
+      SheetName@1000000000 : Text;
+      Text000@1000000011 : TextConst 'ENU=Incorrect Sheet Name';
+      Text001@1000000005 : TextConst 'ENU=Please select Excel file to import.';
+      Text002@1000000020 : TextConst 'ENU=Price Book Import Successfull.';
+      Text006@1000000004 : TextConst 'ENU=Import Excel File';
+      ExcelFileExtensionTok@1000000003 : TextConst '@@@={Locked};ENU=.xlsx';
+      StartingDate@1000000022 : Date;
+      Window@1000000009 : Dialog;
+
+    [TryFunction]
+    LOCAL PROCEDURE OpenExcel@1000000000();
+    BEGIN
+      ExcelBuffer.LOCKTABLE;
+      ExcelBuffer.OpenBook(ServerFileName,SheetName);
+      ExcelBuffer.ReadSheet;
+    END;
+
+    LOCAL PROCEDURE CreateSalesPrice@1000000003(pSalesCode@1000000001 : Code[10];pItemNo@1000000002 : Code[20];pTxtUnitPrice@1000000003 : Text;pCurrencyCode@1000000004 : Code[10]);
+    VAR
+      NewUnitPrice@1000000000 : Decimal;
+    BEGIN
+      WITH SalesPrice DO BEGIN
+        EVALUATE(NewUnitPrice,pTxtUnitPrice);
+        IF NewUnitPrice = 0 THEN
+          EXIT;
+        IF Item."No." <> pItemNo THEN
+          Item.GET(pItemNo);
+        RESET;
+        SETRANGE("Sales Type","Sales Type"::"Customer Price Group");
+        SETRANGE("Sales Code",pSalesCode);
+        SETRANGE("Item No.",pItemNo);
+        SETRANGE("Starting Date",StartingDate);
+        SETRANGE("Currency Code",pCurrencyCode);
+        SETRANGE("Unit of Measure Code",Item."Sales Unit of Measure");
+        IF FINDFIRST THEN BEGIN
+          IF NewUnitPrice <> "Unit Price" THEN BEGIN
+            VALIDATE("Unit Price",NewUnitPrice);
+            MODIFY(TRUE);
+          END;
+        END ELSE BEGIN
+          INIT;
+          VALIDATE("Sales Type","Sales Type"::"Customer Price Group");
+          VALIDATE("Sales Code",pSalesCode);
+          //"Item No." := pItemNo;
+          VALIDATE("Item No.",pItemNo);
+          EVALUATE("Unit Price",pTxtUnitPrice);
+          VALIDATE("Unit Price");
+          VALIDATE("Starting Date",StartingDate);
+          VALIDATE("Currency Code",pCurrencyCode);
+          IF INSERT(TRUE) THEN;
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

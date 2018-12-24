@@ -1,0 +1,180 @@
+OBJECT Codeunit 9062358 Consignment-Create Whse. Rcpt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.15;
+  }
+  PROPERTIES
+  {
+    TableNo=9062447;
+    OnRun=BEGIN
+            ConsignmentHeader := Rec;
+            Code();
+            Rec := ConsignmentHeader;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ConsignmentHeader@1000000000 : Record 9062447;
+      ConsignmentLine@1000000003 : Record 9062448;
+      PurchaseLine@1000000005 : Record 39;
+      WarehouseReceiptHeader@1000000001 : Record 7316;
+      WarehouseReceiptLine@1000000002 : Record 7317;
+      WhseCreateSourceDocument@1000000004 : Codeunit 5750;
+      DialogManagement@1000000006 : Codeunit 9062249;
+      ConsignmentManagement@1000000008 : Codeunit 9062357;
+      DialogIndex@1000000007 : ' ,Header,Line';
+
+    LOCAL PROCEDURE Code@1000000001();
+    BEGIN
+      ConsignmentHeader.OnBeforeCreateWhseReceipt;
+
+      Initialise();
+      CreateWarehouseReceipt();
+      Finalise();
+    END;
+
+    LOCAL PROCEDURE Initialise@1000000003();
+    VAR
+      eNoLinesToCreateWhseReceiptFor@1000000001 : TextConst 'ENU=Consignment "%1" doesn''t have any lines to create a warehouse receipt for.;ENG=Consignment "%1" doesn''t have any lines to create a warehouse receipt for.';
+      eConfirmation@1000000005 : TextConst 'ENU=Do you want to create a warehouse receipt for consignment "%1"?;ENG=Do you want to create a warehouse receipt for consignment "%1"?';
+      eDlgTitle@1000000002 : TextConst 'ENU=Creating a warehouse receipt...;ENG=Creating a warehouse receipt...';
+      eDlgHeader@1000000003 : TextConst 'ENU=Warehouse Receipt(s);ENG=Warehouse Receipt(s)';
+      eDlgLine@1000000004 : TextConst 'ENU=Warehouse Receipt Line(s);ENG=Warehouse Receipt Line(s)';
+    BEGIN
+      ConsignmentHeader.TESTFIELD("Warehouse Receipt No.",'');
+      ConsignmentHeader.TESTFIELD("Location Code");
+      ConsignmentHeader.TESTFIELD("Vendor Shipment No.");
+      FilterConsignmentLines();
+      IF (ConsignmentLine.ISEMPTY) THEN
+        ERROR(eNoLinesToCreateWhseReceiptFor, ConsignmentHeader."No.");
+
+      IF ( NOT (CONFIRM(eConfirmation, TRUE, ConsignmentHeader."No."))) THEN
+        ERROR('');
+
+      ReleasePurchaseOrders();
+
+      ConsignmentManagement.Release(ConsignmentHeader);
+      ConsignmentHeader.TestStatusReleased();
+
+      DialogManagement.Add(eDlgHeader, 20, DialogIndex::Header, 10, TRUE, FALSE);
+      DialogManagement.Add(eDlgLine, 20, DialogIndex::Line, 10, TRUE, FALSE);
+      DialogManagement.Open(eDlgTitle);
+    END;
+
+    LOCAL PROCEDURE Finalise@1000000004();
+    VAR
+      eFinalMessage@1000000000 : TextConst 'ENU=Warehouse receipt "%1" has been created. Do you want to open it?;ENG=Warehouse receipt "%1" has been created. Do you want to open it?';
+    BEGIN
+      ConsignmentHeader.VALIDATE("Warehouse Receipt No.",WarehouseReceiptHeader."No.");
+      ConsignmentHeader.MODIFY;
+
+      DialogManagement.Close();
+      IF (GUIALLOWED) THEN
+        IF (CONFIRM(eFinalMessage, FALSE, WarehouseReceiptHeader."No.")) THEN
+          PAGE.RUN(PAGE::"Warehouse Receipt", WarehouseReceiptHeader);
+    END;
+
+    LOCAL PROCEDURE CreateWarehouseReceipt@1000000007();
+    BEGIN
+      CLEAR(WarehouseReceiptHeader);
+      WarehouseReceiptHeader.INIT();
+      WarehouseReceiptHeader.VALIDATE("Posting Date", WORKDATE);
+      WarehouseReceiptHeader.VALIDATE("Vendor Shipment No.", COPYSTR(ConsignmentHeader."Vendor Shipment No.", 1, MAXSTRLEN(WarehouseReceiptHeader."Vendor Shipment No.")));
+      WarehouseReceiptHeader.VALIDATE("Location Code", ConsignmentHeader."Location Code");
+      WarehouseReceiptHeader.VALIDATE("Vendor Shipment No.",ConsignmentHeader."Vendor Shipment No.");
+      WarehouseReceiptHeader.INSERT(TRUE);
+      DialogManagement.StepCounter(DialogIndex::Header);
+
+      CreateWarehouseReceiptLines();
+
+      WarehouseReceiptHeader.SortWhseDoc();
+
+      ConsignmentHeader.OnAfterCreateWhseReceipt(WarehouseReceiptHeader,WarehouseReceiptLine);
+    END;
+
+    LOCAL PROCEDURE CreateWarehouseReceiptLines@1000000002();
+    BEGIN
+      FilterConsignmentLines();
+      IF (ConsignmentLine.FINDSET()) THEN
+      REPEAT
+        ConsignmentLine2ReceiptLine(WarehouseReceiptHeader, ConsignmentLine);
+        DialogManagement.StepCounter(DialogIndex::Line);
+      UNTIL (ConsignmentLine.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE FilterConsignmentLines@1000000012();
+    BEGIN
+      ConsignmentLine.RESET();
+      ConsignmentLine.SETRANGE("Consignment No.", ConsignmentHeader."No.");
+      ConsignmentLine.SETFILTER("Purchase Order No.", '<>''''');
+      ConsignmentLine.SETFILTER("Purchase Order Line No.", '<>0');
+    END;
+
+    LOCAL PROCEDURE ReleasePurchaseOrders@1000000000();
+    VAR
+      lPurchaseHeader@1000000000 : Record 38;
+      lPurchaseHeaderTmp@1000000001 : TEMPORARY Record 38;
+    BEGIN
+      ConsignmentLine.RESET();
+      ConsignmentLine.SETRANGE("Consignment No.", ConsignmentHeader."No.");
+      ConsignmentLine.SETFILTER("Purchase Order No.", '<>''''');
+      IF (ConsignmentLine.FINDSET()) THEN
+      REPEAT
+        IF ( NOT (lPurchaseHeaderTmp.GET(lPurchaseHeaderTmp."Document Type"::Order, ConsignmentLine."Purchase Order No."))) THEN
+          IF (lPurchaseHeader.GET(lPurchaseHeader."Document Type"::Order, ConsignmentLine."Purchase Order No.")) THEN
+            IF (lPurchaseHeader.Status <> lPurchaseHeader.Status::Released) THEN
+            BEGIN
+              lPurchaseHeaderTmp := lPurchaseHeader;
+              lPurchaseHeaderTmp.INSERT();
+            END;
+      UNTIL (ConsignmentLine.NEXT() = 0);
+
+      lPurchaseHeaderTmp.RESET();
+      IF (lPurchaseHeaderTmp.FINDSET()) THEN
+      REPEAT
+        lPurchaseHeader.GET(lPurchaseHeaderTmp."Document Type", lPurchaseHeaderTmp."No.");
+        CODEUNIT.RUN(CODEUNIT::"Release Purchase Document", lPurchaseHeader);
+      UNTIL (lPurchaseHeaderTmp.NEXT() = 0);
+    END;
+
+    PROCEDURE ConsignmentLine2ReceiptLine@9062231(WhseReceiptHeader@1000 : Record 7316;SrcConsignmentLine@1000000001 : Record 9062448) : Boolean;
+    VAR
+      PurchaseLine@1000000000 : Record 39;
+      WhseRcptPrevLineNo@9062230 : Integer;
+      WhseReceiptLine@9062231 : Record 7317;
+    BEGIN
+      //DOC CN2015.1 - Copying consignment line to receipt line
+      //  -> WhseReceiptHeader: Receipt header
+      //  -> SrcConsignmentLine: Consignment line
+
+      IF (PurchaseLine.GET(PurchaseLine."Document Type"::Order, SrcConsignmentLine."Purchase Order No.",
+        SrcConsignmentLine."Purchase Order Line No."))
+      THEN BEGIN
+        ConsignmentLine := SrcConsignmentLine;
+        WhseReceiptLine.SETRANGE(WhseReceiptLine."No.",WhseReceiptHeader."No.");
+
+        IF WhseReceiptLine.FINDLAST THEN
+          WhseRcptPrevLineNo := WhseReceiptLine."Line No.";
+
+        IF WhseCreateSourceDocument.PurchLine2ReceiptLine(WhseReceiptHeader, PurchaseLine) THEN BEGIN
+          WhseReceiptLine.GET(WhseReceiptHeader."No.",WhseRcptPrevLineNo + 10000);
+          WhseReceiptLine.VALIDATE(WhseReceiptLine."Qty. to Receive" ,ConsignmentLine.Quantity);
+          WhseReceiptLine.MODIFY(TRUE);
+        END;
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NH2016.11 PC 05/11/2015 - Migrated from 2015
+      //DOC NH2016.15 JH 09/05/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

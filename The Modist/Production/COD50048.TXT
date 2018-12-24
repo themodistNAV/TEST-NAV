@@ -1,0 +1,507 @@
+OBJECT Codeunit 50048 Excel Template Upload Mgmt. V3
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/08/18;
+    Time=[ 2:34:16 PM];
+    Modified=Yes;
+    Version List=TM0123,TM3016.01;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            ExcelTemplateUploadHeader.GET(TemplateCodeG);
+            UploadExcelTemplate(ExcelTemplateUploadHeader,TRUE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ExcelTemplateUploadHeader@1000000007 : Record 50021;
+      ExcelTemplateUploadLine@1000000000 : Record 50022;
+      ExcelTemplateUploadHeaderChild@1000000019 : Record 50021;
+      ExcelBuffer@1000000005 : TEMPORARY Record 370;
+      ExcelBuffer2@1000000022 : TEMPORARY Record 370;
+      FileMgt@1000000001 : Codeunit 419;
+      Text000@1000000008 : TextConst 'ENU=Upload Failed, Please contact your system administrator.';
+      Text001@1000000009 : TextConst 'ENU=Template field details not found.';
+      Text002@1000000013 : TextConst 'ENU=You must define at least one Primary Key field.';
+      Text003@1000000014 : TextConst 'ENU=Auto. Increment is supported with Integer and Code fields only.';
+      Text004@1000000017 : TextConst 'ENU=Field "%1" is mandatory in Cell "%2", please fill the Cell in Excel or tick "Allow Blank" or fill "Default Value"';
+      Text005@1000000020 : TextConst 'ENU=Template Parent and Child relation is wrong, please contact system administrator';
+      Text006@1000000003 : TextConst 'ENU=Import Excel File';
+      Text007@1170000000 : TextConst 'ENU=File not valid for upload, please add ''BS01'' in the file name';
+      TextDigits@1000000027 : TextConst 'ENU=0123456789';
+      TextLetters@1000000026 : TextConst 'ENU=ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      Excel2007FileType@1000000016 : TextConst '@@@="{Split=r''\|''}{Locked=s''1''}";ENU="*.xlsx;*.xls";ENG="Excel Files (*.xlsx;*.xls)|*.xlsx;*.xls"';
+      ExcelFileExtensionTok@1000000002 : TextConst '@@@={Locked};ENU=.xlsx|.xlsm';
+      RRef@1000000010 : RecordRef;
+      FRef@1000000012 : FieldRef;
+      KRef@1000000011 : KeyRef;
+      ServerFileName@1000000004 : Text;
+      SheetName@1000000006 : Text;
+      RowID@1000000015 : Text;
+      ColID@1000000018 : Text;
+      FirstRowID@1000000023 : Text;
+      FirstColID@1000000024 : Text;
+      InsertRecord@1000000021 : Boolean;
+      RowNo@1000000025 : Integer;
+      IsRowRepeater@1000000029 : Boolean;
+      IsColumnRepeater@1000000028 : Boolean;
+      DynamicRowID@1000000030 : ARRAY [10] OF Text;
+      DynamicRowID2G@1000000035 : ARRAY [10,10] OF Text;
+      ColName@1000000031 : Text;
+      TempRowNo@1000000032 : Integer;
+      TemplateCodeG@1000000033 : Code[10];
+      KRef2G@1000000034 : KeyRef;
+
+    PROCEDURE UploadExcelTemplate@1000000000(pExcelTemplateUploadHeader@1000000000 : Record 50021;pUploadFile@1000000001 : Boolean);
+    VAR
+      lParentExcelTemplateUploadHeader@1000000010 : Record 50021;
+      i@1000000012 : Integer;
+      y@1000000016 : Integer;
+      z@1000000015 : Integer;
+      lRRef@1000000011 : RecordRef;
+      lFRef@1000000013 : FieldRef;
+      lEntryNoCode@1000000002 : Variant;
+      lIntegerNo@1000000003 : Integer;
+      lExcelTxt@1000000004 : Text;
+      lExcelInteger@1000000005 : Integer;
+      lExcelDecimal@1000000006 : Decimal;
+      lExcelBoolean@1000000007 : Boolean;
+      lExcelOption@1000000008 : Option;
+      lExcelCode@1000000009 : Code[50];
+      lExcelDate@1000000014 : Date;
+      lNoOfRows@1000000018 : Integer;
+      lNoOfColumns@1000000017 : Integer;
+    BEGIN
+      //Will try to keep it in one funtion to make it simpler to use recursive funtion**
+      WITH pExcelTemplateUploadHeader DO BEGIN
+        TESTFIELD("Excel Sheet Name");
+        lNoOfRows := 1;
+        lNoOfColumns := 1;
+        SheetName := "Excel Sheet Name";
+        IsRowRepeater := Repeater;
+        IsColumnRepeater := "Column Repeater";
+        IF IsRowRepeater THEN
+          TESTFIELD("No. of Rows Excel Cell");
+        IF IsColumnRepeater THEN
+          TESTFIELD("No. of Columns Excel Cell");
+
+        IF pUploadFile THEN BEGIN
+          ServerFileName := FileMgt.UploadFile(Text006,Excel2007FileType);
+          IF ServerFileName = '' THEN
+            ERROR('');
+          IF STRPOS(ServerFileName,'BS01') = 0 THEN
+            ERROR(Text007);
+          ExcelBuffer.RESET;
+          ExcelBuffer.DELETEALL;
+          ExcelBuffer.LOCKTABLE;
+          ExcelBuffer.OpenBook(ServerFileName,SheetName);
+          ExcelBuffer.ReadSheet;
+          ExcelBuffer2.RESET;
+          ExcelBuffer2.DELETEALL;
+          ExcelBuffer2.COPY(ExcelBuffer,TRUE);
+        END;
+
+        ExcelBuffer.RESET;
+        ExcelBuffer.SETCURRENTKEY(xlRowID,xlColID);
+        IF ExcelBuffer.ISEMPTY THEN
+          ERROR(Text000);
+
+        IF IsRowRepeater THEN
+          lNoOfRows := GetNoOfRowsToRepeat(pExcelTemplateUploadHeader);
+
+        IF IsColumnRepeater THEN
+          lNoOfColumns := GetNoOfColumnsToRepeat(pExcelTemplateUploadHeader);
+
+        RRef.OPEN("Table ID");
+        RRef.INIT;
+        CALCFIELDS("Has Child");
+
+        WITH ExcelTemplateUploadLine DO BEGIN //Handle Fields
+          RESET;
+          SETRANGE("Template Code",Code);
+          IF ISEMPTY THEN
+            ERROR(Text001);
+
+          RowID := '';
+          ColID := '';
+          FOR y := 1 TO lNoOfRows DO BEGIN
+            CLEAR(DynamicRowID);
+            CLEAR(DynamicRowID2G);
+            TempRowNo := y;
+            FOR z := 1 TO lNoOfColumns DO BEGIN
+              //1. Get Primary Key Field to INSERT the Record.
+              SETCURRENTKEY("Primary Key",Sequence);
+              SETRANGE("Primary Key",TRUE);
+              IF ISEMPTY THEN
+                ERROR(Text002);
+              InsertRecord := FALSE;
+              FINDSET;
+              REPEAT
+                CASE TRUE OF
+                  "No. Series": //For now, No. Series should be configured in Table, not in the Template
+                    BEGIN
+                      InsertRecord := TRUE;
+                    END;
+                  "Auto. Increament":
+                    BEGIN
+                      lIntegerNo += 1; // Selva
+                      CLEAR(lEntryNoCode);
+                      FRef := RRef.FIELD("Field No.");
+                      IF RRef.FINDLAST THEN BEGIN
+                        lEntryNoCode := FRef.VALUE;
+                        IF lEntryNoCode.ISCODE THEN
+                          lEntryNoCode := INCSTR(lEntryNoCode)
+                        ELSE IF lEntryNoCode.ISINTEGER THEN
+                          lEntryNoCode := lIntegerNo; // Selva lEntryNoCode := lIntegerNo + 1;
+                      END ELSE
+                        IF FORMAT(FRef.TYPE) = 'Code' THEN
+                          lEntryNoCode := '1'
+                        ELSE IF FORMAT(FRef.TYPE) = 'Integer' THEN
+                          lEntryNoCode := 1;
+                      FRef.VALUE := lEntryNoCode;
+                      FRef.VALIDATE;
+                      RRef.SETRECFILTER;
+                      InsertRecord := TRUE;
+                    END;
+                  "Foriegn Key": //Should always be processed first. (Primary Key and Forign Key)
+                    BEGIN
+                      IF pExcelTemplateUploadHeader."Parent Template Code" <> '' THEN BEGIN //Means that I'm uploading Document Lines (or similar)
+                        IF ("Excel Cell" = '') AND ("Default Value" = '') THEN BEGIN
+                          lParentExcelTemplateUploadHeader.GET(pExcelTemplateUploadHeader."Parent Template Code");
+                          FRef := RRef.FIELD("Field No.");
+                          IF "Foriegn Key Table No." <> lParentExcelTemplateUploadHeader."Table ID" THEN
+                            ERROR(Text005);
+                          FOR i := 1 TO KRef.FIELDCOUNT DO BEGIN //KRef should be initialized from Recursive Function Call.
+                            lFRef := KRef.FIELDINDEX(i);
+                            IF lFRef.NUMBER = "Foriegn Key Field No." THEN BEGIN
+                              FRef.VALUE := lFRef.VALUE;
+                              FRef.VALIDATE;
+                              RRef.SETRECFILTER;
+                              InsertRecord := TRUE;
+                            END;
+                          END;
+                        END ELSE BEGIN
+                          // Selva
+                          IF (NOT "Static Column in Repeater") AND (z > 1) THEN
+                            "Excel Cell" := DynamicRowID[z - 1];
+
+                          IF "Fixed Row" OR ((z > 1) AND NOT "Static Column in Repeater") THEN
+                            TempRowNo := 0;
+
+                          GetRowIDFromCell("Excel Cell", RowID, TempRowNo);
+                          GetColIDFromCell("Excel Cell", ColID, z, "Static Column in Repeater", ColName, "Increase Column by");
+                          TempRowNo := y;
+
+                          IF NOT "Static Column in Repeater" THEN BEGIN
+                            IF z = 1 THEN
+                              DynamicRowID[z] := ColID + RowID
+                            ELSE
+                              DynamicRowID[z] := ColName + RowID;
+                          END;
+                          // Selva
+                          ExcelBuffer.SETRANGE(xlRowID,RowID);
+                          ExcelBuffer.SETRANGE(xlColID,ColID);
+                          IF NOT ExcelBuffer.FINDFIRST THEN BEGIN
+                            IF "Default Value" = '' THEN BEGIN
+                              IF NOT "Allow Blank" THEN BEGIN
+                                ERROR(Text004,"Field Name","Excel Cell");
+                              END ELSE
+                                ExcelBuffer."Cell Value as Text" := BlankExcelCellAsTxt("Field Type");
+                            END ELSE
+                              ExcelBuffer."Cell Value as Text" := "Default Value";
+                          END;
+
+                          FRef := RRef.FIELD("Field No.");
+                          CASE FORMAT(FRef.TYPE) OF
+                            'Text':
+                              BEGIN
+                                EVALUATE(lExcelTxt,ExcelBuffer."Cell Value as Text");
+                                FRef.VALUE := lExcelTxt;
+                              END;
+                            'Code':
+                              BEGIN
+                                EVALUATE(lExcelCode,ExcelBuffer."Cell Value as Text");
+                                FRef.VALUE := lExcelCode;
+                              END;
+                            'Boolean':
+                              BEGIN
+                                EVALUATE(lExcelBoolean,ExcelBuffer."Cell Value as Text");
+                                FRef.VALUE := lExcelBoolean;
+                              END;
+                            'Integer':
+                              BEGIN
+                                EVALUATE(lExcelInteger,ExcelBuffer."Cell Value as Text");
+                                FRef.VALUE := lExcelInteger;
+                              END;
+                            'Decimal':
+                              BEGIN
+                                EVALUATE(lExcelDecimal,ExcelBuffer."Cell Value as Text");
+                                FRef.VALUE := lExcelDecimal;
+                              END;
+                            'Option':
+                              BEGIN
+                                EVALUATE(lExcelOption,ExcelBuffer."Cell Value as Text");
+                                FRef.VALUE := lExcelOption;
+                              END;
+                            'Date':
+                              BEGIN
+                                EVALUATE(lExcelDate,ExcelBuffer."Cell Value as Text");
+                                FRef.VALUE := lExcelDate;
+                              END;
+                          END;
+                          IF "Validate Field" THEN
+                            FRef.VALIDATE;
+                          InsertRecord := TRUE;
+                        END;
+                      END;
+                    END;
+                  ("Default Value" <> '') AND (NOT "Foriegn Key"):
+                    BEGIN
+                      FRef := RRef.FIELD("Field No.");
+                      FRef.VALUE := "Default Value";
+                      InsertRecord := TRUE;
+                    END;
+                END;
+              UNTIL NEXT=0;
+              IF NOT InsertRecord THEN
+                ERROR(Text005);
+              //RRef.INIT;
+              RRef.INSERT(TRUE);
+              IF NOT IsRowRepeater THEN BEGIN // Selva
+                KRef := RRef.KEYINDEX(1); //Store Primary Key Value for Recursive Function purposes
+                KRef2G := RRef.KEYINDEX(1);
+              END;
+              //End Primary Key Process
+
+              //2. Add Other Fields (MODIFY)
+              SETRANGE("Primary Key",FALSE);
+              IF FINDSET THEN BEGIN
+                REPEAT
+                  TESTFIELD("Excel Cell");
+                  // Selva
+                  IF (NOT "Static Column in Repeater") AND (z > 1) THEN
+                    "Excel Cell" := DynamicRowID2G[ExcelTemplateUploadLine."Fixed Row Dimension"][z - 1]; // TM3016.01
+
+                  IF "Fixed Row" OR ((z > 1) AND NOT "Static Column in Repeater") THEN
+                    TempRowNo := 0;
+
+                  GetRowIDFromCell("Excel Cell", RowID, TempRowNo); // Selva
+                  GetColIDFromCell("Excel Cell", ColID, z, "Static Column in Repeater", ColName, "Increase Column by");
+                  TempRowNo := y;
+
+                  IF NOT "Static Column in Repeater" THEN BEGIN
+                    IF z = 1 THEN
+                      DynamicRowID2G[ExcelTemplateUploadLine."Fixed Row Dimension"][z] := ColID + RowID // TM3016.01
+                    ELSE
+                      DynamicRowID2G[ExcelTemplateUploadLine."Fixed Row Dimension"][z] := ColName + RowID; // TM3016.01
+                  END;
+                  // Selva
+                  ExcelBuffer.SETRANGE(xlRowID,RowID);
+                  ExcelBuffer.SETRANGE(xlColID,ColID);
+                  IF NOT ExcelBuffer.FINDFIRST THEN BEGIN
+                    IF "Default Value" = '' THEN BEGIN
+                      IF NOT "Allow Blank" THEN BEGIN
+                        ERROR(Text004,"Field Name","Excel Cell");
+                      END ELSE
+                        ExcelBuffer."Cell Value as Text" := BlankExcelCellAsTxt("Field Type");
+                    END ELSE
+                      ExcelBuffer."Cell Value as Text" := "Default Value";
+                  END;
+
+                  FRef := RRef.FIELD("Field No.");
+                  CASE FORMAT(FRef.TYPE) OF
+                    'Text':
+                      BEGIN
+                        EVALUATE(lExcelTxt,ExcelBuffer."Cell Value as Text");
+                        FRef.VALUE := lExcelTxt;
+                      END;
+                    'Code':
+                      BEGIN
+                        EVALUATE(lExcelCode,ExcelBuffer."Cell Value as Text");
+                        FRef.VALUE := lExcelCode;
+                      END;
+                    'Boolean':
+                      BEGIN
+                        EVALUATE(lExcelBoolean,ExcelBuffer."Cell Value as Text");
+                        FRef.VALUE := lExcelBoolean;
+                      END;
+                    'Integer':
+                      BEGIN
+                        EVALUATE(lExcelInteger,ExcelBuffer."Cell Value as Text");
+                        FRef.VALUE := lExcelInteger;
+                      END;
+                    'Decimal':
+                      BEGIN
+                        EVALUATE(lExcelDecimal,ExcelBuffer."Cell Value as Text");
+                        FRef.VALUE := lExcelDecimal;
+                      END;
+                    'Option':
+                      BEGIN
+                        EVALUATE(lExcelOption,ExcelBuffer."Cell Value as Text");
+                        FRef.VALUE := lExcelOption;
+                      END;
+                    'Date':
+                      BEGIN
+                        EVALUATE(lExcelDate,ExcelBuffer."Cell Value as Text");
+                        FRef.VALUE := lExcelDate;
+                      END;
+                  END;
+                  IF "Validate Field" THEN
+                    FRef.VALIDATE;
+
+                UNTIL NEXT=0;
+              END;
+              RRef.MODIFY(TRUE);
+            END;
+          END;
+        END;
+
+          //3. If Child(Lines) exist then process - need to test multiple child such as multiple prices for one Item Line in BS
+          RRef.CLOSE;
+          IF "Has Child" THEN BEGIN
+            ExcelTemplateUploadHeaderChild.RESET;
+            ExcelTemplateUploadHeaderChild.SETCURRENTKEY("Parent Template Code");
+            ExcelTemplateUploadHeaderChild.SETRANGE("Parent Template Code",Code);
+            IF ExcelTemplateUploadHeaderChild.FINDSET THEN BEGIN
+              REPEAT
+                UploadExcelTemplate(ExcelTemplateUploadHeaderChild,FALSE);
+              UNTIL ExcelTemplateUploadHeaderChild.NEXT=0;
+            END;
+          END;
+      END;
+    END;
+
+    PROCEDURE GetRowIDFromCell@1000000004(pCell@1000000000 : Code[10];VAR pRowID@1000000001 : Text;RowLineNumber@1000000002 : Integer);
+    VAR
+      c@1000000004 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Char";
+      CellString@1000000003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      IsText@1000000006 : Text;
+      lRowID@1000000008 : Text;
+      IsNumber@1000000005 : Integer;
+    BEGIN
+      EVALUATE(IsNumber, DELCHR(pCell, '=', DELCHR(pCell, '=', TextDigits)));
+      IF RowLineNumber <> 0 THEN
+        pRowID := FORMAT(IsNumber + RowLineNumber - 1)
+      ELSE
+        pRowID := FORMAT(IsNumber + RowLineNumber)
+    END;
+
+    PROCEDURE GetColIDFromCell@1000000012(pCell@1000000000 : Code[10];VAR pColID@1000000002 : Text;ColumnLineNumber@1000000005 : Integer;StaticColumn@1000000007 : Boolean;VAR pColName@1000000008 : Text;IncreaseColumnBy@1170000000 : Integer);
+    VAR
+      c@1000000004 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Char";
+      CellString@1000000003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      IsText@1000000006 : Boolean;
+      c2@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Char";
+    BEGIN
+      pColID := DELCHR(pCell, '=', DELCHR(pCell, '=', TextLetters));
+      IF (IsColumnRepeater) AND (ColumnLineNumber > 1) AND (NOT StaticColumn) THEN BEGIN
+        ExcelBuffer2.RESET;
+        ExcelBuffer2.SETRANGE(xlColID, pColID);
+        ExcelBuffer2.FINDFIRST;
+        ExcelBuffer2.SETRANGE(xlColID);
+        IF IncreaseColumnBy = 0 THEN
+          ExcelBuffer2.SETRANGE("Column No.", ExcelBuffer2."Column No." + 1)
+        ELSE
+          ExcelBuffer2.SETRANGE("Column No.", ExcelBuffer2."Column No." + IncreaseColumnBy);
+        ExcelBuffer2.FINDFIRST;
+        pColID := ExcelBuffer2.xlColID;
+        pColName := pColID;
+      END;
+
+    END;
+
+    LOCAL PROCEDURE BlankExcelCellAsTxt@1000000001(pFieldType@1000000000 : Text) : Text;
+    BEGIN
+      CASE pFieldType OF
+        'Text','Code': EXIT('');
+        'Boolean': EXIT('FALSE');
+        'Decimal','Integer','Option': EXIT('0');
+        'Date': EXIT('');
+      END;
+    END;
+
+    LOCAL PROCEDURE GetNoOfRowsToRepeat@1000000009(pExcelTemplateUploadHeader@1000000000 : Record 50021) : Integer;
+    VAR
+      lNoOfLines@1000000001 : Integer;
+      lRowID@1000000002 : Text;
+      lColID@1000000003 : Text;
+    BEGIN
+      WITH pExcelTemplateUploadHeader DO BEGIN
+        TESTFIELD(Repeater);
+        TESTFIELD("No. of Rows Excel Cell");
+        IF ExcelBuffer.ISEMPTY THEN
+          ERROR(Text000);
+        lRowID := '';
+        lColID := '';
+        GetRowIDFromCell("No. of Rows Excel Cell",lRowID, 1);
+        GetColIDFromCell("No. of Rows Excel Cell",lColID, 0, FALSE,ColName, 0);
+        ExcelBuffer.SETRANGE(xlRowID,lRowID);
+        ExcelBuffer.SETRANGE(xlColID,lColID);
+        ExcelBuffer.FINDFIRST;
+        EVALUATE(lNoOfLines,ExcelBuffer."Cell Value as Text");
+        EXIT(lNoOfLines);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetNoOfColumnsToRepeat@1000000005(pExcelTemplateUploadHeader@1000000000 : Record 50021) : Integer;
+    VAR
+      lNoOfLines@1000000001 : Integer;
+      lRowID@1000000002 : Text;
+      lColID@1000000003 : Text;
+    BEGIN
+      WITH pExcelTemplateUploadHeader DO BEGIN
+        TESTFIELD(Repeater);
+        TESTFIELD("No. of Rows Excel Cell");
+        IF ExcelBuffer.ISEMPTY THEN
+          ERROR(Text000);
+        lRowID := '';
+        lColID := '';
+        GetRowIDFromCell("No. of Columns Excel Cell",lRowID, 1);
+        GetColIDFromCell("No. of Columns Excel Cell",lColID, 0, FALSE,ColName, 0);
+        ExcelBuffer.SETRANGE(xlRowID,lRowID);
+        ExcelBuffer.SETRANGE(xlColID,lColID);
+        ExcelBuffer.FINDFIRST;
+        EVALUATE(lNoOfLines,ExcelBuffer."Cell Value as Text");
+        EXIT(lNoOfLines);
+      END;
+    END;
+
+    LOCAL PROCEDURE DECSTR@1000000015(ValueP@1000000006 : Code[20]) : Code[20];
+    VAR
+      PrefixL@1000000000 : Text;
+      NoStringL@1000000001 : Text;
+      NumberL@1000000002 : Integer;
+      RegexL@1000000003 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex";
+      AddIntL@1000000004 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Int32";
+      PadLengthL@1000000005 : Integer;
+    BEGIN
+      PrefixL := RegexL.Replace(ValueP,'\d+','');
+      NoStringL := RegexL.Match(ValueP,'\d+').Value;
+      NumberL := AddIntL.Parse(NoStringL); // instead of using Evaluate
+      IF NumberL > 0 THEN BEGIN
+       NumberL := NumberL - 1;
+       PadLengthL := STRLEN(ValueP) - STRLEN(PrefixL) - STRLEN(FORMAT(NumberL));
+       EXIT(PrefixL + PADSTR('',PadLengthL,'0') + FORMAT(NumberL));
+      END;
+      ERROR('Resulting number would be negative.');
+    END;
+
+    PROCEDURE SetTemplateCode@1000000002(TemplateCodeP@1000000000 : Code[10]);
+    BEGIN
+      TemplateCodeG := TemplateCodeP;
+    END;
+
+    PROCEDURE GetKeyRef@1000000003(VAR KeyRefP@1000000000 : KeyRef);
+    BEGIN
+      KeyRefP := KRef2G;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

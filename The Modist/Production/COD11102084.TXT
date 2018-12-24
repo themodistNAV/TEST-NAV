@@ -1,0 +1,185 @@
+OBJECT Codeunit 11102084 OM - Mail Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            Send;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Attachment@1000 : ARRAY [100] OF Text[1024];
+      BodyLine@1001 : ARRAY [1000] OF Text[1024];
+      Subject2@1002 : Text;
+      ToAddress2@1003 : Text;
+      NoOfAttachments@1004 : Integer;
+      NoOfBodyLines@1005 : Integer;
+      AttachmentInTempDir@1006 : ARRAY [100] OF Boolean;
+
+    PROCEDURE ToAddress@1(NewValue@1000 : Text);
+    BEGIN
+      ToAddress2 := NewValue;
+    END;
+
+    PROCEDURE Subject@2(NewValue@1000 : Text);
+    BEGIN
+      Subject2 := NewValue;
+    END;
+
+    PROCEDURE AddToBody@3(NewBodyLine@1000 : Text);
+    BEGIN
+      NoOfBodyLines += 1;
+      BodyLine[NoOfBodyLines] := NewBodyLine;
+    END;
+
+    PROCEDURE AddAttachmentBlob@5(InStr@1000 : InStream;FileName@1001 : Text);
+    VAR
+      FileHandler@1002 : Codeunit 11102097;
+      oFile@1003 : File;
+      OutStr@1004 : OutStream;
+    BEGIN
+      NoOfAttachments += 1;
+      Attachment[NoOfAttachments] := FileHandler.TempDirectory + FileName;
+      AttachmentInTempDir[NoOfAttachments] := TRUE;
+
+      IF EXISTS(Attachment[NoOfAttachments]) THEN
+        ERASE(Attachment[NoOfAttachments]);
+
+      oFile.CREATE(Attachment[NoOfAttachments]);
+      oFile.CREATEOUTSTREAM(OutStr);
+      COPYSTREAM(OutStr, InStr);
+      oFile.CLOSE;
+    END;
+
+    PROCEDURE Send@6() : Boolean;
+    VAR
+      Setup@1000 : Record 11102035;
+    BEGIN
+      Setup.CustomGet;
+
+      CASE Setup."Mail Type" OF
+
+        Setup."Mail Type"::Outlook :
+          EXIT(SendOutlook);
+
+        Setup."Mail Type"::SMTP :
+          EXIT(SendSMTP);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE SendOutlook@7() MailSent : Boolean;
+    VAR
+      i@1000 : Integer;
+      Office@1001 : DotNet "'Microsoft.Dynamics.Nav.Integration.Office, Version=9.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.Integration.Office.Outlook.OutlookMessage" RUNONCLIENT;
+      OutlookMessage@1002 : DotNet "'Microsoft.Dynamics.Nav.Integration.Office, Version=9.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.Integration.Office.Outlook.IOutlookMessage" RUNONCLIENT;
+    BEGIN
+      OutlookMessage := Office.OutlookMessage;
+
+      OutlookMessage.Recipients(ToAddress2);
+      OutlookMessage.Subject := Subject2;
+      OutlookMessage.BodyFormat := 2;
+
+      FOR i := 1 TO NoOfBodyLines DO
+        OutlookMessage.Body.Append(BodyLine[i]);
+
+      FOR i := 1 TO NoOfAttachments DO
+        OutlookMessage.AttachmentFileNames.Add(Attachment[i]);
+
+      OutlookMessage.ShowNewMailDialogOnSend := FALSE;
+
+      MailSent := OutlookMessage.Send;
+
+      DeleteAttachments;
+    END;
+
+    LOCAL PROCEDURE SendSMTP@8() : Boolean;
+    VAR
+      Setup@1000 : Record 11102035;
+      User@1001 : Record 11102056;
+      i@1002 : Integer;
+      Mail@1003 : DotNet "'Microsoft.Dynamics.Nav.SMTP, Version=9.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.SMTP.SmtpMessage";
+    BEGIN
+      Setup.CustomGet;
+
+      User.GetActiveUser(TRUE);
+      User.TESTFIELD("E-Mail");
+
+      Mail := Mail.SmtpMessage;
+
+      Mail.FromName := User.Name;
+      Mail.FromAddress := User."E-Mail";
+      Mail."To" := ToAddress2;
+      Mail.Subject := Subject2;
+
+      FOR i := 1 TO NoOfBodyLines DO
+        ErrorIfResult(Mail.AppendBody(BodyLine[i]));
+
+      FOR i := 1 TO NoOfAttachments DO
+        ErrorIfResult(Mail.AddAttachments(Attachment[i]));
+
+      ErrorIfResult(
+        Mail.Send(
+          Setup."SMTP Server",
+          Setup.SMTPPort,
+          Setup.Authentication,
+          Setup."SMTP User",
+          Setup."SMTP Password",
+          Setup."SMTP Enable SSL"));
+
+      DeleteAttachments;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ErrorIfResult@9(Result@1000 : Text);
+    BEGIN
+      IF Result <> '' THEN
+        ERROR(Result);
+    END;
+
+    PROCEDURE SendTestMail@10();
+    VAR
+      User@1000 : Record 11102056;
+      MailMgt@1001 : Codeunit 11102084;
+      ctFail@1002 : TextConst 'DEU=Failed to send mail.;ENU=Failed to send mail.;ESP=Failed to send mail.;FRA=Failed to send mail.;NLD=Niet gelukt om mail te verzenden.;DEA=Failed to send mail.';
+      ctMailSend@1003 : TextConst 'DEU=Mail was successfully sent.;ENU=Mail was successfully sent.;ESP=Mail was successfully sent.;FRA=Mail was successfully sent.;NLD=Het is gelukt om mail te verzenden.;DEA=Mail was successfully sent.';
+      ctTestMail@1004 : TextConst 'DEU=Object Manager Test Mail;ENU=Object Manager Test Mail;ESP=Object Manager Test Mail;FRA=Object Manager Test Mail;NLD=Object Manager Test Mail;DEA=Object Manager Test Mail';
+    BEGIN
+      User.GetActiveUser(TRUE);
+      User.TESTFIELD(Name);
+      User.TESTFIELD("E-Mail");
+
+      MailMgt.ToAddress := User."E-Mail";
+      MailMgt.Subject := ctTestMail;
+      MailMgt.AddToBody(ctTestMail);
+
+      IF MailMgt.Send THEN
+        MESSAGE(ctMailSend)
+      ELSE
+        MESSAGE(ctFail);
+    END;
+
+    LOCAL PROCEDURE DeleteAttachments@11();
+    VAR
+      i@1000 : Integer;
+    BEGIN
+      FOR i := 1 TO NoOfAttachments DO
+        IF AttachmentInTempDir[i] THEN
+          IF EXISTS(Attachment[i]) THEN
+            ERASE(Attachment[i]);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

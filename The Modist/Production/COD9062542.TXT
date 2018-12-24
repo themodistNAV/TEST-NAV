@@ -1,0 +1,403 @@
+OBJECT Codeunit 9062542 Quick Report Grouping
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/03/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.14;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      QuickReportSIVariables@1000000000 : Codeunit 9062551;
+      QuickReportToolkit@1000000002 : Codeunit 9062538;
+      TnpToolkit@1000000001 : Codeunit 9062230;
+
+    PROCEDURE GroupAndTotalQuickReport@1000000000(VAR QuickReportData@1000000000 : TEMPORARY Record 9062699;GroupData@1000000014 : Boolean;ForceTotalData@1000000013 : Boolean);
+    VAR
+      QuickReportData_GroupHeaders@1000000002 : TEMPORARY Record 9062699;
+      QuickReportData_Totals@1000000011 : TEMPORARY Record 9062699;
+      HeaderID@1000000003 : Integer;
+      CurrGroupName1@1000000001 : Text;
+      CurrGroupName2@1000000009 : Text;
+      CurrGroupName3@1000000010 : Text;
+      FirstRow@1000000004 : Boolean;
+      QuickReportField@1000000005 : Record 9062698;
+      QuickReportField_Temp@1000000006 : TEMPORARY Record 9062698;
+      FieldNoText@1000000007 : Text;
+      RowCounter@1000000008 : Integer;
+      TotalData@1000000012 : Boolean;
+    BEGIN
+      QuickReportData.RESET();
+      QuickReportData.SETRANGE("Row Type", QuickReportData."Row Type"::Record);
+      IF (QuickReportData.ISEMPTY()) THEN
+        EXIT;
+
+      IF GroupData THEN BEGIN
+        IF QuickReportData.GetGroupingFieldRelatedColumnID(1) <= 0 THEN
+          GroupData := FALSE
+        ELSE
+          TotalData := TRUE;
+      END;
+      IF ForceTotalData THEN TotalData := TRUE;
+      IF (NOT GroupData) AND (NOT TotalData) THEN EXIT;
+
+      //Delete existing Group Headers
+      IF (GroupData) THEN
+      BEGIN
+        QuickReportData.SETRANGE("Row Type", QuickReportData."Row Type"::Header);
+        QuickReportData.DELETEALL();
+      END;
+      IF (TotalData) THEN
+      BEGIN
+        QuickReportData.SETRANGE("Row Type", QuickReportData."Row Type"::Totals);
+        QuickReportData.DELETEALL();
+      END;
+
+      QuickReportSIVariables.ClearAll;
+
+      //Copy Quick Report Fields to a Temp version
+      QuickReportField.SETRANGE("Quick Report Code",QuickReportData."Quick Report Code");
+      QuickReportField.SETRANGE(Blocked, FALSE);
+      IF QuickReportField.FINDSET THEN BEGIN
+        REPEAT
+          QuickReportField_Temp.INIT;
+          QuickReportField_Temp.TRANSFERFIELDS(QuickReportField);
+          QuickReportField_Temp.INSERT;
+        UNTIL QuickReportField.NEXT = 0;
+      END;
+
+      //Create Group Headers
+      CurrGroupName1 := '';
+      CurrGroupName2 := '';
+      CurrGroupName3 := '';
+
+      HeaderID := 0;
+      FirstRow := TRUE;
+      QuickReportData.RESET;
+      QuickReportData.SETCURRENTKEY("Grouping Field 1","Grouping Field 2","Grouping Field 3","Sorting Field 1","Sorting Field 2","Sorting Field 3");
+      QuickReportData.SETRANGE("Row Type",QuickReportData."Row Type"::Record);
+      QuickReportData.FINDSET();
+      REPEAT
+        IF (QuickReportData."Grouping Field 1" <> CurrGroupName1) OR
+           (QuickReportData."Grouping Field 2" <> CurrGroupName2) OR
+           (QuickReportData."Grouping Field 3" <> CurrGroupName3) OR FirstRow THEN BEGIN
+
+          IF TotalData THEN BEGIN
+            IF FirstRow THEN BEGIN
+              HeaderID := HeaderID -1;
+              QuickReportData_Totals.INIT;
+              QuickReportData_Totals.VALIDATE("Quick Report Code",QuickReportData."Quick Report Code");
+              QuickReportData_Totals.VALIDATE(ID,HeaderID);
+              QuickReportData_Totals.VALIDATE("Row Type",QuickReportData_Totals."Row Type"::Totals);
+              QuickReportData_Totals.VALIDATE("Grouping Field 1",'');
+              QuickReportData_Totals.VALIDATE("Grouping Field 2",'');
+              QuickReportData_Totals.VALIDATE("Grouping Field 3",'');
+              QuickReportData_Totals.VALIDATE("No. of Records",0);
+              QuickReportData_Totals.INSERT;
+            END;
+          END;
+
+          IF GroupData THEN BEGIN
+            IF NOT FirstRow THEN BEGIN
+              FinaliseTotals(QuickReportData_GroupHeaders,QuickReportField_Temp,RowCounter);
+              QuickReportData_GroupHeaders.MODIFY;
+            END;
+
+            CurrGroupName1 := QuickReportData."Grouping Field 1";
+            CurrGroupName2 := QuickReportData."Grouping Field 2";
+            CurrGroupName3 := QuickReportData."Grouping Field 3";
+
+            HeaderID := HeaderID -1;
+            QuickReportData_GroupHeaders.INIT;
+            QuickReportData_GroupHeaders.VALIDATE("Quick Report Code",QuickReportData."Quick Report Code");
+            QuickReportData_GroupHeaders.VALIDATE(ID,HeaderID);
+            QuickReportData_GroupHeaders.VALIDATE("Row Type",QuickReportData_Totals."Row Type"::Header);
+            QuickReportData_GroupHeaders.VALIDATE("Grouping Field 1",QuickReportData."Grouping Field 1");
+            QuickReportData_GroupHeaders.VALIDATE("Grouping Field 2",QuickReportData."Grouping Field 2");
+            QuickReportData_GroupHeaders.VALIDATE("Grouping Field 3",QuickReportData."Grouping Field 3");
+            QuickReportData_GroupHeaders.VALIDATE("No. of Records",0);
+            QuickReportData_GroupHeaders.INSERT;
+          END;
+        END;
+
+        IF GroupData THEN UpdateTotals(QuickReportData,QuickReportData_GroupHeaders,QuickReportField_Temp);
+        IF TotalData THEN UpdateTotals(QuickReportData,QuickReportData_Totals,QuickReportField_Temp);
+
+        RowCounter += 1;
+        FirstRow := FALSE;
+      UNTIL QuickReportData.NEXT = 0;
+
+      IF GroupData THEN BEGIN
+        FinaliseTotals(QuickReportData_GroupHeaders,QuickReportField_Temp,RowCounter);
+        QuickReportData_GroupHeaders.MODIFY;
+
+        IF QuickReportData_GroupHeaders.FINDSET THEN BEGIN
+          REPEAT
+            QuickReportData.INIT;
+            QuickReportData.TRANSFERFIELDS(QuickReportData_GroupHeaders);
+            QuickReportData.INSERT;
+          UNTIL QuickReportData_GroupHeaders.NEXT = 0;
+        END;
+      END;
+
+      IF TotalData THEN BEGIN
+        FinaliseTotals(QuickReportData_Totals,QuickReportField_Temp,RowCounter);
+        QuickReportData_Totals.MODIFY;
+
+        IF QuickReportData_Totals.FINDSET THEN BEGIN
+          REPEAT
+            QuickReportData.INIT;
+            QuickReportData.TRANSFERFIELDS(QuickReportData_Totals);
+            QuickReportData.INSERT;
+          UNTIL QuickReportData_Totals.NEXT = 0;
+        END;
+      END;
+
+      QuickReportData.RESET;
+      QuickReportData.SETCURRENTKEY("Sorting Field 1","Sorting Field 2","Sorting Field 3","Row Type","Grouping Field 1","Grouping Field 2","Grouping Field 3");
+      IF (QuickReportData.FINDFIRST()) THEN;
+
+      QuickReportSIVariables.ClearAll;
+    END;
+
+    LOCAL PROCEDURE UpdateTotals@1000000004(VAR QuickReportData@1000000000 : TEMPORARY Record 9062699;VAR QuickReportData_Total@1000000001 : TEMPORARY Record 9062699;VAR QuickReportField_Temp@1000000002 : Record 9062698);
+    VAR
+      lDecimalField@1000000007 : Decimal;
+      lDateField@1000000006 : Date;
+      lDateTimeField@1000000005 : DateTime;
+      lCodeField@1000000004 : Code[50];
+      lTextField@1000000003 : Text[250];
+      lTotalDecimalField@1000000012 : Decimal;
+      lTotalDateField@1000000011 : Date;
+      lTotalDateTimeField@1000000010 : DateTime;
+      lTotalCodeField@1000000009 : Code[50];
+      lTotalTextField@1000000008 : Text[250];
+    BEGIN
+      QuickReportData_Total."No. of Records" := QuickReportData_Total."No. of Records" + 1;
+      QuickReportField_Temp.SETCURRENTKEY("Quick Report Code",Index);
+      WITH QuickReportField_Temp DO BEGIN
+        FINDSET;
+        REPEAT
+          QuickReportData.GetFields(Index, lDecimalField, lDateField, lDateTimeField, lCodeField, lTextField);
+          QuickReportData_Total.GetFields(Index, lTotalDecimalField, lTotalDateField, lTotalDateTimeField, lTotalCodeField, lTotalTextField);
+          CASE Grouping OF
+            Grouping::Sum,
+            Grouping::Average:
+              lTotalDecimalField += lDecimalField;
+            Grouping::Minimum:
+              lTotalDecimalField := TnpToolkit.MinDecimal(lDecimalField, lTotalDecimalField);
+            Grouping::Maximum :
+              lTotalDecimalField := TnpToolkit.MaxDecimal(lDecimalField, lTotalDecimalField);
+            Grouping::"Group By" :
+              IF QuickReportData_Total."Row Type" = QuickReportData_Total."Row Type"::Header THEN
+              CASE "Quick Report Data Type" OF
+                "Quick Report Data Type"::Decimal: lTotalDecimalField := lDecimalField;
+                "Quick Report Data Type"::Date: lTotalDateField := lDateField;
+                "Quick Report Data Type"::DateTime: lTotalDateTimeField := lDateTimeField;
+                "Quick Report Data Type"::Code: lTotalCodeField := lCodeField;
+                "Quick Report Data Type"::Text: lTotalTextField := lTextField;
+              END;
+          END;
+          QuickReportData_Total.SetFields(Index, lTotalDecimalField, lTotalDateField, lTotalDateTimeField, lTotalCodeField, lTotalTextField);
+        UNTIL NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE FinaliseTotals@1000000011(VAR QuickReportData_Total@1000000000 : TEMPORARY Record 9062699;VAR QuickReportField_Temp@1000000002 : Record 9062698;VAR RowCounter@1000000001 : Integer);
+    VAR
+      lTotalDecimalField@1000000007 : Decimal;
+      lTotalDateField@1000000006 : Date;
+      lTotalDateTimeField@1000000005 : DateTime;
+      lTotalCodeField@1000000004 : Code[50];
+      lTotalTextField@1000000003 : Text[250];
+    BEGIN
+      QuickReportField_Temp.SETCURRENTKEY("Quick Report Code",Index);
+      WITH QuickReportField_Temp DO BEGIN
+        FINDSET;
+        REPEAT
+          QuickReportData_Total.GetFields(Index, lTotalDecimalField, lTotalDateField, lTotalDateTimeField, lTotalCodeField, lTotalTextField);
+          CASE Grouping OF
+            Grouping::Average:
+              IF RowCounter = 0 THEN
+                lTotalDecimalField := 0
+              ELSE
+                lTotalDecimalField := lTotalDecimalField / RowCounter;
+            Grouping::Count :
+              CASE "Quick Report Data Type" OF
+                "Quick Report Data Type"::Decimal: lTotalDecimalField := RowCounter;
+                "Quick Report Data Type"::Text: lTotalTextField := FORMAT(RowCounter);
+                "Quick Report Data Type"::Code: lTotalCodeField := FORMAT(RowCounter);
+              END;
+          END;
+          QuickReportData_Total.SetFields(Index, lTotalDecimalField, lTotalDateField, lTotalDateTimeField, lTotalCodeField, lTotalTextField);
+        UNTIL NEXT = 0;
+      END;
+
+      RowCounter := 0;
+
+      ReValidateSortingFields(QuickReportData_Total,QuickReportField_Temp);
+    END;
+
+    LOCAL PROCEDURE ReValidateSortingFields@1000000005(VAR QuickReportData_Total@1000000002 : TEMPORARY Record 9062699;VAR QuickReportField@1000000004 : TEMPORARY Record 9062698);
+    VAR
+      SortingFieldCount@1000000000 : Integer;
+      RecView@1000000001 : Text;
+      RecPos@1000000003 : Text;
+      lTotalDecimalField@1000000009 : Decimal;
+      lTotalDateField@1000000008 : Date;
+      lTotalDateTimeField@1000000007 : DateTime;
+      lTotalCodeField@1000000006 : Code[50];
+      lTotalTextField@1000000005 : Text[250];
+    BEGIN
+      WITH QuickReportField DO BEGIN
+        RecView := GETVIEW;
+        RecPos := GETPOSITION;
+
+        SETCURRENTKEY("Quick Report Code",Sorting);
+        SETFILTER(Sorting,'<>%1',0);
+
+        IF NOT FINDSET THEN BEGIN
+          SETVIEW(RecView);
+          SETPOSITION(RecPos);
+
+          EXIT;
+        END;
+
+        REPEAT
+          SortingFieldCount += 1;
+          QuickReportData_Total.GetFields(Index, lTotalDecimalField, lTotalDateField, lTotalDateTimeField, lTotalCodeField, lTotalTextField);
+          CASE "Quick Report Data Type" OF
+            "Quick Report Data Type"::Decimal : QuickReportData_Total.SetSortingField_FromNumber(SortingFieldCount, lTotalDecimalField);
+            "Quick Report Data Type"::Text : QuickReportData_Total.SetSortingField_FromText(SortingFieldCount, lTotalTextField);
+            "Quick Report Data Type"::Date : QuickReportData_Total.SetSortingField_FromText(SortingFieldCount, FORMAT(lTotalDateField, 0, 9));
+            "Quick Report Data Type"::DateTime : QuickReportData_Total.SetSortingField_FromText(SortingFieldCount, FORMAT(lTotalDateTimeField, 0, 9));
+            "Quick Report Data Type"::Code : QuickReportData_Total.SetSortingField_FromText(SortingFieldCount, lTotalCodeField);
+          END;
+        UNTIL (NEXT = 0 ) OR ( SortingFieldCount = 3 );
+        SETVIEW(RecView);
+        SETPOSITION(RecPos);
+      END;
+    END;
+
+    PROCEDURE ReGroupAndTotalQuickReport@1000000001(VAR QuickReportData@1000000000 : TEMPORARY Record 9062699;GroupData@1000000011 : Boolean;ForceTotalData@1000000012 : Boolean);
+    VAR
+      QuickReportField@1000000001 : Record 9062698;
+      RecRef@1000000002 : RecordRef;
+      FieldRefs@1000000003 : ARRAY [3] OF FieldRef;
+      Groupings@1000000006 : Integer;
+      GroupingIndex@1000000005 : Integer;
+      GroupingFieldIds@1000000004 : ARRAY [3] OF Integer;
+      GroupingDataFieldIds@1000000007 : ARRAY [3] OF Integer;
+      FieldNoText@1000000008 : Text;
+      TotalData@1000000013 : Boolean;
+    BEGIN
+      QuickReportSIVariables.ClearAll;
+
+      QuickReportData.RESET;
+      IF QuickReportData.ISEMPTY THEN EXIT;
+
+      IF GroupData THEN BEGIN
+        IF QuickReportData.GetGroupingFieldRelatedColumnID(1) <= 0 THEN
+          GroupData := FALSE
+        ELSE
+          TotalData := TRUE;
+      END;
+
+      IF ForceTotalData THEN TotalData := TRUE;
+
+      IF (NOT GroupData) AND (NOT TotalData) THEN EXIT;
+
+      IF GroupData THEN BEGIN
+        QuickReportData.MODIFYALL("Grouping Field 1",'');
+        QuickReportData.MODIFYALL("Grouping Field 2",'');
+        QuickReportData.MODIFYALL("Grouping Field 3",'');
+
+        CLEAR(GroupingFieldIds);
+        CLEAR(GroupingDataFieldIds);
+        Groupings := ARRAYLEN(GroupingFieldIds);
+        FOR GroupingIndex := 1 TO Groupings DO
+        BEGIN
+          GroupingFieldIds[GroupingIndex] := QuickReportData.GetGroupingFieldRelatedColumnID(GroupingIndex);
+          IF GroupingFieldIds[GroupingIndex] <> 0 THEN BEGIN
+            QuickReportField.SETRANGE("Quick Report Code",QuickReportData."Quick Report Code");
+            QuickReportField.SETRANGE(Index,GroupingFieldIds[GroupingIndex]);
+            IF QuickReportField.FINDFIRST THEN
+              GroupingDataFieldIds[GroupingIndex] := QuickReportField."Data Field ID";
+          END;
+        END;
+
+        CLEAR(FieldRefs);
+        RecRef.OPEN(DATABASE::"Quick Report Data");
+        FOR GroupingIndex := 1 TO Groupings DO
+          IF (GroupingDataFieldIds[GroupingIndex] <> 0) THEN
+            FieldRefs[GroupingIndex] := RecRef.FIELD(GroupingDataFieldIds[GroupingIndex]);
+        QuickReportData.FINDSET();
+        REPEAT
+          RecRef.GETTABLE(QuickReportData);
+          FOR GroupingIndex := 1 TO Groupings DO
+            IF (GroupingDataFieldIds[GroupingIndex] <> 0) THEN
+              FieldRefs[GroupingIndex].VALIDATE();
+          RecRef.MODIFY;
+        UNTIL QuickReportData.NEXT = 0;
+        RecRef.CLOSE;
+      END;
+
+      GroupAndTotalQuickReport(QuickReportData,GroupData,ForceTotalData);
+
+      QuickReportSIVariables.ClearAll;
+    END;
+
+    PROCEDURE SetQuickReportGroupingFields@1000000003(VAR QuickReportData@1000000000 : TEMPORARY Record 9062699;GroupingColumn1@1000000002 : Integer;GroupingColumn2@1000000003 : Integer;GroupingColumn3@1000000004 : Integer);
+    VAR
+      QuickReportField@1000000001 : Record 9062698;
+    BEGIN
+      QuickReportField.SETRANGE("Quick Report Code",QuickReportData."Quick Report Code");
+      QuickReportField.SETRANGE(Grouping,QuickReportField.Grouping::"Group By");
+      IF QuickReportField.FINDSET THEN QuickReportField.MODIFYALL(Grouping,QuickReportField.Grouping::" ");
+      QuickReportField.RESET;
+
+      IF GroupingColumn1 <> 0 THEN BEGIN
+        QuickReportField.SETRANGE("Quick Report Code",QuickReportData."Quick Report Code");
+        QuickReportField.SETRANGE(Index,GroupingColumn1);
+        IF QuickReportField.FINDFIRST THEN BEGIN
+          QuickReportField.VALIDATE(Grouping,QuickReportField.Grouping::"Group By");
+          QuickReportField.MODIFY;
+        END;
+      END;
+
+      IF GroupingColumn2 <> 0 THEN BEGIN
+        QuickReportField.SETRANGE("Quick Report Code",QuickReportData."Quick Report Code");
+        QuickReportField.SETRANGE(Index,GroupingColumn2);
+        IF QuickReportField.FINDFIRST THEN BEGIN
+          QuickReportField.VALIDATE(Grouping,QuickReportField.Grouping::"Group By");
+          QuickReportField.MODIFY;
+        END;
+      END;
+
+      IF GroupingColumn3<> 0 THEN BEGIN
+        QuickReportField.SETRANGE("Quick Report Code",QuickReportData."Quick Report Code");
+        QuickReportField.SETRANGE(Index,GroupingColumn3);
+        IF QuickReportField.FINDFIRST THEN BEGIN
+          QuickReportField.VALIDATE(Grouping,QuickReportField.Grouping::"Group By");
+          QuickReportField.MODIFY;
+        END;
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.7  JH 28/08/2015 - Upgraded to 2016
+      //DOC NA2016.12 JH 27/01/2016 - Bugfixes
+      //DOC NA2016.14 JH 21/02/2016 - Simplified data types
+    }
+    END.
+  }
+}
+

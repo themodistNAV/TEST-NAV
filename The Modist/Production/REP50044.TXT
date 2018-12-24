@@ -1,0 +1,1084 @@
+OBJECT Report 50044 Campaign Summary
+{
+  OBJECT-PROPERTIES
+  {
+    Date=30/09/18;
+    Time=[ 2:24:22 PM];
+    Modified=Yes;
+    Version List=TM3023;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Campaign Summary;
+    OnPreReport=BEGIN
+                  SalesSetupG.GET;
+                END;
+
+  }
+  DATASET
+  {
+    { 1170000000;;DataItem;SalesHeader       ;
+               DataItemTable=Table36;
+               DataItemTableView=SORTING(Document Type,No.)
+                                 ORDER(Ascending)
+                                 WHERE(Document Type=FILTER(Order|Invoice));
+               OnAfterGetRecord=BEGIN
+                                  TempSalesHeaderG.TRANSFERFIELDS(SalesHeader);
+                                  TempSalesHeaderG."Prepayment %" := 0;
+                                  TempSalesHeaderG."Prepmt. Payment Discount %" := 0;
+                                  SalesLineG.SETRANGE("Document No.", "No.");
+                                  SalesLineG.SETFILTER(Campaign, CampaignCodeG);
+                                  SalesLineG.SETFILTER("Coupon Code", CouponCodeG);
+                                  IF SalesLineG.FINDFIRST THEN BEGIN
+                                    SalesLineG.SETRANGE(Campaign);
+                                    SalesLineG.SETRANGE("Coupon Code");
+
+                                    SalesLineG.SETRANGE(Type,SalesLineG.Type::Item);
+                                    SalesLineG.CALCSUMS(Quantity);
+                                    SalesLineG.SETRANGE(Type);
+                                    SalesLineG.CALCSUMS(Amount);
+
+                                    TempSalesHeaderG."Prepayment %" := CurrencyExchangeG.ExchangeAmtFCYToLCY(SalesHeader."Order Date", SalesHeader."Currency Code",
+                                                                                                             SalesLineG.Amount, SalesHeader."Currency Factor"); // used different field to store the Amount
+                                    TempSalesHeaderG."Prepmt. Payment Discount %" := SalesLineG.Quantity; // used different field to store the Quantity
+                                    TempSalesHeaderG."Posting Description" := SalesLineG.Campaign;
+                                    TempSalesHeaderG."Prepmt. Posting Description" := SalesLineG."Coupon Code";
+                                  END ELSE
+                                    CurrReport.SKIP;
+                                  TempSalesHeaderG.INSERT;
+                                END;
+
+               ReqFilterFields=Order Date Time,No. }
+
+    { 1170000001;;DataItem;SalesInvoiceHeader;
+               DataItemTable=Table112;
+               DataItemTableView=SORTING(No.)
+                                 ORDER(Ascending);
+               OnPreDataItem=BEGIN
+                               SalesInvoiceHeader.SETCURRENTKEY("Order No.");
+                               SalesInvoiceHeader.SETFILTER("Order Date Time", SalesHeader.GETFILTER("Order Date Time"));
+                               SalesInvoiceHeader.SETFILTER("Order No.", SalesHeader.GETFILTER("No."));
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  PreviousAmtG := 0;
+                                  PreviousQtyG := 0;
+                                  IF TempSalesHeaderG.GET(TempSalesHeaderG."Document Type"::Quote, SalesInvoiceHeader."Order No.") THEN BEGIN
+                                    PreviousAmtG := TempSalesHeaderG."Prepayment %";
+                                    PreviousQtyG := TempSalesHeaderG."Prepmt. Payment Discount %";
+                                  END;
+                                  TempSalesHeaderG.TRANSFERFIELDS(SalesInvoiceHeader);
+                                  TempSalesHeaderG."No." := SalesInvoiceHeader."Order No.";
+                                  TempSalesHeaderG."Prepayment %" := 0;
+                                  TempSalesHeaderG."Prepmt. Payment Discount %" := 0;
+                                  SalesInvoiceLineG.SETRANGE("Document No.", SalesInvoiceHeader."No.");
+                                  SalesInvoiceLineG.SETFILTER(Campaign, CampaignCodeG);
+                                  SalesInvoiceLineG.SETFILTER("Coupon Code", CouponCodeG);
+                                  IF SalesInvoiceLineG.FINDFIRST THEN BEGIN
+                                    // TM3023.01
+                                    SalesInvoiceLineG.SETRANGE(Campaign);
+                                    SalesInvoiceLineG.SETRANGE("Coupon Code");
+
+                                    SalesInvoiceLineG.SETRANGE(Type,SalesLineG.Type::Item);
+                                    SalesInvoiceLineG.CALCSUMS(Quantity);
+                                    SalesInvoiceLineG.SETRANGE(Type);
+                                    SalesInvoiceLineG.CALCSUMS(Amount);
+                                    // TM3023.01
+                                    TempSalesHeaderG."Prepayment %" := CurrencyExchangeG.ExchangeAmtFCYToLCY(SalesInvoiceHeader."Posting Date", SalesInvoiceHeader."Currency Code",
+                                                                                                              SalesInvoiceLineG.Amount, SalesInvoiceHeader."Currency Factor") + PreviousAmtG; // used different field to store the Amount
+                                    TempSalesHeaderG."Prepmt. Payment Discount %" := SalesInvoiceLineG.Quantity + PreviousQtyG; // used different field to store the Quantity
+                                    TempSalesHeaderG."Posting Description" := SalesInvoiceLineG.Campaign;
+                                    TempSalesHeaderG."Prepmt. Posting Description" := SalesInvoiceLineG."Coupon Code";
+                                  END ELSE
+                                    CurrReport.SKIP;
+                                  IF NOT TempSalesHeaderG.INSERT THEN // discuss
+                                    TempSalesHeaderG.MODIFY;
+                                END;
+                                 }
+
+    { 1170000002;;DataItem;CampaignData      ;
+               DataItemTable=Table2000000026;
+               DataItemTableView=SORTING(Number)
+                                 ORDER(Ascending);
+               OnPreDataItem=BEGIN
+                               CampaignData.SETRANGE(Number, 1, TempSalesHeaderG.COUNT);
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  IF CampaignData.Number = 1 THEN BEGIN
+                                    TempSalesHeaderG.FINDFIRST;
+                                  END ELSE
+                                    TempSalesHeaderG.NEXT;
+                                END;
+                                 }
+
+    { 1170000004;1;Column;OrderDateTime      ;
+               SourceExpr=TempSalesHeaderG."Order Date Time" }
+
+    { 1170000003;1;Column;OrderID            ;
+               SourceExpr=TempSalesHeaderG."No." }
+
+    { 1170000005;1;Column;ShiptoCountry      ;
+               SourceExpr=TempSalesHeaderG."Ship-to Country/Region Code" }
+
+    { 1170000006;1;Column;Amount             ;
+               SourceExpr=ABS(TempSalesHeaderG."Prepayment %") }
+
+    { 1170000007;1;Column;Quantity           ;
+               SourceExpr=ABS(TempSalesHeaderG."Prepmt. Payment Discount %") }
+
+    { 1170000008;1;Column;CampaignNameG      ;
+               SourceExpr=TempSalesHeaderG."Posting Description" }
+
+    { 1170000009;1;Column;OrderStatus        ;
+               SourceExpr=TempSalesHeaderG."Order Status" }
+
+    { 1170000019;1;Column;VoucherCode        ;
+               SourceExpr=TempSalesHeaderG."Prepmt. Posting Description" }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+      { 1170000000;;Container;
+                  ContainerType=ContentArea }
+
+      { 1170000002;1;Group  ;
+                  Name=Campaign Filter;
+                  GroupType=Group }
+
+      { 1170000001;2;Field  ;
+                  Name=Campaign Name;
+                  ToolTipML=ENU=The filter you are apply is case sensitive.;
+                  SourceExpr=CampaignCodeG }
+
+      { 1000000000;2;Field  ;
+                  Name=Coupon Code;
+                  SourceExpr=CouponCodeG }
+
+    }
+  }
+  LABELS
+  {
+    { 1170000010;lbl_OrderDateTime;
+                                CaptionML=ENU=Order Date Time }
+    { 1170000011;lbl_OrderID   ;CaptionML=ENU=Order ID }
+    { 1170000012;lbl_CampaignName;
+                                CaptionML=ENU=Campaign Name }
+    { 1170000013;lbl_VoucherCode;
+                                CaptionML=ENU=Voucher Code }
+    { 1170000014;lbl_ShipCountry;
+                                CaptionML=ENU=Ship Country }
+    { 1170000015;lbl_RevenueExcludingVAT;
+                                CaptionML=ENU=Revenue (Excluding VAT) USD }
+    { 1170000016;lbl_Quantities;CaptionML=ENU=Quantities }
+    { 1170000017;lbl_OrderStatus;
+                                CaptionML=ENU=Order Status }
+    { 1170000018;lbl_ReportTitle;
+                                CaptionML=ENU=Campaign Summary }
+  }
+  CODE
+  {
+    VAR
+      TempSalesHeaderG@1170000000 : TEMPORARY Record 36;
+      SalesInvoiceLineG@1170000003 : Record 113;
+      SalesLineG@1170000002 : Record 37;
+      SalesSetupG@1170000006 : Record 311;
+      CurrencyExchangeG@1170000007 : Record 330;
+      CampaignCodeG@1170000001 : Text[50];
+      PreviousAmtG@1170000008 : Decimal;
+      PreviousQtyG@1170000009 : Decimal;
+      CouponCodeG@1000000000 : Code[30];
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+    <?xml version="1.0" encoding="utf-8"?>
+<Report xmlns:rd="http://schemas.microsoft.com/SQLServer/reporting/reportdesigner" xmlns:cl="http://schemas.microsoft.com/sqlserver/reporting/2010/01/componentdefinition" xmlns="http://schemas.microsoft.com/sqlserver/reporting/2010/01/reportdefinition">
+  <AutoRefresh>0</AutoRefresh>
+  <DataSources>
+    <DataSource Name="DataSource">
+      <ConnectionProperties>
+        <DataProvider>SQL</DataProvider>
+        <ConnectString />
+      </ConnectionProperties>
+      <rd:SecurityType>None</rd:SecurityType>
+      <rd:DataSourceID>85c4f403-bfec-4b87-a2ee-5f2843b471d1</rd:DataSourceID>
+    </DataSource>
+  </DataSources>
+  <DataSets>
+    <DataSet Name="DataSet_Result">
+      <Query>
+        <DataSourceName>DataSource</DataSourceName>
+        <CommandText />
+      </Query>
+      <Fields>
+        <Field Name="OrderDateTime">
+          <DataField>OrderDateTime</DataField>
+        </Field>
+        <Field Name="OrderID">
+          <DataField>OrderID</DataField>
+        </Field>
+        <Field Name="ShiptoCountry">
+          <DataField>ShiptoCountry</DataField>
+        </Field>
+        <Field Name="Amount">
+          <DataField>Amount</DataField>
+        </Field>
+        <Field Name="AmountFormat">
+          <DataField>AmountFormat</DataField>
+        </Field>
+        <Field Name="Quantity">
+          <DataField>Quantity</DataField>
+        </Field>
+        <Field Name="QuantityFormat">
+          <DataField>QuantityFormat</DataField>
+        </Field>
+        <Field Name="CampaignNameG">
+          <DataField>CampaignNameG</DataField>
+        </Field>
+        <Field Name="OrderStatus">
+          <DataField>OrderStatus</DataField>
+        </Field>
+        <Field Name="VoucherCode">
+          <DataField>VoucherCode</DataField>
+        </Field>
+      </Fields>
+      <rd:DataSetInfo>
+        <rd:DataSetName>DataSet</rd:DataSetName>
+        <rd:SchemaPath>Report.xsd</rd:SchemaPath>
+        <rd:TableName>Result</rd:TableName>
+      </rd:DataSetInfo>
+    </DataSet>
+  </DataSets>
+  <ReportSections>
+    <ReportSection>
+      <Body>
+        <ReportItems>
+          <Tablix Name="Tablix1">
+            <TablixBody>
+              <TablixColumns>
+                <TablixColumn>
+                  <Width>4.0875cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.5cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>5.54271cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.5cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.5cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>3.63771cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.15604cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.5cm</Width>
+                </TablixColumn>
+              </TablixColumns>
+              <TablixRows>
+                <TablixRow>
+                  <Height>0.6cm</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox5">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Parameters!lbl_OrderDateTime.Value</Value>
+                                  <Style>
+                                    <FontFamily>Calibri</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox5</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>#7292cc</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>#4c68a2</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox7">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Parameters!lbl_OrderID.Value</Value>
+                                  <Style>
+                                    <FontFamily>Calibri</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox7</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>#7292cc</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>#4c68a2</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox9">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Parameters!lbl_CampaignName.Value</Value>
+                                  <Style>
+                                    <FontFamily>Calibri</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox9</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>#7292cc</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>#4c68a2</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox11">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Parameters!lbl_VoucherCode.Value</Value>
+                                  <Style>
+                                    <FontFamily>Calibri</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox11</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>#7292cc</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>#4c68a2</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox13">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Parameters!lbl_ShipCountry.Value</Value>
+                                  <Style>
+                                    <FontFamily>Calibri</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox13</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>#7292cc</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>#4c68a2</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox15">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Parameters!lbl_RevenueExcludingVAT.Value</Value>
+                                  <Style>
+                                    <FontFamily>Calibri</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox15</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>#7292cc</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>#4c68a2</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox16">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Parameters!lbl_Quantities.Value</Value>
+                                  <Style>
+                                    <FontFamily>Calibri</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox16</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>#7292cc</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>#4c68a2</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox17">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Parameters!lbl_OrderStatus.Value</Value>
+                                  <Style>
+                                    <FontFamily>Calibri</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox17</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>#7292cc</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>#4c68a2</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+                <TablixRow>
+                  <Height>0.6cm</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="OrderDateTime">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!OrderDateTime.Value</Value>
+                                  <Style>
+                                    <FontFamily>Calibri</FontFamily>
+                                    <Color>#4d4d4d</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>OrderDateTime</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>#e5e5e5</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="OrderID">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!OrderID.Value</Value>
+                                  <Style>
+                                    <FontFamily>Calibri</FontFamily>
+                                    <Color>#4d4d4d</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>OrderID</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>#e5e5e5</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="CampaignNameG">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!CampaignNameG.Value</Value>
+                                  <Style>
+                                    <FontFamily>Calibri</FontFamily>
+                                    <Color>#4d4d4d</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>CampaignNameG</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>#e5e5e5</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="VoucherCode">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!VoucherCode.Value</Value>
+                                  <Style>
+                                    <FontFamily>Calibri</FontFamily>
+                                    <Color>#4d4d4d</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>VoucherCode</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>#e5e5e5</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ShiptoCountry">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!ShiptoCountry.Value</Value>
+                                  <Style>
+                                    <FontFamily>Calibri</FontFamily>
+                                    <Color>#4d4d4d</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>ShiptoCountry</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>#e5e5e5</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Amount">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!Amount.Value</Value>
+                                  <Style>
+                                    <FontFamily>Calibri</FontFamily>
+                                    <Format>=Fields!AmountFormat.Value</Format>
+                                    <Color>#4d4d4d</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Amount</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>#e5e5e5</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Quantity">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!Quantity.Value</Value>
+                                  <Style>
+                                    <FontFamily>Calibri</FontFamily>
+                                    <Format>=Fields!AmountFormat.Value</Format>
+                                    <Color>#4d4d4d</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Quantity</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>#e5e5e5</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="OrderStatus">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!OrderStatus.Value</Value>
+                                  <Style>
+                                    <FontFamily>Calibri</FontFamily>
+                                    <Color>#4d4d4d</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>OrderStatus</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>#e5e5e5</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+              </TablixRows>
+            </TablixBody>
+            <TablixColumnHierarchy>
+              <TablixMembers>
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+              </TablixMembers>
+            </TablixColumnHierarchy>
+            <TablixRowHierarchy>
+              <TablixMembers>
+                <TablixMember>
+                  <KeepWithGroup>After</KeepWithGroup>
+                </TablixMember>
+                <TablixMember>
+                  <Group Name="Details" />
+                  <SortExpressions>
+                    <SortExpression>
+                      <Value>=Fields!OrderDateTime.Value</Value>
+                      <Direction>Descending</Direction>
+                    </SortExpression>
+                  </SortExpressions>
+                </TablixMember>
+              </TablixMembers>
+            </TablixRowHierarchy>
+            <DataSetName>DataSet_Result</DataSetName>
+            <Top>0cm</Top>
+            <Left>0cm</Left>
+            <Height>1.2cm</Height>
+            <Width>25.42396cm</Width>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+            </Style>
+          </Tablix>
+        </ReportItems>
+        <Height>1.27cm</Height>
+        <Style />
+      </Body>
+      <Width>25.42396cm</Width>
+      <Page>
+        <PageHeader>
+          <Height>0.635cm</Height>
+          <PrintOnFirstPage>true</PrintOnFirstPage>
+          <PrintOnLastPage>true</PrintOnLastPage>
+          <ReportItems>
+            <Textbox Name="Textbox1">
+              <CanGrow>true</CanGrow>
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value EvaluationMode="Auto">=Parameters!lbl_ReportTitle.Value</Value>
+                      <Style>
+                        <FontFamily>Calibri</FontFamily>
+                        <FontSize>14pt</FontSize>
+                        <FontWeight>Bold</FontWeight>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                  <Style>
+                    <TextAlign>Center</TextAlign>
+                  </Style>
+                </Paragraph>
+              </Paragraphs>
+              <rd:DefaultName>Textbox1</rd:DefaultName>
+              <Left>2.84896in</Left>
+              <Height>0.25in</Height>
+              <Width>2.55208in</Width>
+              <Style>
+                <Border>
+                  <Style>None</Style>
+                </Border>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+          </ReportItems>
+          <Style>
+            <Border>
+              <Style>None</Style>
+            </Border>
+          </Style>
+        </PageHeader>
+        <PageHeight>27.94cm</PageHeight>
+        <PageWidth>21.59cm</PageWidth>
+        <LeftMargin>0.5cm</LeftMargin>
+        <RightMargin>0.5cm</RightMargin>
+        <TopMargin>0.5cm</TopMargin>
+        <BottomMargin>0.5cm</BottomMargin>
+        <ColumnSpacing>1.27cm</ColumnSpacing>
+        <Style />
+      </Page>
+    </ReportSection>
+  </ReportSections>
+  <ReportParameters>
+    <ReportParameter Name="lbl_OrderDateTime">
+      <DataType>String</DataType>
+      <DefaultValue>
+        <Values>
+          <Value>lbl_OrderDateTime</Value>
+        </Values>
+      </DefaultValue>
+      <Prompt>lbl_OrderDateTime</Prompt>
+    </ReportParameter>
+    <ReportParameter Name="lbl_OrderID">
+      <DataType>String</DataType>
+      <DefaultValue>
+        <Values>
+          <Value>lbl_OrderID</Value>
+        </Values>
+      </DefaultValue>
+      <Prompt>lbl_OrderID</Prompt>
+    </ReportParameter>
+    <ReportParameter Name="lbl_CampaignName">
+      <DataType>String</DataType>
+      <DefaultValue>
+        <Values>
+          <Value>lbl_CampaignName</Value>
+        </Values>
+      </DefaultValue>
+      <Prompt>lbl_CampaignName</Prompt>
+    </ReportParameter>
+    <ReportParameter Name="lbl_VoucherCode">
+      <DataType>String</DataType>
+      <DefaultValue>
+        <Values>
+          <Value>lbl_VoucherCode</Value>
+        </Values>
+      </DefaultValue>
+      <Prompt>lbl_VoucherCode</Prompt>
+    </ReportParameter>
+    <ReportParameter Name="lbl_ShipCountry">
+      <DataType>String</DataType>
+      <DefaultValue>
+        <Values>
+          <Value>lbl_ShipCountry</Value>
+        </Values>
+      </DefaultValue>
+      <Prompt>lbl_ShipCountry</Prompt>
+    </ReportParameter>
+    <ReportParameter Name="lbl_RevenueExcludingVAT">
+      <DataType>String</DataType>
+      <DefaultValue>
+        <Values>
+          <Value>lbl_RevenueExcludingVAT</Value>
+        </Values>
+      </DefaultValue>
+      <Prompt>lbl_RevenueExcludingVAT</Prompt>
+    </ReportParameter>
+    <ReportParameter Name="lbl_Quantities">
+      <DataType>String</DataType>
+      <DefaultValue>
+        <Values>
+          <Value>lbl_Quantities</Value>
+        </Values>
+      </DefaultValue>
+      <Prompt>lbl_Quantities</Prompt>
+    </ReportParameter>
+    <ReportParameter Name="lbl_OrderStatus">
+      <DataType>String</DataType>
+      <DefaultValue>
+        <Values>
+          <Value>lbl_OrderStatus</Value>
+        </Values>
+      </DefaultValue>
+      <Prompt>lbl_OrderStatus</Prompt>
+    </ReportParameter>
+    <ReportParameter Name="lbl_ReportTitle">
+      <DataType>String</DataType>
+      <DefaultValue>
+        <Values>
+          <Value>lbl_ReportTitle</Value>
+        </Values>
+      </DefaultValue>
+      <Prompt>lbl_ReportTitle</Prompt>
+    </ReportParameter>
+  </ReportParameters>
+  <Code>Public Function BlankZero(ByVal Value As Decimal)
+    if Value = 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankPos(ByVal Value As Decimal)
+    if Value &gt; 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankZeroAndPos(ByVal Value As Decimal)
+    if Value &gt;= 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankNeg(ByVal Value As Decimal)
+    if Value &lt; 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankNegAndZero(ByVal Value As Decimal)
+    if Value &lt;= 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+</Code>
+  <Language>=User!Language</Language>
+  <ConsumeContainerWhitespace>true</ConsumeContainerWhitespace>
+  <rd:ReportUnitType>Cm</rd:ReportUnitType>
+  <rd:ReportID>0eeb6585-38ae-40f1-885b-8d50088d51b4</rd:ReportID>
+</Report>
+    END_OF_RDLDATA
+  }
+}
+

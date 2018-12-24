@@ -1,0 +1,266 @@
+OBJECT Codeunit 9062401 Ask nOra - Sentence Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.12;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            s@1000000000 : Record 9062517;
+          BEGIN
+            s.GET(8065);
+            MESSAGE(GetSubString(8065,0,8065,0));
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      gSentenceText@1000000000 : Text;
+      gSentenceID@1000000001 : Integer;
+      gSentence@1000000002 : Record 9062517;
+      SentenceSet@1000000003 : Boolean;
+      eSentenceNotSet@1000000004 : TextConst 'ENU=The Sentence has not been set;ENG=The Sentence has not been set';
+      eStartSentenceNotSet@1000000005 : TextConst 'ENU=You must set a Start Sentence;ENG=You must set a Start Sentence';
+      eEndSentenceNotSet@1000000006 : TextConst 'ENU=You must set an End Sentence;ENG=You must set an End Sentence';
+      String@1000000008 : Codeunit 9062236;
+      TNPUtils@1000000007 : Codeunit 9062229;
+
+    PROCEDURE SetSentence@1000000009(SentenceID@1000000000 : Integer);
+    BEGIN
+      gSentence.GET(SentenceID);
+      SentenceSet := TRUE;
+    END;
+
+    PROCEDURE SetSentenceText@1000000001(pSentenceText@1000000000 : Text);
+    BEGIN
+      gSentenceText := pSentenceText;
+    END;
+
+    PROCEDURE Read@1000000003(ReadWords@1000000003 : Boolean) NumWords : Integer;
+    VAR
+      CurrWord@1000000000 : Text;
+      CurrUnalteredWord@1000000004 : Text;
+      SentenceWord@1000000001 : Record 9062518;
+      i@1000000002 : Integer;
+    BEGIN
+      IF NOT SentenceSet THEN ERROR(eSentenceNotSet);
+      IF gSentenceText = '' THEN;
+
+      gSentence.VALIDATE("Line Part 1",COPYSTR(gSentenceText,1,250));
+      gSentence.VALIDATE("Line Part 2",COPYSTR(gSentenceText,251,250));
+      gSentence.VALIDATE("Line Part 3",COPYSTR(gSentenceText,501,250));
+      gSentence.VALIDATE("Line Part 4",COPYSTR(gSentenceText,751,250));
+      gSentence.VALIDATE("Line Part 5",COPYSTR(gSentenceText,1001,250));
+      gSentence.MODIFY(TRUE);
+
+      IF NOT ReadWords THEN EXIT;
+
+      REPEAT
+        i += 1;
+        ReadNextWord(CurrWord,CurrUnalteredWord);
+        CurrWord := RemoveUnwantedChars(CurrWord);
+        IF CurrWord <> '' THEN BEGIN
+          SentenceWord.INIT;
+          SentenceWord.VALIDATE("Sentence ID",gSentence."Sentence ID");
+          SentenceWord.VALIDATE("Word ID",i);
+          SentenceWord.VALIDATE(Text,COPYSTR(CurrWord,1,MAXSTRLEN(SentenceWord.Text)));
+          SentenceWord.VALIDATE("Unaltered Text",COPYSTR(CurrUnalteredWord,1,MAXSTRLEN(SentenceWord."Unaltered Text")));
+          SentenceWord.VALIDATE(Ignore,WordIs_ToIgnore(SentenceWord.Text,SentenceWord."Ignore Reason"));
+          SentenceWord.VALIDATE(Type,GetWordType(SentenceWord.Text));
+          SentenceWord.INSERT(TRUE);
+        END;
+      UNTIL (CurrWord = '');
+
+      EXIT(i);
+    END;
+
+    PROCEDURE "--- INSPECT SENTENCES ---"@1000000002();
+    BEGIN
+    END;
+
+    PROCEDURE GetSubString@1000000012(StartSentenceNo@1000000000 : Integer;StartWordNo@1000000001 : Integer;EndSentenceNo@1000000002 : Integer;EndWordNo@1000000003 : Integer) SubString : Text;
+    VAR
+      SentenceWord@1000000004 : Record 9062518;
+      CurrWord@1000000005 : Integer;
+      CurrSentence@1000000006 : Integer;
+      UseWord@1000000007 : Boolean;
+    BEGIN
+      IF StartSentenceNo = 0 THEN ERROR(eStartSentenceNotSet);
+      IF EndSentenceNo = 0 THEN ERROR(eStartSentenceNotSet);
+
+      SentenceWord.SETRANGE("Sentence ID",StartSentenceNo,EndSentenceNo);
+      IF NOT SentenceWord.FINDSET THEN EXIT;
+
+      REPEAT
+        UseWord := TRUE;
+
+        IF SentenceWord."Sentence ID" <> CurrSentence THEN BEGIN
+          CurrSentence := SentenceWord."Sentence ID";
+          CurrWord := 0;
+        END;
+
+        CurrWord += 1;
+
+        IF SentenceWord."Sentence ID" = StartSentenceNo THEN BEGIN
+          IF (StartWordNo <> 0) AND (CurrWord < StartWordNo) THEN UseWord := FALSE;
+        END;
+
+        IF SentenceWord."Sentence ID" = EndSentenceNo THEN BEGIN
+          IF (EndWordNo <> 0) AND (CurrWord > EndWordNo) THEN UseWord := FALSE;
+        END;
+
+        IF UseWord THEN BEGIN
+          IF SubString <> '' THEN SubString += ' ';
+          SubString += SentenceWord.Text;
+        END;
+
+      UNTIL SentenceWord.NEXT = 0;
+    END;
+
+    PROCEDURE GetNextWord@1000000011(SentenceID@1000000000 : Integer;WordID@1000000001 : Integer) WordText : Text;
+    VAR
+      SentenceWord@1000000003 : Record 9062518;
+    BEGIN
+      IF SentenceWord.GET(SentenceID,WordID + 1) THEN EXIT(SentenceWord.Text);
+    END;
+
+    PROCEDURE GetPrevWord@1000000013(SentenceID@1000000000 : Integer;WordID@1000000001 : Integer) WordText : Text;
+    VAR
+      SentenceWord@1000000003 : Record 9062518;
+    BEGIN
+      IF SentenceWord.GET(SentenceID,WordID - 1) THEN EXIT(SentenceWord.Text);
+    END;
+
+    PROCEDURE GetNextWord_FromText@1000000014(SentenceID@1000000000 : Integer;WordText@1000000001 : Text) NextWordText : Text;
+    VAR
+      SentenceWord@1000000002 : Record 9062518;
+    BEGIN
+      IF SentenceWord.GET(SentenceID,FindWordInSentence(SentenceID,WordText,0) + 1) THEN EXIT(SentenceWord.Text);
+    END;
+
+    PROCEDURE GetPrevWord_FromText@1000000018(SentenceID@1000000000 : Integer;WordText@1000000001 : Text) PrevWordText : Text;
+    VAR
+      SentenceWord@1000000002 : Record 9062518;
+    BEGIN
+      IF SentenceWord.GET(SentenceID,FindWordInSentence(SentenceID,WordText,0) - 1) THEN EXIT(SentenceWord.Text);
+    END;
+
+    PROCEDURE FindWordInSentence@1000000015(SentenceID@1000000000 : Integer;WordText@1000000001 : Text;StartAtWordID@1000000003 : Integer) WordID : Integer;
+    VAR
+      SentenceWord@1000000002 : Record 9062518;
+    BEGIN
+      SentenceWord.SETRANGE("Sentence ID",SentenceID);
+      SentenceWord.SETRANGE(Text,WordText);
+      IF StartAtWordID <> 0 THEN SentenceWord.SETFILTER("Word ID",'>=%1',StartAtWordID);
+      IF SentenceWord.FINDFIRST THEN EXIT(SentenceWord."Word ID");
+    END;
+
+    LOCAL PROCEDURE "--- LOCALS ---"@1000000004();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ReadNextWord@1000000000(VAR Word@1000000001 : Text;VAR UnAlteredWord@1000000002 : Text);
+    VAR
+      WordEndPos@1000000000 : Integer;
+    BEGIN
+      Word := '';
+      UnAlteredWord := '';
+
+      IF STRLEN(gSentenceText) = 0 THEN EXIT;
+
+
+      WordEndPos := FindEndOfWord;
+      Word := Trim(COPYSTR(gSentenceText,1,WordEndPos),FALSE);
+      UnAlteredWord :=  Trim(COPYSTR(gSentenceText,1,WordEndPos),TRUE);
+
+      gSentenceText := COPYSTR(gSentenceText,WordEndPos+1);
+    END;
+
+    LOCAL PROCEDURE FindEndOfWord@1000000005() EndPos : Integer;
+    VAR
+      i@1000000000 : Integer;
+      Started@1000000001 : Boolean;
+    BEGIN
+      FOR i := 1 TO STRLEN(gSentenceText) DO BEGIN
+        IF CharIs_EndOfWord(gSentenceText[i]) THEN BEGIN
+          IF Started THEN
+            EXIT(i);
+        END;
+        Started := TRUE;
+      END;
+      EXIT(STRLEN(gSentenceText));
+    END;
+
+    LOCAL PROCEDURE CharIs_EndOfWord@1000000006(Char@1000000000 : Char) : Boolean;
+    VAR
+      CRLF@1000000001 : ARRAY [2] OF Char;
+    BEGIN
+      IF Char = ' ' THEN EXIT(TRUE);
+      //IF Char = '.' THEN EXIT(TRUE);
+      IF Char = '!' THEN EXIT(TRUE);
+      IF Char = '?' THEN EXIT(TRUE);
+      IF Char = ',' THEN EXIT(TRUE);
+      IF Char = 13 THEN EXIT(TRUE);
+      IF Char = 10 THEN EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE WordIs_ToIgnore@1000000008(pWord@1000000000 : Text;VAR IgnoreReason@1000000002 : Code[50]) Ignore : Boolean;
+    VAR
+      IgnoreWords@1000000001 : Record 9062519;
+    BEGIN
+      pWord := Trim(pWord,FALSE);
+      pWord := UPPERCASE(pWord);
+      IF IgnoreWords.GET(pWord) THEN BEGIN
+        IgnoreReason := IgnoreWords."Ignore Reason";
+        EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetWordType@1000000010(Word@1000000001 : Text) TypeCode : Code[20];
+    VAR
+      tmpDate@1000000000 : Date;
+      tmpInt@1000000002 : Integer;
+      tmpDec@1000000003 : Decimal;
+      tmpBool@1000000004 : Boolean;
+    BEGIN
+      IF ((STRPOS(Word,'/') <> 0) OR (STRPOS(Word,'-') <> 0)) THEN BEGIN
+        IF EVALUATE(tmpDate,Word) THEN EXIT('DATE');
+      END;
+      IF EVALUATE(tmpInt,Word) THEN EXIT('INTEGER');
+      IF EVALUATE(tmpDec,Word) THEN EXIT('DECIMAL');
+      IF EVALUATE(tmpBool,Word) THEN EXIT('BOOLEAN');
+    END;
+
+    LOCAL PROCEDURE Trim@1000000007(pText@1000000000 : Text;SpacesOnly@1000000002 : Boolean) TrimmedText : Text;
+    VAR
+      i@1000000001 : Integer;
+    BEGIN
+      FOR i := 1 TO STRLEN(pText) DO BEGIN
+        IF SpacesOnly THEN BEGIN
+          IF pText[i] <> ' ' THEN TrimmedText += FORMAT(pText[i]);
+        END ELSE BEGIN
+          IF NOT CharIs_EndOfWord(pText[i])  THEN TrimmedText += FORMAT(pText[i]);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE RemoveUnwantedChars@1000000016(pText@1000000000 : Text) NewText : Text;
+    BEGIN
+      NewText := pText;
+      NewText := String.Replace(NewText,'''','');
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.4 JH 28/08/2015 - Upgraded to 2016
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit used
+      //DOC NA2016.15 JH 09/05/2016 - CfMD modifications
+    }
+    END.
+  }
+}
+

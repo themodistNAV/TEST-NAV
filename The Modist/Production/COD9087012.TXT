@@ -1,0 +1,170 @@
+OBJECT Codeunit 9087012 Buying Sheet Archive Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/10/16;
+    Time=11:58:46 AM;
+    Version List=NS2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      BuyingSheetHeader@1000000000 : Record 9087020;
+      BuyingSheetSummaryLine@1000000002 : Record 9087021;
+      BuyingSheetLine@1000000003 : Record 9087022;
+      BuyingSheetArchHeader@1000000004 : Record 9087023;
+      BuyingSheetArchSumLine@1000000005 : Record 9087024;
+      BuyingSheetArchLine@1000000006 : Record 9087025;
+      VersionNo@1000000001 : Integer;
+
+    PROCEDURE Archive@1000000001(pBuyingSheetHeader@1000000000 : Record 9087020;pMoveToArchive@1000000007 : Boolean;pInteraction@1000000008 : Boolean) : Boolean;
+    VAR
+      eConfirmation@1000000009 : TextConst 'ENU=Do you want to archive buying sheet "%1"?;ENG=Do you want to archive buying sheet "%1"?';
+      eFinalMessage@1000000010 : TextConst 'ENU=Buying sheet "%1" has been archived. Do you want to open the archive?;ENG=Buying sheet "%1" has been archived. Do you want to open the archive?';
+    BEGIN
+      //DOC NS2015.1 - Archiving buying sheet
+      //  -> pBuyingSheetHeader: The buying sheet header
+      //  -> pMoveToArchive: TRUE: move to archive (delete buying sheet), FALSE: just archive
+      //  -> pInteraction: TRUE: with user interaction, FALSE: without
+      //  <- TRUE: Archived, FALSE: Not
+
+      BuyingSheetHeader := pBuyingSheetHeader;
+
+      IF (pMoveToArchive) THEN
+        CheckIfMovePossible();
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+      IF (pInteraction) THEN
+        IF ( NOT (CONFIRM(eConfirmation, TRUE, BuyingSheetHeader."No."))) THEN
+          EXIT(FALSE);
+
+      ClearLastVersion();
+      FindLastVersionNo();
+
+      ArchiveHeader();
+      ArchiveSummaryLines();
+      ArchiveLines();
+
+      IF (pMoveToArchive) THEN
+        BuyingSheetHeader.DELETE(TRUE);
+
+      IF (pInteraction) THEN
+        IF (CONFIRM(eFinalMessage, TRUE, BuyingSheetHeader."No.")) THEN
+        BEGIN
+          COMMIT;
+          PAGE.RUN(PAGE::"Buying Sheet Arch. Card", BuyingSheetArchHeader);
+        END;
+    END;
+
+    LOCAL PROCEDURE CheckIfMovePossible@1000000003();
+    VAR
+      eLinesNotPosted@1000000000 : TextConst 'ENU=Buying sheet "%1" can''t be moved to archive because there are non-posted purchase order lines related to it.;ENG=Buying sheet "%1" can''t be moved to archive because there are non-posted purchase order lines related to it.';
+      eLinesWithoutPurchaseOrders@1000000001 : TextConst 'ENU=Buying sheet "%1" has some lines not related to purchase orders. Do you still want to move it to archive?;ENG=Buying sheet "%1" has some lines not related to purchase orders. Do you still want to move it to archive?';
+    BEGIN
+      //DOC NS2016.16 - Checking if moving to archive is possible
+
+      BuyingSheetLine.RESET();
+      BuyingSheetLine.SETRANGE("Buying Sheet No.", BuyingSheetHeader."No.");
+      BuyingSheetLine.SETFILTER("Purchase Order No.", '<>''''');
+      BuyingSheetLine.SETFILTER("Purchase Order Line No.", '<>0');
+      BuyingSheetLine.SETRANGE("Purchase Order Line Posted", FALSE);
+      IF ( NOT (BuyingSheetLine.ISEMPTY())) THEN
+        ERROR(eLinesNotPosted);
+
+      BuyingSheetLine.RESET();
+      BuyingSheetLine.SETRANGE("Buying Sheet No.", BuyingSheetHeader."No.");
+      BuyingSheetLine.SETRANGE("Purchase Order No.", '');
+      IF ( NOT (BuyingSheetLine.ISEMPTY())) THEN
+        IF ( NOT (CONFIRM(eLinesWithoutPurchaseOrders, TRUE))) THEN
+          ERROR('');
+    END;
+
+    LOCAL PROCEDURE ClearLastVersion@1000000002();
+    BEGIN
+      //DOC NS2016.16 - Clearing last version in existing archives
+
+      BuyingSheetArchHeader.RESET();
+      BuyingSheetArchHeader.SETRANGE("No.", BuyingSheetHeader."No.");
+      BuyingSheetArchHeader.SETRANGE("Last Version", TRUE);
+      IF ( NOT (BuyingSheetArchHeader.ISEMPTY())) THEN
+      BEGIN
+        BuyingSheetArchHeader.MODIFYALL("Last Version", FALSE);
+
+        BuyingSheetArchSumLine.RESET();
+        BuyingSheetArchSumLine.SETRANGE("Buying Sheet Arch. No.", BuyingSheetArchHeader."No.");
+        BuyingSheetArchSumLine.SETRANGE("Buying Sheet Arch. Version No.", BuyingSheetArchHeader."Version No.");
+        BuyingSheetArchSumLine.MODIFYALL("Last Version", FALSE);
+
+        BuyingSheetArchLine.RESET();
+        BuyingSheetArchLine.SETRANGE("Buying Sheet Arch. No.", BuyingSheetArchHeader."No.");
+        BuyingSheetArchLine.SETRANGE("Buying Sheet Arch. Version No.", BuyingSheetArchHeader."Version No.");
+        BuyingSheetArchLine.MODIFYALL("Last Version", FALSE);
+      END;
+    END;
+
+    LOCAL PROCEDURE FindLastVersionNo@1000000004();
+    BEGIN
+      //DOC NS2016.16 - Finding last version no.
+
+      BuyingSheetArchHeader.RESET();
+      BuyingSheetArchHeader.SETRANGE("No.", BuyingSheetHeader."No.");
+      IF (BuyingSheetArchHeader.FINDLAST()) THEN
+        VersionNo := BuyingSheetArchHeader."Version No." + 1
+      ELSE
+        VersionNo := 1;
+    END;
+
+    LOCAL PROCEDURE ArchiveHeader@1000000000();
+    BEGIN
+      //DOC NS2016.16 - Archiving header
+
+      BuyingSheetArchHeader.INIT();
+      BuyingSheetArchHeader.TRANSFERFIELDS(BuyingSheetHeader);
+      BuyingSheetArchHeader."Version No." := VersionNo;
+      BuyingSheetArchHeader."Last Version" := TRUE;
+      BuyingSheetArchHeader.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ArchiveSummaryLines@1000000008();
+    BEGIN
+
+      BuyingSheetSummaryLine.RESET();
+      BuyingSheetSummaryLine.SETRANGE("Buying Sheet No.", BuyingSheetHeader."No.");
+      IF (BuyingSheetSummaryLine.FINDSET()) THEN
+      REPEAT
+        BuyingSheetArchSumLine.TRANSFERFIELDS(BuyingSheetSummaryLine);
+        BuyingSheetArchSumLine."Buying Sheet Arch. Version No." := VersionNo;
+        BuyingSheetArchSumLine."Last Version" := TRUE;
+        BuyingSheetArchSumLine.INSERT(TRUE);
+      UNTIL (BuyingSheetSummaryLine.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE ArchiveLines@1000000009();
+    BEGIN
+
+      BuyingSheetLine.RESET();
+      BuyingSheetLine.SETRANGE("Buying Sheet No.", BuyingSheetHeader."No.");
+      IF (BuyingSheetLine.FINDSET()) THEN
+      REPEAT
+        BuyingSheetArchLine.TRANSFERFIELDS(BuyingSheetLine);
+        BuyingSheetArchLine."Buying Sheet Arch. Version No." := VersionNo;
+        BuyingSheetArchLine."Last Version" := TRUE;
+        BuyingSheetArchLine.INSERT(TRUE);
+      UNTIL (BuyingSheetLine.NEXT() = 0);
+    END;
+
+    BEGIN
+    {
+      //DOC NS2015.1  JH 06/02/2014 - Created
+      //DOC NS2016.16 JH 07/09/2016 - nSemble 2016
+    }
+    END.
+  }
+}
+

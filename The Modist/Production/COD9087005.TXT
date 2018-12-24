@@ -1,0 +1,415 @@
+OBJECT Codeunit 9087005 Season Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/10/16;
+    Time=11:56:05 AM;
+    Version List=NS2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Currency@1000000010 : Record 4;
+      nSembleSetup@1000000011 : Record 9087000;
+      PurchaseHeader@1000000001 : Record 38;
+      BuyingSheetHeader@1000000002 : Record 9087020;
+      Season@1000000004 : Record 9087009;
+      SeasonCurrency@1000000000 : Record 9087010;
+      DialogManagement@1000000005 : Codeunit 9062249;
+      DialogIndex@1000000003 : ',Season,Currency,BuyingSheet,PurchaseOrder';
+      DialogOpened@1000000006 : Boolean;
+      tDialogTitleChecking@1000000008 : TextConst 'ENU=Checking...;ENG=Checking...';
+      tDialogTitleUpdating@1000000007 : TextConst 'ENU=Updating...;ENG=Updating...';
+      tDialogFinalMessage@1000000009 : TextConst 'ENU=Currency factors have been updated.;ENG=Currency factors have been updated.';
+
+    PROCEDURE "--- General Methods ---"@1000000039();
+    BEGIN
+    END;
+
+    PROCEDURE UpdateChronology@1000000001(pInteraction@1000000001 : Boolean) : Boolean;
+    VAR
+      eConfirmation@1000000000 : TextConst 'ENU=Do you want to update season chronology using %1?;ENG=Do you want to update season chronology using %1?';
+      lSeason@1000000002 : Record 9087009;
+      lPreviousSeason@1000000003 : Record 9087009;
+      eFinalMessage@1000000004 : TextConst 'ENU=Season chronology has been updated.;ENG=Season chronology has been updated.';
+    BEGIN
+      //DOC NS2015.1 - Updating season chronology
+      //  -> pInteraction: Interaction flag
+      //  <- TRUE: Chronology updated, FALSE: Not
+
+      nSembleSetup.VerifyAndGet();
+      IF (nSembleSetup."Season Chronology By" = nSembleSetup."Season Chronology By"::" ") THEN
+      BEGIN
+        nSembleSetup.VALIDATE("Season Chronology By", nSembleSetup."Season Chronology By"::Sequence);
+        IF (nSembleSetup.MODIFY(TRUE)) THEN;
+        nSembleSetup.TESTFIELD("Season Chronology By");
+      END;
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+      IF (pInteraction) THEN
+        IF ( NOT (CONFIRM(eConfirmation, TRUE, FORMAT(nSembleSetup."Season Chronology By")))) THEN
+          EXIT(FALSE);
+
+      lSeason.RESET();
+      IF (lSeason.FINDSET(TRUE)) THEN
+      REPEAT
+        IF (lSeason.FindPreviousSeason(lPreviousSeason)) THEN
+        BEGIN
+          lSeason.VALIDATE("Previous Season Code", lPreviousSeason.Code);
+          lSeason.MODIFY(TRUE);
+        END;
+      UNTIL (lSeason.NEXT() = 0);
+
+      IF (pInteraction) THEN
+        MESSAGE(eFinalMessage);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE UpdateSeasonCurrencyFactors@1000000000(pSeason@1000000001 : Record 9087009;pInteraction@1000000000 : Boolean) : Boolean;
+    VAR
+      eNoCurrencies@1000000002 : TextConst 'ENU=No currencies have been defined for season "%1";ENG=No currencies have been defined for season "%1"';
+      lResult@1000000003 : Boolean;
+      eSingleMultipleCurrenciesMenu@1000000004 : TextConst 'ENU=Single Currency,All Currencies;ENG=Single Currency,All Currencies';
+      lSingleMultipleCurrencies@1000000005 : ' ,Single,Multiple';
+      lReleasedBuyingSheetsExist@1000000006 : Boolean;
+      lReleasedPurchaseOrdersExist@1000000007 : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Updating season currency factors
+      //  -> pSeason: Season to update factors for
+      //  -> pInteraction: Interaction flag
+      //  <- TRUE: Factors updated, FALSE: Not
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+      Season := pSeason;
+      lResult := FALSE;
+
+      SeasonCurrency.RESET();
+      SeasonCurrency.SETRANGE("Season Code", Season.Code);
+      CASE (SeasonCurrency.COUNT) OF
+        0:
+          ERROR(eNoCurrencies, Season.Code);
+        1:
+          BEGIN
+            SeasonCurrency.FINDFIRST();
+            SeasonCurrency.SETRECFILTER();
+            lResult := TRUE;
+          END;
+        ELSE
+          BEGIN
+            lSingleMultipleCurrencies := STRMENU(eSingleMultipleCurrenciesMenu, lSingleMultipleCurrencies::Single);
+            CASE (lSingleMultipleCurrencies) OF
+              lSingleMultipleCurrencies::Single:
+                lResult := (PAGE.RUNMODAL(0, SeasonCurrency) = ACTION::LookupOK);
+              lSingleMultipleCurrencies::Multiple:
+                lResult := TRUE;
+            END;
+          END;
+      END;
+
+      IF (lResult) THEN
+      BEGIN
+        IF (pInteraction) THEN
+        BEGIN
+          IF (SeasonCurrency.FINDSET()) THEN
+          BEGIN
+            OpenDialog(tDialogTitleChecking);
+            DialogManagement.SetCounterTextValue(DialogIndex::Season, Season.Code);
+            REPEAT
+              DialogManagement.SetCounterTextValue(DialogIndex::Currency, SeasonCurrency."Currency Code");
+              IF ( NOT (lReleasedBuyingSheetsExist)) THEN
+                lReleasedBuyingSheetsExist := ReleasedBuyingSheetsExist();
+              IF ( NOT (lReleasedPurchaseOrdersExist)) THEN
+                lReleasedPurchaseOrdersExist := ReleasedPurchaseOrdersExist();
+            UNTIL (SeasonCurrency.NEXT() = 0);
+            CloseDialog(TRUE);
+          END;
+          lResult := ConfirmReleasedDocuments(lReleasedBuyingSheetsExist, lReleasedPurchaseOrdersExist);
+        END
+        ELSE
+          lResult := TRUE;
+
+        IF (lResult) THEN
+        BEGIN
+          IF (SeasonCurrency.FINDSET()) THEN
+          BEGIN
+            OpenDialog(tDialogTitleUpdating);
+            DialogManagement.SetCounterTextValue(DialogIndex::Season, Season.Code);
+            REPEAT
+              UpdateCurrencyFactor(SeasonCurrency, FALSE, FALSE);
+            UNTIL (SeasonCurrency.NEXT() = 0);
+            CloseDialog(TRUE);
+          END;
+        END
+        ELSE
+          lResult := FALSE;
+      END;
+
+      IF ((pInteraction) AND (lResult)) THEN
+        DialogManagement.FinalMessage(tDialogFinalMessage);
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE UpdateCurrencyFactor@1000000002(pSeasonCurrency@1000000000 : Record 9087010;pCheck@1000000007 : Boolean;pInteraction@1000000002 : Boolean) : Boolean;
+    VAR
+      lResult@1000000001 : Boolean;
+      lReleasedBuyingSheetsExist@1000000009 : Boolean;
+      lReleasedPurchaseOrdersExist@1000000008 : Boolean;
+      lDialogOpened@1000000010 : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Updating season currency factor for the given season currency record
+      //  -> pSeasonCurrency: The season currency
+      //  -> pCheck: Check flag
+      //  -> pInteraction: Interaction flag
+      //  <- TRUE: Factors updated, FALSE: Not
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+      pCheck := ((pCheck) AND (pInteraction));
+      SeasonCurrency := pSeasonCurrency;
+      lResult := FALSE;
+
+      IF (pCheck) THEN
+      BEGIN
+        lReleasedBuyingSheetsExist := ReleasedBuyingSheetsExist();
+        lReleasedPurchaseOrdersExist := ReleasedPurchaseOrdersExist();
+        lResult := ConfirmReleasedDocuments(lReleasedBuyingSheetsExist, lReleasedPurchaseOrdersExist);
+      END
+      ELSE
+        lResult := TRUE;
+
+      IF (lResult) THEN
+      BEGIN
+        lDialogOpened := OpenDialog(tDialogTitleUpdating);
+
+        UpdateBuyingSheetsCurrencyFactors();
+        UpdatePurchaseOrdersCurrencyFactors();
+
+        CloseDialog(lDialogOpened);
+        lResult := TRUE;
+      END;
+
+      IF ((pInteraction) AND (lDialogOpened)) THEN
+        DialogManagement.FinalMessage(tDialogFinalMessage);
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE CopySubSeasonsFrom@1000000003(pToSeason@1000000000 : Record 9087009) : Boolean;
+    VAR
+      eNoSeasonsToCopyFrom@1000000004 : TextConst 'ENU=There are no seasons to copy sub-seasons from.;ENG=There are no seasons to copy sub-seasons from.';
+      eNoSubSeasons@1000000007 : TextConst 'ENU=Season "%1" doesn''t have any sub-seasons.;ENG=Season "%1" doesn''t have any sub-seasons.';
+      eConfirmation@1000000001 : TextConst 'ENU=Do you want to copy sub-seasons from "%1" to "%2"?;ENG=Do you want to copy sub-seasons from "%1" to "%2"?';
+      lFromSeason@1000000002 : Record 9087009;
+      eFinalMessage@1000000003 : TextConst 'ENU=Sub-seasons have been copied.;ENG=Sub-seasons have been copied.';
+      lFromSubSeason@1000000005 : Record 9087011;
+      lToSubSeason@1000000006 : Record 9087011;
+    BEGIN
+      //DOC NS2015.1 - Copying sub-seasons from specified season
+      //  -> pToSeason: Destination season
+      //  <- TRUE = Copied, FALSE = Cancelled
+
+      IF (pToSeason.Code = '') THEN
+        EXIT(FALSE);
+
+      lFromSeason.RESET();
+      lFromSeason.FILTERGROUP(2);
+      lFromSeason.SETFILTER(Code, '<>%1', pToSeason.Code);
+      lFromSeason.FILTERGROUP(0);
+      IF (lFromSeason.ISEMPTY) THEN
+        ERROR(eNoSeasonsToCopyFrom);
+
+      IF (PAGE.RUNMODAL(0, lFromSeason) <> ACTION::LookupOK) THEN
+        EXIT(FALSE);
+
+      lFromSubSeason.RESET();
+      lFromSubSeason.SETRANGE("Season Code", lFromSeason.Code);
+      IF (lFromSubSeason.ISEMPTY) THEN
+        ERROR(eNoSubSeasons, lFromSeason.Code);
+
+      IF ( NOT (CONFIRM(eConfirmation, TRUE, lFromSeason.Code, pToSeason.Code))) THEN
+        EXIT(FALSE);
+
+      lFromSubSeason.RESET();
+      lFromSubSeason.SETRANGE("Season Code", lFromSeason.Code);
+      IF (lFromSubSeason.FINDSET()) THEN
+      REPEAT
+        IF ( NOT (lToSubSeason.GET(pToSeason.Code, lFromSubSeason.Code))) THEN
+        BEGIN
+          lToSubSeason := lFromSubSeason;
+          lToSubSeason.VALIDATE("Season Code", pToSeason.Code);
+          lToSubSeason.INSERT(TRUE);
+        END;
+      UNTIL (lFromSubSeason.NEXT() = 0);
+
+      MESSAGE(eFinalMessage);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE "--- Internal Methods ---"@1000000038();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ConfirmReleasedDocuments@1000000005(pReleasedBuyingSheetsExist@1000000009 : Boolean;pReleasedPurchaseOrdersExist@1000000001 : Boolean) : Boolean;
+    VAR
+      lPurchaseOrdersExist@1000000003 : Boolean;
+      lBuyingSheetsExist@1000000002 : Boolean;
+      lResult@1000000000 : Boolean;
+      eConfirmation@1000000004 : TextConst 'ENU=%1 exist with season "%2", currency "%3" and not up to date currency factor, but status not open - they won''t be udpated. Do you want to continue?;ENG=%1 exist with season "%2", currency "%3" and not up to date currency factor, but status not open - they won''t be udpated. Do you want to continue?';
+      lConfirmationText@1000000005 : Text[1024];
+      ePurchaseOrders@1000000006 : TextConst 'ENU=purchase orders;ENG=purchase orders';
+      eBuyingSheets@1000000007 : TextConst 'ENU=buying sheets;ENG=buying sheets';
+      eAnd@1000000008 : TextConst 'ENU=and;ENG=and';
+    BEGIN
+      //DOC NS2015.1 - Released documents confirmation
+      //  -> pReleasedBuyingSheetsExist: Flag telling released buying sheets exist
+      //  -> pReleasedPurchaseOrdersExist: Flag telling released purchase orders exist
+      //  <- Result
+
+      IF (( NOT (pReleasedBuyingSheetsExist)) AND ( NOT (pReleasedPurchaseOrdersExist))) THEN
+        EXIT(FALSE);
+
+      IF ( NOT (GUIALLOWED)) THEN
+        EXIT(TRUE);
+
+      IF (lBuyingSheetsExist) THEN
+        lConfirmationText := eBuyingSheets;
+      IF (lPurchaseOrdersExist) THEN
+      BEGIN
+        IF (lConfirmationText <> '') THEN
+          lConfirmationText := lConfirmationText + ' ' + eAnd + ' ';
+        lConfirmationText := lConfirmationText + ePurchaseOrders;
+      END;
+      lConfirmationText := UPPERCASE(COPYSTR(lConfirmationText, 1, 1)) + COPYSTR(lConfirmationText, 2, STRLEN(lConfirmationText) - 1);
+      lResult := CONFIRM(eConfirmation, TRUE, lConfirmationText, SeasonCurrency."Currency Code");
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE ReleasedBuyingSheetsExist@1000000009() : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Returning if released buying sheets exist
+      //  <- Result
+
+      BuyingSheetHeader.RESET();
+      BuyingSheetHeader.SETRANGE("Season Code", SeasonCurrency."Season Code");
+      BuyingSheetHeader.SETRANGE("Currency Code", SeasonCurrency."Currency Code");
+      BuyingSheetHeader.SETFILTER("Currency Factor", '<>%1', SeasonCurrency."Currency Factor");
+      BuyingSheetHeader.SETFILTER(Status, '<>%1', BuyingSheetHeader.Status::Open);
+      EXIT( NOT (BuyingSheetHeader.ISEMPTY));
+    END;
+
+    LOCAL PROCEDURE ReleasedPurchaseOrdersExist@1000000008() : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Returning if released purchase orders exist
+      //  <- Result
+
+      PurchaseHeader.RESET();
+      PurchaseHeader.SETRANGE("Document Type", PurchaseHeader."Document Type"::Order);
+      PurchaseHeader.SETRANGE("Currency Code", SeasonCurrency."Currency Code");
+      PurchaseHeader.SETFILTER("Currency Factor", '<>%1', SeasonCurrency."Currency Factor");
+      PurchaseHeader.SETFILTER(Status, '<>%1', PurchaseHeader.Status::Open);
+      EXIT( NOT (PurchaseHeader.ISEMPTY));
+    END;
+
+    LOCAL PROCEDURE UpdateBuyingSheetsCurrencyFactors@1000000017();
+    VAR
+      lBuyingSheetStatusManagement@1000000001 : Codeunit 9087007;
+      lWasReleased@1000000000 : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Updating buying sheets currency factors
+
+      BuyingSheetHeader.RESET();
+      BuyingSheetHeader.SETRANGE("Season Code",SeasonCurrency."Season Code");
+      BuyingSheetHeader.SETRANGE("Currency Code", SeasonCurrency."Currency Code");
+      IF (BuyingSheetHeader.FINDSET(TRUE)) THEN
+      REPEAT
+        IF (BuyingSheetHeader."Currency Factor" <> SeasonCurrency."Currency Factor") THEN
+        BEGIN
+          lWasReleased := (BuyingSheetHeader.Status = BuyingSheetHeader.Status::Released);
+          IF (lWasReleased) THEN
+            lBuyingSheetStatusManagement.Reopen(BuyingSheetHeader);
+          BuyingSheetHeader.VALIDATE("Currency Factor", SeasonCurrency."Currency Factor");
+          BuyingSheetHeader.MODIFY(TRUE);
+          IF (lWasReleased) THEN
+            lBuyingSheetStatusManagement.Release(BuyingSheetHeader);
+          DialogManagement.StepCounter(DialogIndex::BuyingSheet);
+        END;
+      UNTIL (BuyingSheetHeader.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE UpdatePurchaseOrdersCurrencyFactors@1000000018();
+    BEGIN
+      //DOC NS2015.1 - Updating purchase orders currency factors
+
+      PurchaseHeader.RESET();
+      PurchaseHeader.SETRANGE("Document Type", PurchaseHeader."Document Type"::Order);
+      PurchaseHeader.SETRANGE("Currency Code", SeasonCurrency."Currency Code");
+      PurchaseHeader.SETRANGE(Status, PurchaseHeader.Status::Open);
+      IF (PurchaseHeader.FINDSET(TRUE)) THEN
+      REPEAT
+        IF (PurchaseHeader."Currency Factor" <> SeasonCurrency."Currency Factor") THEN
+        BEGIN
+          PurchaseHeader.VALIDATE("Currency Factor", SeasonCurrency."Currency Factor");
+          PurchaseHeader.MODIFY(TRUE);
+          DialogManagement.StepCounter(DialogIndex::PurchaseOrder);
+        END;
+      UNTIL (PurchaseHeader.NEXT() = 0);
+    END;
+
+    PROCEDURE "--- Dialog Methods ---"@1000000037();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE OpenDialog@1000000021(pTitle@1000000000 : Text[250]) : Boolean;
+    VAR
+      eDialogBuyingSheets@1000000003 : TextConst 'ENU=Buying Sheets Updated;ENG=Buying Sheets Updated';
+      eDialogPurchaseOrders@1000000002 : TextConst 'ENU=Purchase Orders Updated;ENG=Purchase Orders Updated';
+    BEGIN
+      //DOC NS2015.1 - Opening dialog
+      //  -> pTitle: Dialog title
+      //  <- Dialog opened / not
+
+      IF (DialogOpened) THEN
+        EXIT(FALSE);
+
+      DialogManagement.Add(Season.TABLECAPTION(), 20, DialogIndex::Season, 10, FALSE, FALSE);
+      DialogManagement.Add(Currency.TABLECAPTION(), 20, DialogIndex::Currency, 10, FALSE, FALSE);
+      DialogManagement.Add(eDialogBuyingSheets, 20, DialogIndex::BuyingSheet, 20, TRUE, FALSE);
+      DialogManagement.Add(eDialogPurchaseOrders, 20, DialogIndex::PurchaseOrder, 20, TRUE, FALSE);
+
+      DialogManagement.Open(pTitle);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CloseDialog@1000000022(pDialogOpened@1000000000 : Boolean);
+    BEGIN
+      //DOC NS2015.1 - Closing dialog
+      //  -> pDialogOpened: Flag telling if dialog has been opened
+
+      IF ( NOT (pDialogOpened)) THEN
+        EXIT;
+
+      DialogManagement.Close();
+
+      DialogOpened := FALSE;
+    END;
+
+    BEGIN
+    {
+      //DOC NS2015.1  JH 20/11/2013 - Created
+      //DOC NS2015.1  JH 20/02/2014 - Amendments
+      //DOC NS2016.16 JH 07/09/2016 - nSemble 2016
+    }
+    END.
+  }
+}
+

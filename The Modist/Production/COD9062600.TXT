@@ -1,0 +1,846 @@
+OBJECT Codeunit 9062600 File Attachment Processing
+{
+  OBJECT-PROPERTIES
+  {
+    Date=28/01/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.12;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      errNoSheetSelected@9062229 : TextConst 'ENU=No sheet selected.;ENG=No sheet selected.';
+      cnfValidateData@9062230 : TextConst 'ENU=Would you like to Validate the data as it is imported?\\IMPORTANT: Importing data without Validation can cause serious problems. Only choose this option if you know what you are doing.;ENG=Would you like to Validate the data as it is imported?\\IMPORTANT: Importing data without Validation can cause serious problems. Only choose this option if you know what you are doing.';
+      cnfStopOnError@9062231 : TextConst 'ENU=Would you like to Stop the import if there''s an error?\\If you choose not to stop when there''s an error, you will be given an copy of the import file with error information once the import completes.;ENG=Would you like to Stop the import if there''s an error?\\If you choose not to stop when there''s an error, you will be given an copy of the import file with error information once the import completes.';
+      txtExcelFiles@9062232 : TextConst 'ENU=Excel Files(*.xlsx)|*.xlsx;ENG=Excel Files(*.xlsx)|*.xlsx';
+      Logger@9062234 : Record 9062280;
+      SysB@9062233 : Record 9062230;
+      txtCalledImportFile@9062235 : TextConst 'ENU=Called "ImportFile" for Queue %1;ENG=Called "ImportFile" for Queue %1';
+      errFileNotFound@9062236 : TextConst 'ENU=File not found.  Attaching folders is not supported.;ENG=File not found.  Attaching folders is not supported.';
+      FileAttachment@9062240 : Record 9062272;
+      TNPUtils@9062237 : Codeunit 9062229;
+      GenDevUtils@9062238 : Codeunit 9062459;
+      UniversalVars@9062239 : Codeunit 9062232;
+      FileAttachMgt@9062241 : Codeunit 9062267;
+      FileSystem@9062242 : Codeunit 9062264;
+      errFileUploadError@9062243 : TextConst 'ENU=There was an error uploading this file.;ENG=There was an error uploading this file.';
+      String@1000000000 : Codeunit 9062236;
+
+    LOCAL PROCEDURE ImportFile@1000000014(VAR FilteredFileAttachment@9062229 : Record 9062272;FAQEntry@1000000003 : Record 9062271;PromptReplace@1000000001 : Boolean;ShowDialog@9062230 : Boolean);
+    VAR
+      FilePath@1000000002 : Text[500];
+      SaveAsFileName@1000000000 : Text[250];
+      StorageType@1000000004 : 'BLOB,FilePath';
+      FAQueue@1000000005 : Record 9062270;
+    BEGIN
+      FAQueue.GET(FAQEntry."Queue Code");
+      Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(txtCalledImportFile, FAQEntry."Queue Code"), USERID);
+      ImportFileAdvanced(FilteredFileAttachment, FAQEntry.FilePath, FAQEntry.Filename, FAQEntry.Description, FAQEntry."File Type", PromptReplace, ShowDialog, FALSE,
+        FAQEntry."User ID",FAQEntry."Contact No.",FAQEntry."Sender Email Address",FAQEntry."Excel ID");
+    END;
+
+    LOCAL PROCEDURE ImportFileNoDialog@1000000017(VAR FilteredFileAttachment@9062229 : Record 9062272;FAQEntry@1000000003 : Record 9062271;PromptReplace@1000000001 : Boolean);
+    VAR
+      FilePath@1000000002 : Text[500];
+      SaveAsFileName@1000000000 : Text[250];
+      StorageType@1000000004 : 'BLOB,FilePath';
+      FAQueue@1000000005 : Record 9062270;
+    BEGIN
+      FAQueue.GET(FAQEntry."Queue Code");
+      Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(txtCalledImportFile, FAQEntry."Queue Code"), FAQEntry."Contact No.");
+      ImportFileAdvanced(FilteredFileAttachment, FAQEntry.FilePath, FAQEntry.Filename, FAQEntry.Description, FAQEntry."File Type", PromptReplace, FALSE, FALSE,
+        FAQEntry."User ID",FAQEntry."Contact No.",FAQEntry."Sender Email Address",FAQEntry."Excel ID");
+    END;
+
+    PROCEDURE ImportFileAdvanced@1102633003(VAR FilteredFileAttachment@9062229 : Record 9062272;FilePath@1102633000 : Text[500];SaveAsFileName@1000000001 : Text[250];Desc@1000000012 : Text[250];aType@1000000010 : Code[20];PromptReplace@1000000003 : Boolean;ShowDialog@1000000011 : Boolean;Overwrite@1000000013 : Boolean;CreatedByUsedID@1000000025 : Code[50];CreatedByContactNo@1000000017 : Code[20];CreatedByEmailAdd@1000000015 : Text[80];ExcelID@1000000027 : Integer) ErrorMessage : Text[250];
+    VAR
+      FileNameNoPath@1102633006 : Text[1024];
+      ClientTempFile@1102633003 : Text[1024];
+      ServerTempFile@1102633002 : Text[1024];
+      FileMgmt@1000000002 : Codeunit 9062267;
+      PointPos@1000000000 : Integer;
+      FileAttachCardPage@1000000004 : Page 9062310;
+      Version@1000000005 : Integer;
+      FileAttachment2@1000000006 : Record 9062272;
+      TheType@1000000007 : Code[20];
+      NIFE@1000000008 : Codeunit 9062273;
+      DestFileName@1000000014 : Text[1024];
+      StorageLoc@1000000018 : Text[250];
+      tempbool@1000000019 : Boolean;
+      i@1000000020 : Integer;
+      ErrorText@1000000022 : Text[250];
+      StorageFilePath@1000000016 : Text[250];
+      MaxBLOBSize@1000000023 : Integer;
+      FileSize@1000000024 : Integer;
+      lFileSystemBuffer@1000000009 : Record 9062386;
+      EmailNotification@1000000026 : Codeunit 9062261;
+      TxtOverwriteConfirmation@1000000021 : TextConst 'ENU=Would you like to overwrite the last version of this file?;ENG=Would you like to overwrite the last version of this file?';
+      TxtOverwritingEntry@1000000028 : TextConst 'ENU=Overwriting entry %1;ENG=Overwriting entry %1';
+      TxtAddingVersion@1000000029 : TextConst 'ENU=Adding version %1 of %2;ENG=Adding version %1 of %2';
+      TxtUploadingForStorage@1000000030 : TextConst 'ENU=Uploading %1 for storage;ENG=Uploading %1 for storage';
+      TxtMadeTemporaryCopy@1000000031 : TextConst 'ENU=Made temporary copy of file at %1;ENG=Made temporary copy of file at %1';
+      TxtGotStorageLocation@1000000032 : TextConst 'ENU=Got storage location for %1 of %2;ENG=Got storage location for %1 of %2';
+      TxtSizeIs@1000000033 : TextConst 'ENU=Size of %1 is %2;ENG=Size of %1 is %2';
+      TxtSizeIsVsMaxSize@1000000034 : TextConst 'ENU=Size of %1 is %2. Maximum BLOB size is %3. Therefore storing in %4;ENG=Size of %1 is %2. Maximum BLOB size is %3. Therefore storing in %4';
+      TxtStoredInBlob@1000000035 : TextConst 'ENU=Stored %1 in BLOB;ENG=Stored %1 in BLOB';
+      TxtDeleted@1000000036 : TextConst 'ENU=Deleted %1 to allow for overwrite;ENG=Deleted %1 to allow for overwrite';
+      TxtDestinationFileAlreadyExists@1000000037 : TextConst 'ENU="The destination file already exists; will find new name: %1";ENG="The destination file already exists; will find new name: %1"';
+      TxtCopied@1000000038 : TextConst 'ENU=Copied %1 to %2 for storage;ENG=Copied %1 to %2 for storage';
+      TxtStored@1000000039 : TextConst 'ENU=Stored %1 on disk at %2;ENG=Stored %1 on disk at %2';
+      TxtAttached@1000000040 : TextConst 'ENU=Attached %1 for table %2, PK1: %3, PK2: %4, PK3: %5;ENG=Attached %1 for table %2, PK1: %3, PK2: %4, PK3: %5';
+      TxtAttemptingToReadWithSmartDoc@1000000041 : TextConst 'ENU=Attempting to read the file using SmartDoc;ENG=Attempting to read the file using SmartDoc';
+      TxtSmartDocInputsSet@1000000042 : TextConst 'ENU=SmartDoc inputs set;ENG=SmartDoc inputs set';
+      TxtSmartDocError@1000000043 : TextConst 'ENU=SmartDoc error on file attachment %1 with message: %2;ENG=SmartDoc error on file attachment %1 with message: %2';
+      TxtErrorEMailSubject@1000000044 : TextConst 'ENU=Problem processing file: %1;ENG=Problem processing file: %1';
+      TxtErrorEMailBody@1000000045 : TextConst 'ENU=Sorry, there was a problem processing your file: %1. It gave the error:<BR /><B>%2</B>;ENG=Sorry, there was a problem processing your file: %1. It gave the error:<BR /><B>%2</B>';
+      TxtSmartDocRunSuccessfully@1000000046 : TextConst 'ENU=SmartDoc ran successfully on file attachment %1;ENG=SmartDoc ran successfully on file attachment %1';
+      TxtSuccessEMailSubject@1000000047 : TextConst 'ENU=I attached your file;ENG=I attached your file';
+      TxtSuccessEMailBody@1000000048 : TextConst 'ENU=I attached your file (%1) to %2 for you. Nora x;ENG=I attached your file (%1) to %2 for you. Nora x';
+    BEGIN
+      IF NOT FileSystem.FileExists(FALSE,FilePath) THEN
+        ERROR(errFileNotFound);
+
+      TheType := aType;
+      FileNameNoPath := SaveAsFileName;
+      Version := 1;
+      FileAttachment2.COPYFILTERS(FilteredFileAttachment);
+      FileAttachment2.SETRANGE(FileName, FileNameNoPath);
+      IF FileAttachment2.FINDSET THEN BEGIN
+        FileAttachment2.FINDLAST;
+        IF ShowDialog THEN
+          Overwrite := CONFIRM(TxtOverwriteConfirmation);
+
+        IF Overwrite THEN BEGIN
+          Logger.Log('FATTACH', Logger.Type::Information, STRSUBSTNO(TxtOverwritingEntry, FileAttachment2."No."), USERID);
+          Version := FileAttachment2."Version No.";
+          TheType := FileAttachment2.Type;
+          FileAttachment2.SETFILTER("Version No.",'%1',FileAttachment2."Version No.");
+          FileAttachment2.DELETEALL;
+          FileAttachment2.SETFILTER("Version No.",'');
+        END ELSE BEGIN
+          Logger.Log('FATTACH', Logger.Type::Information, STRSUBSTNO(TxtAddingVersion, FileAttachment2."Version No." + 1, FileAttachment2."No."), USERID);
+          FileAttachment2."Current Version" := FALSE;
+          FileAttachment2.MODIFY(TRUE);
+          Version := FileAttachment2."Version No." + 1;
+          TheType := aType;
+        END;
+
+      END;
+
+      Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtUploadingForStorage, FilePath), USERID);
+
+      ServerTempFile := FileSystem.GetTempFileName(FALSE);
+      FileSystem.CopyFile(FALSE, FilePath, ServerTempFile);
+
+      CLEAR(FileAttachment);
+      FileAttachment.RESET();
+      FileAttachment.COPYFILTERS(FilteredFileAttachment);
+      InitFileAttachment(FilteredFileAttachment);
+      FileAttachment.FileName := FileNameNoPath;
+
+      IF FileAttachment2.Description <> '' THEN
+        FileAttachment.Description := FileAttachment2.Description
+      ELSE
+        FileAttachment.Description := Desc;
+
+      PointPos := FindLastInString('.',FileAttachment.FileName) +1;
+      FileAttachment.Extension := COPYSTR(FileAttachment.FileName,PointPos,STRLEN(FileAttachment.FileName)-PointPos+1);
+      FileAttachment."Version No." := Version;
+      FileAttachment.Type := TheType;
+      FileAttachment."Current Version" := TRUE;
+      FileAttachment."Created By" := CreatedByUsedID;
+      FileAttachment."Created By Contact" := CreatedByContactNo;
+      FileAttachment."Created By Email Add." := CreatedByEmailAdd;
+      FileAttachment."Excel ID" := ExcelID;
+      FileAttachment.INSERT(TRUE);
+      COMMIT;
+      IF ShowDialog THEN BEGIN
+        FileAttachCardPage.SETRECORD(FileAttachment);
+        FileAttachCardPage.RUNMODAL;
+        FileAttachCardPage.GETRECORD(FileAttachment);
+      END;
+
+      StorageFilePath := GetStorageLoc(USERID,FileAttachment.Type,FileAttachment."Table ID",
+                        FORMAT(FileAttachment."Primary Key Value 1"));
+
+      Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtGotStorageLocation, FilePath, StorageFilePath), USERID);
+      IF StorageFilePath = '!BLOB' THEN BEGIN
+        FileSystem.GetFileInfo(FALSE, ServerTempFile, lFileSystemBuffer);
+        Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtSizeIs, FilePath, lFileSystemBuffer.Size), USERID);
+        MaxBLOBSize := SysB.GetDecimal('MAX_BLOB_SIZE');
+        //Convert from MB to Bytes
+        MaxBLOBSize := MaxBLOBSize * 1024 * 1024;
+        IF FileSize > MaxBLOBSize THEN BEGIN
+          StorageFilePath := SysB.GetText('BLOB_OVERFLOW_PATH');
+          StorageFilePath := String.Replace(StorageFilePath,'[SERVICE]',GenDevUtils.GetServiceName(0));
+          StorageFilePath := String.Replace(StorageFilePath,'[TENANT]',TENANTID);
+          IF NOT FileSystem.FolderExists(FALSE, StorageFilePath) THEN
+            FileSystem.CreateFolderStructure(FALSE, StorageFilePath);
+          FileAttachment."Storage Type" := FileAttachment."Storage Type"::FilePath;
+          Logger.Log('FATTACH', Logger.Type::Warning, STRSUBSTNO(TxtSizeIsVsMaxSize, FilePath, FileSize, MaxBLOBSize, SysB.GetText('BLOB_OVERFLOW_PATH')), USERID);
+        END ELSE
+          FileAttachment."Storage Type" := FileAttachment."Storage Type"::BLOB;
+      END ELSE
+        FileAttachment."Storage Type" := FileAttachment."Storage Type"::FilePath;
+
+      //Store in either BLOB or onDisk >>
+      IF FileAttachment."Storage Type" = FileAttachment."Storage Type"::BLOB THEN BEGIN
+        FileAttachment.Attachment.IMPORT(ServerTempFile);
+        Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtStoredInBlob, FileAttachment.FileName), USERID);
+      END ELSE BEGIN
+        IF NOT FileSystem.FolderExists(FALSE, StorageFilePath) THEN
+          FileSystem.CreateFolderStructure(FileSystem.Client(), StorageFilePath);
+        DestFileName := StorageFilePath + '\' + FileAttachment.FileName;
+        IF FILE.EXISTS(DestFileName) THEN BEGIN
+          IF Overwrite THEN BEGIN
+            FILE.ERASE(DestFileName);
+            Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtDeleted, DestFileName), USERID);
+          END ELSE BEGIN
+            Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtDestinationFileAlreadyExists, DestFileName), USERID);
+            i := 1;
+            REPEAT
+              DestFileName := StorageFilePath + '\' + FORMAT(i) + '_' + FileAttachment.FileName;
+              i += 1;
+            UNTIL NOT FILE.EXISTS(DestFileName);
+          END;
+        END;
+        FILE.COPY(ServerTempFile,DestFileName);
+        Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtCopied, ServerTempFile, DestFileName), USERID);
+        FileAttachment."Stored FilePath" := DestFileName;
+        Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtStored, FileAttachment.FileName, DestFileName), USERID);
+      END;
+      //Store in either BLOB or onDisk <<
+
+      FileAttachment.MODIFY(TRUE);
+      Logger.Log('FATTACH', Logger.Type::Information, COPYSTR(STRSUBSTNO(TxtAttached, FileAttachment.FileName, FileAttachment."Table ID",
+        FileAttachment."Primary Key Value 1", FileAttachment."Primary Key Value 2", FileAttachment."Primary Key Value 3"), 1, 100), USERID);
+
+      ERASE(ServerTempFile);
+
+      COMMIT;
+
+      //Popup went here...
+      Logger.Log('FATTACH', Logger.Type::Debug, TxtAttemptingToReadWithSmartDoc, USERID);
+
+      NIFE.SetInputs(FileAttachment,
+                     FileAttachment."Primary Key FieldID 1",FileAttachment."Primary Key Value 1",
+                     FileAttachment."Primary Key FieldID 2",FileAttachment."Primary Key Value 2",
+                     FileAttachment."Primary Key FieldID 3",FileAttachment."Primary Key Value 3",
+                     ShowDialog);
+      Logger.Log('FATTACH', Logger.Type::Debug, TxtSmartDocInputsSet, USERID);
+
+      COMMIT;
+
+      IF NOT NIFE.RUN THEN BEGIN
+        ErrorText := COPYSTR(GETLASTERRORTEXT,1,250);
+        FileAttachment.GET(FileAttachment."No.");
+        FileAttachment.Errored := TRUE;
+        FileAttachment."Error Description" := ErrorText;
+        FileAttachment.MODIFY;
+        Logger.Log('FATTACH', Logger.Type::Error, STRSUBSTNO(TxtSmartDocError, FileAttachment."No.", ErrorText), USERID);
+        IF NOT UniversalVars.GetBooleanVar('HIDEERRORS') THEN BEGIN
+          IF FileAttachment."Created By Email Add." <> '' THEN BEGIN
+            EmailNotification.QuickMessage(FileAttachment."Created By Email Add.", '', STRSUBSTNO(TxtErrorEMailSubject, FileAttachment.FileName),
+              STRSUBSTNO(TxtErrorEMailBody, FileAttachment.FileName, ErrorText), 0);
+          END;
+        END;
+        EXIT(ErrorText);
+      END ELSE BEGIN
+        Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtSmartDocRunSuccessfully, FileAttachment."No."), USERID);
+        IF FileAttachment."Created By Email Add." <> '' THEN BEGIN
+          IF NOT SysB.GetBoolean('DONT_NOTIFY_ONATTACH') THEN BEGIN //DOC NA2015.4
+            EmailNotification.QuickMessage(FileAttachment."Created By Email Add.", '', TxtSuccessEMailSubject,
+              STRSUBSTNO(TxtSuccessEMailBody, FileAttachment.FileName,
+                TNPUtils.GetTableName(FileAttachment."Table ID") + ' '  +
+                  TNPUtils.GetRecordDescription(FileAttachment."Table ID",
+                    TNPUtils.GetPositionTextUsingPrimaryKeyValues(FileAttachment."Table ID",
+                                                                  FileAttachment."Primary Key Value 1",FileAttachment."Primary Key Value 2",FileAttachment."Primary Key Value 3",'','')))
+                , 0);
+          END;
+        END;
+
+      END;
+    END;
+
+    PROCEDURE ImportDataFromExcel@9062229();
+    VAR
+      OpenFileDiag@9062235 : DotNet "'System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Windows.Forms.OpenFileDialog" RUNONCLIENT;
+      DiagResult@9062234 : DotNet "'System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Windows.Forms.DialogResult" RUNONCLIENT;
+      ExcelImportExport@9062236 : Codeunit 9062296;
+      ValidateData@9062233 : Boolean;
+      StopOnError@9062232 : Boolean;
+      ExcelBuf@9062231 : Record 9062715;
+      SheetName@9062230 : Text[250];
+      FilePath@9062229 : Text[1024];
+    BEGIN
+      OpenFileDiag := OpenFileDiag.OpenFileDialog;
+      OpenFileDiag.CheckFileExists(TRUE);
+      OpenFileDiag.CheckPathExists(TRUE);
+      OpenFileDiag.Filter(txtExcelFiles);
+      DiagResult := OpenFileDiag.ShowDialog;
+      IF DiagResult.Equals(DiagResult.Cancel) THEN EXIT;
+
+      FilePath := ExcelImportExport.UploadFileToServer(OpenFileDiag.FileName);
+      SheetName := ExcelBuf.SelectSheetsName(FilePath);
+
+      IF SheetName = '' THEN
+          ERROR(errNoSheetSelected);
+      ValidateData := CONFIRM(cnfValidateData, TRUE);
+      StopOnError := CONFIRM(cnfStopOnError, FALSE);
+      ExcelImportExport.ImportDataFromExcel(FilePath,TRUE,SheetName,ValidateData,StopOnError,FALSE);
+    END;
+
+    PROCEDURE ImportDataFromCurrExcelWbok@9062230();
+    VAR
+      ExcelImportExport@9062234 : Codeunit 9062296;
+      ValidateData@9062233 : Boolean;
+      StopOnError@9062232 : Boolean;
+      ExcelBuf@9062231 : Record 9062715;
+      SheetName@9062230 : Text[250];
+      FilePath@9062229 : Text[1024];
+    BEGIN
+      FilePath := ExcelImportExport.UploadCurrExcelWkbkToServer;
+      SheetName := ExcelBuf.SelectSheetsName(FilePath);
+
+      IF SheetName = '' THEN
+          ERROR(errNoSheetSelected);
+      IF SysB.GetBoolean('IMP_EXC_NO_VALID') THEN
+        ValidateData := CONFIRM(cnfValidateData, TRUE)
+      ELSE
+        ValidateData := TRUE;
+      StopOnError := CONFIRM(cnfStopOnError,FALSE);
+      ExcelImportExport.ImportDataFromExcel(FilePath,TRUE,SheetName,ValidateData,StopOnError,FALSE);
+    END;
+
+    PROCEDURE GetFromQueueEntry@9062232(VAR FilteredFileAttachment@9062231 : Record 9062272;VAR FAQEntry@9062232 : Record 9062271;PromptReplace@9062230 : Boolean;ShowDialog@9062229 : Boolean);
+    BEGIN
+      ImportFile(FilteredFileAttachment, FAQEntry, PromptReplace, ShowDialog);
+      FAQEntry.MoveToProcessed(FileAttachment."Table ID", FileAttachment."Related Record Position",
+        FileAttachment."Card Page ID");
+    END;
+
+    PROCEDURE GetFromServer@9062231(VAR FilteredFileAttachment@9062229 : Record 9062272;TheFilePath@9062230 : Text;AttachmentName@9062238 : Text;AttachmentDescription@9062237 : Text;PromptReplace@9062231 : Boolean;ShowDialog@9062239 : Boolean);
+    VAR
+      FileMgmt@9062236 : Codeunit 9062267;
+      FAQ@9062235 : Record 9062270;
+      FAQEntryNo@9062234 : Integer;
+      FAQEntry@9062233 : Record 9062271;
+      FileSystem@9062232 : Codeunit 9062264;
+    BEGIN
+      IF TheFilePath <> '' THEN BEGIN
+
+        IF (AttachmentName = '') THEN
+          AttachmentName := FileSystem.GetFileName(FALSE, TheFilePath);
+        IF (AttachmentDescription = '') THEN
+          AttachmentDescription := AttachmentName;
+
+        FAQEntryNo := FAQ.AddEntry(TheFilePath,
+          AttachmentName, AttachmentDescription,USERID,
+          FAQ.GetUserDefaultQueue(USERID),TRUE,TRUE);
+
+        IF FAQEntry.GET(FAQEntryNo) THEN
+          GetFromQueueEntry(FilteredFileAttachment, FAQEntry, PromptReplace, ShowDialog);
+      END;
+    END;
+
+    PROCEDURE GetFromClient@1000000007(VAR FilteredFileAttachment@9062229 : Record 9062272);
+    VAR
+      TheFilePath@1000000000 : Text[1024];
+      FileMgmt@1000000001 : Codeunit 9062267;
+      FAQ@1000000002 : Record 9062270;
+      FAQEntryNo@1000000003 : Integer;
+      FAQEntry@1000000004 : Record 9062271;
+      TxtDialogTitle@1000000005 : TextConst 'ENU=Select file;ENG=Select file';
+      FileSystem@1000000006 : Codeunit 9062264;
+    BEGIN
+      IF NOT UPLOAD(TxtDialogTitle, '', '', '', TheFilePath) THEN
+        ERROR(errFileUploadError);
+      GetFromServer(FilteredFileAttachment, TheFilePath, '', '', TRUE, TRUE);
+    END;
+
+    PROCEDURE GetFromClientSilent@9062246(VAR FilteredFileAttachment@9062229 : Record 9062272;ClientFilePath@9062231 : Text);
+    VAR
+      FileManagement@9062232 : Codeunit 419;
+      ServerFilePath@9062230 : Text;
+    BEGIN
+      ServerFilePath := FileManagement.UploadFileSilent(ClientFilePath);
+      GetFromServer(FilteredFileAttachment, ServerFilePath, '', '', FALSE, FALSE);
+    END;
+
+    PROCEDURE GetFromExcel@1000000004(VAR FilteredFileAttachment@9062229 : Record 9062272);
+    VAR
+      ExcelApp@1000000000 : Automation "{00020813-0000-0000-C000-000000000046} 1.7:{00024500-0000-0000-C000-000000000046}:Unknown Automation Server.Application";
+      Workbook@1000000001 : Automation "{00020813-0000-0000-C000-000000000046} 1.7:{00020819-0000-0000-C000-000000000046}:Unknown Automation Server.Workbook";
+      FAQ@1000000003 : Record 9062270;
+      FAQEntryNo@1000000002 : Integer;
+      FAQEntry@1000000004 : Record 9062271;
+      ClientFilePath@1000000005 : Text;
+      FileSystem@1000000006 : Codeunit 9062264;
+      TheFilePath@1000000007 : Text;
+      FileManagement@1000000008 : Codeunit 419;
+      WorkbookName@1000000009 : Text;
+      eExcelNotOpen@1000000010 : TextConst 'ENU=The system can''t get access to Excel active workbook.\Please make sure your Excel is running and you have a workbook open.;ENG=The system can''t get access to Excel active workbook.\Please make sure your Excel is running and you have a workbook open.';
+    BEGIN
+      IF ISCLEAR(ExcelApp) THEN CREATE(ExcelApp,FALSE,TRUE);
+      Workbook := ExcelApp.ActiveWorkbook;
+      IF ISCLEAR(Workbook) THEN
+        ERROR(eExcelNotOpen);
+      WorkbookName := FileSystem.GetFileName(TRUE, Workbook.FullName);
+      CheckFileExtension(WorkbookName, 'xlsx,xlsm,xlsb,xls,xltx,xltm,xlt,xlam,xla,xml,mht,mhtml,htm,html,txt,csv,pdf,xps,ods', 'xlsx');
+      //DOC NA2016.10 >>
+      //ClientFilePath := FileAttachMgt.ClientTempPath + WorkbookName;
+      ClientFilePath := FileSystem.GetTempPathForFile(TRUE, WorkbookName);
+      //DOC NA2016.10 <<
+      FileSystem.DeleteFileIfExists(FileSystem.Client(), ClientFilePath);
+      Workbook.SaveCopyAs(ClientFilePath);
+
+      TheFilePath := FileManagement.UploadFileSilent(ClientFilePath);
+
+      GetFromServer(FilteredFileAttachment, TheFilePath, WorkbookName, WorkbookName, FALSE, TRUE);
+    END;
+
+    PROCEDURE GetFromWord@1000000006(VAR FilteredFileAttachment@9062229 : Record 9062272);
+    VAR
+      WordApp@1000000000 : Automation "{00020905-0000-0000-C000-000000000046} 8.5:{000209FF-0000-0000-C000-000000000046}:Unknown Automation Server.Application";
+      Document@1000000001 : Automation "{00020905-0000-0000-C000-000000000046} 8.5:{00020906-0000-0000-C000-000000000046}:Unknown Automation Server.Document";
+      FAQ@1000000006 : Record 9062270;
+      FAQEntryNo@1000000005 : Integer;
+      FAQEntry@1000000004 : Record 9062271;
+      ClientFilePath@1000000003 : Text;
+      DocumentName@1000000002 : Text;
+      TheFilePath@1000000007 : Text;
+      FileManagement@1000000008 : Codeunit 419;
+      eWordNotOpen@1000000009 : TextConst 'ENU=The system can''t get access to Word active document.\Please make sure your Word is running and you have a document open.;ENG=The system can''t get access to Word active document.\Please make sure your Word is running and you have a document open.';
+      FileSystem@9062230 : Codeunit 9062264;
+    BEGIN
+      IF ISCLEAR(WordApp) THEN CREATE(WordApp,FALSE,TRUE);
+      Document := WordApp.ActiveDocument;
+      IF ISCLEAR(Document) THEN
+        ERROR(eWordNotOpen);
+      DocumentName := FileSystem.GetFileName(TRUE, Document.Name);
+      CheckFileExtension(DocumentName, 'docx,docm,doc,dotx,dotm,dot,pdf,xps,mht,mhtml,htm,html,rtf,txt,xml,odt', 'docx');
+      //DOC NA2016.10 >>
+      //ClientFilePath := FileAttachMgt.ClientTempPath + DocumentName;
+      ClientFilePath := FileSystem.GetTempPathForFile(TRUE, DocumentName);
+      //DOC NA2016.10 <<
+      Document.SaveAs2(ClientFilePath);
+
+      TheFilePath := FileManagement.UploadFileSilent(ClientFilePath);
+
+      GetFromServer(FilteredFileAttachment, TheFilePath, DocumentName, DocumentName, FALSE, TRUE);
+
+      CLEAR(WordApp);
+    END;
+
+    PROCEDURE GetFromOutlook@1000000012(VAR FilteredFileAttachment@9062229 : Record 9062272);
+    VAR
+      ClientFilePath@1000000003 : Text[1024];
+      OutlookApp@1000000000 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{0006F03A-0000-0000-C000-000000000046}:Unknown Automation Server.Application";
+      Inspector@1000000001 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{00063058-0000-0000-C000-000000000046}:Unknown Automation Server.Inspector";
+      MailItem@1000000002 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{00061033-0000-0000-C000-000000000046}:Unknown Automation Server.MailItem";
+      FAQ@1000000006 : Record 9062270;
+      FAQEntryNo@1000000005 : Integer;
+      FAQEntry@1000000004 : Record 9062271;
+      TmpFileName@1000000007 : Text[1024];
+      TheFilePath@1000000009 : Text;
+      FileManagement@1000000008 : Codeunit 419;
+    BEGIN
+      CREATE(OutlookApp,FALSE,TRUE);
+      Inspector := OutlookApp.ActiveInspector;
+      MailItem := Inspector.CurrentItem;
+      TmpFileName := FORMAT(CREATEGUID) + '.msg';
+      //DOC NA2016.10 >>
+      //ClientFilePath := FileAttachMgt.ClientTempPath + '\' + TmpFileName;
+      ClientFilePath := FileSystem.GetTempPathForFile(TRUE, TmpFileName);
+      //DOC NA2016.10 <<
+
+      MailItem.SaveAs(ClientFilePath);
+
+      TheFilePath := FileManagement.UploadFileSilent(ClientFilePath);
+
+      GetFromServer(FilteredFileAttachment, TheFilePath, TmpFileName, MailItem.Subject, FALSE, TRUE);
+
+      CLEAR(OutlookApp);
+    END;
+
+    PROCEDURE GetFromMyQueue@1000000000(VAR FilteredFileAttachment@9062229 : Record 9062272);
+    VAR
+      FAQPage@1000000001 : Page 9062311;
+      FAQEntry@1000000002 : Record 9062271;
+    BEGIN
+      FAQEntry.SETRANGE("User ID",USERID);
+      FAQPage.SETTABLEVIEW(FAQEntry);
+      FAQPage.LOOKUPMODE := TRUE;
+      IF FAQPage.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        FAQPage.GETRECORD(FAQEntry);
+        ImportFile(FilteredFileAttachment, FAQEntry,TRUE, TRUE);
+        FAQEntry.MoveToProcessed(FileAttachment."Table ID", FileAttachment."Related Record Position",
+          FileAttachment."Card Page ID");
+      END;
+    END;
+
+    PROCEDURE GetLastSentMessageFromOutlook@1000000013(Subject@1000000000 : Text[100];RecipientEmail@1000000010 : Text[100];VAR MailItem@1000000011 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{00061033-0000-0000-C000-000000000046}:Unknown Automation Server.MailItem";UseOutboxNoSent@1000000018 : Boolean) Found : Boolean;
+    VAR
+      Inspector@1000000003 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{00063058-0000-0000-C000-000000000046}:Unknown Automation Server.Inspector";
+      OutlookApp@1000000006 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{0006F03A-0000-0000-C000-000000000046}:Unknown Automation Server.Application";
+      namespace@1000000004 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{0006308B-0000-0000-C000-000000000046}:Unknown Automation Server.NameSpace";
+      Folder@1000000001 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{000610F7-0000-0000-C000-000000000046}:Unknown Automation Server.Folder";
+      MailItems@1000000005 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{00063052-0000-0000-C000-000000000046}:Unknown Automation Server.Items";
+      RestrictString@1000000007 : Text[250];
+      i@1000000008 : Integer;
+      Count@1000000009 : Integer;
+      Recipients@1000000002 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{0006303B-0000-0000-C000-000000000046}:Unknown Automation Server.Recipients";
+      Recipient@1000000012 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{00063045-0000-0000-C000-000000000046}:Unknown Automation Server.Recipient";
+      RecipCount@1000000013 : Integer;
+      j@1000000014 : Integer;
+      AutoMsg@1000000015 : Codeunit 9062270;
+      AddressEntry@1000000016 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{0006304B-0000-0000-C000-000000000046}:Unknown Automation Server.AddressEntry";
+      RecipEmail@1000000017 : Text[250];
+    BEGIN
+      IF NOT ISCLEAR(OutlookApp) THEN CLEAR(OutlookApp);
+      IF NOT ISCLEAR(MailItems) THEN CLEAR(MailItems);
+      IF NOT ISCLEAR(MailItem) THEN CLEAR(MailItem);
+
+      CREATE(OutlookApp,FALSE,TRUE);
+      namespace := OutlookApp.GetNamespace('MAPI');
+      IF UseOutboxNoSent THEN
+        Folder := namespace.GetDefaultFolder(4) // 4 = Outbox
+      ELSE
+        Folder := namespace.GetDefaultFolder(5); // 5 = Sent Items
+
+      MailItems := Folder.Items;
+      RestrictString := STRSUBSTNO('[LastModificationTime] >= ''%1''',FORMAT(TODAY));
+      MailItems := MailItems.Restrict(RestrictString);
+      IF Subject <> '' THEN BEGIN
+        RestrictString := STRSUBSTNO('[Subject] = ''%1''',Subject);
+        MailItems := MailItems.Restrict(RestrictString);
+      END;
+
+      Count := MailItems.Count;
+      IF Count > 0 THEN BEGIN
+        MailItems.Sort('[LastModificationTime]',1);
+        REPEAT
+          i += 1;
+          IF i = 1 THEN
+            MailItem := MailItems.GetFirst
+          ELSE
+            MailItem := MailItems.GetNext;
+
+          IF RecipientEmail = '' THEN
+            EXIT(TRUE)
+          ELSE BEGIN
+            Recipients := MailItem.Recipients;
+            RecipCount := Recipients.Count;
+            IF RecipCount <> 0 THEN BEGIN
+              j := 0;
+              REPEAT
+                j += 1;
+                Recipient := Recipients.Item(j);
+                AddressEntry := Recipient.AddressEntry;
+                RecipEmail := AutoMsg.GetEmailFromOutlookAddress(AddressEntry);
+                IF LOWERCASE(RecipEmail) = LOWERCASE(RecipientEmail) THEN EXIT(TRUE);
+              UNTIL j >= RecipCount;
+            END;
+          END;
+        UNTIL i >= Count;
+      END ELSE EXIT(FALSE);
+      CLEAR(OutlookApp);
+    END;
+
+    PROCEDURE GetFromOutlookItem@1000000016(VAR FilteredFileAttachment@9062229 : Record 9062272;MailItem@1000000007 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{00061033-0000-0000-C000-000000000046}:Unknown Automation Server.MailItem");
+    VAR
+      ClientFilePath@1000000003 : Text[1024];
+      OutlookApp@1000000000 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{0006F03A-0000-0000-C000-000000000046}:Unknown Automation Server.Application";
+      Inspector@1000000001 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{00063058-0000-0000-C000-000000000046}:Unknown Automation Server.Inspector";
+      FAQ@1000000006 : Record 9062270;
+      FAQEntryNo@1000000005 : Integer;
+      FAQEntry@1000000004 : Record 9062271;
+      Folder@1000000002 : Automation "{00062FFF-0000-0000-C000-000000000046} 9.4:{000610F7-0000-0000-C000-000000000046}:Unknown Automation Server.Folder";
+      TheFilePath@1000000008 : Text;
+      FileManagement@1000000009 : Codeunit 419;
+    BEGIN
+      CREATE(OutlookApp,FALSE,TRUE);
+      //DOC NA2016.10 >>
+      //ClientFilePath := FileAttachMgt.ClientTempPath + COPYSTR(MailItem.EntryID,1,30) + '.msg';
+      ClientFilePath := FileSystem.GetTempPathForFile(TRUE, COPYSTR(MailItem.EntryID,1,30) + '.msg');
+      //DOC NA2016.10
+      MailItem.SaveAs(ClientFilePath);
+
+      TheFilePath := FileManagement.UploadFileSilent(ClientFilePath);
+
+      GetFromServer(FilteredFileAttachment, TheFilePath, COPYSTR(MailItem.EntryID,1,30) + '.msg',
+        MailItem.Subject, FALSE, FALSE);
+
+      Folder := MailItem.Parent;
+      IF Folder.Name = 'Outbox' THEN
+        MailItem.Send;
+
+      CLEAR(OutlookApp);
+    END;
+
+    PROCEDURE InitFileAttachment@1102633011(VAR FilteredFileAttachment@9062229 : Record 9062272);
+    VAR
+      FilterGroup@1102633001 : Integer;
+      RecordRef@9062230 : RecordRef;
+      FieldRef@1000000000 : FieldRef;
+      RecLinks@1000000001 : Record 2000000068;
+      TxtGotFilters@1000000002 : TextConst 'ENU=Got filters: %1;ENG=Got filters: %1';
+      TxtGotFilter@1000000003 : TextConst 'ENU=Got filter for %1 as %2;ENG=Got filter for %1 as %2';
+      TxtPkv1@1000000004 : TextConst 'ENU=PKV1;ENG=PKV1';
+      TxtPkv2@1000000005 : TextConst 'ENU=PKV2;ENG=PKV2';
+      TxtPkv3@1000000006 : TextConst 'ENU=PKV3;ENG=PKV3';
+      TxtSetTo@1000000007 : TextConst 'ENU=Set %1 to %2;ENG=Set %1 to %2';
+      i@1000000008 : Integer;
+    BEGIN
+      FilterGroup := FilteredFileAttachment.FILTERGROUP;
+      i := -1;
+      REPEAT
+        i += 1;
+        FilteredFileAttachment.FILTERGROUP(i);
+      UNTIL ( i > 10 ) OR (FilteredFileAttachment.GETFILTER("Table ID") <> '');
+
+      Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtGotFilters, FilteredFileAttachment.GETFILTERS), USERID);
+      FileAttachment."Table ID" := FilteredFileAttachment.GETRANGEMIN("Table ID");
+      RecordRef.OPEN(FileAttachment."Table ID");
+
+      Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtGotFilter, TxtPkv1, FilteredFileAttachment.GETFILTER("Primary Key Value 1")), USERID);
+      Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtGotFilter, TxtPkv2, FilteredFileAttachment.GETFILTER("Primary Key Value 2")), USERID);
+      Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtGotFilter, TxtPkv3, FilteredFileAttachment.GETFILTER("Primary Key Value 3")), USERID);
+
+      IF(FilteredFileAttachment.GETFILTER("Primary Key Value 1") <> '') THEN
+        FileAttachment."Primary Key Value 1" := FilteredFileAttachment.GETRANGEMIN("Primary Key Value 1");
+      IF(FilteredFileAttachment.GETFILTER("Primary Key Value 2") <> '') THEN
+        FileAttachment."Primary Key Value 2" := FilteredFileAttachment.GETRANGEMIN("Primary Key Value 2");
+      IF(FilteredFileAttachment.GETFILTER("Primary Key Value 3") <> '') THEN
+        FileAttachment."Primary Key Value 3" := FilteredFileAttachment.GETRANGEMIN("Primary Key Value 3");
+
+      IF FilteredFileAttachment.GETFILTER("Primary Key FieldID 1") <> '' THEN
+        FileAttachment."Primary Key FieldID 1" := FilteredFileAttachment.GETRANGEMIN("Primary Key FieldID 1")
+      ELSE
+        FileAttachment."Primary Key FieldID 1" := TNPUtils.GetPrimaryKeyFieldID(FileAttachment."Table ID",'',1);
+
+      IF FileAttachment."Primary Key FieldID 1" <> 0 THEN BEGIN
+        FieldRef := RecordRef.FIELD(FileAttachment."Primary Key FieldID 1");
+        FieldRef.SETFILTER(FileAttachment."Primary Key Value 1");
+      END;
+
+      IF FilteredFileAttachment.GETFILTER("Primary Key FieldID 2") <> '' THEN
+        FileAttachment."Primary Key FieldID 2" := FilteredFileAttachment.GETRANGEMIN("Primary Key FieldID 2")
+      ELSE
+        FileAttachment."Primary Key FieldID 2" := TNPUtils.GetPrimaryKeyFieldID(FileAttachment."Table ID",'',2);
+
+      IF FileAttachment."Primary Key FieldID 2" <> 0 THEN BEGIN
+        FieldRef := RecordRef.FIELD(FileAttachment."Primary Key FieldID 2");
+        FieldRef.SETFILTER(FileAttachment."Primary Key Value 2");
+      END;
+
+      IF FilteredFileAttachment.GETFILTER("Primary Key FieldID 3") <> '' THEN
+        FileAttachment."Primary Key FieldID 3" := FilteredFileAttachment.GETRANGEMIN("Primary Key FieldID 3")
+      ELSE
+        FileAttachment."Primary Key FieldID 3" := TNPUtils.GetPrimaryKeyFieldID(FileAttachment."Table ID",'',3);
+
+      IF FileAttachment."Primary Key FieldID 3" <> 0 THEN BEGIN
+        FieldRef := RecordRef.FIELD(FileAttachment."Primary Key FieldID 3");
+        FieldRef.SETFILTER(FileAttachment."Primary Key Value 3");
+      END;
+
+      IF NOT RecordRef.FINDFIRST() THEN;
+
+      IF FilteredFileAttachment.GETFILTER("Card Page ID") <> '' THEN
+        FileAttachment."Card Page ID" := FilteredFileAttachment.GETRANGEMIN("Card Page ID");
+
+      //DOC NA2016.10 >>
+      IF (FilteredFileAttachment.GETFILTER("Related Record Position") <> '') THEN
+        FileAttachment."Related Record Position" := FilteredFileAttachment.GETFILTER("Related Record Position")
+      ELSE
+        FileAttachment."Related Record Position" := RecordRef.GETPOSITION(FALSE);
+      //DOC NA2016.10 <<
+
+      Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtSetTo, TxtPkv1, FileAttachment."Primary Key Value 1"), USERID);
+      Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtSetTo, TxtPkv2, FileAttachment."Primary Key Value 2"), USERID);
+      Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtSetTo, TxtPkv3, FileAttachment."Primary Key Value 3"), USERID);
+      FilteredFileAttachment.FILTERGROUP( FilterGroup );
+
+      FileAttachment.SetRecordDescription();
+    END;
+
+    PROCEDURE GetStorageLoc@1000000011(UserID@1000000005 : Code[50];DocumentType@1000000000 : Code[20];TableID@1000000001 : Integer;PrimaryKey1@1000000002 : Text) : Text[250];
+    VAR
+      StorageLoc@1000000006 : Record 9062269;
+      TxtLookingForStorageLocation@1000000004 : TextConst 'ENU=Looking for Storage Location based on: User: %1, Document Type: %2, Table: %3, PK1: %4;ENG=Looking for Storage Location based on: User: %1, Document Type: %2, Table: %3, PK1: %4';
+      TxtStorageFound@1000000007 : TextConst 'ENU=Storage location of %1 found based on %2;ENG=Storage location of %1 found based on %2';
+      TxtDocumentTypeUser@1000000010 : TextConst 'ENU=Document Type / User;ENG=Document Type / User';
+      TxtDocumentTypeBlankUser@1000000008 : TextConst 'ENU=Document Type / blank User;ENG=Document Type / blank User';
+      TxtTablePk1User@1000000009 : TextConst 'ENU=Table / PK1 / User;ENG=Table / PK1 / User';
+      TxtTablePk1BlankUser@1000000011 : TextConst 'ENU=Table / PK1 / blank User;ENG=Table / PK1 / blank User';
+      TxtTableBlankPk1User@1000000012 : TextConst 'ENU=Table / blank PK1 / User;ENG=Table / blank PK1 / User';
+      TxtTableBlankPk1BlankUser@1000000013 : TextConst 'ENU=Table / blank PK1 / blank User;ENG=Table / blank PK1 / blank User';
+      TxtBlankTypeUser@1000000014 : TextConst 'ENU=blank Type / User;ENG=blank Type / User';
+      TxtBlankTypeBlankUser@1000000015 : TextConst 'ENU=blank Type / blank User;ENG=blank Type / blank User';
+      TxtNoStorageLocationFound@1000000003 : TextConst 'ENU=Could not store file as no matching Storage Location entry was found (for user ID %1, document type %2, table ID %3 and primary key 1 %4).;ENG=Could not store file as no matching Storage Location entry was found (for user ID %1, document type %2, table ID %3 and primary key 1 %4).';
+    BEGIN
+      Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtLookingForStorageLocation, UserID, DocumentType, TableID, PrimaryKey1), UserID);
+
+      //Look for DocType First
+      //For given user first
+      StorageLoc.SETRANGE(Type,StorageLoc.Type::"Document Type");
+      StorageLoc.SETRANGE("Document Type Code",DocumentType);
+      StorageLoc.SETRANGE("User ID",UserID);
+      IF StorageLoc.FINDSET THEN BEGIN
+        Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtStorageFound, StorageLoc.GetLocationText(), TxtDocumentTypeUser), UserID);
+        EXIT(StorageLoc.GetLocationText());
+      END;
+
+      StorageLoc.RESET;
+
+      //For blank user
+      StorageLoc.SETRANGE(Type,StorageLoc.Type::"Document Type");
+      StorageLoc.SETRANGE("Document Type Code",DocumentType);
+      StorageLoc.SETRANGE("User ID",'');
+      IF StorageLoc.FINDSET THEN BEGIN
+        Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtStorageFound, StorageLoc.GetLocationText(), TxtDocumentTypeBlankUser), UserID);
+        EXIT(StorageLoc.GetLocationText());
+      END;
+
+      StorageLoc.RESET;
+
+      //Look for Table and Primary Key 1
+      //For given user first
+      StorageLoc.SETRANGE(Type,StorageLoc.Type::"Table ID");
+      StorageLoc.SETRANGE("Table ID",TableID);
+      IF PrimaryKey1 <> '' THEN StorageLoc.SETRANGE("Primary Key 1",PrimaryKey1);
+      StorageLoc.SETRANGE("User ID",UserID);
+      IF StorageLoc.FINDSET THEN BEGIN
+        Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtStorageFound, StorageLoc.GetLocationText(), TxtTablePk1User), UserID);
+        EXIT(StorageLoc.GetLocationText());
+      END;
+
+      StorageLoc.RESET;
+
+      //For blank user
+      StorageLoc.SETRANGE(Type,StorageLoc.Type::"Table ID");
+      StorageLoc.SETRANGE("Table ID",TableID);
+      IF PrimaryKey1 <> '' THEN StorageLoc.SETRANGE("Primary Key 1",PrimaryKey1);
+      StorageLoc.SETRANGE("User ID",'');
+      IF StorageLoc.FINDSET THEN BEGIN
+        Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtStorageFound, StorageLoc.GetLocationText(), TxtTablePk1BlankUser), UserID);
+        EXIT(StorageLoc.GetLocationText());
+      END;
+
+      StorageLoc.RESET;
+
+      //Look for Table and Blank Primary Key 1
+      //For given user first
+      StorageLoc.SETRANGE(Type,StorageLoc.Type::"Table ID");
+      StorageLoc.SETRANGE("Table ID",TableID);
+      StorageLoc.SETRANGE("Primary Key 1",' ');
+      StorageLoc.SETRANGE("User ID",UserID);
+      IF StorageLoc.FINDSET THEN BEGIN
+        Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtStorageFound, StorageLoc.GetLocationText(), TxtTableBlankPk1User), UserID);
+        EXIT(StorageLoc.GetLocationText());
+      END;
+
+      StorageLoc.RESET;
+
+      //For blank user
+      StorageLoc.SETRANGE(Type,StorageLoc.Type::"Table ID");
+      StorageLoc.SETRANGE("Table ID",TableID);
+      StorageLoc.SETRANGE("Primary Key 1",' ');
+      StorageLoc.SETRANGE("User ID",'');
+      IF StorageLoc.FINDSET THEN BEGIN
+        Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtStorageFound, StorageLoc.GetLocationText(), TxtTableBlankPk1BlankUser), UserID);
+        EXIT(StorageLoc.GetLocationText());
+      END;
+
+      StorageLoc.RESET;
+
+      //Look for BlankType
+      //For given user first
+      StorageLoc.SETRANGE(Type,StorageLoc.Type::" ");
+      StorageLoc.SETRANGE("User ID",UserID);
+      IF StorageLoc.FINDSET THEN BEGIN
+        Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtStorageFound, StorageLoc.GetLocationText(), TxtBlankTypeUser), UserID);
+        EXIT(StorageLoc.GetLocationText());
+      END;
+
+      StorageLoc.RESET;
+
+      //For blank user
+      StorageLoc.SETRANGE(Type,StorageLoc.Type::" ");
+      StorageLoc.SETRANGE("User ID",'');
+
+      //DOC NA2016.10 >>
+      IF (NOT(StorageLoc.FINDSET())) THEN BEGIN
+        StorageLoc.INIT();
+        StorageLoc.VALIDATE("Storage Type", StorageLoc."Storage Type"::BLOB);
+        StorageLoc.INSERT(TRUE);
+      END;
+
+      //IF StorageLoc.FINDSET THEN BEGIN
+        Logger.Log('FATTACH', Logger.Type::Debug, STRSUBSTNO(TxtStorageFound, StorageLoc.GetLocationText(), TxtBlankTypeBlankUser), UserID);
+        EXIT(StorageLoc.GetLocationText());
+      //END;
+      //DOC NA2016.10 <<
+
+      ERROR(TxtNoStorageLocationFound, UserID, DocumentType, TableID, PrimaryKey1);
+    END;
+
+    PROCEDURE FindLastInString@1000000002(Character@1000000000 : Char;String@1000000001 : Text) Pos : Integer;
+    VAR
+      i@1000000002 : Integer;
+    BEGIN
+      FOR i := 1 TO STRLEN(String) DO BEGIN
+        IF String[STRLEN(String)+1-i] = Character THEN
+          EXIT(STRLEN(String)-i+1);
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckFileExtension@1000000021(VAR pFilePath@1000000000 : Text;pExtensions@1000000001 : Text;pDefaultExtension@1000000004 : Text);
+    VAR
+      lFileSystem@1000000002 : Codeunit 9062264;
+      lFilePath@1000000008 : Text;
+      lFileDirectoryName@1000000007 : Text;
+      lFileNameWithoutExtension@1000000006 : Text;
+      lFileExtension@1000000003 : Text;
+      lFileExtensionAccepted@1000000005 : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Checking if given file path has a proper extension
+      //  <> pFilePath: Source / target file path
+      //  -> pExtensions: A list of accepted extensions (coma-separated)
+      //  -> pDefaultExtension: Default extension if no extension present
+
+      lFileExtension := DELCHR(LOWERCASE(lFileSystem.GetExtension(FALSE, pFilePath)), '<>', ' ');
+      IF (COPYSTR(lFileExtension, 1, 1) = '.') THEN
+        lFileExtension := COPYSTR(lFileExtension, 2, STRLEN(lFileExtension) - 1);
+      lFileExtensionAccepted := (STRPOS(',' + pExtensions + ',', ',' + lFileExtension + ',') > 0);
+      IF ( NOT (lFileExtensionAccepted)) THEN
+      BEGIN
+        lFileDirectoryName := lFileSystem.GetFolderName(FALSE, pFilePath);
+        lFileNameWithoutExtension := lFileSystem.GetFileNameWithoutExtension(TRUE, pFilePath);
+        lFilePath := lFileSystem.Combine(TRUE, lFileDirectoryName, lFileNameWithoutExtension);
+        IF (pDefaultExtension <> '') THEN
+          pFilePath := STRSUBSTNO('%1.%2', lFilePath, pDefaultExtension)
+        ELSE
+          pFilePath := lFilePath;
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.10 AZ 14/09/2015 - Created
+      //DOC NA2016.10 AZ 02/11/2015 - PrimaryKey1 parameter length changed in GetStorageLoc function
+      //DOC NA2016.10 AZ 02/11/2015 - Create empty storage location
+      //DOC NA2016.10 AZ 02/11/2015 - "Card Form ID" and "Move to Card Form ID" fields removed from "File Attachment" table
+      //DOC NA2016.11 JH 02/12/2015 - Bugfixes
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit
+    }
+    END.
+  }
+}
+

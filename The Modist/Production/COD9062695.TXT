@@ -1,0 +1,179 @@
+OBJECT Codeunit 9062695 FF XML Management FAQ
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    TableNo=9062271;
+    OnRun=VAR
+            SubMissionId@1000000000 : Text;
+            Tint@1000000001 : Integer;
+            OutStr@1000000002 : OutStream;
+            InStr@1000000003 : InStream;
+            TempFile@1000000004 : File;
+            RecRef@1000000005 : RecordRef;
+            FldRef@1000000006 : FieldRef;
+            ProcessedOK@1000000007 : Boolean;
+            eProcessing@1000000008 : TextConst 'ENU=Processing XML document;ENG=Processing XML document';
+            eProcessed@1000000009 : TextConst 'ENU=XML Document Processed;ENG=XML Document Processed';
+            eAttached@1000000010 : TextConst 'ENU=Attached To Parent;ENG=Attached To Parent';
+            eAttachingPdf@1000000011 : TextConst 'ENU=Attaching PDF to Parent;ENG=Attaching PDF to Parent';
+            eProcessedOk@1000000012 : TextConst 'ENU=Processed OK;ENG=Processed OK';
+            eNoParent@1000000013 : TextConst 'ENU=No Parent - Copy Record;ENG=No Parent - Copy Record';
+          BEGIN
+            FastFieldsSetup.GET();
+
+            IF STRPOS(Rec.Description,'_')  > 0 THEN
+             SubMissionId:= COPYSTR(Rec.Description,STRPOS(Rec.Description,'_')+1,36)
+            ELSE
+              SubMissionId:= COPYSTR(Rec.Description,1,36);
+
+            FFEntryLog.RESET;
+            FFEntryLog.INIT;
+            FFEntryLog."Entry No":=0;
+            FFEntryLog.Filename:=Rec.Filename;
+            FFEntryLog.FilePath:=Rec.FilePath;
+            FFEntryLog."Document Type":=Rec."Document Type";
+            FFEntryLog."Queue Id":=Rec."Queue Code";
+            FFEntryLog."Submission Id":=SubMissionId;
+            FFEntryLog."FAQ Entry No":=Rec."Entry No.";
+
+            TempFile.OPEN(Rec.FilePath);
+            TempFile.CREATEINSTREAM(InStr);
+            FFEntryLog."File As Blob".CREATEOUTSTREAM(OutStr);
+            COPYSTREAM(OutStr,InStr);
+            FFEntryLog.INSERT(TRUE);
+            TempFile.CLOSE();
+            COMMIT;
+
+            TMPFileAttachmentQueueEntry.INIT;
+            TMPFileAttachmentQueueEntry.TRANSFERFIELDS(Rec);
+            TMPFileAttachmentQueueEntry.INSERT;
+            COMMIT;
+
+            CASE Rec."Document Type" OF
+
+              'FF01-1':
+              BEGIN
+
+              CASE UPPERCASE(PathS.GetExtension(Rec.FilePath)) OF
+
+                '.XML':
+                BEGIN
+                IF UPPERCASE(PathS.GetExtension(Rec.FilePath)) = '.XML' THEN BEGIN
+                  FFEntryLog."Processing Text":=eProcessing;
+                  FFEntryLog.MODIFY;
+                  ProcessedOK:=FastFormsXMLManagement.ImportXmlFileToNavTables(Rec.FilePath,FFEntryLog);
+                  IF ProcessedOK THEN BEGIN
+                    FFEntryLog."Processing Text":=eProcessed;
+                    FFEntryLog.Processed:=TRUE;
+                    FFEntryLog.MODIFY;
+                    COMMIT;
+                    FFEntryLog2.RESET;
+                    FFEntryLog2.SETFILTER(FFEntryLog2."Submission Id",FFEntryLog."Submission Id");
+                    FFEntryLog2.SETFILTER(FFEntryLog2."Entry No", '<>%1' ,FFEntryLog."Entry No");
+                    FFEntryLog2.SETRANGE(FFEntryLog2."File Is Attached",FALSE);
+                    IF FFEntryLog2.FINDSET THEN BEGIN
+                        REPEAT
+                        //Export the blob to a temp blob
+                        RecRef.GET(FFEntryLog2.RECORDID);
+                        FldRef := RecRef.FIELD(31);
+                        FldRef.CALCFIELD();
+                        TmpBlob.Blob := FldRef.VALUE;
+                        RecRef.CLOSE();
+
+                        TempFileName:= PathS.GetDirectoryName(FFEntryLog2.FilePath) +'\'+ SubMissionId + '.pdf';
+                        FileSystem.ExportBlobToFileSilent(FALSE,TmpBlob,TempFileName);
+                        IF FastFormsXMLManagement.AttachOrphanToParent(TempFileName,FFEntryLog."Submission Id",FFEntryLog."Record Id") THEN BEGIN
+                            FFEntryLog2."File Is Attached":=TRUE;
+                            FFEntryLog2."Processing Text":=eAttached;
+                            FFEntryLog2.Processed:=TRUE;
+                            FFEntryLog2.MODIFY;
+                            FileSystem.DeleteFileIfExists(FALSE,TempFileName);  //Stop the repeated import of the PDF
+                          END;
+
+                          UNTIL FFEntryLog2.NEXT=0;
+                    END;
+                    END;
+                  END ELSE BEGIN
+                    Rec."AutoProcess Errored":=TRUE;
+                    Rec.Processed:=FALSE;
+                    Rec."AutoProcess Error Message":=GETLASTERRORTEXT;
+                    Rec."AutoProcess Error Count":=Rec."AutoProcess Error Count"+1;
+                    Rec.MODIFY;
+                    FFEntryLog."Error In Processing":=TRUE;
+                    FFEntryLog."Processing Text":=GETLASTERRORTEXT;
+                    FFEntryLog.MODIFY;
+                    FFEntryLog2.RESET;
+                    FFEntryLog2.SETFILTER(FFEntryLog2."Submission Id",FFEntryLog."Submission Id");
+                    FFEntryLog2.SETFILTER(FFEntryLog2."Entry No", '<>%1' ,FFEntryLog."Entry No");
+                    IF FFEntryLog2.FINDSET THEN BEGIN
+                      FFEntryLog2.MODIFYALL("Error In Processing",TRUE);
+                      END;
+                  END;
+                END;
+
+                ELSE
+                BEGIN
+                FFEntryLog2.RESET;
+                FFEntryLog2.SETFILTER(FFEntryLog2."Submission Id",SubMissionId);
+                FFEntryLog2.SETFILTER(FFEntryLog2."Postion Text",'<>%1','');
+                IF FFEntryLog2.FINDFIRST THEN BEGIN
+                  FFEntryLog."Processing Text":=eAttachingPdf;
+                  FFEntryLog.MODIFY;
+                  IF FastFormsXMLManagement.AttachFilesToParent(Rec.FilePath,SubMissionId,FFEntryLog2."Record Id") THEN BEGIN
+                    FFEntryLog.Processed:=TRUE;
+                    FFEntryLog."File Is Attached":=TRUE;
+                    FFEntryLog."Processing Text":=eProcessedOk;
+                    FFEntryLog.MODIFY;
+                    COMMIT;
+                  END ELSE BEGIN
+                    FFEntryLog."Error In Processing":=TRUE;
+                    FFEntryLog."Processing Text":=GETLASTERRORTEXT;
+                    FFEntryLog.MODIFY;
+                    END;
+                  END ELSE BEGIN
+                    FFEntryLog."Processing Text":=eNoParent;
+                    FFEntryLog.MODIFY;
+                    Rec."AutoProcess Errored":=TRUE;
+                    Rec.Processed:=FALSE;
+                    Rec."AutoProcess Error Count":=Rec."AutoProcess Error Count"+1;
+                    Rec.MODIFY;
+                    COMMIT;
+                  END;
+                END;
+
+                END;
+
+              END;
+
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      FastFormsXMLManagement@1000000000 : Codeunit 9062696;
+      FFEntryLog@1000000001 : Record 9062833;
+      PathS@1000000002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Path";
+      GRecordId@1000000003 : RecordID;
+      TMPFileAttachmentQueueEntry@1000000004 : Record 9062834;
+      FileSystem@1000000005 : Codeunit 9062264;
+      FFEntryLog2@1000000006 : Record 9062833;
+      FastFieldsSetup@1000000007 : Record 9062831;
+      TmpBlob@1000000008 : Record 99008535;
+      TempFileName@1000000009 : Text;
+
+    BEGIN
+    {
+      //DOC NH2016.15 JH 26/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

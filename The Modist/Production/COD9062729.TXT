@@ -1,0 +1,492 @@
+OBJECT Codeunit 9062729 Geolocation Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EnhFieldMgt@1000000003 : Codeunit 9062298;
+      EnablementSetup@1000000000 : Record 9062229;
+      CachedCoordinatesSrcTableNo@1000000001 : Integer;
+      CachedCoordinatesSrcFieldNo@1000000002 : Integer;
+
+    LOCAL PROCEDURE "--- Record Coordinates ---"@1000000003();
+    BEGIN
+    END;
+
+    PROCEDURE GetRecRefCoordinates@1000000004(VAR RecRef@1000000000 : RecordRef;CoordinatesFieldNo@1000000010 : Integer;UpdateIfNotFound@1000000004 : Boolean;ForceReload@1000000002 : Boolean) : Text;
+    VAR
+      QRData@1000000011 : Record 9062699;
+      SourceRecRef@1000000014 : RecordRef;
+      CloseRecRef@1000000013 : Boolean;
+      RecordTableNo@1000000012 : Integer;
+      RecordPosition@1000000003 : Text;
+      CoordinatesValue@1000000001 : Text;
+      PostCode@1000000009 : Text;
+      City@1000000008 : Text;
+      Address@1000000007 : Text;
+      CountryCode@1000000006 : Code[20];
+      CountryName@1000000005 : Text;
+    BEGIN
+      //Get RecordRef Coordinates
+
+      CloseRecRef := FALSE;
+
+      IF (RecRef.NUMBER = DATABASE::"Quick Report Data") THEN BEGIN
+        RecRef.SETTABLE(QRData);
+        RecordTableNo := QRData."Table ID";
+        RecordPosition := QRData."Table Position";
+
+        //get source record ref
+        CloseRecRef := FALSE;
+        SourceRecRef.OPEN(RecordTableNo);
+        SourceRecRef.SETPOSITION(RecordPosition);
+        SourceRecRef.FIND('=');
+        RecordPosition := SourceRecRef.GETPOSITION(TRUE);
+
+      END ELSE BEGIN
+        RecordTableNo := RecRef.NUMBER;
+        RecordPosition := RecRef.GETPOSITION();
+        SourceRecRef := RecRef;
+      END;
+
+      IF (RecordTableNo = 0) OR (RecordPosition = '') THEN BEGIN
+        IF (CloseRecRef) THEN
+          SourceRecRef.CLOSE();
+        EXIT('');
+      END;
+
+      CoordinatesValue := '';
+      IF (CoordinatesFieldNo = 0) THEN
+        CoordinatesFieldNo := GetDefaultCoordinatesFieldNo(RecordTableNo, TRUE);
+
+      IF (CoordinatesFieldNo <> 0) THEN BEGIN
+        CoordinatesValue := EnhFieldMgt.CalculateFieldValue(RecordTableNo, CoordinatesFieldNo, RecordPosition);
+        IF (((CoordinatesValue = '') AND (UpdateIfNotFound)) OR (ForceReload)) THEN BEGIN
+
+          IF (GetRecRefAddress(SourceRecRef, PostCode, City, Address, CountryCode, CountryName)) THEN BEGIN
+            CoordinatesValue := GeocodeAddress(PostCode, City, Address, CountryCode, CountryName);
+            EnhFieldMgt.SetFieldValue(RecordTableNo, CoordinatesFieldNo, RecordPosition, CoordinatesValue);
+          END;
+
+        END;
+      END;
+
+      IF (CloseRecRef) THEN
+        SourceRecRef.CLOSE();
+
+      EXIT(CoordinatesValue);
+    END;
+
+    LOCAL PROCEDURE GetRecRefAddress@1000000005(VAR RecRef@1000000000 : RecordRef;VAR PostCode@1000000001 : Text;VAR City@1000000002 : Text;VAR Address@1000000003 : Text;VAR CountryCode@1000000004 : Code[20];VAR CountryName@1000000005 : Text) : Boolean;
+    VAR
+      Customer@1000000006 : Record 18;
+      Vendor@1000000007 : Record 23;
+      Contact@1000000008 : Record 5050;
+      Country@1000000009 : Record 9;
+      CompanyInformation@1000000010 : Record 79;
+      Location@1000000011 : Record 14;
+      ShipToAddress@1000000012 : Record 222;
+      Job@1000000013 : Record 167;
+      Resource@1000000014 : Record 156;
+      Employee@1000000015 : Record 5200;
+      BankAccount@1000000016 : Record 270;
+      OrderAddress@1000000017 : Record 224;
+    BEGIN
+      //Get RecordRef Address
+
+      PostCode := '';
+      City := '';
+      Address := '';
+      CountryCode := '';
+      CountryName := '';
+
+      CASE (RecRef.NUMBER) OF
+        DATABASE::Customer:
+          BEGIN
+            PostCode := RecRef.FIELD(Customer.FIELDNO("Post Code")).VALUE;
+            City := RecRef.FIELD(Customer.FIELDNO(City)).VALUE;
+            Address := RecRef.FIELD(Customer.FIELDNO(Address)).VALUE;
+            CountryCode := RecRef.FIELD(Customer.FIELDNO("Country/Region Code")).VALUE;
+          END;
+        DATABASE::Vendor:
+          BEGIN
+            PostCode := RecRef.FIELD(Vendor.FIELDNO("Post Code")).VALUE;
+            City := RecRef.FIELD(Vendor.FIELDNO(City)).VALUE;
+            Address := RecRef.FIELD(Vendor.FIELDNO(Address)).VALUE;
+            CountryCode := RecRef.FIELD(Vendor.FIELDNO("Country/Region Code")).VALUE;
+          END;
+        DATABASE::Contact:
+          BEGIN
+            PostCode := RecRef.FIELD(Contact.FIELDNO("Post Code")).VALUE;
+            City := RecRef.FIELD(Contact.FIELDNO(City)).VALUE;
+            Address := RecRef.FIELD(Contact.FIELDNO(Address)).VALUE;
+            CountryCode := RecRef.FIELD(Contact.FIELDNO("Country/Region Code")).VALUE;
+          END;
+        DATABASE::Location:
+          BEGIN
+            PostCode := RecRef.FIELD(Location.FIELDNO("Post Code")).VALUE;
+            City := RecRef.FIELD(Location.FIELDNO(City)).VALUE;
+            Address := RecRef.FIELD(Location.FIELDNO(Address)).VALUE;
+            CountryCode := RecRef.FIELD(Location.FIELDNO("Country/Region Code")).VALUE;
+          END;
+        DATABASE::"Ship-to Address":
+          BEGIN
+            PostCode := RecRef.FIELD(ShipToAddress.FIELDNO("Post Code")).VALUE;
+            City := RecRef.FIELD(ShipToAddress.FIELDNO(City)).VALUE;
+            Address := RecRef.FIELD(ShipToAddress.FIELDNO(Address)).VALUE;
+            CountryCode := RecRef.FIELD(ShipToAddress.FIELDNO("Country/Region Code")).VALUE;
+          END;
+        DATABASE::Job:
+          BEGIN
+            PostCode := RecRef.FIELD(Job.FIELDNO("Bill-to Post Code")).VALUE;
+            City := RecRef.FIELD(Job.FIELDNO("Bill-to City")).VALUE;
+            Address := RecRef.FIELD(Job.FIELDNO("Bill-to Address")).VALUE;
+            CountryCode := RecRef.FIELD(Job.FIELDNO("Bill-to Country/Region Code")).VALUE;
+          END;
+        DATABASE::"Bank Account":
+          BEGIN
+            PostCode := RecRef.FIELD(BankAccount.FIELDNO("Post Code")).VALUE;
+            City := RecRef.FIELD(BankAccount.FIELDNO(City)).VALUE;
+            Address := RecRef.FIELD(BankAccount.FIELDNO(Address)).VALUE;
+            CountryCode := RecRef.FIELD(BankAccount.FIELDNO("Country/Region Code")).VALUE;
+          END;
+        DATABASE::"Company Information":
+          BEGIN
+            PostCode := RecRef.FIELD(CompanyInformation.FIELDNO("Post Code")).VALUE;
+            City := RecRef.FIELD(CompanyInformation.FIELDNO(City)).VALUE;
+            Address := RecRef.FIELD(CompanyInformation.FIELDNO(Address)).VALUE;
+            CountryCode := RecRef.FIELD(CompanyInformation.FIELDNO("Country/Region Code")).VALUE;
+          END;
+        DATABASE::Employee:
+          BEGIN
+            PostCode := RecRef.FIELD(Employee.FIELDNO("Post Code")).VALUE;
+            City := RecRef.FIELD(Employee.FIELDNO(City)).VALUE;
+            Address := RecRef.FIELD(Employee.FIELDNO(Address)).VALUE;
+            CountryCode := RecRef.FIELD(Employee.FIELDNO("Country/Region Code")).VALUE;
+          END;
+        DATABASE::Resource:
+          BEGIN
+            PostCode := RecRef.FIELD(Resource.FIELDNO("Post Code")).VALUE;
+            City := RecRef.FIELD(Resource.FIELDNO(City)).VALUE;
+            Address := RecRef.FIELD(Resource.FIELDNO(Address)).VALUE;
+            CountryCode := RecRef.FIELD(Resource.FIELDNO("Country/Region Code")).VALUE;
+          END;
+        DATABASE::"Order Address":
+          BEGIN
+            PostCode := RecRef.FIELD(OrderAddress.FIELDNO("Post Code")).VALUE;
+            City := RecRef.FIELD(OrderAddress.FIELDNO(City)).VALUE;
+            Address := RecRef.FIELD(OrderAddress.FIELDNO(Address)).VALUE;
+            CountryCode := RecRef.FIELD(OrderAddress.FIELDNO("Country/Region Code")).VALUE;
+          END;
+      ELSE
+        EXIT(FALSE);
+      END;
+
+      IF (CountryCode = '') THEN BEGIN
+        CompanyInformation.GET();
+        CountryCode := CompanyInformation."Country/Region Code";
+      END;
+
+      IF (CountryCode <> '') THEN BEGIN
+        Country.GET(CountryCode);
+        CountryName := Country.Name;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GeocodeAddress@1000000006(PostCode@1000000004 : Text;City@1000000003 : Text;Address@1000000002 : Text;CountryCode@1000000001 : Code[20];CountryName@1000000000 : Text) : Text;
+    VAR
+      UKAddress@1000000005 : Boolean;
+      CoordinatesValue@1000000006 : Text;
+    BEGIN
+      //Convert Address to Coordinates
+
+      CoordinatesValue := '';
+
+      //Web services use ISO country codes, so we can hardcode them here
+      UKAddress := CountryCode IN ['UK', 'GB'];
+      //For UK we don't have to use addesss line if we have a valid post code
+      IF (UKAddress) THEN BEGIN
+        CountryCode := 'UK';
+        IF (PostCode <> '') THEN
+          Address := '';
+      END;
+
+      //Try to use BingMaps to geocode address
+      CoordinatesValue := BingGeocodeAddress(PostCode, City, Address, CountryCode, CountryName);
+      IF (CoordinatesValue = '') AND (City <> '') AND ((Address <> '') OR (PostCode <> '')) THEN
+        CoordinatesValue := BingGeocodeAddress('', City, '', CountryCode, CountryName);
+
+      IF (CoordinatesValue <> '') THEN
+        EXIT(CoordinatesValue);
+
+      EXIT(UndefinedCoordinatesText());
+    END;
+
+    PROCEDURE GetDefaultCoordinatesFieldNo@1000000000(TableNo@1000000000 : Integer;CreateIfMissing@1000000003 : Boolean) : Integer;
+    VAR
+      EnhFieldDef@1000000001 : Record 9062327;
+      FieldName@1000000002 : Text;
+    BEGIN
+      //Get Coordinates Enhanced Field No.
+      IF (TableNo = 0) THEN
+        EXIT(0);
+
+      IF ((CachedCoordinatesSrcTableNo <> TableNo) OR (CachedCoordinatesSrcFieldNo = 0)) THEN BEGIN
+
+        FieldName := 'Coordinates';
+
+        EnhFieldDef.RESET();
+        EnhFieldDef.SETRANGE("Table No.", TableNo);
+        EnhFieldDef.SETRANGE(Name, FieldName);
+        IF (NOT(EnhFieldDef.FINDFIRST())) THEN BEGIN
+
+          IF (NOT(CreateIfMissing)) THEN
+            EXIT(0);
+
+          EnhFieldDef.INIT();
+          EnhFieldDef."Enhanced Field No." := 0;
+          EnhFieldDef.VALIDATE("Table No.", TableNo);
+          EnhFieldDef.INSERT(TRUE);
+
+          EnhFieldDef.VALIDATE(Name, FieldName);
+          EnhFieldDef.VALIDATE(Type, EnhFieldDef.Type::Text);
+          EnhFieldDef.VALIDATE(Editable, TRUE);
+          EnhFieldDef.MODIFY(TRUE);
+        END;
+
+        CachedCoordinatesSrcTableNo := TableNo;
+        CachedCoordinatesSrcFieldNo := EnhFieldDef."Enhanced Field No.";
+      END;
+
+      EXIT(CachedCoordinatesSrcFieldNo);
+    END;
+
+    PROCEDURE HasCoordinates@1000000001(TableNo@1000000000 : Integer) : Boolean;
+    BEGIN
+      EXIT(TableNo IN [
+        DATABASE::Customer,
+        DATABASE::Vendor,
+        DATABASE::Contact,
+        DATABASE::Location,
+        DATABASE::"Ship-to Address",
+        DATABASE::Job,
+        DATABASE::"Bank Account",
+        DATABASE::"Company Information",
+        DATABASE::Employee,
+        DATABASE::Resource,
+        DATABASE::"Order Address"]);
+    END;
+
+    LOCAL PROCEDURE "--- Bing Maps Methods ---"@1000000013();
+    BEGIN
+    END;
+
+    PROCEDURE BingGeocodeAddress@1000000014(PostCode@1000000004 : Text;City@1000000003 : Text;Address@1000000002 : Text;CountryCode@1000000001 : Code[20];CountryName@1000000000 : Text) : Text;
+    VAR
+      TempBlob@1000000016 : TEMPORARY Record 99008535;
+      HttpDownloadMgt@1000000015 : Codeunit 9062687;
+      XmlToolkit@1000000014 : Codeunit 9062641;
+      XmlDocument@1000000013 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XmlNamespaceManager@1000000012 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+      OutputStream@1000000011 : OutStream;
+      InputStream@1000000010 : InStream;
+      RequestUrl@1000000009 : Text;
+      BingKey@1000000008 : Text;
+      LatitudeText@1000000007 : Text;
+      LongitudeText@1000000006 : Text;
+      CoordinatesValue@1000000005 : Text;
+    BEGIN
+      CoordinatesValue := '';
+      BingKey := BingGetKey();
+
+      IF (BingKey <> '') THEN BEGIN
+        //Bing requires ISO country codes, so we can hardcode them here
+        //For UK we don't have to use addesss line if we have a valid post code
+        IF (CountryCode IN ['UK', 'GB']) THEN BEGIN
+          CountryCode := 'UK';
+          IF (PostCode <> '') THEN
+            Address := '';
+        END;
+
+        RequestUrl :=
+          STRSUBSTNO(
+            'https://dev.virtualearth.net/REST/v1/Locations?countryRegion=%1&locality=%2&postalCode=%3&addressLine=%4&maxResults=1&o=xml&key=%5',
+            HttpDownloadMgt.UrlEncode(CountryCode), HttpDownloadMgt.UrlEncode(City), HttpDownloadMgt.UrlEncode(PostCode),
+            HttpDownloadMgt.UrlEncode(Address), BingKey);
+
+      //  LogMessage(RequestUrl);
+      //  ERROR(RequestUrl);
+
+        TempBlob.Blob.CREATEOUTSTREAM(OutputStream);
+        IF (HttpDownloadMgt.DownloadToStream(RequestUrl, OutputStream)) THEN BEGIN
+          TempBlob.Blob.CREATEINSTREAM(InputStream);
+
+          XmlDocument := XmlDocument.XmlDocument();
+          XmlDocument.Load(InputStream);
+          XmlToolkit.GetXmlDocumentNamespaces(XmlDocument, 'd', XmlNamespaceManager);
+
+          LatitudeText := XmlToolkit.GetXmlNodeValue(XmlDocument, 'd:Response/d:ResourceSets/d:ResourceSet/d:Resources/d:Location/d:Point/d:Latitude', XmlNamespaceManager);
+          LongitudeText := XmlToolkit.GetXmlNodeValue(XmlDocument, 'd:Response/d:ResourceSets/d:ResourceSet/d:Resources/d:Location/d:Point/d:Longitude', XmlNamespaceManager);
+          IF (LatitudeText <> '') AND (LongitudeText <> '') THEN
+            CoordinatesValue := LatitudeText + ',' + LongitudeText;
+        END;
+      END;
+
+      EXIT(CoordinatesValue);
+    END;
+
+    PROCEDURE BingGetKey@1000000015() : Text;
+    BEGIN
+      IF (EnablementSetup."Bing Maps Key" = '') THEN
+        EnablementSetup.GET();
+      EXIT(EnablementSetup."Bing Maps Key");
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@1000000002();
+    BEGIN
+    END;
+
+    PROCEDURE UndefinedCoordinatesText@1000000007() : Text;
+    BEGIN
+      EXIT('0,0');
+    END;
+
+    PROCEDURE EmptyCoordinates@1000000010(CoordinatesValue@1000000000 : Text) : Boolean;
+    BEGIN
+      EXIT((CoordinatesValue = '') OR (CoordinatesValue = UndefinedCoordinatesText()));
+    END;
+
+    LOCAL PROCEDURE "--- Address Changes Event Subscriptions ---"@1000000011();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE OnAddressRecRefChanged@1000000018(NewRecRef@1000000000 : RecordRef;OldRecRef@1000000001 : RecordRef);
+    VAR
+      EnhFieldMgt@1000000009 : Codeunit 9062298;
+      NewAddress@1000000002 : ARRAY [5] OF Text;
+      OldAddress@1000000003 : ARRAY [5] OF Text;
+      NewCountryCode@1000000004 : Code[10];
+      OldCountryCode@1000000005 : Code[10];
+      AddressChanged@1000000007 : Boolean;
+      AddressFieldIndex@1000000006 : Integer;
+      CoordinatesFieldNo@1000000008 : Integer;
+    BEGIN
+      IF (GetRecRefAddress(NewRecRef, NewAddress[1], NewAddress[2], NewAddress[3], NewCountryCode, NewAddress[4])) AND
+        (GetRecRefAddress(OldRecRef, OldAddress[1], OldAddress[2], OldAddress[3], OldCountryCode, OldAddress[4]))
+      THEN BEGIN
+        //detect address change
+        AddressChanged := (NewCountryCode <> OldCountryCode);
+        IF (NOT(AddressChanged)) THEN BEGIN
+          FOR AddressFieldIndex := 1 TO 4 DO
+            IF (NewAddress[AddressFieldIndex] <> OldAddress[AddressFieldIndex]) THEN
+              AddressChanged := TRUE;
+        END;
+        //clear coordinates enhanced field
+        IF (AddressChanged) THEN BEGIN
+          CoordinatesFieldNo := GetDefaultCoordinatesFieldNo(NewRecRef.NUMBER, TRUE);
+          IF (CoordinatesFieldNo <> 0) THEN
+            EnhFieldMgt.SetFieldValue(NewRecRef.NUMBER, CoordinatesFieldNo, NewRecRef.GETPOSITION(), '');
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE OnAddressRecordChanged@1000000019(NewRecord@1000000000 : Variant;OldRecord@1000000001 : Variant);
+    VAR
+      NewRecRef@1000000002 : RecordRef;
+      OldRecRef@1000000003 : RecordRef;
+    BEGIN
+      NewRecRef.GETTABLE(NewRecord);
+      OldRecRef.GETTABLE(OldRecord);
+      OnAddressRecRefChanged(NewRecRef, OldRecRef);
+      OldRecRef.CLOSE();
+      NewRecRef.CLOSE();
+    END;
+
+    [EventSubscriber(Table,18,OnAfterModifyEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE OnModifyCustomer@1000000016(VAR Rec@1000000000 : Record 18;VAR xRec@1000000001 : Record 18;RunTrigger@1000000002 : Boolean);
+    BEGIN
+      OnAddressRecordChanged(Rec, xRec);
+    END;
+
+    [EventSubscriber(Table,23,OnAfterModifyEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE OnModifyVendor@1000000021(VAR Rec@1000000000 : Record 23;VAR xRec@1000000001 : Record 23;RunTrigger@1000000002 : Boolean);
+    BEGIN
+      OnAddressRecordChanged(Rec, xRec);
+    END;
+
+    [EventSubscriber(Table,5050,OnAfterModifyEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE OnModifyContact@1000000022(VAR Rec@1000000000 : Record 5050;VAR xRec@1000000001 : Record 5050;RunTrigger@1000000002 : Boolean);
+    BEGIN
+      OnAddressRecordChanged(Rec, xRec);
+    END;
+
+    [EventSubscriber(Table,14,OnAfterModifyEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE OnModifyLocation@1000000029(VAR Rec@1000000000 : Record 14;VAR xRec@1000000001 : Record 14;RunTrigger@1000000002 : Boolean);
+    BEGIN
+      OnAddressRecordChanged(Rec, xRec);
+    END;
+
+    [EventSubscriber(Table,222,OnAfterModifyEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE OnModifyShipToAddress@1000000030(VAR Rec@1000000000 : Record 222;VAR xRec@1000000001 : Record 222;RunTrigger@1000000002 : Boolean);
+    BEGIN
+      OnAddressRecordChanged(Rec, xRec);
+    END;
+
+    [EventSubscriber(Table,167,OnAfterModifyEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE OnModifyJob@1000000031(VAR Rec@1000000000 : Record 167;VAR xRec@1000000001 : Record 167;RunTrigger@1000000002 : Boolean);
+    BEGIN
+      OnAddressRecordChanged(Rec, xRec);
+    END;
+
+    [EventSubscriber(Table,270,OnAfterModifyEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE OnModifyBankAccount@1000000026(VAR Rec@1000000000 : Record 270;VAR xRec@1000000001 : Record 270;RunTrigger@1000000002 : Boolean);
+    BEGIN
+      OnAddressRecordChanged(Rec, xRec);
+    END;
+
+    [EventSubscriber(Table,79,OnAfterModifyEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE OnModifyCompanyInformation@1000000025(VAR Rec@1000000000 : Record 79;VAR xRec@1000000001 : Record 79;RunTrigger@1000000002 : Boolean);
+    BEGIN
+      OnAddressRecordChanged(Rec, xRec);
+    END;
+
+    [EventSubscriber(Table,5200,OnAfterModifyEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE OnModifyEmployee@1000000032(VAR Rec@1000000000 : Record 5200;VAR xRec@1000000001 : Record 5200;RunTrigger@1000000002 : Boolean);
+    BEGIN
+      OnAddressRecordChanged(Rec, xRec);
+    END;
+
+    [EventSubscriber(Table,156,OnAfterModifyEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE OnModifyResource@1000000033(VAR Rec@1000000000 : Record 156;VAR xRec@1000000001 : Record 156;RunTrigger@1000000002 : Boolean);
+    BEGIN
+      OnAddressRecordChanged(Rec, xRec);
+    END;
+
+    [EventSubscriber(Table,224,OnAfterModifyEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE OnModifyOrderAddress@1000000034(VAR Rec@1000000000 : Record 224;VAR xRec@1000000001 : Record 224;RunTrigger@1000000002 : Boolean);
+    BEGIN
+      OnAddressRecordChanged(Rec, xRec);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.15 AZ 16/03/2016 - Created
+      //DOC NA2016.15 AZ 15/04/2016 - Quick Reports bugfixes
+    }
+    END.
+  }
+}
+

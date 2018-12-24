@@ -1,0 +1,399 @@
+OBJECT Codeunit 9062304 Planning Board Event Handling
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/03/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.14;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      PlanningBoardHeader@9062231 : Record 9062337;
+      PlanningBoardMenuItem@9062233 : Record 9062343;
+      PlanningBoardActionToolkit@1000000000 : Codeunit 9062314;
+      PlanningBoardDiagnostics@9062235 : Codeunit 9062313;
+      BlobToolkit@9062230 : Codeunit 9062242;
+      FileSystem@9062234 : Codeunit 9062264;
+
+    LOCAL PROCEDURE "--- General ---"@9062271();
+    BEGIN
+    END;
+
+    PROCEDURE HandleEvent@9062230(VAR pPlanningBoardContext@9062232 : Record 9062349;pEventData@9062230 : Text) : Text;
+    VAR
+      lBlob@9062233 : Record 99008535;
+      lEventTypeText@9062237 : Text;
+      lEventArgumentTmp@9062236 : TEMPORARY Record 9062730;
+      lInStream@9062235 : InStream;
+      lPlanningBoardEventXmlPort@9062234 : XMLport 9062233;
+      lErrorMessage@1000000000 : Text;
+    BEGIN
+      //DOC NA2016.12 - Handling event
+      //  <> pPlanningBoardContext: Source / target planning board context
+      //  -> pEventData: Event data
+      //  <- Error message
+
+      ClearEvent(pPlanningBoardContext);
+      ClearAction(pPlanningBoardContext);
+
+      PlanningBoardDiagnostics.DumpTextToFile('Event', 'xml', pEventData);
+      PlanningBoardDiagnostics.DumpContextToFile(pPlanningBoardContext, 'Pre Event Context');
+
+      IF ( NOT (PlanningBoardHeader.GET(pPlanningBoardContext."Planning Board Code"))) THEN
+        EXIT;
+
+      BlobToolkit.TextToBlob(pEventData, lBlob);
+      lBlob.Blob.CREATEINSTREAM(lInStream);
+      lPlanningBoardEventXmlPort.SETSOURCE(lInStream);
+      lPlanningBoardEventXmlPort.IMPORT();
+
+      lEventTypeText := lPlanningBoardEventXmlPort.GetEventTypeText();
+      lPlanningBoardEventXmlPort.GetEventArguments(lEventArgumentTmp);
+
+      ParseEvent(pPlanningBoardContext, lEventTypeText, lEventArgumentTmp);
+
+      FindAction(pPlanningBoardContext);
+      lErrorMessage := ExecuteAction(pPlanningBoardContext);
+
+      PlanningBoardDiagnostics.DumpContextToFile(pPlanningBoardContext, 'Post Event Context');
+
+      EXIT(lErrorMessage);
+    END;
+
+    LOCAL PROCEDURE ClearEvent@9062231(VAR pPlanningBoardContext@9062230 : Record 9062349);
+    BEGIN
+      //DOC NA2016.12 - Clearing event (fields in planning board context)
+      //  <> pPlanningBoardContext: Source / target planning board context
+
+      CLEAR(pPlanningBoardContext."Event Type");
+      CLEAR(pPlanningBoardContext."Event Type Text");
+      CLEAR(pPlanningBoardContext."Event Resource ID");
+      CLEAR(pPlanningBoardContext."Event Entry ID");
+      CLEAR(pPlanningBoardContext."Event Start Date");
+      CLEAR(pPlanningBoardContext."Event Start Time");
+      CLEAR(pPlanningBoardContext."Event End Date");
+      CLEAR(pPlanningBoardContext."Event End Time");
+      CLEAR(pPlanningBoardContext."Event Menu Table Type");
+    END;
+
+    LOCAL PROCEDURE ClearAction@9062243(VAR pPlanningBoardContext@9062230 : Record 9062349);
+    BEGIN
+      //DOC NA2016.12 - Clearing action (fields in planning board context)
+      //  <> pPlanningBoardContext: Source / target planning board context
+
+      CLEAR(pPlanningBoardContext."Action Type");
+      CLEAR(pPlanningBoardContext."Action Run Object Type");
+      CLEAR(pPlanningBoardContext."Action Run Object ID");
+      CLEAR(pPlanningBoardContext."Action Open Panel Code");
+      CLEAR(pPlanningBoardContext."Action Open Pl. Board Code");
+      CLEAR(pPlanningBoardContext."Action Run Quick Report Code");
+      CLEAR(pPlanningBoardContext."Action Hyperlink URL");
+      CLEAR(pPlanningBoardContext."Action Change Table ID");
+      CLEAR(pPlanningBoardContext."Action Change Field Type");
+      CLEAR(pPlanningBoardContext."Action Change Field ID");
+      CLEAR(pPlanningBoardContext."Action Change Field to Decimal");
+      CLEAR(pPlanningBoardContext."Action Change Field to DateTm.");
+      CLEAR(pPlanningBoardContext."Action Change Field to Text");
+      CLEAR(pPlanningBoardContext."Action Change Field Message");
+      CLEAR(pPlanningBoardContext."Action Code");
+    END;
+
+    LOCAL PROCEDURE ParseEvent@9062232(VAR pPlanningBoardContext@9062233 : Record 9062349;pEventTypeText@9062230 : Text;VAR pEventArgument@9062231 : Record 9062730);
+    VAR
+      lArgumentFieldId@9062232 : Integer;
+    BEGIN
+      //DOC NA2016.12 - Parsing event
+      //  <> pPlanningBoardContext: Source / target planning board context
+      //  -> pEventTypeText: Event type text
+      //  <> pEventArgument: Event arguments recordset
+
+      pPlanningBoardContext."Event Type" := EventTypeTextToEventType(pEventTypeText);
+      IF (pEventArgument.FINDSET()) THEN
+      REPEAT
+        lArgumentFieldId := ArgumentNameToFieldId(pEventArgument.Name);
+        CASE (lArgumentFieldId) OF
+          pPlanningBoardContext.FIELDNO("Event Resource ID"):
+            pPlanningBoardContext."Event Resource ID" := XmlTextToInteger(pEventArgument.Value);
+          pPlanningBoardContext.FIELDNO("Event Entry ID"):
+            pPlanningBoardContext."Event Entry ID" := XmlTextToInteger(pEventArgument.Value);
+          pPlanningBoardContext.FIELDNO("Event Start Date"):
+            pPlanningBoardContext."Event Start Date" := XmlTextToDate(pEventArgument.Value);
+          pPlanningBoardContext.FIELDNO("Event Start Time"):
+            pPlanningBoardContext."Event Start Time" := XmlTextToTime(pEventArgument.Value);
+          pPlanningBoardContext.FIELDNO("Event End Date"):
+            pPlanningBoardContext."Event End Date" := XmlTextToDate(pEventArgument.Value);
+          pPlanningBoardContext.FIELDNO("Event End Time"):
+            pPlanningBoardContext."Event End Time" := XmlTextToTime(pEventArgument.Value);
+          pPlanningBoardContext.FIELDNO("Event Menu Table Type"):
+            pPlanningBoardContext."Event Menu Table Type" := XmlTextToInteger(pEventArgument.Value);
+          pPlanningBoardContext.FIELDNO("Event Menu Item ID"):
+            pPlanningBoardContext."Event Menu Item ID" := XmlTextToInteger(pEventArgument.Value);
+        END;
+      UNTIL (pEventArgument.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE FindAction@9062233(VAR pPlanningBoardContext@9062233 : Record 9062349);
+    VAR
+      lPlanningBoardMenuItem@9062232 : Record 9062343;
+      lPlanningBoardEvent@9062231 : Record 9062345;
+      lPlanningBoardAction@9062230 : Record 9062344;
+    BEGIN
+      //DOC NA2016.12 - Trying to find an action and - if found - copying its field to the context
+      //  <> pPlanningBoardContext: Source / target planning board context
+
+      CLEAR(lPlanningBoardAction);
+
+      IF (pPlanningBoardContext."Event Type" = pPlanningBoardContext."Event Type"::"Menu Item Clicked") THEN
+      BEGIN
+        IF (lPlanningBoardMenuItem.GET(pPlanningBoardContext."Planning Board Code", pPlanningBoardContext."Event Menu Table Type",
+            pPlanningBoardContext."Event Menu Item ID")) THEN
+        BEGIN
+          lPlanningBoardAction."Planning Board Code" := lPlanningBoardMenuItem."Planning Board Code";
+          lPlanningBoardAction."Parent Table" := lPlanningBoardAction."Parent Table"::"Planning Board Menu Item";
+          lPlanningBoardAction."Parent Table Type" := lPlanningBoardMenuItem."Planning Board Table Type";
+          lPlanningBoardAction."Parent ID" := lPlanningBoardMenuItem.ID;
+        END;
+      END
+      ELSE
+      BEGIN
+        lPlanningBoardEvent.RESET();
+        lPlanningBoardEvent.SETRANGE("Planning Board Code", pPlanningBoardContext."Planning Board Code");
+        lPlanningBoardEvent.SETRANGE("Event Type", pPlanningBoardContext."Event Type");
+        IF (lPlanningBoardEvent.FINDFIRST()) THEN
+        BEGIN
+          lPlanningBoardAction."Planning Board Code" := lPlanningBoardEvent."Planning Board Code";
+          lPlanningBoardAction."Parent Table" := lPlanningBoardAction."Parent Table"::"Planning Board Event";
+          lPlanningBoardAction."Parent ID" := lPlanningBoardEvent.ID;
+        END;
+      END;
+
+      IF (lPlanningBoardAction.GET(lPlanningBoardAction."Planning Board Code", lPlanningBoardAction."Parent Table",
+          lPlanningBoardAction."Parent Table Type", lPlanningBoardAction."Parent ID")) THEN
+      BEGIN
+        pPlanningBoardContext."Action Type" := lPlanningBoardAction."Action Type";
+        pPlanningBoardContext."Action Run Object Type" := lPlanningBoardAction."Run Object Type";
+        pPlanningBoardContext."Action Run Object ID" := lPlanningBoardAction."Run Object ID";
+        pPlanningBoardContext."Action Open Panel Code" := lPlanningBoardAction."Open Panel Code";
+        pPlanningBoardContext."Action Open Pl. Board Code" := lPlanningBoardAction."Open Planning Board Code";
+        pPlanningBoardContext."Action Run Quick Report Code" := lPlanningBoardAction."Run Quick Report Code";
+        pPlanningBoardContext."Action Hyperlink URL" := lPlanningBoardAction."Hyperlink URL";
+        pPlanningBoardContext."Action Change Table ID" := lPlanningBoardAction."Change Table ID";
+        pPlanningBoardContext."Action Change Field Type" := lPlanningBoardAction."Change Field Type";
+        pPlanningBoardContext."Action Change Field ID" := lPlanningBoardAction."Change Field ID";
+        pPlanningBoardContext."Action Change Field to Decimal" := lPlanningBoardAction."Change Field to Decimal";
+        pPlanningBoardContext."Action Change Field to DateTm." := lPlanningBoardAction."Change Field to DateTime";
+        pPlanningBoardContext."Action Change Field to Text" := lPlanningBoardAction."Change Field to Text";
+        pPlanningBoardContext."Action Change Field Message" := lPlanningBoardAction."Change Field Message";
+        pPlanningBoardContext."Action Code" := lPlanningBoardAction."Action Code";
+      END;
+    END;
+
+    LOCAL PROCEDURE ExecuteAction@9062235(VAR pPlanningBoardContext@9062230 : Record 9062349) : Text;
+    VAR
+      lResult@1000000001 : Boolean;
+      lErrorMessage@1000000000 : Text;
+    BEGIN
+      //DOC NA2016.12 - Executing action
+      //  <> pPlanningBoardContext: Source / target planning board context
+      //  <- Error message
+
+      CLEAR(pPlanningBoardContext."Action Handled");
+      CLEAR(pPlanningBoardContext."Force Update");
+      CLEAR(pPlanningBoardContext."Update Control");
+      CLEARLASTERROR();
+      CLEAR(lResult);
+      CLEAR(lErrorMessage);
+
+      IF (PlanningBoardHeader."Action Handling Codeunit ID" <> 0) THEN
+      BEGIN
+        lResult := CODEUNIT.RUN(PlanningBoardHeader."Action Handling Codeunit ID", pPlanningBoardContext);
+        IF ( NOT (lResult)) THEN
+          lErrorMessage := GETLASTERRORTEXT();
+      END
+      ELSE
+        lResult := TRUE;
+
+      IF ((lResult) AND ( NOT (pPlanningBoardContext."Action Handled"))) THEN
+      BEGIN
+        lResult := CODEUNIT.RUN(CODEUNIT::"Planning Board Action Handling", pPlanningBoardContext);
+        IF ( NOT (lResult)) THEN
+          lErrorMessage := GETLASTERRORTEXT();
+      END;
+
+      EXIT(lErrorMessage);
+    END;
+
+    LOCAL PROCEDURE "--- Conversions ---"@9062270();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE EventTypeTextToEventType@9062236(pEventTypeText@9062230 : Text) : Integer;
+    VAR
+      lPlanningBoardContext@9062231 : Record 9062349;
+    BEGIN
+      //DOC NA2016.12 - Converting event type text to event type
+      //  -> pEventTypeText: Event type text
+      //  <- Event type
+
+      pEventTypeText := DELCHR(LOWERCASE(pEventTypeText), '<=>', ' ');
+
+      CASE (pEventTypeText) OF
+        'entrycloned', 'entclo':
+          EXIT(lPlanningBoardContext."Event Type"::"Entry Cloned");
+        'entrydoubleclicked', 'entdoucli':
+          EXIT(lPlanningBoardContext."Event Type"::"Entry Double-Clicked");
+        'entrydropped', 'entdro':
+          EXIT(lPlanningBoardContext."Event Type"::"Entry Dropped");
+        'entryresized', 'entres':
+          EXIT(lPlanningBoardContext."Event Type"::"Entry Resized");
+        'menuitemclicked', 'menitecli':
+          EXIT(lPlanningBoardContext."Event Type"::"Menu Item Clicked");
+        'resourcedoubleclicked', 'resdoucli':
+          EXIT(lPlanningBoardContext."Event Type"::"Resource Double-Clicked");
+      END;
+
+      EXIT(lPlanningBoardContext."Event Type"::" ");
+    END;
+
+    LOCAL PROCEDURE ArgumentNameToFieldId@9062244(pArgumentName@9062230 : Text) : Integer;
+    VAR
+      lPlanningBoardContext@9062231 : Record 9062349;
+    BEGIN
+      //DOC NA2016.12 - Converting argument name to field ID
+      //  -> pArgumentName: The argument name
+      //  <- Field ID (or zero if no match found)
+
+      pArgumentName := DELCHR(LOWERCASE(pArgumentName), '<=>', ' ');
+
+      CASE (pArgumentName) OF
+        'resourceid', 'resid':
+          EXIT(lPlanningBoardContext.FIELDNO("Event Resource ID"));
+        'entryid', 'entid':
+          EXIT(lPlanningBoardContext.FIELDNO("Event Entry ID"));
+        'startdate', 'stadat':
+          EXIT(lPlanningBoardContext.FIELDNO("Event Start Date"));
+        'starttime', 'statim':
+          EXIT(lPlanningBoardContext.FIELDNO("Event Start Time"));
+        'enddate', 'enddat':
+          EXIT(lPlanningBoardContext.FIELDNO("Event End Date"));
+        'endtime', 'endtim':
+          EXIT(lPlanningBoardContext.FIELDNO("Event End Time"));
+        'menutabletype', 'mentabtyp':
+          EXIT(lPlanningBoardContext.FIELDNO("Event Menu Table Type"));
+        'menuitemid', 'meniteid':
+          EXIT(lPlanningBoardContext.FIELDNO("Event Menu Item ID"));
+      END;
+
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@9062269();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE XmlTextToInteger@9062256(pText@9062230 : Text) : Integer;
+    VAR
+      lInteger@9062231 : Integer;
+    BEGIN
+      //DOC NA2016.12 - Converting XML text to integer
+      //  -> pText: The text
+      //  <- Integer converted or 0 if no conversion possible
+
+      IF ( NOT (EVALUATE(lInteger, pText))) THEN
+        CLEAR(lInteger);
+      EXIT(lInteger);
+    END;
+
+    LOCAL PROCEDURE XmlTextToDate@9062257(pText@9062230 : Text) : Date;
+    VAR
+      lDate@9062231 : Date;
+    BEGIN
+      //DOC NA2016.12 - Converting XML text to date (it comes as YYYY-MM-DDT00:00:00Z)
+      //  -> pText: The text
+      //  <- Date converted or 0D if no conversion possible
+
+      IF ( NOT (TryToConvertToDate(COPYSTR(pText, 1, 4), COPYSTR(pText, 6, 2), COPYSTR(pText, 9, 2), lDate))) THEN
+        CLEAR(lDate);
+      EXIT(lDate);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryToConvertToDate@9062268(pYearText@9062232 : Text;pMonthText@9062231 : Text;pDayText@9062230 : Text;VAR pDate@9062233 : Date);
+    VAR
+      lYear@9062237 : Integer;
+      lMonth@9062236 : Integer;
+      lDay@9062235 : Integer;
+      lDate@9062234 : Date;
+    BEGIN
+      //DOC NA2016.12 - Trying to convert given year text, month text and day text to date
+      //  -> pYearText: Year text
+      //  -> pMonthText: Month text
+      //  -> pDayText: Day text
+      //  <> pDate: Target date
+
+      EVALUATE(lYear, pYearText);
+      EVALUATE(lMonth, pMonthText);
+      EVALUATE(lDay, pDayText);
+
+      pDate := DMY2DATE(lDay, lMonth, lYear);
+    END;
+
+    LOCAL PROCEDURE XmlTextToTime@9062258(pText@9062230 : Text) : Time;
+    VAR
+      lTime@9062231 : Time;
+    BEGIN
+      //DOC NA2016.12 - Converting XML text to time (it comes as 1754-01-01THH:MM:SSZ)
+      //  -> pText: The text
+      //  <- Time converted or 0T if no conversion possible
+
+      IF ( NOT (TryToConvertToTime(COPYSTR(pText, 12, 2), COPYSTR(pText, 15, 2), COPYSTR(pText, 18, 2), lTime))) THEN
+        CLEAR(lTime);
+      EXIT(lTime);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryToConvertToTime@9062278(pHoursText@9062230 : Text;pMinutesText@9062231 : Text;pSecondsText@9062232 : Text;VAR pTime@9062233 : Time);
+    VAR
+      lHours@9062234 : Integer;
+      lMinutes@9062235 : Integer;
+      lSeconds@9062236 : Integer;
+      eNotHours@9062237 : TextConst 'ENU="""%1"" doesn''t represent hours";ENG="""%1"" doesn''t represent hours"';
+      eNotMinutes@9062238 : TextConst 'ENU="""%1"" doesn''t represent minutes";ENG="""%1"" doesn''t represent minutes"';
+      eNotSeconds@9062239 : TextConst 'ENU="""%1"" doesn''t represent seconds";ENG="""%1"" doesn''t represent seconds"';
+    BEGIN
+      //DOC NA2016.12 - Trying to convert hours text, minutes text and seconds text to time
+      //  -> pHoursText: Hours text
+      //  -> pMinutesText: Minutes text
+      //  -> pSecondsText: Seconds text
+      //  <> pTime: Target time
+
+      EVALUATE(lHours, pHoursText);
+      EVALUATE(lMinutes, pMinutesText);
+      EVALUATE(lSeconds, pSecondsText);
+
+      IF ((lHours < 0) OR (lHours > 24)) THEN
+        ERROR(eNotHours, pHoursText);
+      IF ((lMinutes < 0) OR (lMinutes > 59)) THEN
+        ERROR(eNotMinutes, pMinutesText);
+      IF ((lSeconds < 0) OR (lSeconds > 59)) THEN
+        ERROR(eNotSeconds, pSecondsText);
+
+      pTime := 000000T + ((lHours * 60 + lMinutes) * 60 + lSeconds) * 1000;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.12 JH 11/10/2015 - Created
+      //DOC NA2016.14 JH 18/02/2016 - Custom action added
+    }
+    END.
+  }
+}
+

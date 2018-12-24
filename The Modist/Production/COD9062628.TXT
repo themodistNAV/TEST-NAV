@@ -1,0 +1,209 @@
+OBJECT Codeunit 9062628 Tag Actions
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    TableNo=9062761;
+    OnRun=VAR
+            eAddToReqCode@1000000001 : TextConst 'ENU=ADDTOREQ;ENG=ADDTOREQ';
+            eRunWorkflowCode@1000000002 : TextConst 'ENU=RUNWORKFLOW;ENG=RUNWORKFLOW';
+            eError@1000000000 : TextConst 'ENU=Action %1 not found in Codeunit %2;ENG=Action %1 not found in Codeunit %2';
+          BEGIN
+            GetTag(Rec);
+
+            CASE Code OF
+              eAddToReqCode : AddItemsToReqWorksheet(Rec);
+              eRunWorkflowCode : RunWorkFlow(Rec);
+              ELSE
+                ERROR(STRSUBSTNO(eError,Code,"Codeunit Name"));
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Tag@1000000000 : Record 9062492;
+
+    LOCAL PROCEDURE GetTag@1000000001(VAR TagAction@1000000000 : Record 9062761);
+    VAR
+      i@1000000001 : Integer;
+      TagCode@1000000002 : Code[50];
+      TagUserID@1000000003 : Code[50];
+      eTagNotFound@1000000004 : TextConst 'ENU=Tag not found;ENG=Tag not found';
+    BEGIN
+      FOR i := 0 TO 10 DO BEGIN
+        TagAction.FILTERGROUP(i);
+        IF TagAction.GETFILTER(TagAction."Tag Code to Pass") <> '' THEN BEGIN
+          Tag.SETFILTER(Tag.Code,TagAction.GETFILTER(TagAction."Tag Code to Pass"));
+          Tag.SETFILTER(Tag."Table No.",TagAction.GETFILTER(TagAction."Table No. to Pass"));
+          Tag.SETFILTER(Tag."User ID",TagAction.GETFILTER(TagAction."User ID to Pass"));
+          IF Tag.FINDFIRST THEN
+            EXIT;
+        END;
+      END;
+
+      ERROR(eTagNotFound);
+    END;
+
+    LOCAL PROCEDURE AddItemsToReqWorksheet@1000000000(VAR TagAction@1000000000 : Record 9062761);
+    VAR
+      TagEntry@1000000001 : Record 9062493;
+      RequisitionWkshName@1000000002 : Record 245;
+      StrMenuInt@1000000003 : Integer;
+      StrMenuString@1000000004 : Text;
+      RequisitionLine@1000000005 : Record 246;
+      LineNo@1000000006 : Integer;
+      Item@1000000007 : Record 27;
+      ItemsAdded@1000000008 : Integer;
+      ItemsExisting@1000000011 : Integer;
+      ItemsWrongReplen@1000000012 : Integer;
+      ReqJnlManagement@1000000009 : Codeunit 330;
+      TagBatchFound@1000000010 : Boolean;
+      eNoEntries@1000000013 : TextConst 'ENU=No Entries found in Tag %1;ENG=No Entries found in Tag %1';
+      eNew@1000000015 : TextConst 'ENU=New;ENG=New';
+      eStrMenuTitle@1000000014 : TextConst 'ENU=Which Worksheet would you like to add these Items to?;ENG=Which Worksheet would you like to add these Items to?';
+      eFinalMessage@1000000016 : TextConst 'ENU=%1 Items added to Req. Worksheet %2\\(%3 Skipped as already on Worksheet)\(%4 Skipped as Replenishment System not "%5");ENG=%1 Items added to Req. Worksheet %2\\(%3 Skipped as already on Worksheet)\(%4 Skipped as Replenishment System not "%5")';
+    BEGIN
+      TagEntry.SETRANGE(TagEntry."Tag Code",Tag.Code);
+      TagEntry.SETRANGE(TagEntry."Table No.",Tag."Table No.");
+      TagEntry.SETRANGE(TagEntry."User ID",Tag."User ID");
+      IF NOT TagEntry.FINDSET THEN
+        ERROR(STRSUBSTNO(eNoEntries,Tag.Code));
+
+      RequisitionWkshName.SETRANGE(RequisitionWkshName."Template Type",RequisitionWkshName."Template Type"::"Req.");
+      IF RequisitionWkshName.FINDSET THEN BEGIN
+        REPEAT
+          IF StrMenuString <> '' THEN
+            StrMenuString += ',';
+          StrMenuString += RequisitionWkshName.Name;
+
+          IF RequisitionWkshName.Name = COPYSTR(Tag.Code,1,10) THEN
+            TagBatchFound := TRUE;
+        UNTIL RequisitionWkshName.NEXT = 0;
+      END;
+
+      IF NOT TagBatchFound THEN BEGIN
+        IF StrMenuString <> '' THEN
+          StrMenuString += ',';
+        StrMenuString += COPYSTR(Tag.Code,1,10) + ' ' + STRSUBSTNO('(%1)', eNew);
+      END;
+
+      StrMenuInt := STRMENU(StrMenuString,1,eStrMenuTitle);
+
+      IF StrMenuInt = 0 THEN EXIT;
+      IF StrMenuInt > RequisitionWkshName.COUNT THEN BEGIN
+        RequisitionWkshName.INIT;
+        RequisitionWkshName.VALIDATE(RequisitionWkshName."Worksheet Template Name",'REQ');
+        RequisitionWkshName.VALIDATE(RequisitionWkshName.Name,COPYSTR(Tag.Code,1,10));
+        IF Tag.Description <> '' THEN
+          RequisitionWkshName.VALIDATE(RequisitionWkshName.Description,Tag.Description)
+        ELSE
+          RequisitionWkshName.VALIDATE(RequisitionWkshName.Description,Tag.Name);
+        RequisitionWkshName.INSERT(TRUE);
+      END ELSE BEGIN
+        RequisitionWkshName.FINDFIRST;
+        RequisitionWkshName.NEXT(StrMenuInt-1);
+      END;
+
+      RequisitionLine.SETRANGE(RequisitionLine."Worksheet Template Name",RequisitionWkshName."Worksheet Template Name");
+      RequisitionLine.SETRANGE(RequisitionLine."Journal Batch Name",RequisitionWkshName.Name);
+      IF RequisitionLine.FINDLAST THEN
+        LineNo := RequisitionLine."Line No."
+      ELSE
+        LineNo := 0;
+
+      REPEAT
+        Item.SETPOSITION(TagEntry."Position Text");
+        Item.GET(Item.RECORDID);
+
+        IF Item."Replenishment System" = Item."Replenishment System"::Purchase THEN BEGIN
+
+          RequisitionLine.SETRANGE(RequisitionLine."Worksheet Template Name",RequisitionWkshName."Worksheet Template Name");
+          RequisitionLine.SETRANGE(RequisitionLine."Journal Batch Name",RequisitionWkshName.Name);
+          RequisitionLine.SETRANGE(RequisitionLine.Type,RequisitionLine.Type::Item);
+          RequisitionLine.SETRANGE(RequisitionLine."No.", Item."No.");
+          IF NOT RequisitionLine.FINDFIRST THEN BEGIN
+            LineNo += 10000;
+            RequisitionLine.INIT;
+            RequisitionLine.VALIDATE(RequisitionLine."Worksheet Template Name",RequisitionWkshName."Worksheet Template Name");
+            RequisitionLine.VALIDATE(RequisitionLine."Journal Batch Name",RequisitionWkshName.Name);
+            RequisitionLine.VALIDATE(RequisitionLine."Line No.",LineNo);
+            RequisitionLine.VALIDATE(RequisitionLine.Type,RequisitionLine.Type::Item);
+            RequisitionLine.VALIDATE(RequisitionLine."No.", Item."No.");
+            RequisitionLine.VALIDATE(RequisitionLine.Quantity,Item."Reorder Quantity");
+            RequisitionLine.VALIDATE(RequisitionLine."Vendor No.",Item."Vendor No.");
+            RequisitionLine.INSERT(TRUE);
+
+            ItemsAdded += 1;
+          END ELSE
+            ItemsExisting += 1;
+        END ELSE
+          ItemsWrongReplen += 1;
+      UNTIL TagEntry.NEXT = 0;
+
+      MESSAGE(eFinalMessage,ItemsAdded,RequisitionWkshName.Name,ItemsExisting,ItemsWrongReplen,Item."Replenishment System"::Purchase);
+
+      ReqJnlManagement.TemplateSelectionFromBatch(RequisitionWkshName);
+    END;
+
+    LOCAL PROCEDURE RunWorkFlow@1000000002(VAR TagAction@1000000000 : Record 9062761);
+    VAR
+      TagEntry@1000000001 : Record 9062493;
+      LineNo@1000000006 : Integer;
+      Item@1000000007 : Record 27;
+      ItemsAdded@1000000008 : Integer;
+      ItemsExisting@1000000011 : Integer;
+      EnhancedWorkflow@1000000002 : Record 9062258;
+      WorkFlowInt@1000000004 : Codeunit 9062262;
+      EnhancedWorkflow2@1000000005 : Record 9062258;
+      Act@1000000010 : Action;
+      WorkFlowList@1000000009 : Page 9062283;
+      WorkFlowList2@1000000003 : Page 9063133;
+      eNoEntries@1000000012 : TextConst 'ENU=No Entries found in Tag %1;ENG=No Entries found in Tag %1';
+    BEGIN
+      TagEntry.SETRANGE(TagEntry."Tag Code",Tag.Code);
+      TagEntry.SETRANGE(TagEntry."Table No.",Tag."Table No.");
+      TagEntry.SETRANGE(TagEntry."User ID",Tag."User ID");
+      IF NOT TagEntry.FINDSET THEN
+        ERROR(STRSUBSTNO(eNoEntries,Tag.Code));
+
+      EnhancedWorkflow.SETRANGE(EnhancedWorkflow."Table ID",Tag."Table No.");
+
+      IF EnhancedWorkflow.FINDSET THEN
+          BEGIN
+            CLEAR(WorkFlowList2);
+
+            WorkFlowList2.SETTABLEVIEW(EnhancedWorkflow);
+            WorkFlowList2.SETRECORD(EnhancedWorkflow);
+            WorkFlowList2.EDITABLE(FALSE);
+            WorkFlowList2.LOOKUPMODE(TRUE);
+
+            Act:=WorkFlowList2.RUNMODAL();
+            //This needs to be modifed to check it was lookup ok
+
+            WorkFlowList2.GETRECORD(EnhancedWorkflow2);
+            EnhancedWorkflow2.SETRECFILTER;
+              BEGIN
+              REPEAT
+                //Fisnd the item
+                WorkFlowInt.Simple(EnhancedWorkflow2."No.",TagEntry."Position Text");
+              UNTIL TagEntry.NEXT=0;
+              END;
+          END;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.10 PC 12/10/2016 - Created
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

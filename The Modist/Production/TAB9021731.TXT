@@ -1,0 +1,324 @@
+OBJECT Table 9021731 Web Security User Role
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:50:10 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               DateTimeInsertedModified:=CURRENTDATETIME;
+               UserInsertedModified:=USERID;
+
+               //DOC EC2013.4.63 -
+               LabelRec.GET("Label Code");
+               IF LabelRec."Login Inherits Cust. User Role" THEN BEGIN
+                 //if this is a customer-level user role then ensure all logins inherit this
+                 IF ("Customer No." <> '') AND ("Not For Extract" = TRUE) THEN BEGIN
+                   InternetB2BCustomer.RESET;
+                   InternetB2BCustomer.SETRANGE("Customer No.","Customer No.");
+                   InternetB2BCustomer.SETRANGE("Label Code","Label Code");
+                   IF InternetB2BCustomer.FIND('-') THEN
+                   REPEAT
+                     WebSecUserRole.RESET;
+                     WebSecUserRole."Internet Customer No." := InternetB2BCustomer."No.";
+                     WebSecUserRole."Label Code" := InternetB2BCustomer."Label Code";
+                     WebSecUserRole."Web Security Role" := "Web Security Role";
+                     WebSecUserRole."User Type" := WebSecUserRole."User Type"::B2B;
+                     WebSecUserRole.Comment := 'Inherited from Customer Role';
+                     WebSecUserRole."Auto Entered Exclude Role Code" := "Auto Entered Exclude Role Code"; //DOC EC2013.4.63 GW added
+                     IF WebSecUserRole.INSERT(TRUE) THEN;
+                   UNTIL InternetB2BCustomer.NEXT = 0;
+                 END;
+                 //MQ LM4.2.3 SB140508 -
+                 IF ("Label Code" = 'LM') AND ("Customer No." <> '') AND ("Not For Extract" = TRUE) THEN
+                     InsertCustomerItemAvail;
+                 //MQ LM4.2.3 SB140508 +
+               END ELSE
+                 IF "Customer No." <> '' THEN
+                   ERROR(Text002,LabelRec.FIELDCAPTION("Login Inherits Cust. User Role"));
+               //DOC EC2013.4.63 +
+             END;
+
+    OnModify=BEGIN
+               DateTimeInsertedModified:=CURRENTDATETIME;
+               UserInsertedModified:=USERID;
+             END;
+
+    OnDelete=BEGIN
+               //DOC EC2013.4.60 -
+               WebSecUserRole.RESET;
+               WebSecUserRole.SETRANGE("Internet Customer No.","Internet Customer No.");
+               WebSecUserRole.SETRANGE("Label Code","Label Code");
+               WebSecUserRole.SETRANGE("Auto Entered Exclude Role Code","Web Security Role");
+               WebSecUserRole.SETRANGE("Customer No.","Customer No."); //DOC EC2013.4.63 GW added
+               IF WebSecUserRole.FIND('-') THEN
+               REPEAT
+                 WebSecUserRole1 := WebSecUserRole;
+                 WebSecUserRole1.DELETE(TRUE); //DOC EC2013.4.63 GW made TRUE
+               UNTIL WebSecUserRole.NEXT = 0;
+
+               WebSecUserRole.RESET;
+               WebSecUserRole.SETRANGE("Internet Customer No.","Internet Customer No.");
+               WebSecUserRole.SETRANGE("Label Code","Label Code");
+               WebSecUserRole.SETFILTER("Web Security Role",'<>%1',"Web Security Role");
+               //DOC EC2013.4.63 WebSecUserRole.SETFILTER("Auto Entered Exclude Role Code",'%1','');
+               WebSecUserRole.SETFILTER("Auto Entered Exclude Role Code",'%1',"Auto Entered Exclude Role Code");  //DOC EC2013.4.63
+
+               IF WebSecUserRole.FINDFIRST THEN BEGIN
+                 FoundExcludedRole := FALSE;
+                 WebSecRole.RESET;
+                 WebSecRole.SETRANGE("Label Code","Label Code");
+                 WebSecRole.SETFILTER(Code,'<>%1',"Web Security Role");
+                 WebSecRole.SETFILTER("Excluded Role",'<>%1','');
+                 IF WebSecRole.FIND('-') THEN
+                 REPEAT
+                   IF WebSecUserRole.GET("Internet Customer No.","Label Code",WebSecRole.Code) THEN BEGIN
+                     FoundExcludedRole := TRUE;
+                   END;
+                 UNTIL WebSecRole.NEXT = 0;
+
+                 IF FoundExcludedRole = FALSE THEN BEGIN
+                   WebSecRole.RESET;
+                   WebSecRole.SETRANGE("Label Code","Label Code");
+                   WebSecRole.SETFILTER(Code,'<>%1',WebSecUserRole."Web Security Role");
+                   WebSecRole.SETFILTER("Excluded Role",'<>%1','');
+                   IF WebSecRole.FIND('-') THEN REPEAT
+                     IF NOT WebSecUserRole1.GET("Internet Customer No.","Label Code",
+                                               WebSecRole."Excluded Role") THEN BEGIN
+                       CLEAR(WebSecUserRole1);
+                       WebSecUserRole1.INIT;
+                       WebSecUserRole1."Internet Customer No." := "Internet Customer No.";
+                       WebSecUserRole1."Label Code" := "Label Code";
+                       WebSecUserRole1."Web Security Role" := WebSecRole."Excluded Role";
+                       WebSecUserRole1."Auto Entered Exclude Role Code" := WebSecUserRole."Web Security Role";
+                       WebSecUserRole1."User Type" := WebSecUserRole."User Type";
+                       WebSecUserRole1."Customer No." := "Customer No.";  //DOC EC2013.4.63 added this line
+                       WebSecUserRole1."Not For Extract" := "Not For Extract";  //DOC EC2013.4.63 added this line
+                       WebSecUserRole1.INSERT(TRUE);
+                     END;
+                   UNTIL WebSecRole.NEXT = 0;
+                 END;
+               END;
+               //DOC EC2013.4.60 +
+
+               //DOC EC2013.4.63 -
+               LabelRec.GET("Label Code");
+               IF LabelRec."Login Inherits Cust. User Role" THEN BEGIN
+                 //if this is a customer-level user role then ensure all logins have it removed
+                 IF ("Customer No." <> '') AND ("Not For Extract" = TRUE) THEN BEGIN
+                   InternetB2BCustomer.RESET;
+                   InternetB2BCustomer.SETRANGE("Customer No.","Customer No.");
+                   InternetB2BCustomer.SETRANGE("Label Code","Label Code");
+                   IF InternetB2BCustomer.FIND('-') THEN
+                   REPEAT
+                     WebSecUserRole.RESET;
+                     WebSecUserRole.SETRANGE("Internet Customer No.",InternetB2BCustomer."No.");
+                     WebSecUserRole.SETRANGE("Label Code",InternetB2BCustomer."Label Code");
+                     WebSecUserRole.SETRANGE("Web Security Role","Web Security Role");
+                     WebSecUserRole.SETRANGE("User Type",WebSecUserRole."User Type"::B2B);
+                     WebSecUserRole.DELETEALL(TRUE); //DOC EC2013.4.63 GW made TRUE
+                   UNTIL InternetB2BCustomer.NEXT = 0;
+                 END;
+                 IF ("Label Code" = 'LM') AND ("Customer No." <> '') AND ("Not For Extract" = TRUE) THEN
+                   DeleteCustomerItemAvail;
+               END;
+               //DOC EC2013.4.63 +
+             END;
+
+    OnRename=BEGIN
+               ERROR(Text000,TABLECAPTION);
+             END;
+
+    CaptionML=[ENU=Web Security User Role;
+               ENG=Web Security User Role];
+    LookupPageID=Page9021736;
+    DrillDownPageID=Page9021736;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Internet Customer No.;Text38       ;CaptionML=[ENU=Internet Customer No.;
+                                                              ENG=Internet Customer No.];
+                                                   NotBlank=Yes }
+    { 5   ;   ;Web Security Role   ;Code20        ;TableRelation="Web Security Role".Code WHERE (Label Code=FIELD(Label Code));
+                                                   OnValidate=BEGIN
+                                                                //IF "Customer No." = '' THEN BEGIN   //DOC EC2013.4.63
+                                                                //DOC EC2013.4.60 -
+                                                                WebSecRole.RESET;
+                                                                WebSecRole.SETRANGE("Label Code","Label Code");
+                                                                WebSecRole.SETRANGE("Excluded Role","Web Security Role");
+                                                                IF WebSecRole.FINDFIRST THEN
+                                                                  ERROR(Text001);
+
+                                                                WebSecRole.GET("Label Code","Web Security Role");
+                                                                IF WebSecRole."Excluded Role" <> '' THEN BEGIN
+                                                                  IF WebSecUserRole.GET("Internet Customer No.","Label Code",WebSecRole."Excluded Role") THEN
+                                                                    WebSecUserRole.DELETE(TRUE); //DOC EC2013.4.63
+                                                                END ELSE BEGIN
+                                                                  FoundExcludedRole := FALSE;
+                                                                  WebSecRole.RESET;
+                                                                  WebSecRole.SETRANGE("Label Code","Label Code");
+                                                                  WebSecRole.SETFILTER(Code,'<>%1',"Web Security Role");
+                                                                  WebSecRole.SETFILTER("Excluded Role",'<>%1','');
+                                                                  IF WebSecRole.FIND('-') THEN
+                                                                  REPEAT
+                                                                    IF WebSecUserRole.GET("Internet Customer No.","Label Code",WebSecRole.Code) THEN
+                                                                      FoundExcludedRole := TRUE;
+                                                                  UNTIL WebSecRole.NEXT = 0;
+
+                                                                  IF FoundExcludedRole = FALSE THEN BEGIN
+                                                                    WebSecRole.RESET;
+                                                                    WebSecRole.SETRANGE("Label Code","Label Code");
+                                                                    WebSecRole.SETFILTER(Code,'<>%1',"Web Security Role");
+                                                                    WebSecRole.SETFILTER("Excluded Role",'<>%1','');
+                                                                    IF WebSecRole.FIND('-') THEN REPEAT
+                                                                      IF NOT WebSecUserRole.GET("Internet Customer No.","Label Code",
+                                                                                                WebSecRole."Excluded Role") THEN BEGIN
+                                                                        CLEAR(WebSecUserRole);
+                                                                        WebSecUserRole.INIT;
+                                                                        WebSecUserRole."Internet Customer No." := "Internet Customer No.";
+                                                                        WebSecUserRole."Label Code" := "Label Code";
+                                                                        WebSecUserRole."Web Security Role" := WebSecRole."Excluded Role";
+                                                                        WebSecUserRole."Auto Entered Exclude Role Code" := "Web Security Role";
+                                                                        WebSecUserRole."User Type" := "User Type";  //DOC EC2013.4.63 added this line
+                                                                        WebSecUserRole."Customer No." := "Customer No.";  //DOC EC2013.4.63 added this line
+                                                                        WebSecUserRole."Not For Extract" := "Not For Extract";  //DOC EC2013.4.63 added this line
+                                                                        WebSecUserRole.INSERT(TRUE);
+                                                                      END;
+                                                                    UNTIL WebSecRole.NEXT = 0;
+                                                                  END;
+                                                                END;
+                                                                //DOC EC2013.4.60 +
+
+                                                                //END; //DOC EC2013.4.63
+                                                              END;
+
+                                                   CaptionML=[ENU=Web Security Role;
+                                                              ENG=Web Security Role];
+                                                   NotBlank=Yes }
+    { 10  ;   ;Label Code          ;Code10        ;TableRelation=Label;
+                                                   CaptionML=[ENU=Label Code;
+                                                              ENG=Label Code] }
+    { 15  ;   ;User Type           ;Option        ;OnValidate=BEGIN
+                                                                WebSecUserRole.RESET;
+                                                                WebSecUserRole.SETRANGE("Internet Customer No.","Internet Customer No.");
+                                                                WebSecUserRole.SETRANGE("Label Code","Label Code");
+                                                                WebSecUserRole.SETRANGE("Auto Entered Exclude Role Code","Web Security Role");
+                                                                IF WebSecUserRole.FIND('-') THEN
+                                                                REPEAT
+                                                                  WebSecUserRole."User Type" := "User Type";
+                                                                  WebSecUserRole.MODIFY;
+                                                                UNTIL WebSecUserRole.NEXT = 0;
+                                                              END;
+
+                                                   CaptionML=[ENU=User Type;
+                                                              ENG=User Type];
+                                                   OptionCaptionML=[ENU=B2C,B2B;
+                                                                    ENG=B2C,B2B];
+                                                   OptionString=B2C,B2B }
+    { 20  ;   ;Comment             ;Text250       ;CaptionML=[ENU=Comment;
+                                                              ENG=Comment] }
+    { 30  ;   ;Contact Name        ;Text50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("Internet Customers".Contact WHERE (No.=FIELD(Internet Customer No.)));
+                                                   CaptionML=[ENU=Contact Name;
+                                                              ENG=Contact Name];
+                                                   Editable=No }
+    { 40  ;   ;DateTimeInsertedModified;DateTime  ;CaptionML=[ENU=DateTimeInsertedModified;
+                                                              ENG=DateTimeInsertedModified];
+                                                   Editable=No }
+    { 41  ;   ;UserInsertedModified;Code40        ;CaptionML=[ENU=UserInsertedModified;
+                                                              ENG=UserInsertedModified];
+                                                   Description=MQ 10/01/2014 - GW140110 from C20;
+                                                   Editable=No }
+    { 42  ;   ;Auto Entered Exclude Role Code;Code20;
+                                                   TableRelation="Web Security Role".Code WHERE (Label Code=FIELD(Label Code));
+                                                   CaptionML=[ENU=Auto Entered Exclude Role Code;
+                                                              ENG=Auto Entered Exclude Role Code] }
+    { 50  ;   ;Customer No.        ;Code20        ;TableRelation=Customer;
+                                                   CaptionML=[ENU=Customer No.;
+                                                              ENG=Customer No.];
+                                                   Description=SB140508 }
+    { 52  ;   ;Not For Extract     ;Boolean       ;CaptionML=[ENU=Not For Extract;
+                                                              ENG=Not For Extract];
+                                                   Description=SB140508 }
+  }
+  KEYS
+  {
+    {    ;Internet Customer No.,Label Code,Web Security Role;
+                                                   Clustered=Yes }
+    {    ;Customer No.                             }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      Text000@1190000005 : TextConst 'ENU=You can not rename a %1.;ENG=You can not rename a %1.';
+      WebSecRole@1000000000 : Record 9021730;
+      Text001@1000000001 : TextConst 'ENU=You cannot add someone to a Web Security Role that is an excluded role. (1);ENG=You cannot add someone to a Web Security Role that is an excluded role. (1)';
+      WebSecUserRole@1000000002 : Record 9021731;
+      WebSecUserRole1@1000000003 : Record 9021731;
+      LabelRec@1000000006 : Record 9021618;
+      InternetB2BCustomer@1000000005 : Record 9021643;
+      CustItemAvail@1000000008 : Record 9021707;
+      Item@1000000007 : Record 27;
+      FoundExcludedRole@1000000009 : Boolean;
+      Text002@1000000004 : TextConst 'ENU=You cannot do this unless the Label %1 is TRUE. (2);ENG=You cannot do this unless the Label %1 is TRUE. (2)';
+
+    PROCEDURE InsertCustomerItemAvail@1000000000();
+    BEGIN
+      //MQ LM4.2.3 SB140508 - currently only used by LM so got LM specific filters
+      Item.RESET;
+      Item.SETFILTER("Inventory Posting Group",'%1','FP');
+      Item.SETRANGE("Gen. Prod. Posting Group","Web Security Role");
+      IF Item.FIND('-') THEN BEGIN
+        REPEAT
+          CLEAR(CustItemAvail);
+          CustItemAvail.INIT;
+          CustItemAvail."Customer Relationship Type" := CustItemAvail."Customer Relationship Type"::"Customer No";
+          CustItemAvail."Customer Relationship No." := "Customer No.";
+          CustItemAvail."Item Relationship Type" := CustItemAvail."Item Relationship Type"::"Item No.";
+          CustItemAvail."Item Relationship No." := Item."No.";
+          CustItemAvail."Buy Button State" := CustItemAvail."Buy Button State"::"View and Buy";
+          IF CustItemAvail.INSERT THEN;
+        UNTIL Item.NEXT = 0;
+      END;
+      //MQ LM4.2.3 SB140508 +
+    END;
+
+    PROCEDURE DeleteCustomerItemAvail@1000000002();
+    BEGIN
+      //MQ LM4.2.3 SB140508 - currently only used by LM so got LM specific filters
+      Item.RESET;
+      Item.SETFILTER("Inventory Posting Group",'%1','FP');
+      Item.SETRANGE("Gen. Prod. Posting Group","Web Security Role");
+      IF Item.FIND('-') THEN BEGIN
+        REPEAT
+          CustItemAvail.RESET;
+          CustItemAvail.SETRANGE("Customer Relationship Type",CustItemAvail."Customer Relationship Type"::"Customer No");
+          CustItemAvail.SETRANGE("Customer Relationship No.","Customer No.");
+          CustItemAvail.SETRANGE("Item Relationship Type",CustItemAvail."Item Relationship Type"::"Item No.");
+          CustItemAvail.SETRANGE("Item Relationship No.",Item."No.");
+          CustItemAvail.DELETEALL;
+        UNTIL Item.NEXT = 0;
+      END;
+      //MQ LM4.2.3 SB140508 +
+    END;
+
+    BEGIN
+    {
+      //DOC EC2009.2.69 MQ 30/09/2011 - GW110930 Key change so can enter User Roles from Roles
+      //DOC EC2013.4.00 MQ 10/01/2014 - GW140110 Made USERID fields C40
+      //DOC EC2013.4.60 MQ 12/03/2014 - GW140312 Auto add Excluded Security Roles
+      //DOC EC2013.4.63 SB 08/04/2014 - SB140508 Added fields 50 & 52 to be able to define security roles at customer level
+      //DOC EC2013.4.63 SB 08/04/2014 - Code in OnInsert & OnDelete to ensure that if the role being inserted/deleted is at the customer level then logins inherit the role
+      //DOC EC2013.4.63 MQ 27/05/2014 - GW140527 Enhanced and added secondary key on Customer No.; Code in Web Security Role
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,375 @@
+OBJECT Codeunit 9021629 Overnight FunctionReference
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:19 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            {
+            UpdatePostingDates();              //Updating Posting Dates
+            COMMIT;
+
+            CloseExpiredVoucherEntries();      //Closing Expired Voucher Entries
+            COMMIT;
+
+            CloseExpiredLoyaltyPointEntry();   //Closing Expired Loyalty Point Entries
+            COMMIT;
+
+            DeleteReservationEntries();        //Closing Unwanted Reservation Entries
+            COMMIT;
+
+            DeleteTrackingSpecEntries();       //Closing Unwanted Tracking Spec. Entries
+            COMMIT;
+
+            DeleteJobLogEntries();             //Deleting Job Log Entries if over no. of days
+            COMMIT;
+
+            DeleteEmptyPickNotes();            //Deleting Empty Pick Notes
+            COMMIT;
+
+            UpdateAnalysisReports();           //Updating Analysis Reports
+            COMMIT;
+
+            UpdateAnalysisViews();             //Updating Analysis Views
+            COMMIT;
+
+            DeleteSurplusReservEntry();        //Deleting Surplus Item Ledger Entries & Sales Line (for Order type only)
+            COMMIT;
+            }
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SitemapMgmt@1000000000 : Codeunit 9021617;
+      Text001@1000000006 : TextConst 'ENU=Closing Expired Voucher Entries #1###############;ENG=Closing Expired Voucher Entries #1###############';
+      Text002@1000000005 : TextConst 'ENU=Closing Expired Loyalty Point Entries #1###############;ENG=Closing Expired Loyalty Point Entries #1###############';
+      Text003@1000000004 : TextConst 'ENU=Deleting Unwanted Reservation Entries #1###############;ENG=Deleting Unwanted Reservation Entries #1###############';
+      Text004@1000000003 : TextConst 'ENU=Deleting Unwanted Tracking Spec. Entries #1###############;ENG=Deleting Unwanted Tracking Spec. Entries #1###############';
+      Text005@1000000002 : TextConst 'ENU=Deleting Unwanted Surplus Reserve Entries #1###############;ENG=Deleting Unwanted Surplus Reserve Entries #1###############';
+      Window@1000000007 : Dialog;
+
+    PROCEDURE UpdatePostingDates@1040011();
+    VAR
+      GLSetup@1040003 : Record 98;
+      UserSetup@1040000 : Record 91;
+      MonthStartDate@1040001 : Date;
+      MonthEndDate@1040002 : Date;
+    BEGIN
+      MonthEndDate := CALCDATE('<CM>',TODAY);
+      MonthStartDate := CALCDATE('<-1M+CM+1D>',MonthEndDate);
+      {
+      UserSetup.RESET;
+      IF UserSetup.FINDSET() THEN REPEAT
+        IF NOT UserSetup."Do Not Update Start/End Date" THEN BEGIN
+          UserSetup."Allow Posting From" := MonthStartDate;
+          UserSetup."Allow Posting To" := MonthEndDate;
+          UserSetup.MODIFY;
+        END;
+      UNTIL UserSetup.NEXT = 0;
+      }
+      GLSetup.GET;
+      GLSetup."Allow Posting From" :=   MonthStartDate;
+      GLSetup."Allow Posting To" := MonthEndDate;
+      GLSetup.MODIFY;
+    END;
+
+    PROCEDURE CloseExpiredVoucherEntries@1040000();
+    VAR
+      VoucherEntries@1040000 : Record 9021672;
+    BEGIN
+      IF GUIALLOWED THEN
+        Window.OPEN(Text001);
+
+      VoucherEntries.RESET;
+      VoucherEntries.SETCURRENTKEY(Open);
+      VoucherEntries.SETRANGE(Open,TRUE);
+      IF VoucherEntries.FINDSET() THEN REPEAT
+        IF GUIALLOWED THEN
+          Window.UPDATE(1,VoucherEntries."Entry No.");
+
+        IF VoucherEntries."Expiry Date" < TODAY THEN BEGIN
+          VoucherEntries.VALIDATE(Expired,TRUE);
+          VoucherEntries.VALIDATE("Remaining Amount",0);
+        END;
+        IF VoucherEntries."Remaining Amount" = 0 THEN BEGIN
+          VoucherEntries.VALIDATE(Open,FALSE);
+          VoucherEntries.MODIFY(TRUE);  //GW 101025 changed to MODIFY(TRUE)
+        END;
+      UNTIL VoucherEntries.NEXT = 0;
+
+      IF GUIALLOWED THEN
+        Window.CLOSE;
+    END;
+
+    PROCEDURE CloseExpiredLoyaltyPointEntry@1040001();
+    VAR
+      LoyaltyPointEntries@1040000 : Record 9021674;
+    BEGIN
+      IF GUIALLOWED THEN
+        Window.OPEN(Text002);
+      {
+      LoyaltyPointEntries.RESET;
+      LoyaltyPointEntries.SETCURRENTKEY(Open);
+      LoyaltyPointEntries.SETRANGE(Open,TRUE);
+      IF LoyaltyPointEntries.FINDSET() THEN REPEAT
+        IF GUIALLOWED THEN
+          Window.UPDATE(1,LoyaltyPointEntries."Entry No.");
+        IF LoyaltyPointEntries."Expiry Date" < TODAY THEN BEGIN
+          LoyaltyPointEntries.VALIDATE(Expired,TRUE);
+          LoyaltyPointEntries.VALIDATE("Remaining Points",0);
+        END;
+        IF LoyaltyPointEntries."Remaining Points" = 0 THEN BEGIN
+          LoyaltyPointEntries.VALIDATE(Open,FALSE);
+          LoyaltyPointEntries.MODIFY;
+        END;
+      UNTIL LoyaltyPointEntries.NEXT = 0;
+      }
+      IF GUIALLOWED THEN
+        Window.CLOSE;
+    END;
+
+    PROCEDURE DeleteReservationEntries@1040002();
+    VAR
+      ReservationEnt@1040000 : Record 337;
+      ReservationEnt1@1040001 : Record 337;
+      SalesHrd@1040002 : Record 36;
+      PurchHrd@1040003 : Record 38;
+    BEGIN
+      IF GUIALLOWED THEN
+        Window.OPEN(Text003);
+
+      //Deleting Unwanted Sales Entries
+      ReservationEnt.RESET;
+      ReservationEnt.SETCURRENTKEY("Source ID","Source Ref. No.","Source Type","Source Subtype","Source Batch Name",
+        "Source Prod. Order Line","Reservation Status","Shipment Date","Expected Receipt Date");
+      ReservationEnt.SETRANGE("Source Type",37);
+      IF ReservationEnt.FINDSET() THEN REPEAT
+        IF GUIALLOWED THEN
+          Window.UPDATE(1,ReservationEnt."Entry No.");
+        IF NOT SalesHrd.GET(ReservationEnt."Source Subtype",ReservationEnt."Source ID") THEN BEGIN
+          ReservationEnt1.RESET;
+          ReservationEnt1.SETRANGE("Entry No.",ReservationEnt."Entry No.");
+          ReservationEnt1.DELETEALL;
+        END;
+      UNTIL ReservationEnt.NEXT = 0;
+
+      //Deleting Unwanted Purchase Entries
+      ReservationEnt.RESET;
+      ReservationEnt.SETCURRENTKEY("Source ID","Source Ref. No.","Source Type","Source Subtype","Source Batch Name",
+        "Source Prod. Order Line","Reservation Status","Shipment Date","Expected Receipt Date");
+      ReservationEnt.SETRANGE("Source Type",39);
+      IF ReservationEnt.FINDSET() THEN REPEAT
+        IF GUIALLOWED THEN
+          Window.UPDATE(1,ReservationEnt."Entry No.");
+        IF NOT PurchHrd.GET(ReservationEnt."Source Subtype",ReservationEnt."Source ID") THEN BEGIN
+          ReservationEnt1.RESET;
+          ReservationEnt1.SETRANGE("Entry No.",ReservationEnt."Entry No.");
+          ReservationEnt1.DELETEALL;
+        END;
+      UNTIL ReservationEnt.NEXT = 0;
+
+      IF GUIALLOWED THEN
+        Window.CLOSE;
+    END;
+
+    PROCEDURE DeleteTrackingSpecEntries@1040003();
+    VAR
+      TrackSpec@1040000 : Record 336;
+      TrackSpec1@1040001 : Record 336;
+      SalesHrd@1040002 : Record 36;
+      PurchHrd@1040003 : Record 38;
+    BEGIN
+      IF GUIALLOWED THEN
+        Window.OPEN(Text004);
+
+      //Deleting Unwanted Sales Entries
+      TrackSpec.RESET;
+      TrackSpec.SETCURRENTKEY(
+        "Source ID","Source Type","Source Subtype","Source Batch Name","Source Prod. Order Line","Source Ref. No.");
+      TrackSpec.SETRANGE("Source Type",37);
+      IF TrackSpec.FINDSET() THEN REPEAT
+        IF GUIALLOWED THEN
+          Window.UPDATE(1,TrackSpec."Entry No.");
+        IF NOT SalesHrd.GET(TrackSpec."Source Subtype",TrackSpec."Source ID") THEN BEGIN
+          TrackSpec1.RESET;
+          TrackSpec1.SETRANGE("Entry No.",TrackSpec."Entry No.");
+          TrackSpec1.DELETEALL;
+        END;
+      UNTIL TrackSpec.NEXT = 0;
+
+      //Deleting Unwanted Purchase Entries
+      TrackSpec.RESET;
+      TrackSpec.SETCURRENTKEY(
+        "Source ID","Source Type","Source Subtype","Source Batch Name","Source Prod. Order Line","Source Ref. No.");
+      TrackSpec.SETRANGE("Source Type",39);
+      IF TrackSpec.FINDSET() THEN REPEAT
+        IF GUIALLOWED THEN
+          Window.UPDATE(1,TrackSpec."Entry No.");
+        IF NOT PurchHrd.GET(TrackSpec."Source Subtype",TrackSpec."Source ID") THEN BEGIN
+          TrackSpec1.RESET;
+          TrackSpec1.SETRANGE("Entry No.",TrackSpec."Entry No.");
+          TrackSpec1.DELETEALL;
+        END;
+      UNTIL TrackSpec.NEXT = 0;
+
+      IF GUIALLOWED THEN
+        Window.CLOSE;
+    END;
+
+    PROCEDURE DeleteJobLogEntries@1040005();
+    VAR
+      JobQueueSetup@1040000 : Record 470;
+      JobQueueLogEntry@1040001 : Record 474;
+      JobQueueLogEntry1@1040003 : Record 474;
+      DeleteDataFormula@1040002 : DateFormula;
+    BEGIN
+      //Deleting Job Log Entries if older then certain no. of days
+
+      //**************** AK 180209 This function has been commented out as it was creating some problem while deleting records
+      {
+      JobQueueSetup.GET;
+      IF (NOT JobQueueSetup."Job Queue Active") OR (JobQueueSetup."Delete Job Log Entry Over Days" = 0) THEN
+        EXIT;
+
+      EVALUATE(DeleteDataFormula,'-'+FORMAT(JobQueueSetup."Delete Job Log Entry Over Days") + 'D');
+
+      JobQueueLogEntry.LOCKTABLE;
+      JobQueueLogEntry.RESET;
+      IF JobQueueLogEntry.FINDSET THEN REPEAT
+        IF JobQueueLogEntry."End Date/Time" <= CREATEDATETIME(CALCDATE(DeleteDataFormula,TODAY),0T) THEN BEGIN
+          JobQueueLogEntry1 := JobQueueLogEntry;
+          JobQueueLogEntry1.DELETE;
+        END;
+      UNTIL JobQueueLogEntry.NEXT = 0;
+      }
+      //****************- This function has been commented out as it was creating some problem while deleting records
+    END;
+
+    PROCEDURE DeleteEmptyPickNotes@1040017();
+    VAR
+      PickHeader@1040000 : Record 5766;
+      DelPickHeader@1040001 : Record 5766;
+    BEGIN
+      PickHeader.RESET;
+      PickHeader.SETRANGE(PickHeader.Type,PickHeader.Type::"Invt. Pick");
+      IF PickHeader.FINDSET() THEN REPEAT
+        PickHeader.CALCFIELDS("No. of Lines");
+        IF PickHeader."No. of Lines" = 0 THEN BEGIN
+          IF DelPickHeader.GET(PickHeader.Type,PickHeader."No.") THEN BEGIN
+            DelPickHeader.CALCFIELDS("No. of Lines");
+            IF DelPickHeader."No. of Lines" = 0 THEN
+              DelPickHeader.DELETE(TRUE);
+          END
+        END;
+      UNTIL PickHeader.NEXT = 0 ;
+
+      PickHeader.SETRANGE(Type,PickHeader.Type::" ");
+      PickHeader.SETFILTER("No.",'<>%1','');
+      IF PickHeader.FINDSET() THEN REPEAT
+        PickHeader.CALCFIELDS("No. of Lines");
+        IF PickHeader."No. of Lines" = 0 THEN BEGIN
+          IF DelPickHeader.GET(0,PickHeader."No.") THEN BEGIN
+            DelPickHeader.CALCFIELDS("No. of Lines");
+            IF DelPickHeader."No. of Lines" = 0 THEN
+              DelPickHeader.DELETE(TRUE);
+          END
+        END;
+      UNTIL PickHeader.NEXT = 0 ;
+    END;
+
+    PROCEDURE UpdateAnalysisReports@1040006();
+    VAR
+      ItemAnalysisView@1040000 : Record 7152;
+      UpdateItemAnalysisView@1040001 : Codeunit 7150;
+    BEGIN
+      ItemAnalysisView.RESET;
+      ItemAnalysisView.SETRANGE(Blocked,FALSE);
+      IF ItemAnalysisView.FINDSET THEN REPEAT
+        CLEAR(UpdateItemAnalysisView);
+        UpdateItemAnalysisView.RUN(ItemAnalysisView);
+        COMMIT;
+      UNTIL ItemAnalysisView.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateAnalysisViews@1040007();
+    VAR
+      AnalysisView@1040001 : Record 363;
+      UpdateAnalysisView@1040000 : Codeunit 410;
+    BEGIN
+      AnalysisView.RESET;
+      AnalysisView.SETRANGE(Blocked,FALSE);
+      IF AnalysisView.FINDSET THEN REPEAT
+        CLEAR(UpdateAnalysisView);
+        UpdateAnalysisView.RUN(AnalysisView);
+        COMMIT;
+      UNTIL AnalysisView.NEXT = 0;
+    END;
+
+    PROCEDURE DeleteSurplusReservEntry@1040008();
+    VAR
+      ReservationEnt@1040003 : Record 337;
+      ReservEnt1@1040002 : Record 337;
+    BEGIN
+      //AK 200309 -
+      IF GUIALLOWED THEN
+        Window.OPEN(Text005);
+
+      //Deleting Unwanted Surplus Entries for Item Ledger Entry and Sales Line
+      ReservationEnt.RESET;
+      ReservationEnt.SETCURRENTKEY("Source ID","Source Ref. No.","Source Type","Source Subtype","Source Batch Name",
+        "Source Prod. Order Line","Reservation Status","Shipment Date","Expected Receipt Date");
+      ReservationEnt.SETFILTER("Source Type",'%1|%2',32,37);
+      ReservationEnt.SETFILTER("Source Subtype",'%1|%2',0,1);
+      ReservationEnt.SETRANGE("Reservation Status",ReservationEnt."Reservation Status"::Surplus);
+      IF ReservationEnt.FINDSET() THEN REPEAT
+        IF GUIALLOWED THEN
+          Window.UPDATE(1,ReservationEnt."Entry No.");
+        IF NOT ReservEnt1.GET(ReservationEnt."Entry No.",NOT ReservationEnt.Positive) THEN BEGIN
+          IF (ReservEnt1.GET(ReservationEnt."Entry No.",ReservationEnt.Positive)) AND
+            (ReservEnt1."Reservation Status" = ReservEnt1."Reservation Status"::Surplus)
+          THEN
+            ReservEnt1.DELETE;
+        END;
+      UNTIL ReservationEnt.NEXT = 0;
+
+      IF GUIALLOWED THEN
+        Window.CLOSE;
+      //AK 200309 +
+    END;
+
+    PROCEDURE DeleteJobQueueLogEntry@1040013();
+    VAR
+      JobQueueLogEntry@1040000 : Record 474;
+      CompanyRec@1040001 : Record 2000000006;
+    BEGIN
+      //AK 040809 -
+      IF (TIME > 200001T) AND (TIME < 205959T) THEN BEGIN
+        CompanyRec.RESET;
+        IF CompanyRec.FINDSET THEN REPEAT
+          CLEAR(JobQueueLogEntry);
+          JobQueueLogEntry.RESET;
+          JobQueueLogEntry.LOCKTABLE();
+          JobQueueLogEntry.CHANGECOMPANY(CompanyRec.Name);
+          JobQueueLogEntry.SETCURRENTKEY(ID,Status,"End Date/Time");
+          JobQueueLogEntry.SETRANGE("End Date/Time",0DT,CREATEDATETIME(CALCDATE('<-7D>',TODAY),TIME));
+          JobQueueLogEntry.DELETEALL;
+        UNTIL CompanyRec.NEXT = 0;
+      END;
+      //AK 040809 +
+    END;
+
+    BEGIN
+    {
+      //DOC EC2013.3.20 MQ 15/10/2012 - GW121015 Make CalcDate Multilanguage
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,432 @@
+OBJECT Codeunit 9087013 Buying Sheet Purch. Ord. Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/01/17;
+    Time=[ 2:34:38 PM];
+    Modified=Yes;
+    Version List=NS2016.16,M0026,M0027;
+  }
+  PROPERTIES
+  {
+    TableNo=9087020;
+    OnRun=BEGIN
+            UpdatePurchaseOrders(Rec, TRUE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      nSembleSetup@1000000009 : Record 9087000;
+      BuyingSheetHeader@1000000000 : Record 9087020;
+      BuyingSheetLine@1000000001 : Record 9087022;
+      PurchaseHeader@1000000003 : Record 38;
+      PurchaseSummaryLine@1000000006 : Record 9087030;
+      PurchaseLine@1000000004 : Record 39;
+      PurchCommentLine@1000000017 : Record 43;
+      nSembleToolkit@1000000012 : Codeunit 9087000;
+      BuyingSheetStatusManagement@1000000002 : Codeunit 9087007;
+      PurchaseOrderCreated@1000000007 : TEMPORARY Record 38;
+      PurchaseOrderReopened@1000000005 : TEMPORARY Record 38;
+      TnpToolkit@1000000011 : Codeunit 9062230;
+      PurchaseOrderSummaryLineNos@1000000016 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.Dictionary`2";
+      PurchaseOrderLineNos@1000000010 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.Dictionary`2";
+      PurchaseOrderKey@1000000008 : Text;
+      DialogManagement@1000000013 : Codeunit 9062249;
+      DialogIndex@1000000014 : ' ,PurchaseOrders,PurchaseOrderLines';
+      Interaction@1000000015 : Boolean;
+
+    LOCAL PROCEDURE UpdatePurchaseOrders@1000000001(VAR pBuyingSheetHeader@1000000001 : Record 9087020;pInteraction@1000000002 : Boolean) : Boolean;
+    VAR
+      eNotReleased@1000000000 : TextConst 'ENU=Buying sheet "%1" has to be released before updating orders.;ENG=Buying sheet "%1" has to be released before updating orders.';
+      lResult@1000000003 : Boolean;
+    BEGIN
+      //DOC NS2016.16 - Updating purchase orders
+      //  <> pBuyingSheetHeader: Buying sheet header to update purchase orders for
+      //  -> pInteraction: Interaction flag
+      //  <- TRUE = Updated, FALSE = Cancelled
+
+      lResult := FALSE;
+
+      BuyingSheetHeader := pBuyingSheetHeader;
+      Interaction := ((pInteraction) AND (GUIALLOWED()));
+
+      BuyingSheetStatusManagement.Release(BuyingSheetHeader);
+      IF (BuyingSheetHeader.Status = BuyingSheetHeader.Status::Released) THEN
+        lResult := UpdatePurchaseOrdersInternal()
+      ELSE
+        MESSAGE(eNotReleased, BuyingSheetHeader."No.");
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE UpdatePurchaseOrdersInternal@1000000000() : Boolean;
+    VAR
+      eConfirmation@1000000001 : TextConst 'ENU=Do you want to update purchase orders for Buying Sheet "%1"?;ENG=Do you want to update purchase orders for Buying Sheet "%1"?';
+      eFinalMessage@1000000000 : TextConst 'ENU=Purchase orders have been created for Buying Sheet "%1".;ENG=Purchase orders have been created for Buying Sheet "%1".';
+    BEGIN
+      //DOC NS2016.16 - Updating purchase orders
+      //  <- TRUE = Updated, FALSE = Cancelled
+
+      IF (Interaction) THEN
+        IF ( NOT (CONFIRM(eConfirmation, TRUE, BuyingSheetHeader."No."))) THEN
+          EXIT(FALSE);
+
+      IF (Interaction) THEN
+        OpenDialog();
+
+      nSembleSetup.VerifyAndGet();
+
+      ClearBuffers();
+
+      BuyingSheetLine.RESET();
+      BuyingSheetLine.SETRANGE("Buying Sheet No.", BuyingSheetHeader."No.");
+      BuyingSheetLine.SETRANGE("Purchase Order No.", '');
+      IF (BuyingSheetLine.FINDSET(TRUE)) THEN
+      REPEAT
+        IF ((BuyingSheetLine."Purchase Order No." = '') OR (BuyingSheetLine."Purchase Order Line No." = 0)) THEN
+          CreatePurchaseOrder()
+        ELSE
+          UpdatePurchaseOrderLine();
+      UNTIL (BuyingSheetLine.NEXT() = 0);
+
+      IF (Interaction) THEN
+      BEGIN
+        CloseDialog();
+        MESSAGE(eFinalMessage, BuyingSheetHeader."No.");
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ClearBuffers@1000000012();
+    BEGIN
+      //DOC NS2016.16 - Clearing buffers
+
+      PurchaseOrderCreated.RESET();
+      PurchaseOrderCreated.DELETEALL();
+
+      PurchaseOrderReopened.RESET();
+      PurchaseOrderReopened.DELETEALL();
+
+      PurchaseOrderSummaryLineNos := PurchaseOrderSummaryLineNos.Dictionary();
+      PurchaseOrderLineNos := PurchaseOrderLineNos.Dictionary();
+    END;
+
+    LOCAL PROCEDURE CreatePurchaseOrder@1000000005();
+    VAR
+      lBuyingSheetLineVariant@1000000000 : Variant;
+    BEGIN
+      //DOC NS2016.16 - Creating purchase order for the current line
+
+      CreatePurchaseOrderHeader();
+      CreatePurchaseOrderLine();
+
+      CLEAR(nSembleToolkit);
+      nSembleToolkit.SetRecord(BuyingSheetLine);
+      nSembleToolkit.ValidateRecordField(BuyingSheetLine.FIELDNO("Purchase Order No."), PurchaseHeader."No.");
+      nSembleToolkit.ValidateRecordField(BuyingSheetLine.FIELDNO("Purchase Order Line No."), PurchaseLine."Line No.");
+      IF (nSembleToolkit.GetRecord(lBuyingSheetLineVariant)) THEN
+      BEGIN
+        BuyingSheetLine := lBuyingSheetLineVariant;
+        BuyingSheetLine.MODIFY(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreatePurchaseOrderHeader@1000000011();
+    VAR
+      lVendorNo@1000000000 : Code[20];
+      lOrderDate@1000000001 : Date;
+      lCurrencyCode@1000000002 : Code[10];
+      lCurrencyFactor@1000000003 : Decimal;
+      lSeasonCode@1000000004 : Code[20];
+      lSubSeasonCode@1000000005 : Code[20];
+      lLeadTimeCalculation@1000000006 : DateFormula;
+    BEGIN
+      //DOC NS2016.16 - Creating purchase order header
+
+      PurchaseOrderCreated.RESET();
+      IF ( NOT (nSembleSetup."One Purch. Ord. per Buying Sh.")) THEN
+      BEGIN
+        PurchaseOrderCreated.SETRANGE("Buy-from Vendor No.", BuyingSheetLine."Vendor No.");
+        PurchaseOrderCreated.SETRANGE("Order Date", BuyingSheetLine."Order Date");
+        PurchaseOrderCreated.SETRANGE("Currency Code", BuyingSheetLine."Currency Code");
+        PurchaseOrderCreated.SETRANGE("Currency Factor", BuyingSheetLine."Currency Factor");
+        PurchaseOrderCreated.SETRANGE("Season Code", BuyingSheetHeader."Season Code");
+        PurchaseOrderCreated.SETRANGE("Sub-Season Code", BuyingSheetHeader."Sub-Season Code");
+      END;
+      IF (PurchaseOrderCreated.FINDFIRST()) THEN
+        PurchaseHeader := PurchaseOrderCreated
+      ELSE
+      BEGIN
+        IF (nSembleSetup."One Purch. Ord. per Buying Sh.") THEN
+        BEGIN
+          lVendorNo := BuyingSheetHeader."Vendor No.";
+          lOrderDate := BuyingSheetHeader."Order Date";
+          lCurrencyCode := BuyingSheetHeader."Currency Code";
+          lCurrencyFactor := BuyingSheetHeader."Currency Factor";
+          lSeasonCode := BuyingSheetHeader."Season Code";
+          lSubSeasonCode := BuyingSheetHeader."Sub-Season Code";
+          lLeadTimeCalculation := BuyingSheetHeader."Lead Time Calculation";
+        END
+        ELSE
+        BEGIN
+          lVendorNo := BuyingSheetLine."Vendor No.";
+          lOrderDate := BuyingSheetLine."Order Date";
+          lCurrencyCode := BuyingSheetLine."Currency Code";
+          lCurrencyFactor := BuyingSheetLine."Currency Factor";
+          lSeasonCode := BuyingSheetLine."Season Code";
+          lSubSeasonCode := BuyingSheetLine."Sub-Season Code";
+          lLeadTimeCalculation := BuyingSheetLine."Lead Time Calculation";
+        END;
+
+        CLEAR(PurchaseHeader);
+        PurchaseHeader.INIT();
+        PurchaseHeader.VALIDATE("Document Type", PurchaseHeader."Document Type"::Order);
+        PurchaseHeader.INSERT(TRUE);
+        PurchaseHeader.VALIDATE("Buy-from Vendor No.", lVendorNo);
+        PurchaseHeader.VALIDATE("Order Date", lOrderDate);
+        PurchaseHeader.VALIDATE("Document Date", WORKDATE());
+        PurchaseHeader.VALIDATE("Posting Date", WORKDATE());
+        PurchaseHeader.VALIDATE("Currency Code", lCurrencyCode);
+        PurchaseHeader.VALIDATE("Currency Factor", lCurrencyFactor);
+        PurchaseHeader.VALIDATE("Location Code", BuyingSheetHeader."Location Code");
+        PurchaseHeader.VALIDATE("Shipment Method Code", BuyingSheetHeader."Shipment Method Code");
+        PurchaseHeader.VALIDATE("Buying Sheet No.", BuyingSheetHeader."No.");
+        PurchaseHeader.VALIDATE("Season Code", lSeasonCode);
+        PurchaseHeader.VALIDATE("Sub-Season Code", lSubSeasonCode);
+        PurchaseHeader.VALIDATE("Lead Time Calculation", lLeadTimeCalculation);
+        PurchaseHeader.VALIDATE("Payment Terms Code", BuyingSheetHeader."Payment Terms Code"); //DOC M0026 DD 20/10/16 +-
+        PurchaseHeader.VALIDATE("Prepayment %",BuyingSheetHeader."Deposit %");                 //DOC OP9031 M0027
+        PurchaseHeader.MODIFY(TRUE);
+
+        PurchaseOrderCreated := PurchaseHeader;
+        PurchaseOrderCreated.INSERT();
+
+        IF (Interaction) THEN
+          DialogManagement.StepCounter(DialogIndex::PurchaseOrders);
+      END;
+
+      PurchaseOrderKey := FORMAT(PurchaseHeader."Document Type") + PurchaseHeader."No.";
+    END;
+
+    LOCAL PROCEDURE CreatePurchaseOrderLine@1000000003();
+    VAR
+      lLineNo@1000000000 : Integer;
+    BEGIN
+      //DOC NS2016.16 - Creating purchase order line
+
+      UpdatePurchaseOrderSummaryLine();
+
+      PurchaseLine.RESET();
+      PurchaseLine.SETRANGE("Document Type", PurchaseHeader."Document Type");
+      PurchaseLine.SETRANGE("Document No.", PurchaseHeader."No.");
+      PurchaseLine.SETRANGE(Type, PurchaseLine.Type::Item);
+      PurchaseLine.SETRANGE("No.", BuyingSheetLine."Item No.");
+      PurchaseLine.SETRANGE("Variant Code", BuyingSheetLine."Variant Code");
+      IF ( NOT (PurchaseLine.FINDFIRST())) THEN
+      BEGIN
+        IF (PurchaseOrderLineNos.ContainsKey(PurchaseOrderKey)) THEN
+          lLineNo := PurchaseOrderLineNos.Item(PurchaseOrderKey)
+        ELSE
+        BEGIN
+          PurchaseLine.RESET();
+          PurchaseLine.SETRANGE("Document Type", PurchaseHeader."Document Type");
+          PurchaseLine.SETRANGE("Document No.", PurchaseHeader."No.");
+          IF (PurchaseLine.FINDLAST()) THEN
+            lLineNo := PurchaseLine."Line No.";
+        END;
+        lLineNo += 10000;
+        PurchaseOrderLineNos.Item(PurchaseOrderKey, lLineNo);
+
+        CLEAR(PurchaseLine);
+        PurchaseLine.INIT();
+        PurchaseLine.VALIDATE("Document Type", PurchaseHeader."Document Type");
+        PurchaseLine.VALIDATE("Document No.", PurchaseHeader."No.");
+        PurchaseLine.VALIDATE("Line No.", lLineNo);
+        PurchaseLine.VALIDATE("Buy-from Vendor No.", PurchaseHeader."Buy-from Vendor No.");
+        PurchaseLine.VALIDATE(Type, PurchaseLine.Type::Item);
+        PurchaseLine.VALIDATE("No.", BuyingSheetLine."Item No.");
+        PurchaseLine.VALIDATE("Variant Code", BuyingSheetLine."Variant Code");
+        PurchaseLine.INSERT(TRUE);
+        //DOC OP9031 -
+        //Insert Comment
+        PurchCommentLine."Document Type" := PurchaseLine."Document Type";
+        PurchCommentLine."No." := PurchaseLine."Document No.";
+        PurchCommentLine."Document Line No." := PurchaseLine."Line No.";
+        IF NOT PurchCommentLine.FIND('=') THEN BEGIN
+          PurchCommentLine.Date := WORKDATE;
+          PurchCommentLine.Comment := BuyingSheetLine.Comments;
+          PurchCommentLine.INSERT(TRUE);
+        END;
+        //DOC OP9031 +
+      END;
+
+      PurchaseLine.VALIDATE("Location Code", BuyingSheetLine."Location Code");
+      PurchaseLine.VALIDATE(Quantity, BuyingSheetLine.Quantity);
+      PurchaseLine.VALIDATE("Direct Unit Cost", BuyingSheetLine."Direct Unit Cost");
+      PurchaseLine.VALIDATE("Buying Sheet No.", BuyingSheetHeader."No.");
+      PurchaseLine.VALIDATE("Buying Sheet Line No.", BuyingSheetLine."Line No.");
+      PurchaseLine.VALIDATE("Season Code", BuyingSheetLine."Season Code");
+      PurchaseLine.VALIDATE("Sub-Season Code", BuyingSheetLine."Sub-Season Code");
+      PurchaseLine.VALIDATE("Brand Code", BuyingSheetLine."Brand Code");
+      PurchaseLine.VALIDATE("Size Group Code", BuyingSheetLine."Size Group Code");
+      PurchaseLine.VALIDATE("Size Code", BuyingSheetLine."Size Code");
+      PurchaseLine.VALIDATE("Standard Size Group Code", BuyingSheetLine."Standard Size Group Code");
+      PurchaseLine.VALIDATE("Standard Size Code", BuyingSheetLine."Standard Size Code");
+      PurchaseLine.VALIDATE("Division Code", BuyingSheetLine."Division Code");
+      PurchaseLine.VALIDATE("Department Code", BuyingSheetLine."Department Code");
+      PurchaseLine.VALIDATE("Group Code", BuyingSheetLine."Group Code");
+      PurchaseLine.VALIDATE("Category Code", BuyingSheetLine."Category Code");
+      PurchaseLine.VALIDATE("Sub-Category Code", BuyingSheetLine."Sub-Category Code");
+      PurchaseLine.VALIDATE("Style No.", BuyingSheetLine."Style No.");
+      PurchaseLine.VALIDATE("Overhead Rate",BuyingSheetLine."Overhead Unit Cost (LCY)");  //DOC NS2016.16 PCM 23/09/2016
+      PurchaseLine.VALIDATE("Lead Time Calculation", BuyingSheetLine."Lead Time Calculation");
+      PurchaseLine.VALIDATE("Buying Sheet Shipment Date",BuyingSheetLine."Shipment Date");        //DOC OP9031
+      PurchaseLine.VALIDATE("Buying Sheet Cancellation Date",BuyingSheetLine."Cancellation Date");//DOC OP9031
+      PurchaseLine.MODIFY(TRUE);
+
+      IF (Interaction) THEN
+        DialogManagement.StepCounter(DialogIndex::PurchaseOrderLines);
+    END;
+
+    LOCAL PROCEDURE UpdatePurchaseOrderSummaryLine@1000000006();
+    VAR
+      lLineNo@1000000000 : Integer;
+    BEGIN
+      //DOC NS2016.16 - Creating purchase order summary line
+
+      PurchaseSummaryLine.RESET();
+      PurchaseSummaryLine.SETRANGE("Document Type", PurchaseHeader."Document Type");
+      PurchaseSummaryLine.SETRANGE("Document No.", PurchaseHeader."No.");
+      PurchaseSummaryLine.SETRANGE(Type, PurchaseSummaryLine.Type::Item);
+      PurchaseSummaryLine.SETRANGE("No.", BuyingSheetLine."Item No.");
+      IF ( NOT (PurchaseSummaryLine.FINDFIRST())) THEN
+      BEGIN
+        IF (PurchaseOrderSummaryLineNos.ContainsKey(PurchaseOrderKey)) THEN
+          lLineNo := PurchaseOrderSummaryLineNos.Item(PurchaseOrderKey)
+        ELSE
+        BEGIN
+          PurchaseSummaryLine.RESET();
+          PurchaseSummaryLine.SETRANGE("Document Type", PurchaseHeader."Document Type");
+          PurchaseSummaryLine.SETRANGE("Document No.", PurchaseHeader."No.");
+          IF (PurchaseSummaryLine.FINDLAST()) THEN
+            lLineNo := PurchaseSummaryLine."Line No.";
+        END;
+        lLineNo += 10000;
+        PurchaseOrderSummaryLineNos.Item(PurchaseOrderKey, lLineNo);
+
+        CLEAR(PurchaseSummaryLine);
+        PurchaseSummaryLine.INIT();
+        PurchaseSummaryLine.VALIDATE("Document Type", PurchaseHeader."Document Type");
+        PurchaseSummaryLine.VALIDATE("Document No.", PurchaseHeader."No.");
+        PurchaseSummaryLine.VALIDATE("Line No.", lLineNo);
+        PurchaseSummaryLine.VALIDATE(Type, PurchaseSummaryLine.Type::Item);
+        PurchaseSummaryLine."Vendor Item No." := BuyingSheetLine."Vendor Item No.";  //DOC NS2016.16 PCM 27/09/2016
+        PurchaseSummaryLine.VALIDATE("No.", BuyingSheetLine."Item No.");
+        PurchaseSummaryLine.VALIDATE("Buying Sheet Shipment Date",BuyingSheetLine."Shipment Date");        //DOC OP9031
+        PurchaseSummaryLine.VALIDATE("Buying Sheet Cancellation Date",BuyingSheetLine."Cancellation Date");//DOC OP9031
+        PurchaseSummaryLine.INSERT(TRUE);
+
+        DetectPurchaseOrderLineNo();
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdatePurchaseOrderLine@1000000008();
+    VAR
+      lPurchaseLineModified@1000000000 : Boolean;
+      lPurchaseLineVariant@1000000001 : Variant;
+    BEGIN
+      //DOC NS2016.16 - Updating purchase order line
+
+      IF (PurchaseLine.GET(PurchaseLine."Document Type"::Order, BuyingSheetLine."Purchase Order No.", BuyingSheetLine."Purchase Order Line No.")) THEN
+      BEGIN
+        CLEAR(nSembleToolkit);
+        nSembleToolkit.SetRecord(PurchaseLine);
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO(Type), PurchaseLine.Type::Item);
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("No."), BuyingSheetLine."Item No.");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Variant Code"), BuyingSheetLine."Variant Code");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Location Code"), BuyingSheetLine."Location Code");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO(Quantity), BuyingSheetLine.Quantity);
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Direct Unit Cost"), BuyingSheetLine."Direct Unit Cost");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Buying Sheet No."), BuyingSheetHeader."No.");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Buying Sheet Line No."), BuyingSheetLine."Line No.");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Season Code"), BuyingSheetLine."Season Code");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Sub-Season Code"), BuyingSheetLine."Sub-Season Code");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Brand Code"), BuyingSheetLine."Brand Code");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Size Group Code"), BuyingSheetLine."Size Group Code");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Size Code"), BuyingSheetLine."Size Code");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Standard Size Group Code"), BuyingSheetLine."Standard Size Code");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Standard Size Code"), BuyingSheetLine."Standard Size Code");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Division Code"), BuyingSheetLine."Division Code");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Department Code"), BuyingSheetLine."Department Code");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Group Code"), BuyingSheetLine."Group Code");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Category Code"), BuyingSheetLine."Category Code");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Sub-Category Code"), BuyingSheetLine."Sub-Category Code");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Style No."), BuyingSheetLine."Style No.");
+        nSembleToolkit.ValidateRecordField(PurchaseLine.FIELDNO("Overhead Rate"), BuyingSheetLine."Overhead Unit Cost (LCY)");  //DOC NS2016.16 PCM 23/09/2016
+        lPurchaseLineModified := nSembleToolkit.GetRecord(lPurchaseLineVariant);
+        IF (lPurchaseLineModified) THEN
+        BEGIN
+          PurchaseLine := lPurchaseLineVariant;
+          PurchaseLine.MODIFY(TRUE);
+        END;
+      END
+      ELSE
+        CreatePurchaseOrderLine();
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@1000000002();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE DetectPurchaseOrderLineNo@1000000009();
+    VAR
+      lLineNo@1000000000 : Integer;
+    BEGIN
+      //DOC NS2016.16 - Detecting purchase order line no.
+
+      PurchaseLine.RESET();
+      PurchaseLine.SETRANGE("Document Type", PurchaseHeader."Document Type");
+      PurchaseLine.SETRANGE("Document No.", PurchaseHeader."No.");
+      IF (PurchaseLine.FINDLAST()) THEN
+        lLineNo := PurchaseLine."Line No.";
+      PurchaseOrderLineNos.Item(PurchaseOrderKey, lLineNo);
+    END;
+
+    LOCAL PROCEDURE OpenDialog@1000000004();
+    VAR
+      eTitle@1000000003 : TextConst 'ENU=Creating Purchase Orders for Buying Sheet "%1"...;ENG=Creating Purchase Orders for Buying Sheet "%1"...';
+      ePurchaseOrders@1000000001 : TextConst 'ENU=Purchase Orders;ENG=Purchase Orders';
+      ePurchaseOrderLines@1000000002 : TextConst 'ENU=Purchase Order Lines;ENG=Purchase Order Lines';
+    BEGIN
+      //DOC NS2016.16 - Opening a dialog
+
+      CLEAR(DialogManagement);
+
+      DialogManagement.Add(ePurchaseOrders, 20, DialogIndex::PurchaseOrders, 20, TRUE, FALSE);
+      DialogManagement.Add(ePurchaseOrderLines, 20, DialogIndex::PurchaseOrderLines, 20, TRUE, FALSE);
+      DialogManagement.Open(STRSUBSTNO(eTitle, BuyingSheetHeader."No."));
+    END;
+
+    LOCAL PROCEDURE CloseDialog@1000000007();
+    BEGIN
+      //DOC NS2016.16 - Closing a dialog
+
+      DialogManagement.Close();
+    END;
+
+    BEGIN
+    {
+      //DOC NS2016.16 JH 06/09/2016 - Created
+      //DOC NS2016.16 PCM 23/09/2016 - Populate "Overhead Rate" from "Buying Sheet Line".
+      //DOC NS2016.16 PCM 27/09/2016 - Populate "Vendor Item No." field on summary line.
+      //DOC M0026 DD 20/10/16 - Populate "Payment Terms Code" from Buying Sheet.
+      //DOC OP9031 M0027 PCM 06/12/16 - Populate "Prepayment %" from Buying Sheet "Deposit %".
+      //DOC OP9031       PCM 05/01/17 - Populate Purchase Line Comments and Purchase Line "Buying Sheet Shipment Date","Buying Sheet Cancellation Date".
+    }
+    END.
+  }
+}
+

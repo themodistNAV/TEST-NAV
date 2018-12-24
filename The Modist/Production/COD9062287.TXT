@@ -1,0 +1,433 @@
+OBJECT Codeunit 9062287 Process Jet Report Request
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    TableNo=9062734;
+    OnRun=VAR
+            InBrackets@1000000000 : Boolean;
+            CurrWord@1000000001 : Text[30];
+            JetReport@1000000002 : Record 9062296;
+            TxtProcessing@1000000003 : TextConst 'ENU=Processing report e-mail;ENG=Processing report e-mail';
+            TxtNoMailItem@1000000004 : TextConst 'ENU=Mail item must be set before attempting to process the report request;ENG=Mail item must be set before attempting to process the report request';
+          BEGIN
+            Logger.Log(TxtJetProcess, Logger.Type::Debug, TxtProcessing, USERID);
+            IF MailItemSet THEN
+              ProcessReportRequest
+            ELSE
+              ERROR(TxtNoMailItem);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      NextIsParam@1000000001 : Boolean;
+      JetParam@1000000000 : Record 9062297;
+      JetRepID@1000000003 : Integer;
+      TempJetHeader@1000000004 : Record 9062296;
+      TempJetParam@1000000002 : Record 9062297;
+      GotAllParams@1000000005 : Boolean;
+      MailItemSet@1000000007 : Boolean;
+      CRLF@1000000008 : Text[2];
+      AutoMsgEmailProc@1000000009 : Codeunit 9062270;
+      TNLUtils@1000000010 : Codeunit 9062229;
+      Logger@1000000011 : Record 9062280;
+      NotificationMgt@1000000012 : Codeunit 9062261;
+      EMailTmp@1000000015 : TEMPORARY Record 9062281;
+      EMailLineTmp@1000000006 : TEMPORARY Record 9062282;
+      EmailEntryNo@1000000013 : Integer;
+      SysB@1000000014 : Record 9062230;
+      TxtJetProcess@1000000016 : TextConst 'ENU=JETPROCESS;ENG=JETPROCESS';
+      String@1000000017 : Codeunit 9062236;
+
+    PROCEDURE ProcessReportRequest@1000000005() OK : Boolean;
+    VAR
+      CurrLine@1000000002 : Text[1024];
+      InBrackets@1000000004 : Boolean;
+      CurrWord@1000000003 : Text[1024];
+      OutputPath@1000000000 : Text[250];
+      JetReport@1000000005 : Record 9062296;
+      pos@1000000006 : Integer;
+      TxtGotLine@1000000001 : TextConst 'ENU=Got line: "%1";ENG=Got line: "%1"';
+      TxtFoundJetReportId@1000000007 : TextConst 'ENU=Found jet report ID %1 at pos %2 in "%3";ENG=Found jet report ID %1 at pos %2 in "%3"';
+      TxtIdentifiedReport@1000000008 : TextConst 'ENU=Identified report as "%1";ENG=Identified report as "%1"';
+      TxtNoLinesInEMailBody@1000000009 : TextConst 'ENU=Could not process Jet Report request as didnt find and lines in email message body;ENG=Could not process Jet Report request as didnt find and lines in email message body';
+      TxtErrorEMailSubject@1000000010 : TextConst 'ENU=Problem with your Report Request;ENG=Problem with your Report Request';
+      TxtErrorNoMessageBody@1000000011 : TextConst 'ENU=There was no message body in the email request you sent.;ENG=There was no message body in the email request you sent.';
+      TxtEMailBody@1000000013 : TextConst 'ENU=Your %1 report is attached. Nora x;ENG=Your %1 report is attached. Nora x';
+      TxtSetEMail@1000000012 : TextConst 'ENU=Set e-mail no. to %1 in Jet Header %2;ENG=Set e-mail no. to %1 in Jet Header %2';
+      TxtCouldNotAutoRun@1000000014 : TextConst 'ENU=Could not auto-run as could not find contact from email address "%1";ENG=Could not auto-run as could not find contact from email address "%1"';
+      TxtCouldNotMatch@1000000015 : TextConst 'ENU=Could not match the request to a user in NAV;ENG=Could not match the request to a user in NAV';
+      TxtErrorNoMatch@1000000016 : TextConst 'ENU=Could not match you to a user in NAV. Please contact the system administrator.;ENG=Could not match you to a user in NAV. Please contact the system administrator.';
+      TxtSettingAutoRun@1000000017 : TextConst 'ENU=Setting auto-run as "%1" from email address "%2";ENG=Setting auto-run as "%1" from email address "%2"';
+      TxtAddedToRunQueue@1000000018 : TextConst 'ENU=Added jet report "%1" ID %2 to auto-run queue;ENG=Added jet report "%1" ID %2 to auto-run queue';
+      TxtNoMatchingJetReport@1000000019 : TextConst 'ENU=Could not process jet report request as no matching jet report found in message body;ENG=Could not process jet report request as no matching jet report found in message body';
+      TxtErrorNoMatchingJetReport@1000000020 : TextConst 'ENU=Did not match the name of a report in the email request you sent.;ENG=Did not match the name of a report in the email request you sent.';
+      test@1000000021 : Char;
+    BEGIN
+      EMailLineTmp.RESET();
+      EMailLineTmp.SETRANGE("Line Type", EMailLineTmp."Line Type"::Body);
+      IF (EMailLineTmp.FINDSET()) THEN
+        REPEAT
+          pos := 0;
+          CurrLine := COPYSTR(EMailLineTmp.GetLine(),1,1024);
+          CurrLine := String.Replace(CurrLine,'?','');
+          Logger.Log(TxtJetProcess, Logger.Type::Debug, STRSUBSTNO(TxtGotLine, CurrLine), USERID);
+          IF JetRepID = 0 THEN BEGIN
+            JetReport.SETFILTER(Description,'<>%1','');
+            JetReport.SETFILTER(ID,'>0');
+            JetReport.FINDFIRST;
+            REPEAT
+              pos := STRPOS(UPPERCASE(CurrLine),UPPERCASE(JetReport.Description));
+
+              IF pos <> 0 THEN BEGIN
+                Logger.Log(TxtJetProcess, Logger.Type::Debug, STRSUBSTNO(TxtFoundJetReportId, JetRepID, pos, CurrLine), USERID);
+                JetRepID := JetReport.ID;
+                JetReport.CreateCopy(TempJetHeader,TempJetParam);
+
+                Logger.Log(TxtJetProcess, Logger.Type::Information, STRSUBSTNO(TxtIdentifiedReport, JetReport."Short Code"), USERID);
+                IF STRLEN(CurrLine) > 0 THEN
+                  ReadLine(COPYSTR(CurrLine,pos+1,STRLEN(CurrLine)-(pos)),InBrackets,CurrWord);
+              END;
+
+            UNTIL (JetRepID <> 0) OR (JetReport.NEXT = 0);
+          END ELSE BEGIN
+            IF pos = 0 THEN
+              ReadLine(CurrLine,InBrackets,CurrWord)
+            ELSE
+              ReadLine(COPYSTR(CurrLine,pos+1,STRLEN(CurrLine)-(pos+1)),InBrackets,CurrWord);
+          END;
+        UNTIL (((JetRepID <> 0) AND TempJetHeader.GotAllParams) OR (EMailLineTmp.NEXT() = 0))
+      ELSE BEGIN
+        Logger.Log(TxtJetProcess, Logger.Type::Error, TxtNoLinesInEMailBody, USERID);
+        NotificationMgt.QuickMessage(EMailTmp."Sender E-Mail", '', TxtErrorEMailSubject, TxtErrorNoMessageBody, 0);
+
+      END;
+      IF JetRepID <> 0 THEN BEGIN
+        IF TempJetHeader."Output Folder Path" = '' THEN
+          //TempJetHeader."Output Folder Path" := SysB.GetText('TEMP_PATH'); //DOC NA2016.15
+          TempJetHeader."Output Folder Path" := SysB.GetText('JET_DEFAULT_OUTPUT'); //DOC NA2016.15
+        IF TempJetHeader."Output Folder Path" = '' THEN TempJetHeader."Output Folder Path" := TEMPORARYPATH;
+        TempJetHeader."E-Mail Recipients" := EMailTmp."Sender E-Mail";
+        IF TempJetHeader."E-Mail Subject" = '' THEN
+          TempJetHeader."E-Mail Subject" := TempJetHeader.Description;
+        IF TempJetHeader."E-Mail Body" = '' THEN
+          TempJetHeader."E-Mail Body" := STRSUBSTNO(TxtEMailBody, TempJetHeader.Description);
+        TempJetHeader."E-Mail Entry No." := EmailEntryNo;
+        Logger.Log(TxtJetProcess, Logger.Type::Debug, STRSUBSTNO(TxtSetEMail, TempJetHeader."E-Mail Entry No.", TempJetHeader.ID), USERID);
+        TempJetHeader."Send E-Mail" := TRUE;
+        IF TempJetHeader."Output Format" = TempJetHeader."Output Format"::HTML THEN
+          TempJetHeader."Output Format" := TempJetHeader."Output Format"::Excel;
+        TempJetHeader."Auto Run As" := TNLUtils.GetContactFromEmail(EMailTmp."Sender E-Mail");
+        IF TempJetHeader."Auto Run As" = '' THEN BEGIN
+          Logger.Log(TxtJetProcess, Logger.Type::Error, STRSUBSTNO(TxtCouldNotAutoRun, TempJetHeader."E-Mail Recipients"), USERID);
+          TempJetHeader."Auto Run" := TRUE;
+          TempJetHeader."Auto Run Failed" := TRUE;
+          TempJetHeader."Run Error Message" := TxtCouldNotMatch;
+          NotificationMgt.QuickMessage(TempJetHeader."E-Mail Recipients", '', TxtErrorEMailSubject, TxtErrorNoMatch, 0);
+
+        END ELSE BEGIN
+          Logger.Log(TxtJetProcess, Logger.Type::Debug, STRSUBSTNO(TxtSettingAutoRun, TempJetHeader."Auto Run As", TempJetHeader."E-Mail Recipients"), USERID);
+        END;
+        TempJetHeader."Auto Run" := TRUE;
+        TempJetHeader.MODIFY(TRUE);
+        Logger.Log(TxtJetProcess, Logger.Type::Information, STRSUBSTNO(TxtAddedToRunQueue, TempJetHeader."Short Code", TempJetHeader.ID), USERID);
+        EXIT(TRUE);
+      END ELSE BEGIN
+        Logger.Log(TxtJetProcess, Logger.Type::Error, TxtNoMatchingJetReport, USERID);
+        NotificationMgt.QuickMessage(EMailTmp."Sender E-Mail", '', TxtErrorEMailSubject, TxtErrorNoMatchingJetReport, 0);
+        EXIT(FALSE);
+      END;
+    END;
+
+    PROCEDURE ReadLine@1000000000(theLine@1000000005 : Text;VAR StartInBrackets@1000000006 : Boolean;VAR PartWord@1000000007 : Text) InBrackets : Boolean;
+    VAR
+      TP@1000000004 : Codeunit 9062247;
+      output@1000000003 : Text;
+    BEGIN
+      IF (DELCHR(theLine, '<>', ' ') = '') THEN
+        EXIT(FALSE);
+
+      TP.SetString(theLine);
+      TP.SetInBrackets(StartInBrackets);
+      REPEAT
+        output := TP.GetNextWord;
+
+        IF output <> '' THEN BEGIN
+          IF PartWord <> '' THEN
+            output := PartWord + ' ' + output;
+          StartInBrackets := TP.GetInBrackets;
+          IF NOT TP.GetInBrackets THEN BEGIN
+            IF output <> '|' THEN BEGIN
+              ReadWord(output,JetParam);
+              PartWord := '';
+            END;
+          END ELSE BEGIN
+            PartWord := output;
+          END;
+        END;
+      UNTIL output = '';
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ReadWord@1000000001(theWord@1000000000 : Text;VAR TheJetParam@1000000005 : Record 9062297);
+    VAR
+      JetParams@1000000003 : Record 9062297;
+      RecRef@1000000002 : RecordRef;
+      FieldRef@1000000001 : FieldRef;
+      JetReports@1000000004 : Record 9062296;
+      theParam@1000000006 : Text[100];
+      TxtFoundParameter@1000000007 : TextConst 'ENU=Found parameter "%1" from word "%2";ENG=Found parameter "%1" from word "%2"';
+    BEGIN
+      IF NextIsParam THEN BEGIN
+        theParam := SetParam(theWord,TheJetParam);
+        IF theParam <> '' THEN BEGIN
+          TempJetHeader.SetParamAutoFillText(TheJetParam.Name,theWord);
+          IF theParam = 'ªERRORª' THEN
+            TempJetHeader.SetParamAsErr(TheJetParam.Name)
+          ELSE
+            TempJetHeader.SetParam(TheJetParam.Name,theParam);
+        NextIsParam := FALSE;
+        EXIT;
+        END;
+      END;
+
+      IF JetRepID = 0 THEN BEGIN
+        JetReports.SETRANGE(Description,'@',theWord);
+        IF JetReports.FINDSET THEN BEGIN
+          JetRepID := JetReports.ID;
+          JetReports.CreateCopy(TempJetHeader,TempJetParam);
+        END;
+      END ELSE BEGIN
+        IF (DELCHR(theWord, '<>', ' ') <> '') THEN
+        BEGIN
+          JetParams.SETRANGE("Header ID",JetRepID);
+          JetParams.SETFILTER(SearchWord, '%1', COPYSTR(theWord,1,MAXSTRLEN(JetParams.SearchWord)));
+          IF ((JetParams.FINDFIRST()) AND (JetParams.SearchWord <> '')) THEN BEGIN
+            BEGIN
+              NextIsParam := TRUE;
+              TheJetParam := JetParams;
+              Logger.Log(TxtJetProcess, Logger.Type::Debug, STRSUBSTNO(TxtFoundParameter, JetParams.Name, theWord), USERID);
+            END
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE SetParam@1000000002(theWord@1000000004 : Text[250];VAR TheJetParam@1000000003 : Record 9062297) theValue : Text[100];
+    VAR
+      JetParams@1000000002 : Record 9062297;
+      RecRef@1000000001 : RecordRef;
+      FieldRef@1000000000 : FieldRef;
+      tempDate@1000000005 : Date;
+      tempDec@1000000006 : Decimal;
+      tempInt@1000000007 : Integer;
+      tempBool@1000000008 : Boolean;
+    BEGIN
+      JetParams.GET(TheJetParam."Header ID",TheJetParam.Name);
+      IF JetParams."Is Reference" THEN BEGIN
+        RecRef.OPEN(TheJetParam."Table ID");
+        FieldRef := RecRef.FIELD(TheJetParam."Match-to Field ID");
+        IF TheJetParam."Match-to Field ID Partial" THEN
+          FieldRef.SETFILTER('@*' + COPYSTR(theWord,1,FieldRef.LENGTH) + '*')
+        ELSE
+          FieldRef.SETFILTER('@' + COPYSTR(theWord,1,FieldRef.LENGTH));
+
+        IF RecRef.FINDSET THEN BEGIN
+          FieldRef := RecRef.FIELD(TheJetParam."Return Field ID");
+          theValue := FORMAT(FieldRef.VALUE);
+        END ELSE BEGIN
+          IF TheJetParam."Alt. Match-to Field ID" <> 0 THEN BEGIN
+            FieldRef := RecRef.FIELD(TheJetParam."Match-to Field ID");
+            FieldRef.SETFILTER('');
+            FieldRef := RecRef.FIELD(TheJetParam."Alt. Match-to Field ID");
+            IF TheJetParam."Alt. Match-to Field ID Partial" THEN
+              FieldRef.SETFILTER('@*' + COPYSTR(theWord,1,FieldRef.LENGTH) + '*')
+            ELSE
+              FieldRef.SETFILTER('@' + COPYSTR(theWord,1,FieldRef.LENGTH));
+            IF RecRef.FINDSET THEN BEGIN
+              FieldRef := RecRef.FIELD(TheJetParam."Return Field ID");
+              theValue := FORMAT(FieldRef.VALUE);
+            END;
+          END;
+        END;
+      END ELSE BEGIN
+        CASE JetParams."Value Format" OF
+          JetParams."Value Format"::Text : theValue := theWord;
+          JetParams."Value Format"::Date :
+            BEGIN
+              IF NOT EVALUATE(tempDate,theWord) THEN BEGIN
+                theValue := 'ªERRORª';
+              END ELSE BEGIN
+                theValue := FORMAT(tempDate,0,'<Day,2>-<Month,2>-<Year>');
+              END;
+            END;
+          JetParams."Value Format"::Decimal :
+            BEGIN
+              IF NOT EVALUATE(tempDec,theWord) THEN BEGIN
+                theValue := 'ªERRORª';
+              END ELSE BEGIN
+                theValue := FORMAT(tempDec);
+              END;
+            END;
+          JetParams."Value Format"::Integer :
+            BEGIN
+              IF NOT EVALUATE(tempInt,theWord) THEN BEGIN
+                theValue := 'ªERRORª';
+              END ELSE BEGIN
+                theValue := FORMAT(tempInt);
+              END;
+            END;
+          JetParams."Value Format"::Boolean :
+            BEGIN
+              IF NOT EVALUATE(tempBool,theWord) THEN BEGIN
+                theValue := 'ªERRORª';
+              END ELSE BEGIN
+                theValue := FORMAT(tempBool);
+              END;
+            END;
+        END;
+      END;
+    END;
+
+    PROCEDURE RunJetReports@1000000009();
+    VAR
+      JetAutoHeaders@1000000000 : Record 9062296;
+      Path@1000000001 : Text;
+      Contact@1000000002 : Record 5050;
+      ErrorToName@1000000003 : Text;
+      ErrorToEmail@1000000004 : Text;
+      TxtAttemptingToRun@1000000005 : TextConst 'ENU=Attempting to run report %1 - autorun is %2;ENG=Attempting to run report %1 - autorun is %2';
+      TxtErrorWhenRunningReport@1000000006 : TextConst 'ENU=Error when running report "%1": %2;ENG=Error when running report "%1": %2';
+      TxtProblem@1000000007 : TextConst 'ENU=Problem with your report request;ENG=Problem with your report request';
+      TxtSuccessfullyRunReport@1000000008 : TextConst 'ENU=Successfully ran report "%1" to path "%2" and to email "%3";ENG=Successfully ran report "%1" to path "%2" and to email "%3"';
+    BEGIN
+      JetAutoHeaders.SETRANGE("Auto Run Failed",FALSE);
+      JetAutoHeaders.SETRANGE("Auto Run",TRUE);
+      IF JetAutoHeaders.FINDSET THEN BEGIN
+        Logger.Log(TxtJetProcess, Logger.Type::Debug, STRSUBSTNO(TxtAttemptingToRun, JetAutoHeaders.ID, JetAutoHeaders."Auto Run"), USERID);
+        REPEAT
+          JetAutoHeaders.RunAs(JetAutoHeaders."Auto Run As");
+          Path := JetAutoHeaders.RunReport(FALSE, TRUE);
+          IF COPYSTR(Path,1,1) = '!' THEN BEGIN
+            IF (JetAutoHeaders."No. of Retries" > 0) THEN
+            BEGIN
+              IF (JetAutoHeaders."No. of Retries Completed" < JetAutoHeaders."No. of Retries") THEN
+              BEGIN
+                JetAutoHeaders."No. of Retries Completed" += 1;
+                JetAutoHeaders."Auto Run Failed" := FALSE;
+              END
+              ELSE
+                JetAutoHeaders."Auto Run Failed" := TRUE;
+            END
+            ELSE
+              JetAutoHeaders."Auto Run Failed" := TRUE;
+
+            IF JetAutoHeaders."Run Error Message" = '' THEN JetAutoHeaders."Run Error Message" := COPYSTR(Path,2,250);
+            JetAutoHeaders.MODIFY(TRUE);
+            Logger.Log(TxtJetProcess, Logger.Type::Error, STRSUBSTNO(TxtErrorWhenRunningReport, JetAutoHeaders."Short Code", JetAutoHeaders."Run Error Message"), USERID);
+
+            IF (JetAutoHeaders."Auto Run Failed") THEN
+            BEGIN
+              ErrorToEmail := '';
+              IF Contact.GET(JetAutoHeaders."Auto Run As") THEN BEGIN
+                ErrorToEmail := Contact."E-Mail";
+              END;
+              IF ErrorToEmail = '' THEN ErrorToEmail := JetAutoHeaders."E-Mail Recipients";
+              NotificationMgt.QuickMessage(ErrorToEmail, '', TxtProblem, JetAutoHeaders."Run Error Message",0);
+            END;
+
+            IF (JetAutoHeaders."Auto Run Failed") THEN
+              JetAutoHeaders.DELETE(TRUE);
+          END ELSE BEGIN
+            Logger.Log(TxtJetProcess, Logger.Type::Information, STRSUBSTNO(TxtSuccessfullyRunReport, JetAutoHeaders."Short Code", Path, JetAutoHeaders."E-Mail Recipients"), USERID);
+            JetAutoHeaders."AutoRun Succeeded" := TRUE;
+            JetAutoHeaders.MODIFY(TRUE);
+          END;
+        UNTIL JetAutoHeaders.NEXT = 0;
+      END;
+
+      CLEAR(JetAutoHeaders);
+      JetAutoHeaders.SETRANGE("AutoRun Succeeded",TRUE);
+      IF JetAutoHeaders.FINDSET THEN JetAutoHeaders.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE ReadLogFile@1000000004(pFilePath@1000000000 : Text[250]) : Text[1024];
+    VAR
+      lTempBlob@1000000010 : Record 99008535;
+      lFileManagement@1000000001 : Codeunit 419;
+      lInStream@1000000005 : InStream;
+      lLine@1000000004 : Text[1024];
+      lErrorMessage@1000000009 : Text[1024];
+      xAutoPilotCommandLine@1000000002 : TextConst 'ENU=autopilot command line;ENG=autopilot command line';
+    BEGIN
+      //DOC NA2015.1 - Reading Jet Report log file and returning if any errors occured
+      //  -> pFilePath: The file path
+      //  <- Error message or empty if no error
+
+      lTempBlob.Blob.IMPORT(pFilePath);
+      lTempBlob.Blob.CREATEINSTREAM(lInStream);
+
+      WHILE ( NOT (lInStream.EOS())) DO
+        lInStream.READTEXT(lLine);
+
+      IF (STRPOS(LOWERCASE(lLine), xAutoPilotCommandLine) <> 0) THEN
+        lErrorMessage := ''
+      ELSE
+        lErrorMessage := lLine;
+
+      EXIT(lErrorMessage);
+    END;
+
+    PROCEDURE SetEMail@1000000008(pEMail@1000000001 : Record 9062281;VAR pEMailLine@1000000000 : Record 9062282;EmailEntryNo@1000000002 : Integer);
+    VAR
+      TxtSetEnquiryEMailEntryNo@1000000003 : TextConst 'ENU=Set enquiry e-mail entry no. to %1;ENG=Set enquiry e-mail entry no. to %1';
+    BEGIN
+      //DOC NA2015.1 - Setting e-mail content
+      //  -> pEMail: E-Mail (header)
+      //  <> pEMailLine: E-Mail lines recordset
+
+      EMailTmp.RESET();
+      EMailTmp.DELETEALL();
+      EMailTmp := pEMail;
+      EMailTmp.INSERT();
+
+      EMailLineTmp.RESET();
+      EMailLineTmp.DELETEALL();
+      IF (pEMailLine.FINDSET()) THEN
+      REPEAT
+        EMailLineTmp := pEMailLine;
+        EMailLineTmp.INSERT();
+      UNTIL (pEMailLine.NEXT() = 0);
+
+      EmailEntryNo := EmailEntryNo;
+      Logger.Log(TxtJetProcess, Logger.Type::Debug, STRSUBSTNO(TxtSetEnquiryEMailEntryNo, EmailEntryNo), USERID);
+      MailItemSet := TRUE;
+      COMMIT;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  JH 10/08/2012 - Migrated to 2013
+      //DOC NA2015.1  PC 02/08/2013 - Changes to use Email Subject/Body as defined in Jet Autopilot Header (if not blank)
+      //DOC NA2015.1  PC 21/02/2014 - Fixes to Parameter processing bugs
+      //DOC NA2015.2  JH 01/07/2014 - No. of retries
+      //DOC NA2015.4  JH 28/12/2014 - System behaviours renamed
+      //DOC NA2015.4  AP 22/10/2015 - Limit the email line to 1024 char's
+      //DOC NA2016.10 JH 26/08/2015 - Upgraded to 2016
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit used
+      //DOC NA2016.14 PC 04/03/2016 - Changed filters that use * and @ to different format
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+      //DOC NA2016.15 AP 27/04/2016 - Changed the Ouput Folder from Temp To Jet Output
+    }
+    END.
+  }
+}
+

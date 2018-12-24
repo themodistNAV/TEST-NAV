@@ -1,0 +1,422 @@
+OBJECT Table 9062447 Consignment Header
+{
+  OBJECT-PROPERTIES
+  {
+    Date=23/09/16;
+    Time=10:58:45 AM;
+    Version List=NH2016.15,NS2016.16;
+  }
+  PROPERTIES
+  {
+    OnInsert=VAR
+               ConsignmentStatus@1000000001 : Record 9062449;
+               NoSeriesMgt@1000000000 : Codeunit 396;
+               NoSeriesToolkit@9062230 : Codeunit 9062598;
+             BEGIN
+               IF "No." = '' THEN BEGIN
+                 NoSeriesToolkit.CreateNoSeries(tNoSeriesCode,tNoSeriesStartNo);
+                 VALIDATE("No.",NoSeriesMgt.GetNextNo(tNoSeriesCode,WORKDATE,TRUE));
+               END;
+
+               IF ("Current Status" = '') THEN BEGIN
+                 ConsignmentStatus.RESET();
+                 ConsignmentStatus.SETCURRENTKEY(Sequence);
+                 IF (ConsignmentStatus.FINDFIRST()) THEN
+                   "Current Status" := ConsignmentStatus.Code;
+               END;
+             END;
+
+    OnModify=BEGIN
+               "Last Update" := CURRENTDATETIME;
+               "Last Update By" := USERID;
+             END;
+
+    OnDelete=VAR
+               lConsignmentLine@1000000000 : Record 9062448;
+               lWarehouseReceiptHeader@1000000001 : Record 7316;
+               eUsedFor@1000000002 : TextConst 'ENU=Consignment "%1" has ben used to create warehouse receipt "%2". It can''t be deleted.;ENG=Consignment "%1" has ben used to create warehouse receipt "%2". It can''t be deleted.';
+             BEGIN
+               lWarehouseReceiptHeader.RESET();
+               lWarehouseReceiptHeader.SETCURRENTKEY("Vendor Shipment No.");
+               lWarehouseReceiptHeader.SETRANGE("Vendor Shipment No.","Vendor Shipment No.");
+               IF (lWarehouseReceiptHeader.FINDFIRST()) THEN
+                 ERROR(eUsedFor, Rec."No.", lWarehouseReceiptHeader."No.");
+
+               lConsignmentLine.SETRANGE("Consignment No.","No.");
+               lConsignmentLine.DELETEALL(TRUE);
+             END;
+
+    CaptionML=[ENU=Consignment Header;
+               ENG=Consignment Header];
+    LookupPageID=Page9062664;
+    DrillDownPageID=Page9062664;
+  }
+  FIELDS
+  {
+    { 1   ;   ;No.                 ;Code20        ;CaptionML=[ENU=No.;
+                                                              ENG=No.] }
+    { 2   ;   ;Vendor No.          ;Code20        ;TableRelation=Vendor;
+                                                   OnValidate=VAR
+                                                                EmptyDateFormula@1000000000 : DateFormula;
+                                                                LeadTimeCalculation@1000000001 : DateFormula;
+                                                                DateDueInWarehouse@1000000002 : Date;
+                                                              BEGIN
+                                                                TestStatusOpen();
+
+                                                                IF ("Vendor No." <> '') THEN  BEGIN
+                                                                  Vendor.GET("Vendor No.");
+
+                                                                  LeadTimeCalculation := Vendor."Lead Time Calculation";
+
+                                                                  IF (LeadTimeCalculation <> EmptyDateFormula) THEN
+                                                                    DateDueInWarehouse := CALCDATE(LeadTimeCalculation, WORKDATE)
+                                                                  ELSE
+                                                                    DateDueInWarehouse := WORKDATE;
+
+                                                                  VALIDATE("Date Due in Warehouse", DateDueInWarehouse);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Vendor No.;
+                                                              ENG=Vendor No.] }
+    { 3   ;   ;Vendor Shipment No. ;Code35        ;CaptionML=[ENU=Vendor Shipment No.;
+                                                              ENG=Vendor Shipment No.] }
+    { 4   ;   ;Description         ;Text100       ;CaptionML=[ENU=Description;
+                                                              ENG=Description] }
+    { 5   ;   ;Last Update         ;DateTime      ;CaptionML=[ENU=Last Update;
+                                                              ENG=Last Update];
+                                                   Editable=No }
+    { 6   ;   ;Last Update By      ;Code50        ;CaptionML=[ENU=Last Update By;
+                                                              ENG=Last Update By];
+                                                   Editable=No }
+    { 7   ;   ;Current Status      ;Code20        ;TableRelation="Consignment Status";
+                                                   OnValidate=VAR
+                                                                ConsignmentStatus@1000000002 : Record 9062449;
+                                                                StatusChange@1000000000 : Record 9062483;
+                                                                WorkflowInterface@1000000003 : Codeunit 9062262;
+                                                                EntryNo@1000000001 : Integer;
+                                                              BEGIN
+                                                                IF xRec."Current Status" <> Rec."Current Status" THEN BEGIN
+                                                                  StatusChange.SETRANGE("Consignment No.","No.");
+                                                                  IF (StatusChange.FINDLAST()) THEN
+                                                                    EntryNo := StatusChange."Entry No.";
+                                                                  EntryNo += 1;
+                                                                  CLEAR(StatusChange);
+                                                                  StatusChange.INIT;
+                                                                  StatusChange.VALIDATE("Consignment No.","No.");
+                                                                  StatusChange.VALIDATE("Entry No.",EntryNo);
+                                                                  StatusChange.VALIDATE("From Status Code",xRec."Current Status");
+                                                                  StatusChange.VALIDATE("To Status Code","Current Status");
+                                                                  StatusChange.Updated := CURRENTDATETIME;
+                                                                  StatusChange."Updated By" := USERID;
+                                                                  StatusChange.INSERT(TRUE);
+                                                                  IF (Rec."Current Status" <> '') THEN
+                                                                  BEGIN
+                                                                    ConsignmentStatus.GET(Rec."Current Status");
+                                                                    IF (ConsignmentStatus."Workflow on Set" <> '') THEN
+                                                                      WorkflowInterface.Simple(ConsignmentStatus."Workflow on Set", Rec.GETPOSITION());
+                                                                  END;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Current Status;
+                                                              ENG=Current Status] }
+    { 18  ;   ;Total Quantity      ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Consignment Line".Quantity WHERE (Consignment No.=FIELD(No.)));
+                                                   CaptionML=[ENU=Total Quantity;
+                                                              ENG=Total Quantity];
+                                                   Editable=No }
+    { 19  ;   ;Total Quantity (Base);Decimal      ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Consignment Line"."Quantity (Base)" WHERE (Consignment No.=FIELD(No.)));
+                                                   CaptionML=[ENU=Total Quantity (Base);
+                                                              ENG=Total Quantity (Base)];
+                                                   Editable=No }
+    { 20  ;   ;Date Leaving Dock   ;Date          ;CaptionML=[ENU=Date Leaving Dock;
+                                                              ENG=Date Leaving Dock] }
+    { 21  ;   ;Date Due at Port    ;Date          ;CaptionML=[ENU=Date Due at Port;
+                                                              ENG=Date Due at Port] }
+    { 22  ;   ;Date Due in Warehouse;Date         ;CaptionML=[ENU=Date Due in Warehouse;
+                                                              ENG=Date Due in Warehouse] }
+    { 23  ;   ;Freight Doc. Received;Boolean      ;CaptionML=[ENU=Freight Doc. Received;
+                                                              ENG=Freight Doc. Received] }
+    { 24  ;   ;Freight Amount      ;Decimal       ;OnValidate=BEGIN
+                                                                TestStatusOpen();
+                                                              END;
+
+                                                   CaptionML=[ENU=Freight Amount;
+                                                              ENG=Freight Amount] }
+    { 25  ;   ;Duty Amount         ;Decimal       ;OnValidate=BEGIN
+                                                                TestStatusOpen();
+                                                              END;
+
+                                                   CaptionML=[ENU=Duty Amount;
+                                                              ENG=Duty Amount] }
+    { 26  ;   ;Time Due in Warehouse;Time         ;CaptionML=[ENU=Time Due in Warehouse;
+                                                              ENG=Time Due in Warehouse] }
+    { 31  ;   ;Warehouse Receipt No.;Code20       ;TableRelation="Warehouse Receipt Header";
+                                                   OnLookup=VAR
+                                                              lWarehouseReceiptHeader@1000000000 : Record 7316;
+                                                            BEGIN
+                                                            END;
+
+                                                   CaptionML=[ENU=Warehouse Receipt No.;
+                                                              ENG=Warehouse Receipt No.] }
+    { 40  ;   ;Location Code       ;Code10        ;TableRelation=Location;
+                                                   OnValidate=BEGIN
+                                                                TestStatusOpen();
+                                                              END;
+
+                                                   CaptionML=[ENU=Location Code;
+                                                              ENG=Location Code] }
+    { 41  ;   ;Status              ;Option        ;InitValue=Open;
+                                                   CaptionML=[ENU=Status;
+                                                              ENG=Status];
+                                                   OptionCaptionML=[ENU=" ,Open,Released";
+                                                                    ENG=" ,Open,Released"];
+                                                   OptionString=[ ,Open,Released] }
+    { 42  ;   ;Purchase Order No.  ;Code20        ;TableRelation="Purchase Header".No. WHERE (Document Type=CONST(Order),
+                                                                                              Buy-from Vendor No.=FIELD(Vendor No.));
+                                                   OnValidate=VAR
+                                                                ConsignmentLine@1000000003 : Record 9062448;
+                                                                ConsignmentMgt@1000000000 : Codeunit 9062357;
+                                                                AddLines@1000000001 : Boolean;
+                                                                DeleteLines@1000000002 : Boolean;
+                                                              BEGIN
+                                                                IF ("Purchase Order No." <> '') THEN BEGIN
+                                                                  AddLines := FALSE;
+                                                                  IF (GUIALLOWED) THEN
+                                                                    AddLines := CONFIRM(STRSUBSTNO(cnfAddOrderLines, "Purchase Order No."));
+                                                                  IF (AddLines) THEN BEGIN
+                                                                    DeleteLines := FALSE;
+                                                                    IF (GUIALLOWED) AND (xRec."Purchase Order No." <> "Purchase Order No.") THEN BEGIN
+                                                                      ConsignmentLine.RESET();
+                                                                      ConsignmentLine.SETRANGE("Consignment No.", "No.");
+                                                                      IF (NOT(ConsignmentLine.ISEMPTY)) THEN
+                                                                        DeleteLines := CONFIRM(STRSUBSTNO(cnfPOChangedDeleteOrderLines, "Purchase Order No."));
+                                                                    END;
+
+                                                                    ConsignmentMgt.AssignPurchaseOrderLines(Rec, FALSE, TRUE);
+                                                                  END;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Purchase Order No.;
+                                                              ENG=Purchase Order No.] }
+    { 70  ;   ;No. of Cartons      ;Integer       ;CaptionML=[ENU=No. of Cartons;
+                                                              ENG=No. of Cartons];
+                                                   MinValue=0 }
+    { 80  ;   ;Shipping Agent Code ;Code10        ;TableRelation="Shipping Agent";
+                                                   OnValidate=BEGIN
+                                                                TESTFIELD(Status,Status::Open);
+                                                              END;
+
+                                                   AccessByPermission=TableData 5790=R;
+                                                   CaptionML=[ENU=Shipping Agent Code;
+                                                              ENG=Shipping Agent Code] }
+    { 81  ;   ;Shipping Agent Service Code;Code10 ;TableRelation="Shipping Agent Services".Code WHERE (Shipping Agent Code=FIELD(Shipping Agent Code));
+                                                   OnValidate=BEGIN
+                                                                TESTFIELD(Status,Status::Open);
+                                                              END;
+
+                                                   CaptionML=[ENU=Shipping Agent Service Code;
+                                                              ENG=Shipping Agent Service Code] }
+    { 82  ;   ;Vessel Name         ;Text100       ;CaptionML=[ENU=Vessel Name;
+                                                              ENG=Vessel Name] }
+    { 83  ;   ;Voyage No.          ;Text30        ;CaptionML=[ENU=Voyage No.;
+                                                              ENG=Voyage No.] }
+    { 1000;   ;Vendor Name         ;Text100       ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Vendor.Name WHERE (No.=FIELD(Vendor No.)));
+                                                   CaptionML=[ENU=Vendor Name;
+                                                              ENG=Vendor Name];
+                                                   Editable=No }
+    { 1001;   ;Priority            ;Integer       ;CaptionML=[ENU=Priority;
+                                                              ENG=Priority] }
+    { 9087000;;Buying Sheet No.    ;Code20        ;TableRelation="Buying Sheet Header";
+                                                   CaptionML=[ENU=Buying Sheet No.;
+                                                              ENG=Buying Sheet No.];
+                                                   Description=NS2016.16 }
+  }
+  KEYS
+  {
+    {    ;No.                                     ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      tChange@1000000000 : TextConst 'ENU=Change "%1"?;ENG=Change "%1"?';
+      Vendor@1000000003 : Record 23;
+      cnfAddOrderLines@1000000005 : TextConst 'ENU=Do you want to add lines from order no. %1?;ENG=Do you want to add lines from order no. %1?';
+      cnfPOChangedDeleteOrderLines@1000000006 : TextConst 'ENU=Do you want to delete existing consignment lines before adding records from purchase order %1?;ENG=Do you want to delete existing consignment lines before adding records from purchase order %1?';
+      tNoSeriesCode@9062230 : TextConst 'ENU=CONSIGNMEN;ENG=CONSIGNMEN';
+      tNoSeriesStartNo@9062231 : TextConst 'ENU=CN000001;ENG=CN000001';
+
+    PROCEDURE TestStatusOpen@1000000001();
+    BEGIN
+      Rec.TESTFIELD(Status, Rec.Status::Open);
+    END;
+
+    PROCEDURE TestStatusReleased@1000000002();
+    BEGIN
+      Rec.TESTFIELD(Status, Rec.Status::Released);
+    END;
+
+    PROCEDURE ShowVendor@1000000006();
+    VAR
+      lVendor@1000000000 : Record 23;
+    BEGIN
+      //DOC NA2015.1 - Showing vendor
+
+      Rec.TESTFIELD("Vendor No.");
+      lVendor.GET(Rec."Vendor No.");
+      PAGE.RUN(PAGE::"Vendor Card", lVendor);
+    END;
+
+    PROCEDURE ShowPurchaseOrders@1000000004();
+    VAR
+      lConsignmentLine@1000000002 : Record 9062448;
+      lPurchaseHeader@1000000000 : Record 38;
+      lPurchaseHeaderTmp@1000000001 : TEMPORARY Record 38;
+      eNoOrders@1000000003 : TextConst 'ENU=There are no purchase orders linked to the consignment.;ENG=There are no purchase orders linked to the consignment.';
+      lFilter@1000000004 : Code[1024];
+    BEGIN
+      //DOC NA2015.1 - Showing purchase orders
+
+      lConsignmentLine.RESET();
+      lConsignmentLine.SETRANGE("Consignment No.", Rec."No.");
+      lConsignmentLine.SETFILTER("Purchase Order No.", '<>''''');
+      IF (lConsignmentLine.FINDSET()) THEN
+      REPEAT
+        IF (lPurchaseHeader.GET(lPurchaseHeader."Document Type"::Order, lConsignmentLine."Purchase Order No.")) THEN
+          IF ( NOT (lPurchaseHeaderTmp.GET(lPurchaseHeader."Document Type", lPurchaseHeader."No."))) THEN
+          BEGIN
+            lPurchaseHeaderTmp := lPurchaseHeader;
+            lPurchaseHeaderTmp.INSERT();
+          END;
+      UNTIL (lConsignmentLine.NEXT() = 0);
+
+      CASE (lPurchaseHeaderTmp.COUNT) OF
+        0:
+          ERROR(eNoOrders);
+        1:
+          BEGIN
+            lPurchaseHeaderTmp.FINDFIRST();
+            lPurchaseHeader.GET(lPurchaseHeaderTmp."Document Type", lPurchaseHeaderTmp."No.");
+            PAGE.RUN(PAGE::"Purchase Order", lPurchaseHeader);
+          END;
+        ELSE
+          BEGIN
+            lPurchaseHeaderTmp.FINDSET();
+            REPEAT
+              IF (lFilter <> '') THEN
+                lFilter := lFilter + '|';
+              lFilter := lFilter + lPurchaseHeaderTmp."No.";
+            UNTIL (lPurchaseHeaderTmp.NEXT() = 0);
+            lPurchaseHeader.RESET();
+            lPurchaseHeader.FILTERGROUP(2);
+            lPurchaseHeader.SETRANGE("Document Type", lPurchaseHeader."Document Type"::Order);
+            lPurchaseHeader.FILTERGROUP(0);
+            lPurchaseHeader.SETFILTER("No.", lFilter);
+            PAGE.RUN(PAGE::"Purchase Order List", lPurchaseHeader);
+          END;
+      END;
+    END;
+
+    PROCEDURE ShowWarehouseReceipts@1000000005();
+    VAR
+      lWarehouseReceiptHeader@1000000000 : Record 7316;
+      eNoWarehouseReceipts@1000000001 : TextConst 'ENU=There are no warehouse receipts linked to the consignment.;ENG=There are no warehouse receipts linked to the consignment.';
+    BEGIN
+      lWarehouseReceiptHeader.RESET();
+      lWarehouseReceiptHeader.SETCURRENTKEY("Vendor Shipment No.");
+      lWarehouseReceiptHeader.SETRANGE("Vendor Shipment No.", Rec."Vendor Shipment No.");
+
+      CASE (lWarehouseReceiptHeader.COUNT) OF
+        0:
+          ERROR(eNoWarehouseReceipts);
+        1:
+          BEGIN
+            lWarehouseReceiptHeader.FINDFIRST();
+            PAGE.RUN(PAGE::"Warehouse Receipt", lWarehouseReceiptHeader);
+          END;
+        ELSE
+          PAGE.RUN(PAGE::"Warehouse Receipts", lWarehouseReceiptHeader);
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Events ---"@9062233();
+    BEGIN
+    END;
+
+    [Integration(TRUE)]
+    PROCEDURE OnBeforeRelease@9062235();
+    BEGIN
+    END;
+
+    [Integration(TRUE)]
+    PROCEDURE OnAfterRelease@9062236();
+    BEGIN
+    END;
+
+    [Integration(TRUE)]
+    PROCEDURE OnBeforeReOpen@9062231();
+    BEGIN
+    END;
+
+    [Integration(TRUE)]
+    PROCEDURE OnAfterReOpen@9062230();
+    BEGIN
+    END;
+
+    [Integration(TRUE)]
+    PROCEDURE OnBeforeAllocateCostByQuantity@9062237();
+    BEGIN
+    END;
+
+    [Integration(TRUE)]
+    PROCEDURE OnAfterAllocateCostByQuantity@9062239();
+    BEGIN
+    END;
+
+    [Integration(TRUE)]
+    PROCEDURE OnBeforeAllocateCostByAmount@9062240();
+    BEGIN
+    END;
+
+    [Integration(TRUE)]
+    PROCEDURE OnAfterAllocateCostByAmount@9062241();
+    BEGIN
+    END;
+
+    [Integration(TRUE)]
+    PROCEDURE OnBeforeUpdatePurchaseOrderCosts@9062242();
+    BEGIN
+    END;
+
+    [Integration(TRUE)]
+    PROCEDURE OnAfterUpdatePurchaseOrderCosts@9062243();
+    BEGIN
+    END;
+
+    [Integration(TRUE)]
+    PROCEDURE OnBeforeCreateWhseReceipt@9062232();
+    BEGIN
+    END;
+
+    [Integration(TRUE)]
+    PROCEDURE OnAfterCreateWhseReceipt@9062234(VAR WarehouseReceiptHeader@9062230 : Record 7316;VAR WarehouseReceiptLine@9062231 : Record 7317);
+    BEGIN
+    END;
+
+    BEGIN
+    {
+      //DOC NH2016.11 PC 05/11/2015 - Migrated from 2015
+      //DOC NH2016.15 JH 15/04/2016 - CfMD amendments
+      //DOC NS2016.16 JH 23/09/2016 - "Buying Sheet No." added
+    }
+    END.
+  }
+}
+

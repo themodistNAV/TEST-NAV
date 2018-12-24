@@ -1,0 +1,673 @@
+OBJECT Codeunit 9021624 MQ Global Functions
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:19 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            CreateWebAttsFromImages;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text009@1190000005 : TextConst 'ENU=Can not find the Language Code on opening form.  Please consult Brand Villages. (4);ENG=Can not find the Language Code on opening form.  Please consult Brand Villages. (4)';
+      Text010@1000000002 : TextConst 'ENU=This action will overwrite critical settings in the %1 and %2 tables in order to set this database to act as the %3 database.\\Are you sure you want to continue?;ENG=This action will overwrite critical settings in the %1 and %2 tables in order to set this database to act as the %3 database.\\Are you sure you want to continue?';
+      Text011@1000000001 : TextConst 'ENU=No changes were made.;ENG=No changes were made.';
+      Text012@1000000000 : TextConst 'ENU=The current database name [%1] does not match the database name in the %2 table for the target [%3] environment.;ENG=The current database name [%1] does not match the database name in the %2 table for the target [%3] environment.';
+
+    PROCEDURE CheckLabelUsedInCompany@1190000006(LabelCodeIn@1190000005 : Code[10]) : Boolean;
+    VAR
+      LabelRec@1190000006 : Record 9021618;
+    BEGIN
+      //DOC EC2009.2.69 -
+      IF LabelCodeIn = '' THEN EXIT(TRUE);
+      LabelRec.GET(LabelCodeIn);
+      IF LabelRec."Used-in Company" = COMPANYNAME THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+      //DOC EC2009.2.69 +
+    END;
+
+    PROCEDURE CountCharacterOccurence@1000000001(StringToSearch@1000000000 : Text[1024];CharacterToFind@1000000001 : Text[1]) ReturnCount : Integer;
+    BEGIN
+      ReturnCount:=STRLEN(DELCHR(StringToSearch, '=', DELCHR(StringToSearch,'=', CharacterToFind)));
+    END;
+
+    PROCEDURE GetLanguage@1040004() LanguageCode : Code[10];
+    VAR
+      LangRec@1040000 : Record 8;
+    BEGIN
+      LangRec.RESET;
+      LangRec.SETRANGE("Windows Language ID",GLOBALLANGUAGE);
+      LangRec.SETFILTER(Code,'<>%1','CPL');
+      IF LangRec.FINDFIRST THEN
+        LanguageCode := LangRec.Code
+      ELSE
+        ERROR(Text009);
+    END;
+
+    PROCEDURE GetLabelCode@1000000003() LabelCode : Code[10];
+    VAR
+      LabelRec@1190000005 : Record 9021618;
+    BEGIN
+      //this is the master version of this function but older equivalent functions exist in:
+      //  cu9021490: StdTableTriggerCode.FindLabel()
+      //  cu9021619: Label Functions.GetLabelCode()
+      LabelRec.RESET;
+      LabelRec.SETRANGE("Used-in Company",COMPANYNAME);
+      LabelRec.SETRANGE("Default Label in Company",TRUE);
+      IF LabelRec.FINDFIRST THEN
+        EXIT(LabelRec.Code)
+      ELSE BEGIN
+        LabelRec.SETRANGE("Default Label in Company");
+        IF LabelRec.COUNT = 1 THEN BEGIN
+          LabelRec.FINDFIRST;
+          EXIT(LabelRec.Code);
+        END;
+      END;
+      EXIT('');
+    END;
+
+    PROCEDURE ReplaceString@1000000000(InputString@1000000000 : Text[1000];FindWhat@1000000001 : Text[100];ReplaceWith@1000000002 : Text[100]) OutputString : Text[1000];
+    BEGIN
+      WHILE STRPOS(InputString,FindWhat) > 0 DO BEGIN
+
+        //take the portion of the existing string up to the next occurence of the FindWhat string...
+        OutputString+=COPYSTR(InputString,1,STRPOS(InputString,FindWhat)-STRLEN(FindWhat))+ReplaceWith;
+
+        //chop down the string being processed ready for the next loop...
+        InputString:=COPYSTR(InputString,STRPOS(InputString,FindWhat)+STRLEN(FindWhat));
+
+      //if not confirm('InputString: %1\\OutputString:%2',true,inputstring,outputstring) then error('stopped');
+      END;
+
+      //add any remaining part of the original string back on...
+      OutputString+=InputString;
+
+      EXIT(OutputString);
+    END;
+
+    PROCEDURE CreateWebAttsFromImages@1000000002();
+    VAR
+      Label@1000000010 : Record 9021618;
+      RecToSearch@1000000009 : Record 112;
+      FileName@1000000008 : Text[250];
+      FullFileName@1000000007 : Text[1000];
+      FilePath@1000000016 : Text[250];
+      InitialFileName1@1000000012 : Text[30];
+      InitialFileName2@1000000013 : Text[30];
+      AttributeMgt@1000000006 : Codeunit 9021620;
+      Test@1000000005 : Boolean;
+      i@1000000004 : Integer;
+      j@1000000003 : Integer;
+      l@1000000001 : Integer;
+      m@1000000000 : Integer;
+      WebAttCode1@1000000014 : Code[20];
+      WebAttCode2@1000000015 : Code[20];
+      TxtFinalMessage@1000000002 : TextConst 'ENU=Of %1 %4, %2 %5 and %3 %6;ENG=Of %1 %4, %2 %5 and %3 %6';
+      TxtL001@1000000011 : TextConst 'ENU=Sales_Invoice;ENG=Sales_Invoice';
+      TxtL002@1000000017 : TextConst 'ENU=INVOICE;ENG=INVOICE';
+    BEGIN
+      //Test := TRUE;
+
+      i := 0;
+      j := 0;
+      l := 0;
+
+      InitialFileName1 := '';
+      WebAttCode1 := '';
+      InitialFileName2 := TxtL001;
+      WebAttCode2 := TxtL002;
+
+      Label.RESET;
+      Label.GET(GetLabelCode);
+      FilePath := Label."Web Content Folder" + Label."File Attachment Subfolder" + 'invoices\';
+      //ERROR('folder is %1',FilePath);
+
+      RecToSearch.RESET;
+      RecToSearch.SETFILTER("Internet Order Reference",'<>%1','');
+      RecToSearch.SETRANGE("Is An Internet Customer",TRUE);
+      //RecToSearch.SETRANGE("No.",'103365');
+      IF RecToSearch.FIND('-') THEN
+      REPEAT
+        l := l + 1;
+        FileName := InitialFileName1 + '%1.pdf';
+        FileName := STRSUBSTNO(FileName,RecToSearch."Internet Order Reference");
+        FullFileName := FilePath + FileName;
+        //ERROR('FullFileName is %1',FullFileName);
+        IF EXISTS(FullFileName) THEN BEGIN
+          ERROR('Found %1',FullFileName);
+          IF Test = FALSE THEN
+            AttributeMgt.ControlWebAttributes('2',RecToSearch."No.",0,112,RecToSearch."Label Code",
+                         WebAttCode1,0,FileName,'',0,FALSE,0D,0T);
+          i := i + 1;
+        //END ELSE BEGIN
+        //  ERROR('Not Found %1',FullFileName);
+        END;
+        FileName := InitialFileName2 + '%1.pdf';
+        FileName := STRSUBSTNO(FileName,RecToSearch."No.");
+        FullFileName := FilePath + FileName;
+        //ERROR('FullFileName is %1',FullFileName);
+        IF EXISTS(FullFileName) THEN BEGIN
+          //ERROR('Found %1',FullFileName);
+          IF Test = FALSE THEN
+            AttributeMgt.ControlWebAttributes('2',RecToSearch."No.",0,112,RecToSearch."Label Code",
+                         WebAttCode2,0,FileName,'',0,FALSE,0D,0T);
+          j := j + 1;
+        END;
+      UNTIL RecToSearch.NEXT = 0;
+
+      MESSAGE(TxtFinalMessage,l,i,j,RecToSearch.TABLECAPTION,WebAttCode1,WebAttCode2);
+    END;
+
+    PROCEDURE CopyTestSettingsToCustSpecPars@1000000005(VAR LabelRec@1000000000 : Record 9021618);
+    VAR
+      InternetSetup@1000000001 : Record 9021609;
+      CustSpecParms@1000000002 : Record 9021606;
+      TextL000@1000000003 : TextConst 'ENU=Are you really sure you want to run this as it should only be run on NAV''s TEST database?;ENG=Are you really sure you want to run this as it should only be run on NAV''s TEST database?';
+      TextL001@1000000004 : TextConst 'ENU=Abandonned.;ENG=Abandonned.';
+      TextL002@1000000005 : TextConst 'ENU=You can only do this for Label %1 when in Company %2;ENG=You can only do this for Label %1 when in Company %2';
+      TextL003@1000000006 : TextConst 'ENU=This will replace the Remote URL value of %1 with %2.\\Is that OK?;ENG=This will replace the Remote URL value of %1 with %2.\\Is that OK?';
+      TextL004@1000000007 : TextConst 'ENU=Live To Test, Test Remote Shop URL;ENG=Live To Test, Test Remote Shop URL';
+      TextL005@1000000008 : TextConst 'ENU=MQ Global Functions CU;ENG=MQ Global Functions CU';
+      TextL006@1000000009 : TextConst 'ENU=This will replace the Staging URL value of %1 with %2.\\Is that OK?;ENG=This will replace the Staging URL value of %1 with %2.\\Is that OK?';
+      TextL007@1000000010 : TextConst 'ENU=Live To Test, Test Staging Site UR;ENG=Live To Test, Test Staging Site UR';
+      TextL008@1000000011 : TextConst 'ENU=This will replace the Web Content Folder value of %1 with %2.\\Is that OK?;ENG=This will replace the Web Content Folder value of %1 with %2.\\Is that OK?';
+      TextL009@1000000012 : TextConst 'ENU=Live To Test, Test Web Content Folder;ENG=Live To Test, Test Web Content Folder';
+      TextL010@1000000013 : TextConst 'ENU=This will replace the Staging URL value of %1 with %2.\\Is that OK?;ENG=This will replace the Staging URL value of %1 with %2.\\Is that OK?';
+      TextL011@1000000014 : TextConst 'ENU=Live To Test, Test FTP Doc Download Servername;ENG=Live To Test, Test FTP Doc Download Servername';
+      TextL012@1000000015 : TextConst 'ENU=This will replace the Staging URL value of %1 with %2.\\Is that OK?;ENG=This will replace the Staging URL value of %1 with %2.\\Is that OK?';
+      TextL013@1000000016 : TextConst 'ENU=Live To Test, Test FTP Doc Download Folder Path;ENG=Live To Test, Test FTP Doc Download Folder Path';
+      TextL014@1000000017 : TextConst 'ENU=This will replace the Staging URL value of %1 with %2.\\Is that OK?;ENG=This will replace the Staging URL value of %1 with %2.\\Is that OK?';
+      TextL015@1000000018 : TextConst 'ENU=Live To Test, Test FTP UNC Folder Path;ENG=Live To Test, Test FTP UNC Folder Path';
+      TextL016@1000000019 : TextConst 'ENU=This will replace the Web Root Application Folder value of %1 with %2.\\Is that OK?;ENG=This will replace the Web Root Application Folder value of %1 with %2.\\Is that OK?';
+      TextL017@1000000020 : TextConst 'ENU=Live To Test, Test Web Root Application Folder;ENG=Live To Test, Test Web Root Application Folder';
+      TextL018@1000000021 : TextConst 'ENU=This will replace Drop Location for Trigger Sync the  value of %1 with %2.\\Is that OK?;ENG=This will replace Drop Location for Trigger Sync the  value of %1 with %2.\\Is that OK?';
+      TextL019@1000000022 : TextConst 'ENU=Live To Test, Test Drop Location for Trigger Sync;ENG=Live To Test, Test Drop Location for Trigger Sync';
+      TextL020@1000000023 : TextConst 'ENU=This will replace the Registered Product value of %1 with %2.\\Is that OK?;ENG=This will replace the Registered Product value of %1 with %2.\\Is that OK?';
+      TextL021@1000000024 : TextConst 'ENU=Live To Test, Test Registered Product Name;ENG=Live To Test, Test Registered Product Name';
+      TextL022@1000000025 : TextConst 'ENU=This will replace the Sitemap Export Folder value of %1 with %2.\\Is that OK?;ENG=This will replace the Sitemap Export Folder value of %1 with %2.\\Is that OK?';
+      TextL023@1000000026 : TextConst 'ENU=Live To Test, Test Sitemap Export Folder;ENG=Live To Test, Test Sitemap Export Folder';
+      TextL024@1000000027 : TextConst 'ENU=This will replace the Online Connector File Queue value of %1 with %2.\\Is that OK?;ENG=This will replace the Online Connector File Queue value of %1 with %2.\\Is that OK?';
+      TextL025@1000000028 : TextConst 'ENU=Live To Test, Test Online Connector File Queue;ENG=Live To Test, Test Online Connector File Queue';
+      TextL026@1000000029 : TextConst 'ENU=This will replace the Promotion URL value of %1 with %2.\\Is that OK?;ENG=This will replace the Promotion URL value of %1 with %2.\\Is that OK?';
+      TextL027@1000000030 : TextConst 'ENU=Live To Test, Test Promotion URL;ENG=Live To Test, Test Promotion URL';
+      TextL028@1000000031 : TextConst 'ENU=Done - please check Customer Specific Parameters;ENG=Done - please check Customer Specific Parameters';
+    BEGIN
+      //DOC EC2013.4.67 MQ 29/09/2014 - GW140929 New function
+      IF LabelRec."Used-in Company" <> COMPANYNAME THEN
+        ERROR(TextL002,LabelRec.Code,LabelRec."Used-in Company");
+
+      IF STRPOS(UPPERCASE(LabelRec."Remote Shop URL"),'TEST') = 0 THEN
+        IF NOT CONFIRM(TextL000,FALSE) THEN
+          ERROR(TextL001);
+
+      IF CustSpecParms.GET('LLT_REMOTE_URL', LabelRec.Code,0) THEN BEGIN
+        IF CustSpecParms.TextVar = '' THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,LabelRec."Remote Shop URL");
+            CustSpecParms.MODIFY;
+        END ELSE BEGIN
+          IF CONFIRM(TextL003,FALSE,
+            CustSpecParms.TextVar,LabelRec."Remote Shop URL") THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,LabelRec."Remote Shop URL");
+            CustSpecParms.MODIFY;
+          END;
+        END;
+      END ELSE BEGIN
+        CustSpecParms.INIT;
+        CustSpecParms."Unique Identifier" := 'LLT_REMOTE_URL';
+        CustSpecParms."Entry Code" := LabelRec.Code;
+        CustSpecParms."Entry Integer" := 0;
+        CustSpecParms.Description := TextL004;
+        CustSpecParms."Where Used" := TextL005;
+        CustSpecParms."Maximum Length" := 100;
+        CustSpecParms.VALIDATE(TextVar,LabelRec."Remote Shop URL");
+        CustSpecParms.INSERT;
+      END;
+
+      IF CustSpecParms.GET('LLT_STG_URL', LabelRec.Code,0) THEN BEGIN
+        IF CustSpecParms.TextVar = '' THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,LabelRec."Staging Site URL");
+            CustSpecParms.MODIFY;
+        END ELSE BEGIN
+          IF CONFIRM(TextL006,FALSE,
+            CustSpecParms.TextVar,LabelRec."Staging Site URL") THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,LabelRec."Staging Site URL");
+            CustSpecParms.MODIFY;
+          END;
+        END;
+      END ELSE BEGIN
+        CustSpecParms.INIT;
+        CustSpecParms."Unique Identifier" := 'LLT_STG_URL';
+        CustSpecParms."Entry Code" := LabelRec.Code;
+        CustSpecParms."Entry Integer" := 0;
+        CustSpecParms.Description := TextL007;
+        CustSpecParms."Where Used" := TextL005;
+        CustSpecParms."Maximum Length" := 100;
+        CustSpecParms.VALIDATE(TextVar,LabelRec."Staging Site URL");
+        CustSpecParms.INSERT;
+      END;
+
+      IF CustSpecParms.GET('LLT_WEB_CONT_FOLD', LabelRec.Code,0) THEN BEGIN
+        IF CustSpecParms.TextVar = '' THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,LabelRec."Web Content Folder");
+            CustSpecParms.MODIFY;
+        END ELSE BEGIN
+          IF CONFIRM(TextL008,FALSE,
+            CustSpecParms.TextVar,LabelRec."Web Content Folder") THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,LabelRec."Web Content Folder");
+            CustSpecParms.MODIFY;
+          END;
+        END;
+      END ELSE BEGIN
+        CustSpecParms.INIT;
+        CustSpecParms."Unique Identifier" := 'LLT_WEB_CONT_FOLD';
+        CustSpecParms."Entry Code" := LabelRec.Code;
+        CustSpecParms."Entry Integer" := 0;
+        CustSpecParms.Description := TextL009;
+        CustSpecParms."Where Used" := TextL005;
+        CustSpecParms."Maximum Length" := 150;
+        CustSpecParms.VALIDATE(TextVar,LabelRec."Web Content Folder");
+        CustSpecParms.INSERT;
+      END;
+
+      IF CustSpecParms.GET('LLT_FTP_DOWN_SERV', LabelRec.Code,0) THEN BEGIN
+        IF CustSpecParms.TextVar = '' THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,LabelRec."FTP Doc Download Servername");
+            CustSpecParms.MODIFY;
+        END ELSE BEGIN
+          IF CONFIRM(TextL010,FALSE,
+            CustSpecParms.TextVar,LabelRec."FTP Doc Download Servername") THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,LabelRec."FTP Doc Download Servername");
+            CustSpecParms.MODIFY;
+          END;
+        END;
+      END ELSE BEGIN
+        CustSpecParms.INIT;
+        CustSpecParms."Unique Identifier" := 'LLT_FTP_DOWN_SERV';
+        CustSpecParms."Entry Code" := LabelRec.Code;
+        CustSpecParms."Entry Integer" := 0;
+        CustSpecParms.Description := TextL011;
+        CustSpecParms."Where Used" := TextL005;
+        CustSpecParms."Maximum Length" := 40;
+        CustSpecParms.VALIDATE(TextVar,LabelRec."FTP Doc Download Servername");
+        CustSpecParms.INSERT;
+      END;
+
+      IF CustSpecParms.GET('LLT_FTP_DOWN_PATH', LabelRec.Code,0) THEN BEGIN
+        IF CustSpecParms.TextVar = '' THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,LabelRec."FTP Doc Download Folder Path");
+            CustSpecParms.MODIFY;
+        END ELSE BEGIN
+          IF CONFIRM(TextL012,FALSE,
+            CustSpecParms.TextVar,LabelRec."FTP Doc Download Folder Path") THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,LabelRec."FTP Doc Download Folder Path");
+            CustSpecParms.MODIFY;
+          END;
+        END;
+      END ELSE BEGIN
+        CustSpecParms.INIT;
+        CustSpecParms."Unique Identifier" := 'LLT_FTP_DOWN_PATH';
+        CustSpecParms."Entry Code" := LabelRec.Code;
+        CustSpecParms."Entry Integer" := 0;
+        CustSpecParms.Description := TextL013;
+        CustSpecParms."Where Used" := TextL005;
+        CustSpecParms."Maximum Length" := 100;
+        CustSpecParms.VALIDATE(TextVar,LabelRec."FTP Doc Download Folder Path");
+        CustSpecParms.INSERT;
+      END;
+
+      IF CustSpecParms.GET('LLT_FTP_UNC_PATH', LabelRec.Code,0) THEN BEGIN
+        IF CustSpecParms.TextVar = '' THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,LabelRec."FTP UNC Folder Path");
+            CustSpecParms.MODIFY;
+        END ELSE BEGIN
+          IF CONFIRM(TextL014,FALSE,
+            CustSpecParms.TextVar,LabelRec."FTP UNC Folder Path") THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,LabelRec."FTP UNC Folder Path");
+            CustSpecParms.MODIFY;
+          END;
+        END;
+      END ELSE BEGIN
+        CustSpecParms.INIT;
+        CustSpecParms."Unique Identifier" := 'LLT_FTP_UNC_PATH';
+        CustSpecParms."Entry Code" := LabelRec.Code;
+        CustSpecParms."Entry Integer" := 0;
+        CustSpecParms.Description := TextL015;
+        CustSpecParms."Where Used" := TextL005;
+        CustSpecParms."Maximum Length" := 100;
+        CustSpecParms.VALIDATE(TextVar,LabelRec."FTP UNC Folder Path");
+        CustSpecParms.INSERT;
+      END;
+
+
+      //make the required changes to the Internet Setup values...
+      InternetSetup.GET;
+
+      //InternetSetup."Web Application Root Folder"
+      IF CustSpecParms.GET('LIT_WEB_ROOT_FOLD', LabelRec.Code,0) THEN BEGIN
+        IF CustSpecParms.TextVar = '' THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,InternetSetup."Web Application Root Folder");
+            CustSpecParms.MODIFY;
+        END ELSE BEGIN
+          IF CONFIRM(TextL016,FALSE,
+            CustSpecParms.TextVar,InternetSetup."Web Application Root Folder") THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,InternetSetup."Web Application Root Folder");
+            CustSpecParms.MODIFY;
+          END;
+        END;
+      END ELSE BEGIN
+        CustSpecParms.INIT;
+        CustSpecParms."Unique Identifier" := 'LIT_WEB_ROOT_FOLD';
+        CustSpecParms."Entry Code" := LabelRec.Code;
+        CustSpecParms."Entry Integer" := 0;
+        CustSpecParms.Description := TextL017;
+        CustSpecParms."Where Used" := TextL005;
+        CustSpecParms."Maximum Length" := 100;
+        CustSpecParms.VALIDATE(TextVar,InternetSetup."Web Application Root Folder");
+        CustSpecParms.INSERT;
+      END;
+
+      //InternetSetup."Drop Location for Trigger Sync"
+      IF CustSpecParms.GET('LIT_DROPLOC_TRIGSYNC', LabelRec.Code,0) THEN BEGIN
+        IF CustSpecParms.TextVar = '' THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,InternetSetup."Drop Location for Trigger Sync");
+            CustSpecParms.MODIFY;
+        END ELSE BEGIN
+          IF CONFIRM(TextL018,FALSE,
+            CustSpecParms.TextVar,InternetSetup."Drop Location for Trigger Sync") THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,InternetSetup."Drop Location for Trigger Sync");
+            CustSpecParms.MODIFY;
+          END;
+        END;
+      END ELSE BEGIN
+        CustSpecParms.INIT;
+        CustSpecParms."Unique Identifier" := 'LIT_DROPLOC_TRIGSYNC';
+        CustSpecParms."Entry Code" := LabelRec.Code;
+        CustSpecParms."Entry Integer" := 0;
+        CustSpecParms.Description := TextL019;
+        CustSpecParms."Where Used" := TextL005;
+        CustSpecParms."Maximum Length" := 250;
+        CustSpecParms.VALIDATE(TextVar,InternetSetup."Drop Location for Trigger Sync");
+        CustSpecParms.INSERT;
+      END;
+
+      //InternetSetup."Registered Product Name"
+      IF CustSpecParms.GET('LIT_REG_PROD_NAME', LabelRec.Code,0) THEN BEGIN
+        IF CustSpecParms.TextVar = '' THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,InternetSetup."Registered Product Name");
+            CustSpecParms.MODIFY;
+        END ELSE BEGIN
+          IF CONFIRM(TextL020,FALSE,
+            CustSpecParms.TextVar,InternetSetup."Registered Product Name") THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,InternetSetup."Registered Product Name");
+            CustSpecParms.MODIFY;
+          END;
+        END;
+      END ELSE BEGIN
+        CustSpecParms.INIT;
+        CustSpecParms."Unique Identifier" := 'LIT_REG_PROD_NAME';
+        CustSpecParms."Entry Code" := LabelRec.Code;
+        CustSpecParms."Entry Integer" := 0;
+        CustSpecParms.Description := TextL021;
+        CustSpecParms."Where Used" := TextL005;
+        CustSpecParms."Maximum Length" := 30;
+        CustSpecParms.VALIDATE(TextVar,InternetSetup."Registered Product Name");
+        CustSpecParms.INSERT;
+      END;
+
+      //InternetSetup."Sitemap Export Folder"
+      IF CustSpecParms.GET('LIT_SITEMAP FOLD', LabelRec.Code,0) THEN BEGIN
+        IF CustSpecParms.TextVar = '' THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,InternetSetup."Sitemap Export Folder");
+            CustSpecParms.MODIFY;
+        END ELSE BEGIN
+          IF CONFIRM(TextL022,FALSE,
+            CustSpecParms.TextVar,InternetSetup."Sitemap Export Folder") THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,InternetSetup."Sitemap Export Folder");
+            CustSpecParms.MODIFY;
+          END;
+        END;
+      END ELSE BEGIN
+        CustSpecParms.INIT;
+        CustSpecParms."Unique Identifier" := 'LIT_SITEMAP FOLD';
+        CustSpecParms."Entry Code" := LabelRec.Code;
+        CustSpecParms."Entry Integer" := 0;
+        CustSpecParms.Description := TextL023;
+        CustSpecParms."Where Used" := TextL005;
+        CustSpecParms."Maximum Length" := 100;
+        CustSpecParms.VALIDATE(TextVar,InternetSetup."Sitemap Export Folder");
+        CustSpecParms.INSERT;
+      END;
+
+      //InternetSetup."Online Connector File Queue"
+      IF CustSpecParms.GET('LIT_ONLINE_CONFILE_Q', LabelRec.Code,0) THEN BEGIN
+        IF CustSpecParms.TextVar = '' THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,InternetSetup."Online Connector File Queue");
+            CustSpecParms.MODIFY;
+        END ELSE BEGIN
+          IF CONFIRM(TextL024,FALSE,
+            CustSpecParms.TextVar,InternetSetup."Online Connector File Queue") THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,InternetSetup."Online Connector File Queue");
+            CustSpecParms.MODIFY;
+          END;
+        END;
+      END ELSE BEGIN
+        CustSpecParms.INIT;
+        CustSpecParms."Unique Identifier" := 'LIT_ONLINE_CONFILE_Q';
+        CustSpecParms."Entry Code" := LabelRec.Code;
+        CustSpecParms."Entry Integer" := 0;
+        CustSpecParms.Description := TextL025;
+        CustSpecParms."Where Used" := TextL005;
+        CustSpecParms."Maximum Length" := 100;
+        CustSpecParms.VALIDATE(TextVar,InternetSetup."Online Connector File Queue");
+        CustSpecParms.INSERT;
+      END;
+
+      //DOC EC2015.5.03 -
+      //InternetSetup."Promotion URL"
+      IF CustSpecParms.GET('LIT_PROMOTION_URL', LabelRec.Code,0) THEN BEGIN
+        IF CustSpecParms.TextVar = '' THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,InternetSetup."Promotion URL");
+            CustSpecParms.MODIFY;
+        END ELSE BEGIN
+          IF CONFIRM(TextL026,FALSE,
+            CustSpecParms.TextVar,InternetSetup."Promotion URL") THEN BEGIN
+            CustSpecParms.VALIDATE(TextVar,InternetSetup."Promotion URL");
+            CustSpecParms.MODIFY;
+          END;
+        END;
+      END ELSE BEGIN
+        CustSpecParms.INIT;
+        CustSpecParms."Unique Identifier" := 'LIT_PROMOTION_URL';
+        CustSpecParms."Entry Code" := LabelRec.Code;
+        CustSpecParms."Entry Integer" := 0;
+        CustSpecParms.Description := TextL027;
+        CustSpecParms."Where Used" := TextL005;
+        CustSpecParms."Maximum Length" := 80;
+        CustSpecParms.VALIDATE(TextVar,InternetSetup."Promotion URL");
+        CustSpecParms.INSERT;
+      END;
+      //DOC EC2015.5.03 +
+
+      MESSAGE(TextL028);
+    END;
+
+    PROCEDURE TestSettingsFromCustSpecPars@1000000004(VAR LabelRec@1000000000 : Record 9021618);
+    VAR
+      InternetSetup@1000000001 : Record 9021609;
+      CustSpecParms@1000000002 : Record 9021606;
+      TextL000@1000000003 : TextConst 'ENU=Warning... Field %1 not updated even though it is not blank.  Please check.;ENG=Warning... Field %1 not updated even though it is not blank.  Please check.';
+      TextL001@1000000004 : TextConst 'ENU=Warning... Field %1 not updated as new value is the same as the old one.  Please check.;ENG=Warning... Field %1 not updated as new value is the same as the old one.  Please check.';
+      TextL002@1000000005 : TextConst 'ENU=You can only do this for Label %1 when in Company %2;ENG=You can only do this for Label %1 when in Company %2';
+      TextL003@1000000006 : TextConst 'ENU=Done - please check settings in Label and Internet Setup;ENG=Done - please check settings in Label and Internet Setup';
+    BEGIN
+      //DOC EC2013.4.67 MQ 29/09/2014 - GW140929 New function
+      IF LabelRec."Used-in Company" <> COMPANYNAME THEN
+        ERROR(TextL002,LabelRec.Code,LabelRec."Used-in Company");
+
+      IF CustSpecParms.GET('LLT_REMOTE_URL',LabelRec.Code,0) THEN BEGIN
+        IF LabelRec."Remote Shop URL" = CustSpecParms.TextVar THEN
+          MESSAGE(TextL001,LabelRec.FIELDCAPTION("Remote Shop URL"))
+        ELSE
+          LabelRec."Remote Shop URL" := CustSpecParms.TextVar;
+      END ELSE BEGIN
+        IF LabelRec."Remote Shop URL" <> '' THEN
+          MESSAGE(TextL000,LabelRec.FIELDCAPTION("Remote Shop URL"));
+      END;
+
+      IF CustSpecParms.GET('LLT_STG_URL',LabelRec.Code,0) THEN BEGIN
+        IF LabelRec."Staging Site URL" = CustSpecParms.TextVar THEN
+          MESSAGE(TextL001,LabelRec.FIELDCAPTION("Staging Site URL"))
+        ELSE
+          LabelRec."Staging Site URL" := CustSpecParms.TextVar;
+      END ELSE BEGIN
+        IF LabelRec."Staging Site URL" <> '' THEN
+          MESSAGE(TextL000,LabelRec.FIELDCAPTION("Staging Site URL"));
+      END;
+
+      IF CustSpecParms.GET('LLT_WEB_CONT_FOLD',LabelRec.Code,0) THEN BEGIN
+        IF LabelRec."Web Content Folder" = CustSpecParms.TextVar THEN
+          MESSAGE(TextL001,LabelRec.FIELDCAPTION("Web Content Folder"))
+        ELSE
+          LabelRec."Web Content Folder" := CustSpecParms.TextVar;
+      END ELSE BEGIN
+        IF LabelRec."Web Content Folder" <> '' THEN
+          MESSAGE(TextL000,LabelRec.FIELDCAPTION("Web Content Folder"));
+      END;
+
+      IF CustSpecParms.GET('LLT_FTP_DOWN_SERV',LabelRec.Code,0) THEN BEGIN
+        IF LabelRec."FTP Doc Download Servername" = CustSpecParms.TextVar THEN
+          MESSAGE(TextL001,LabelRec.FIELDCAPTION("FTP Doc Download Servername"))
+        ELSE
+          LabelRec."FTP Doc Download Servername" := CustSpecParms.TextVar;
+      END ELSE BEGIN
+        IF LabelRec."FTP Doc Download Servername" <> '' THEN
+          MESSAGE(TextL000,LabelRec.FIELDCAPTION("FTP Doc Download Servername"));
+      END;
+
+      IF CustSpecParms.GET('LLT_FTP_DOWN_PATH',LabelRec.Code,0) THEN BEGIN
+        IF LabelRec."FTP Doc Download Folder Path" = CustSpecParms.TextVar THEN
+          MESSAGE(TextL001,LabelRec.FIELDCAPTION("FTP Doc Download Folder Path"))
+        ELSE
+          LabelRec."FTP Doc Download Folder Path" := CustSpecParms.TextVar;
+      END ELSE BEGIN
+        IF LabelRec."FTP Doc Download Folder Path" <> '' THEN
+          MESSAGE(TextL000,LabelRec.FIELDCAPTION("FTP Doc Download Folder Path"));
+      END;
+
+      IF CustSpecParms.GET('LLT_FTP_UNC_PATH',LabelRec.Code,0) THEN BEGIN
+        IF LabelRec."FTP UNC Folder Path" = CustSpecParms.TextVar THEN
+          MESSAGE(TextL001,LabelRec.FIELDCAPTION("FTP UNC Folder Path"))
+        ELSE
+          LabelRec."FTP UNC Folder Path" := CustSpecParms.TextVar;
+      END ELSE BEGIN
+        IF LabelRec."FTP UNC Folder Path" <> '' THEN
+          MESSAGE(TextL000,LabelRec.FIELDCAPTION("FTP UNC Folder Path"));
+      END;
+
+      LabelRec.MODIFY;
+
+
+      //make the required changes to the Internet Setup values...
+      InternetSetup.GET;
+
+      //InternetSetup."Web Application Root Folder"
+      IF CustSpecParms.GET('LIT_WEB_ROOT_FOLD', LabelRec.Code,0) THEN BEGIN
+        IF InternetSetup."Web Application Root Folder" = CustSpecParms.TextVar THEN
+          MESSAGE(TextL001,InternetSetup.FIELDCAPTION("Web Application Root Folder"))
+        ELSE
+          InternetSetup."Web Application Root Folder" := CustSpecParms.TextVar;
+      END ELSE BEGIN
+        IF InternetSetup."Web Application Root Folder" <> '' THEN
+          MESSAGE(TextL000,InternetSetup.FIELDCAPTION("Web Application Root Folder"));
+      END;
+
+      //InternetSetup."Drop Location for Trigger Sync"
+      IF CustSpecParms.GET('LIT_DROPLOC_TRIGSYNC', LabelRec.Code,0) THEN BEGIN
+        IF InternetSetup."Drop Location for Trigger Sync" = CustSpecParms.TextVar THEN
+          MESSAGE(TextL001,InternetSetup.FIELDCAPTION("Drop Location for Trigger Sync"))
+        ELSE
+          InternetSetup."Drop Location for Trigger Sync" := CustSpecParms.TextVar;
+      END ELSE BEGIN
+        IF InternetSetup."Drop Location for Trigger Sync" <> '' THEN
+          MESSAGE(TextL000,InternetSetup.FIELDCAPTION("Drop Location for Trigger Sync"));
+      END;
+
+      //InternetSetup."Registered Product Name"
+      IF CustSpecParms.GET('LIT_REG_PROD_NAME', LabelRec.Code,0) THEN BEGIN
+        IF InternetSetup."Registered Product Name" = CustSpecParms.TextVar THEN
+          MESSAGE(TextL001,InternetSetup.FIELDCAPTION("Registered Product Name"))
+        ELSE
+          InternetSetup."Registered Product Name" := CustSpecParms.TextVar;
+      END ELSE BEGIN
+        IF InternetSetup."Registered Product Name" <> '' THEN
+          MESSAGE(TextL000,InternetSetup.FIELDCAPTION("Registered Product Name"));
+      END;
+
+      //InternetSetup."Sitemap Export Folder"
+      IF CustSpecParms.GET('LIT_SITEMAP FOLD', LabelRec.Code,0) THEN BEGIN
+        IF InternetSetup."Sitemap Export Folder" = CustSpecParms.TextVar THEN
+          MESSAGE(TextL001,InternetSetup.FIELDCAPTION("Sitemap Export Folder"))
+        ELSE
+          InternetSetup."Sitemap Export Folder" := CustSpecParms.TextVar;
+      END ELSE BEGIN
+        IF InternetSetup."Sitemap Export Folder" <> '' THEN
+          MESSAGE(TextL000,InternetSetup.FIELDCAPTION("Sitemap Export Folder"));
+      END;
+
+      //InternetSetup."Online Connector File Queue"
+      IF CustSpecParms.GET('LIT_ONLINE_CONFILE_Q', LabelRec.Code,0) THEN BEGIN
+        IF InternetSetup."Online Connector File Queue" = CustSpecParms.TextVar THEN
+          MESSAGE(TextL001,InternetSetup.FIELDCAPTION("Online Connector File Queue"))
+        ELSE
+          InternetSetup."Online Connector File Queue" := CustSpecParms.TextVar;
+      END ELSE BEGIN
+        IF InternetSetup."Online Connector File Queue" <> '' THEN
+          MESSAGE(TextL000,InternetSetup.FIELDCAPTION("Online Connector File Queue"));
+      END;
+
+      //DOC EC2015.5.03 -
+      //InternetSetup."Promotion URL"
+      IF CustSpecParms.GET('LIT_PROMOTION_URL', LabelRec.Code,0) THEN BEGIN
+        IF InternetSetup."Promotion URL" = CustSpecParms.TextVar THEN
+          MESSAGE(TextL001,InternetSetup.FIELDCAPTION("Promotion URL"))
+        ELSE
+          InternetSetup."Promotion URL" := CustSpecParms.TextVar;
+      END ELSE BEGIN
+        IF InternetSetup."Promotion URL" <> '' THEN
+          MESSAGE(TextL000,InternetSetup.FIELDCAPTION("Promotion URL"));
+      END;
+      //DOC EC2015.5.03 +
+
+      InternetSetup.MODIFY;
+
+      MESSAGE(TextL003);
+    END;
+
+    BEGIN
+    {
+      //DOC EC2009.2    MA 04/11/2010 - Added SHELL Function
+      //DOC EC2009.2.69 MQ 14/09/2011 - GW110914 New Function CheckLabelUsedInCompany
+      //DOC EC2013.3.10 MA 03/09/2012 - MA120903 New Function ReplaceString
+      //DOC EC2013.3.30 MA 04/12/2012 - MA121204 New Functions: ApplyWebSettingsForEnviron, GetValidEnvSettings, ValidateEnvironment
+      //DOC EC2013.3.30 MQ 18/12/2012 - GW121218 ValidateEnvironment dont work on DERM so put EXIT(TRUE);
+      //DOC EC2013.3.70 MA 03/07/2013 - MA130703 Added function CountCharacterOccurence
+      //DOC EC2013.3.70 MQ 11/07/2013 - GW130711 Add function CreateWebAttsFromImages (will need editing to fit)
+      //DOC EC2013.4.00 MQ 06/11/2013 - GW131106 Removed function SHELL to MQ Global Functions 2 as it errored in 2013; Same for ValidateEnvironment
+      //DOC EC2013.4.67 MQ 29/09/2014 - GW140929 Add functions TestSetsToCustSpecPars and TestSetsFromCustSpecPars; This superceded ApplyWebSettingsForEnviron which now has an error at start and can be removed.
+      //DOC EC2013.4.67 MQ 09/10/2014 - GW141009 Deleted functions ApplyWebSettingsForEnviron and GetValidEnvSetting and table MQ Environment Setting Enhanced functions TestSetsToCustSpecPars and TestSetsFromCustSpecPars
+      //DOC EC2015.5.03 MQ 03/07/2015 - GW150703 Enhanced to add Promotions URL
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

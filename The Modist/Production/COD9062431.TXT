@@ -1,0 +1,279 @@
+OBJECT Codeunit 9062431 Load Test - Sales
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/05/16;
+    Time=[ 1:36:58 PM];
+    Version List=LT2016.16;
+  }
+  PROPERTIES
+  {
+    TableNo=9062461;
+    OnRun=BEGIN
+            CASE (Rec.Mode) OF
+              Rec.Mode::Initialize: InitializeTest(Rec);
+              Rec.Mode::Run: RunTest(Rec);
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      LoadTestMgt@1000000000 : Codeunit 9062430;
+      ItemFilter@1000000001 : Text;
+      CustomerFilter@1000000002 : Text;
+      LocationFilter@1000000003 : Text;
+      NoOfQuotes@1000000004 : Integer;
+      NoOfOrders@1000000005 : Integer;
+      NoOfDocLines@1000000007 : Integer;
+      PostOrders@1000000006 : Boolean;
+
+    LOCAL PROCEDURE InitializeTest@1000000000(VAR LoadTestEntry@1000000000 : Record 9062461);
+    BEGIN
+      LoadTestMgt.ClearParameters(LoadTestEntry."Load Test Code");
+      LoadTestMgt.AddParameter(LoadTestEntry."Load Test Code", 'ITEMFILTER', 'Item No. Filter', '');
+      LoadTestMgt.AddParameter(LoadTestEntry."Load Test Code", 'CUSTOMERFILTER', 'Customer No. Filter', '');
+      LoadTestMgt.AddParameter(LoadTestEntry."Load Test Code", 'LOCATIONFILTER', 'Location Code Filter', '');
+      LoadTestMgt.AddParameter(LoadTestEntry."Load Test Code", 'NOOFQUOTES', 'No. of Quotes', '50');
+      LoadTestMgt.AddParameter(LoadTestEntry."Load Test Code", 'NOOFORDERS', 'No. of Orders', '200');
+      LoadTestMgt.AddParameter(LoadTestEntry."Load Test Code", 'NOOFLINES', 'No. of Document Lines', '7');
+    END;
+
+    LOCAL PROCEDURE RunTest@1000000001(VAR LoadTestEntry@1000000000 : Record 9062461);
+    BEGIN
+      //get parameters
+      ItemFilter := LoadTestMgt.GetParameter(LoadTestEntry."Load Test Code", 'ITEMFILTER');
+      CustomerFilter := LoadTestMgt.GetParameter(LoadTestEntry."Load Test Code", 'CUSTOMERFILTER');
+      LocationFilter := LoadTestMgt.GetParameter(LoadTestEntry."Load Test Code", 'LOCATIONFILTER');
+      NoOfQuotes := LoadTestMgt.GetParameterInt(LoadTestEntry."Load Test Code", 'NOOFQUOTES');
+      NoOfOrders := LoadTestMgt.GetParameterInt(LoadTestEntry."Load Test Code", 'NOOFORDERS');
+      NoOfDocLines := LoadTestMgt.GetParameterInt(LoadTestEntry."Load Test Code", 'NOOFLINES');
+
+      PostOrders := TRUE;
+
+      RANDOMIZE();
+
+      //run tests
+      CreateOrders(LoadTestEntry);
+      CreateOrders(LoadTestEntry);
+
+      //finish test
+      LoadTestMgt.FinishTest(LoadTestEntry."Entry No.");
+    END;
+
+    LOCAL PROCEDURE "--- Tests ---"@1000000002();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CreateQuotes@1000000012(VAR LoadTestEntry@1000000002 : Record 9062461);
+    VAR
+      SalesHeader@1000000001 : Record 36;
+      Success@1000000003 : Boolean;
+      i@1000000000 : Integer;
+    BEGIN
+      FOR i:=1 TO NoOfQuotes DO BEGIN
+        Success := CreateSalesDocument(LoadTestEntry, SalesHeader, SalesHeader."Document Type"::Quote);
+        IF (Success) THEN
+          LoadTestMgt.AddRecordId(LoadTestEntry, SalesHeader.RECORDID);
+        UpdateLoadTestEntry(LoadTestEntry, Success);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateOrders@1000000003(VAR LoadTestEntry@1000000000 : Record 9062461);
+    VAR
+      SalesHeader@1000000002 : Record 36;
+      Success@1000000003 : Boolean;
+      i@1000000001 : Integer;
+    BEGIN
+      FOR i:=1 TO NoOfOrders DO BEGIN
+        Success := CreateSalesDocument(LoadTestEntry, SalesHeader, SalesHeader."Document Type"::Order);
+        IF (Success) THEN BEGIN
+          LoadTestMgt.AddRecordId(LoadTestEntry, SalesHeader.RECORDID);
+          IF (PostOrders) THEN
+            Success := PostSalesOrder(LoadTestEntry, SalesHeader);
+        END;
+        UpdateLoadTestEntry(LoadTestEntry, Success);
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE CreateSalesDocument@1000000004(VAR LoadTestEntry@1000000011 : Record 9062461;VAR SalesHeader@1000000000 : Record 36;DocumentType@1000000010 : Integer);
+    VAR
+      Customer@1000000002 : Record 18;
+      Item@1000000003 : Record 27;
+      Location@1000000006 : Record 14;
+      SalesLine@1000000008 : Record 37;
+      LineNo@1000000007 : Integer;
+      LinesToCreate@1000000001 : Integer;
+      CustomerCount@1000000004 : Integer;
+      ItemCount@1000000009 : Integer;
+      LocationCount@1000000005 : Integer;
+      ItemQty@1000000012 : Decimal;
+    BEGIN
+      //create document header
+      SalesHeader.INIT();
+      SalesHeader."Document Type" := SalesHeader."Document Type"::Order;
+      SalesHeader."No." := '';
+      SalesHeader."Posting Date" := WORKDATE;
+      SalesHeader.INSERT(TRUE);
+      LoadTestEntry.FieldModificationDelay();
+
+      //customer
+      Customer.RESET();
+      IF (CustomerFilter <> '') THEN
+        Customer.SETFILTER("No.", CustomerFilter);
+      CustomerCount := Customer.COUNT;
+      Customer.FINDSET();
+      IF (CustomerCount > 1) THEN
+        Customer.NEXT(RANDOM(CustomerCount) - 1);
+      SalesHeader.VALIDATE("Sell-to Customer No.", Customer."No.");
+
+      //location
+      Location.RESET();
+      IF (LocationFilter <> '') THEN
+        Location.SETFILTER(Code, LocationFilter);
+      LocationCount := Location.COUNT;
+      Location.FINDSET();
+      IF (LocationCount > 1) THEN
+        Location.NEXT(RANDOM(LocationCount) - 1);
+      SalesHeader.VALIDATE("Location Code", Location.Code);
+      SalesHeader.MODIFY(TRUE);
+      LoadTestEntry.FieldModificationDelay();
+
+      //lines
+      LinesToCreate := NoOfDocLines + RANDOM(5) - 3;
+      FOR LineNo := 1 TO LinesToCreate DO BEGIN
+        SalesLine.INIT();
+        SalesLine."Document Type" := SalesHeader."Document Type";
+        SalesLine.VALIDATE("Document No.", SalesHeader."No.");
+        SalesLine."Line No." := 10000 * LineNo;
+        SalesLine.INSERT(TRUE);
+        LoadTestEntry.FieldModificationDelay();
+
+        Item.RESET();
+        IF (ItemFilter <> '') THEN
+          Item.SETFILTER("No.", ItemFilter);
+
+        Item.SETRANGE("Location Filter", Location.Code);
+        Item.SETFILTER(Inventory, '>%1', 0);
+
+        ItemCount := Item.COUNT;
+        Item.FINDSET();
+        Item.NEXT(RANDOM(ItemCount) - 1);
+
+        SalesLine.VALIDATE(Type, SalesLine.Type::Item);
+        SalesLine.MODIFY(TRUE);
+        LoadTestEntry.FieldModificationDelay();
+
+        SalesLine.VALIDATE("No.", Item."No.");
+        SalesLine.MODIFY(TRUE);
+        LoadTestEntry.FieldModificationDelay();
+
+        Item.CALCFIELDS(Inventory);
+        ItemQty := 4;
+        IF (Item.Inventory < ItemQty) THEN
+          ItemQty := Item.Inventory;
+        IF (ItemQty > 2) THEN
+          ItemQty := ItemQty - RANDOM(ItemQty - 1);
+
+        SalesLine.VALIDATE(Quantity, ItemQty);
+        SalesLine.MODIFY(TRUE);
+        LoadTestEntry.FieldModificationDelay();
+
+        SalesHeader.VALIDATE("Location Code", Location.Code);
+        SalesLine.MODIFY(TRUE);
+        LoadTestEntry.FieldModificationDelay();
+
+      END;
+
+      LoadTestEntry.TransactionDelay();
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE PostSalesOrder@1000000006(VAR LoadTestEntry@1000000002 : Record 9062461;VAR SalesHeader@1000000000 : Record 36);
+    VAR
+      Location@1000000003 : Record 14;
+      WhseShptLine@1000000008 : Record 7321;
+      WhseShptHeader@1000000009 : Record 7320;
+      SalesPost@1000000001 : Codeunit 80;
+      ReleaseSalesDoc@1000000004 : Codeunit 414;
+      CreateWhseShipment@1000000006 : Codeunit 5752;
+      WhsePostShipment@1000000010 : Codeunit 5763;
+      WarehouseShipment@1000000005 : Boolean;
+      ShipmentCreated@1000000007 : Boolean;
+    BEGIN
+      WarehouseShipment := FALSE;
+      IF (Location.GET(SalesHeader."Location Code")) THEN
+        WarehouseShipment := Location."Require Shipment";
+
+      IF (WarehouseShipment) THEN BEGIN
+        //release document
+        COMMIT;
+        ReleaseSalesDoc.RUN(SalesHeader);
+        LoadTestEntry.TransactionDelay();
+
+        //create shipment
+        ShipmentCreated := CreateWhseShipment.CreateFromSalesOrderHideDialog(SalesHeader);
+        LoadTestEntry.TransactionDelay();
+
+        //post shipment
+        IF (ShipmentCreated) THEN BEGIN
+          WhseShptLine.RESET();
+          WhseShptLine.SETCURRENTKEY("Source Type", "Source Subtype", "Source No.", "Source Line No.");
+          WhseShptLine.SETRANGE("Source Type", DATABASE::"Sales Line");
+          WhseShptLine.SETRANGE("Source Subtype", SalesHeader."Document Type");
+          WhseShptLine.SETRANGE("Source No.", SalesHeader."No.");
+          IF (WhseShptLine.FINDFIRST()) THEN BEGIN
+            WhseShptHeader.GET(WhseShptLine."No.");
+            WhseShptLine.RESET();
+            WhseShptLine.SETRANGE("No.", WhseShptHeader."No.");
+            WhsePostShipment.SetPostingSettings(TRUE);                //Invoice
+            WhsePostShipment.SetPrint(FALSE);
+            WhsePostShipment.RUN(WhseShptLine);
+            WhsePostShipment.GetResultMessage;
+            LoadTestEntry.TransactionDelay();
+          END;
+        END;
+
+      END ELSE BEGIN
+        CLEAR(SalesPost);
+        SalesHeader.Ship := TRUE;
+        SalesHeader.Invoice := TRUE;
+        SalesPost.RUN(SalesHeader);
+      END;
+
+      LoadTestEntry.TransactionDelay();
+    END;
+
+    LOCAL PROCEDURE "--- Error Log ---"@1000000013();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE UpdateLoadTestEntry@1000000014(VAR LoadTestEntry@1000000000 : Record 9062461;Success@1000000003 : Boolean);
+    VAR
+      LoadTestError@1000000002 : Record 9062462;
+      ErrorText@1000000001 : Text;
+    BEGIN
+      LoadTestEntry.FIND('=');
+      IF (Success) THEN BEGIN
+        LoadTestEntry."Processed Records" := LoadTestEntry."Processed Records" + 1
+      END ELSE BEGIN
+        LoadTestEntry."Records with Errors" := LoadTestEntry."Records with Errors" + 1;
+        ErrorText := GETLASTERRORTEXT;
+        IF (ErrorText <> '') THEN
+          LoadTestError.LogError(LoadTestEntry, ErrorText);
+        CLEARLASTERROR();
+      END;
+      LoadTestEntry.MODIFY();
+      COMMIT;
+    END;
+
+    BEGIN
+    {
+          //DOC LT2016.16 AZ 14/07/2016 - Created
+    }
+    END.
+  }
+}
+

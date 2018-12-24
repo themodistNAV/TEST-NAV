@@ -1,0 +1,469 @@
+OBJECT Codeunit 9086956 nF. User Relations Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=30/10/16;
+    Time=12:05:06 PM;
+    Version List=NF2016.17;
+  }
+  PROPERTIES
+  {
+    TableNo=9086953;
+    OnRun=BEGIN
+            UpdateRelations(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      NfUser@1000000000 : Record 9086953;
+      NfDialogManagement@1000000002 : Codeunit 9086952;
+      NfObjectToolkit@1000000004 : Codeunit 9086974;
+      NfRecordUpdate@1000000001 : Codeunit 9086970;
+      NfString@1000000005 : Codeunit 9086971;
+      NfDialogIndex@1000000003 : ' ,Activity';
+
+    LOCAL PROCEDURE "--- General ---"@1000000004();
+    BEGIN
+    END;
+
+    PROCEDURE UpdateRelations@1000000002(VAR pNfUser@1000000001 : Record 9086953) : Boolean;
+    VAR
+      lRelations@1000000000 : ARRAY [20] OF Boolean;
+      lNfUpdateUserRelations@1000000002 : Report 9086952;
+    BEGIN
+      ///<summary>Updating relations</summary>
+      ///<param name="pNfUser">The user</param>
+      ///<returns>TRUE = Updated, FALSE = Cancelled</returns>
+
+      NfUser := pNfUser;
+
+      lNfUpdateUserRelations.SetRelation(NfUser.Relation::Contact, TRUE);
+      lNfUpdateUserRelations.SetRelation(NfUser.Relation::"Salesperson/Purchaser", (NfUser."Salesperson/Purchaser Code" <> ''));
+      lNfUpdateUserRelations.SetRelation(NfUser.Relation::Vendor, (NfUser."Vendor No." <> ''));
+      lNfUpdateUserRelations.SetRelation(NfUser.Relation::Resource, (NfUser."Resource No." <> ''));
+      lNfUpdateUserRelations.SetRelation(NfUser.Relation::Employee, (NfUser."Employee No." <> ''));
+      lNfUpdateUserRelations.RUNMODAL();
+      IF ( NOT (lNfUpdateUserRelations.GetReportResult())) THEN
+        EXIT(FALSE);
+      lNfUpdateUserRelations.GetRelations(lRelations);
+
+      UpdateSelectedRelations(NfUser, lRelations);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE UpdateSelectedRelations@1000000003(VAR pNfUser@1000000000 : Record 9086953;pRelations@1000000001 : ARRAY [20] OF Boolean);
+    VAR
+      lModify@1000000002 : Boolean;
+      eDialogTitle@1000000003 : TextConst 'ENU=Updating Relations...;ENG=Updating Relations...';
+    BEGIN
+      ///<summary>Updating selected relations</summary>
+      ///<param name="pNfUser">The user</param>
+      ///<param name="pRelations">Array with relations</param>
+
+      NfUser := pNfUser;
+
+      lModify := FALSE;
+
+      CLEAR(NfDialogManagement);
+      NfDialogManagement.AddTextControlNoCaption(NfDialogIndex::Activity);
+      NfDialogManagement.Open(eDialogTitle);
+
+      IF (pRelations[NfUser.Relation::Contact]) THEN
+        UpdateContactRelation(lModify);
+      IF (pRelations[NfUser.Relation::"Salesperson/Purchaser"]) THEN
+        UpdateSalespersonPurchaserRelation(lModify);
+      IF (pRelations[NfUser.Relation::Vendor]) THEN
+        UpdateVendorRelation(lModify);
+      IF (pRelations[NfUser.Relation::Resource]) THEN
+        UpdateResourceRelation(lModify);
+      IF (pRelations[NfUser.Relation::Employee]) THEN
+        UpdateEmployeeRelation(lModify);
+
+      NfDialogManagement.Close();
+
+      IF (lModify) THEN
+        NfUser.MODIFY(TRUE);
+
+      pNfUser := NfUser;
+    END;
+
+    LOCAL PROCEDURE "--- Particular Updates ---"@1000000005();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE UpdateContactRelation@1000000001(VAR pModify@1000000000 : Boolean);
+    VAR
+      lMarketingSetup@1000000002 : Record 5079;
+      lContact@1000000001 : Record 5050;
+      lContactVar@1000000005 : Variant;
+      lNo@1000000003 : Code[20];
+      lNames@1000000004 : ARRAY [2] OF Text[50];
+    BEGIN
+      ///<summary>Updating contact relation</summary>
+      ///<param name="pModify">Target "Modify" flag</param>
+
+      NfDialogManagement.SetValue(NfDialogIndex::Activity, lContact.TABLECAPTION());
+
+      CLEAR(NfRecordUpdate);
+
+      IF (NfUser."Contact No." <> '') THEN
+        IF ( NOT (lContact.GET(NfUser."Contact No."))) THEN
+          NfUser."Contact No." := '';
+
+      IF (NfUser."Contact No." = '') THEN
+      BEGIN
+        lMarketingSetup.GET();
+        lMarketingSetup.TESTFIELD("Contact Nos.");
+
+        lNo := ProposeNo(lMarketingSetup."Contact Nos.", DATABASE::Contact, lContact.FIELDNO("No."), MAXSTRLEN(lContact."No."));
+
+        lContact.INIT();
+        IF (lNo <> '') THEN
+          lContact.VALIDATE("No.", lNo);
+        lContact.INSERT(TRUE);
+      END;
+
+      ProposeNames(lNames, MAXSTRLEN(lContact.Name));
+
+      CLEAR(NfRecordUpdate);
+      NfRecordUpdate.SetRecord(lContact);
+      NfRecordUpdate.ValidateRecordField(lContact.FIELDNO(Name), lNames[1]);
+      NfRecordUpdate.ValidateRecordField(lContact.FIELDNO("Name 2"), lNames[2]);
+      NfRecordUpdate.ValidateRecordField(lContact.FIELDNO("E-Mail"), NfUser."E-Mail");
+      NfRecordUpdate.ValidateRecordField(lContact.FIELDNO("Phone No."), NfUser."Phone No.");
+      NfRecordUpdate.ValidateRecordField(lContact.FIELDNO("Mobile Phone No."), NfUser."Mobile Phone No.");
+      IF (NfRecordUpdate.RecordHasChanged()) THEN
+      BEGIN
+        NfRecordUpdate.GetRecord(lContactVar);
+        lContact := lContactVar;
+        lContact.MODIFY(TRUE);
+      END;
+
+      IF (NfUser."Contact No." = '') THEN
+      BEGIN
+        NfUser.VALIDATE("Contact No.", lContact."No.");
+        pModify := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateSalespersonPurchaserRelation@1000000010(VAR pModify@1000000000 : Boolean);
+    VAR
+      lSalespersonPurchaser@1000000001 : Record 13;
+      lSalespersonPurchaserVar@1000000004 : Variant;
+      lCode@1000000002 : Code[10];
+      lNames@1000000003 : ARRAY [2] OF Text[50];
+    BEGIN
+      ///<summary>Updating salesperson/purchaser relation</summary>
+      ///<param name="pModify">Target "Modify" flag</param>
+
+      NfDialogManagement.SetValue(NfDialogIndex::Activity, lSalespersonPurchaser.TABLECAPTION());
+
+      IF (NfUser."Salesperson/Purchaser Code" <> '') THEN
+        IF ( NOT (lSalespersonPurchaser.GET(NfUser."Salesperson/Purchaser Code"))) THEN
+          NfUser."Salesperson/Purchaser Code" := '';
+
+      IF (NfUser."Salesperson/Purchaser Code" = '') THEN
+      BEGIN
+        lCode := ProposeNo('', DATABASE::"Salesperson/Purchaser", lSalespersonPurchaser.FIELDNO(Code), MAXSTRLEN(lSalespersonPurchaser.Code));
+
+        lSalespersonPurchaser.INIT();
+        lSalespersonPurchaser.VALIDATE(Code, lCode);
+        lSalespersonPurchaser.INSERT(TRUE);
+      END;
+
+      ProposeNames(lNames, MAXSTRLEN(lSalespersonPurchaser.Name));
+
+      CLEAR(NfRecordUpdate);
+      NfRecordUpdate.SetRecord(lSalespersonPurchaser);
+      NfRecordUpdate.ValidateRecordField(lSalespersonPurchaser.FIELDNO(Name), lNames[1]);
+      NfRecordUpdate.ValidateRecordField(lSalespersonPurchaser.FIELDNO("E-Mail"), NfUser."E-Mail");
+      NfRecordUpdate.ValidateRecordField(lSalespersonPurchaser.FIELDNO("Phone No."), NfUser."Phone No.");
+      IF (NfRecordUpdate.RecordHasChanged()) THEN
+      BEGIN
+        NfRecordUpdate.GetRecord(lSalespersonPurchaserVar);
+        lSalespersonPurchaser := lSalespersonPurchaserVar;
+        lSalespersonPurchaser.MODIFY(TRUE);
+      END;
+
+      IF (NfUser."Salesperson/Purchaser Code" = '') THEN
+      BEGIN
+        NfUser."Salesperson/Purchaser Code" := lSalespersonPurchaser.Code;
+        pModify := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateVendorRelation@1000000009(VAR pModify@1000000000 : Boolean);
+    VAR
+      lPurchasesPayablesSetup@1000000001 : Record 312;
+      lVendor@1000000002 : Record 23;
+      lVendorVar@1000000005 : Variant;
+      lNo@1000000003 : Code[20];
+      lNames@1000000004 : ARRAY [2] OF Text[50];
+    BEGIN
+      ///<summary>Updating vendor relation</summary>
+      ///<param name="pModify">Target "Modify" flag</param>
+
+      NfDialogManagement.SetValue(NfDialogIndex::Activity, lVendor.TABLECAPTION());
+
+      CLEAR(NfRecordUpdate);
+
+      IF (NfUser."Vendor No." <> '') THEN
+        IF ( NOT (lVendor.GET(NfUser."Vendor No."))) THEN
+          NfUser."Vendor No." := '';
+
+      IF (NfUser."Vendor No." = '') THEN
+      BEGIN
+        lPurchasesPayablesSetup.GET();
+        lPurchasesPayablesSetup.TESTFIELD("Vendor Nos.");
+
+        lNo := ProposeNo(lPurchasesPayablesSetup."Vendor Nos.", DATABASE::Vendor, lVendor.FIELDNO("No."), MAXSTRLEN(lVendor."No."));
+
+        lVendor.INIT();
+        IF (lNo <> '') THEN
+          lVendor.VALIDATE("No.", lNo);
+        lVendor.INSERT(TRUE);
+      END;
+
+      ProposeNames(lNames, MAXSTRLEN(lVendor.Name));
+
+      CLEAR(NfRecordUpdate);
+      NfRecordUpdate.SetRecord(lVendor);
+      NfRecordUpdate.ValidateRecordField(lVendor.FIELDNO(Name), lNames[1]);
+      NfRecordUpdate.ValidateRecordField(lVendor.FIELDNO("Name 2"), lNames[2]);
+      NfRecordUpdate.ValidateRecordField(lVendor.FIELDNO("E-Mail"), NfUser."E-Mail");
+      NfRecordUpdate.ValidateRecordField(lVendor.FIELDNO("Phone No."), NfUser."Phone No.");
+      IF (NfRecordUpdate.RecordHasChanged()) THEN
+      BEGIN
+        NfRecordUpdate.GetRecord(lVendorVar);
+        lVendor := lVendorVar;
+        lVendor.MODIFY(TRUE);
+      END;
+
+      IF (NfUser."Vendor No." = '') THEN
+      BEGIN
+        NfUser.VALIDATE("Vendor No.", lVendor."No.");
+        pModify := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateResourceRelation@1000000008(VAR pModify@1000000000 : Boolean);
+    VAR
+      lResourcesSetup@1000000004 : Record 314;
+      lResource@1000000003 : Record 156;
+      lResourceVar@1000000005 : Variant;
+      lNo@1000000002 : Code[20];
+      lNames@1000000001 : ARRAY [2] OF Text[50];
+    BEGIN
+      ///<summary>Updating resource relation</summary>
+      ///<param name="pModify">Target "Modify" flag</param>
+
+      NfDialogManagement.SetValue(NfDialogIndex::Activity, lResource.TABLECAPTION());
+
+      CLEAR(NfRecordUpdate);
+
+      IF (NfUser."Resource No." <> '') THEN
+        IF ( NOT (lResource.GET(NfUser."Resource No."))) THEN
+          NfUser."Resource No." := '';
+
+      IF (NfUser."Resource No." = '') THEN
+      BEGIN
+        lResourcesSetup.GET();
+        lResourcesSetup.TESTFIELD("Resource Nos.");
+
+        lNo := ProposeNo(lResourcesSetup."Resource Nos.", DATABASE::Resource, lResource.FIELDNO("No."), MAXSTRLEN(lResource."No."));
+
+        lResource.INIT();
+        IF (lNo <> '') THEN
+          lResource.VALIDATE("No.", lNo);
+        lResource.INSERT(TRUE);
+      END;
+
+      ProposeNames(lNames, MAXSTRLEN(lResource.Name));
+
+      CLEAR(NfRecordUpdate);
+      NfRecordUpdate.SetRecord(lResource);
+      NfRecordUpdate.ValidateRecordField(lResource.FIELDNO(Name), lNames[1]);
+      NfRecordUpdate.ValidateRecordField(lResource.FIELDNO("Name 2"), lNames[2]);
+      IF (NfRecordUpdate.RecordHasChanged()) THEN
+      BEGIN
+        NfRecordUpdate.GetRecord(lResourceVar);
+        lResource := lResourceVar;
+        lResource.MODIFY(TRUE);
+      END;
+
+      IF (NfUser."Resource No." = '') THEN
+      BEGIN
+        NfUser.VALIDATE("Resource No.", lResource."No.");
+        pModify := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateEmployeeRelation@1000000007(VAR pModify@1000000000 : Boolean);
+    VAR
+      lHumanResourcesSetup@1000000004 : Record 5218;
+      lEmployee@1000000003 : Record 5200;
+      lEmployeeVar@1000000005 : Variant;
+      lNo@1000000002 : Code[20];
+      lNames@1000000001 : ARRAY [2] OF Text[50];
+    BEGIN
+      ///<summary>Updating employee relation</summary>
+      ///<param name="pModify">Target "Modify" flag</param>
+
+      NfDialogManagement.SetValue(NfDialogIndex::Activity, lEmployee.TABLECAPTION());
+
+      CLEAR(NfRecordUpdate);
+
+      IF (NfUser."Employee No." <> '') THEN
+        IF ( NOT (lEmployee.GET(NfUser."Employee No."))) THEN
+          NfUser."Employee No." := '';
+
+      IF (NfUser."Employee No." = '') THEN
+      BEGIN
+        lHumanResourcesSetup.GET();
+        lHumanResourcesSetup.TESTFIELD("Employee Nos.");
+
+        lNo := ProposeNo(lHumanResourcesSetup."Employee Nos.", DATABASE::Employee, lEmployee.FIELDNO("No."), MAXSTRLEN(lEmployee."No."));
+
+        lEmployee.INIT();
+        IF (lNo <> '') THEN
+          lEmployee.VALIDATE("No.", lNo);
+        lEmployee.INSERT(TRUE);
+      END;
+
+      ProposeNames(lNames, MAXSTRLEN(lEmployee."First Name"));
+
+      CLEAR(NfRecordUpdate);
+      NfRecordUpdate.SetRecord(lEmployee);
+      NfRecordUpdate.ValidateRecordField(lEmployee.FIELDNO("First Name"), lNames[1]);
+      NfRecordUpdate.ValidateRecordField(lEmployee.FIELDNO("Last Name"), lNames[2]);
+      NfRecordUpdate.ValidateRecordField(lEmployee.FIELDNO("E-Mail"), NfUser."E-Mail");
+      NfRecordUpdate.ValidateRecordField(lEmployee.FIELDNO("Phone No."), NfUser."Phone No.");
+      NfRecordUpdate.ValidateRecordField(lEmployee.FIELDNO("Mobile Phone No."), NfUser."Mobile Phone No.");
+      IF (NfRecordUpdate.RecordHasChanged()) THEN
+      BEGIN
+        NfRecordUpdate.GetRecord(lEmployeeVar);
+        lEmployee := lEmployeeVar;
+        lEmployee.MODIFY(TRUE);
+      END;
+
+      IF (NfUser."Employee No." = '') THEN
+      BEGIN
+        NfUser.VALIDATE("Employee No.", lEmployee."No.");
+        pModify := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@1000000006();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ProposeNo@1000000011(pNoSeriesCode@1000000000 : Code[10];pTableId@1000000002 : Integer;pFieldId@1000000003 : Integer;pLength@1000000005 : Integer) : Code[20];
+    VAR
+      lAllObj@1000000018 : Record 2000000038;
+      lNoSeries@1000000001 : Record 308;
+      lUserId@1000000007 : Code[50];
+      lNo@1000000004 : Code[20];
+      lNoToPropose@1000000013 : Code[20];
+      lProposeNo@1000000006 : Boolean;
+      lChecking@1000000010 : Boolean;
+      lNumber@1000000011 : Integer;
+      lNumberText@1000000015 : Code[20];
+      lNumberLength@1000000012 : Integer;
+      lNumberPreviously@1000000014 : Integer;
+      lLengthDifference@1000000016 : Integer;
+      lRecRef@1000000008 : RecordRef;
+      lFldRef@1000000009 : FieldRef;
+      eIdForRelationsEmpty@1000000019 : TextConst 'ENU=User "%1" has empty "%2". You must update this field to unique value for user relations to be generated.;ENG=User "%1" has empty "%2". You must update this field to unique value for user relations to be generated.';
+      eCantPropose@1000000017 : TextConst 'ENU="Can''t propose no. for table ""%1"" field ""%2"" based on user ""%3""; all possible values already exist in the database. Please, set ""%4"" to something unique for this user.";ENG="Can''t propose no. for table ""%1"" field ""%2"" based on user ""%3""; all possible values already exist in the database. Please, set ""%4"" to something unique for this user."';
+    BEGIN
+      ///<summary>Proposing "No." for a new record</summary>
+      ///<param name="pNoSeriesCode">No. series code</param>
+      ///<param name="pTableId">Table ID to check</param>
+      ///<param name="pFieldId">Field ID to check</param>
+      ///<param name="pLength">Length</param>
+      ///<returns>The "No."</returns>
+      // MYUSERNAME -> MYUSERNAM1 -> MYUSERNAM2 ... -> MYUSERN10
+
+      IF (pNoSeriesCode <> '') THEN
+      BEGIN
+        lNoSeries.GET(pNoSeriesCode);
+        lProposeNo := (lNoSeries."Manual Nos.");
+      END
+      ELSE
+        lProposeNo := TRUE;
+
+      IF (lProposeNo) THEN
+      BEGIN
+        IF (NfUser."ID for Relations" = '') THEN
+          ERROR(eIdForRelationsEmpty, NfUser.GetName(), NfUser.FIELDCAPTION("ID for Relations"));
+
+        lNo := COPYSTR(NfUser."ID for Relations", 1, pLength);
+        lNoToPropose := lNo;
+
+        lRecRef.OPEN(pTableId);
+        lFldRef := lRecRef.FIELD(pFieldId);
+        lChecking := TRUE;
+        WHILE (lChecking) DO
+        BEGIN
+          lFldRef.SETRANGE(lNoToPropose);
+          lChecking := ( NOT (lRecRef.ISEMPTY()));
+          IF (lChecking) THEN
+          BEGIN
+            lNumber += 1;
+            lNumberText := FORMAT(lNumber, 0, 1);
+            lNumberLength := STRLEN(lNumberText);
+            IF (lNumberLength <= pLength) THEN
+            BEGIN
+              IF (STRLEN(lNo) + lNumberLength > pLength) THEN
+              BEGIN
+                lLengthDifference := STRLEN(lNo) + lNumberLength - pLength;
+                lNoToPropose := COPYSTR(lNo, 1, STRLEN(lNo) - lLengthDifference) + lNumberText;
+              END
+              ELSE
+                lNoToPropose := lNo + lNumberText;
+            END
+            ELSE
+              ERROR(eCantPropose, NfObjectToolkit.GetObjectName(lAllObj."Object Type"::Table, pTableId),
+                NfObjectToolkit.GetFieldName(pTableId, pFieldId), NfUser.GetName(), NfUser.FIELDCAPTION("ID for Relations"));
+          END;
+        END;
+        lRecRef.CLOSE();
+
+        lNo := lNoToPropose;
+      END;
+
+      EXIT(lNo);
+    END;
+
+    LOCAL PROCEDURE ProposeNames@1000000000(VAR pNames@1000000000 : ARRAY [2] OF Text[50];pLength@1000000002 : Integer);
+    VAR
+      lNfTextBuffer@1000000001 : TEMPORARY Record 823;
+    BEGIN
+      ///<summary>Proposing names</summary>
+      ///<param name="pNames">Target array of 2 names; 50 characters each</param>
+      ///<param name="pLength">Length (of each name)</param>
+
+      CLEAR(pNames);
+      NfString.SplitPreservingWords(NfUser.GetName(), pLength, lNfTextBuffer);
+      IF (lNfTextBuffer.FINDFIRST()) THEN
+        pNames[1] := lNfTextBuffer.Value;
+      IF (lNfTextBuffer.NEXT() <> 0) THEN
+        pNames[2] := lNfTextBuffer.Value;
+      IF (pNames[1] = '') THEN
+        pNames[1] := COPYSTR(NfUser."Short User ID", 1, pLength);
+      IF (pNames[1] = '') THEN
+        pNames[1] := COPYSTR(NfUser."User ID", 1, pLength);
+    END;
+
+    BEGIN
+    {
+      ///<summary>Managing nForcmeent user relations (with contact, salesperson, vendor, etc.)</summary>
+      ///<change version="NF2016.17" initials="JH" date="2016-10-09">Created</change>
+    }
+    END.
+  }
+}
+

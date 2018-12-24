@@ -1,0 +1,478 @@
+OBJECT Table 9062392 CRM Log Entry
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.15;
+  }
+  PROPERTIES
+  {
+    OnInsert=VAR
+               CRMLog@1000000000 : Record 9062392;
+               ContactPassed@1000000001 : Record 5050;
+               NoSeries@1000000002 : Record 308;
+               NoSeriesLine@1000000003 : Record 309;
+               i@1000000004 : Integer;
+               RelatedTableNo@1000000005 : Integer;
+               RelatedPosText@1000000006 : Text;
+             BEGIN
+               IF "Entry No." <= 0 THEN BEGIN
+                 CRMLog.RESET;
+                 IF NOT CRMLog.FINDLAST THEN "Entry No." := 1 ELSE "Entry No." := CRMLog."Entry No." + 1;
+               END;
+               IF "Log Date" = 0D THEN VALIDATE("Log Date",TODAY);
+               IF "Log Time" = 0T THEN VALIDATE("Log Time",TIME);
+               IF "Owned By Area" = "Owned By Area"::" " THEN "Owned By Area" := "Owned By Area"::Sales;
+
+               VALIDATE("Last Modified Date","Log Date");
+               VALIDATE("Last Modified Time","Log Time");
+
+               IF "Created by" = '' THEN VALIDATE("Created by",TNPUtils.GetUserContactNo(USERID));
+
+               i := -1;
+               REPEAT
+                 i += 1;
+                 FILTERGROUP := i;
+               UNTIL (i > 10) OR (GETFILTERS <> '');
+
+               IF GETFILTER("Related Customer No.") <> '' THEN
+                 VALIDATE("Related Customer No.",GETFILTER("Related Customer No."));
+
+               IF GETFILTER("Related Vendor No.") <> '' THEN
+                 BEGIN
+                  VALIDATE("Related Vendor No.",GETFILTER("Related Vendor No."));
+                  VALIDATE("Owned By Area","Owned By Area"::Purchasing);
+                 END;
+
+               IF GETFILTER("Related Contact") <> '' THEN
+                 IF ContactPassed.GET(GETFILTER("Related Contact")) THEN
+                   VALIDATE("Related Contact",GETFILTER("Related Contact"));
+
+               IF GETFILTER("Related Contact (Company)") <> '' THEN
+                 IF ContactPassed.GET(GETFILTER("Related Contact (Company)")) THEN
+                   VALIDATE("Related Contact (Company)",GETFILTER("Related Contact (Company)"));
+
+               IF GETFILTER("Related Record Type") <> '' THEN
+                 VALIDATE("Related Record Type",GETFILTER("Related Record Type"));
+
+               IF GETFILTER("Related Record") <> '' THEN
+                 VALIDATE("Related Record",GETFILTER("Related Record"));
+
+               IF GETFILTER("Owned By Area") <> '' THEN EVALUATE("Owned By Area",GETFILTER("Owned By Area"));
+
+               i := -1;
+               REPEAT
+                 i += 1;
+                 FILTERGROUP := i;
+                 IF GETFILTER("Assigned To")<> '' THEN
+                   VALIDATE("Assigned To",GETFILTER("Assigned To"));
+               UNTIL (i > 10) OR (GETFILTER("Assigned To") <> '');
+
+               FILTERGROUP := 0;
+
+               IF GetPassedRecord(RelatedTableNo,RelatedPosText) THEN
+                 SetRelatedRecord(RelatedTableNo,RelatedPosText);
+
+               UpdateFromIncident();
+             END;
+
+    OnModify=BEGIN
+               VALIDATE("Last Modified Date",TODAY);
+               VALIDATE("Last Modified Time",TIME);
+             END;
+
+    CaptionML=[ENU=CRM Log Entry;
+               ENG=CRM Log Entry];
+    LookupPageID=Page9062518;
+    DrillDownPageID=Page9062518;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Entry No.           ;Integer       ;CaptionML=[ENU=Entry No.;
+                                                              ENG=Entry No.] }
+    { 2   ;   ;Related Customer No.;Code20        ;TableRelation=Customer;
+                                                   OnValidate=VAR
+                                                                Customer@1000000000 : Record 18;
+                                                                Contact@1000000001 : Record 5050;
+                                                                ContBusRel@1000000002 : Record 5054;
+                                                              BEGIN
+                                                                IF "Related Contact" = '' THEN
+                                                                BEGIN
+                                                                  ContBusRel.SETRANGE("Link to Table",ContBusRel."Link to Table"::Customer);
+                                                                  ContBusRel.SETRANGE("No.","Related Customer No.");
+                                                                  IF (ContBusRel.FINDFIRST) THEN
+                                                                    VALIDATE("Related Contact",ContBusRel."Contact No.");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Related Customer No.;
+                                                              ENG=Related Customer No.] }
+    { 3   ;   ;Related Vendor No.  ;Code20        ;TableRelation=Vendor;
+                                                   OnValidate=VAR
+                                                                Vendor@1000000000 : Record 23;
+                                                                Contact@1000000001 : Record 5050;
+                                                              BEGIN
+                                                              END;
+
+                                                   CaptionML=[ENU=Related Vendor No.;
+                                                              ENG=Related Vendor No.] }
+    { 4   ;   ;Type                ;Code20        ;TableRelation="General Lookup".Code WHERE (Type=CONST(CRMLOGTYPE));
+                                                   CaptionML=[ENU=Type;
+                                                              ENG=Type] }
+    { 5   ;   ;Log Date            ;Date          ;CaptionML=[ENU=Log Date;
+                                                              ENG=Log Date] }
+    { 6   ;   ;Log Time            ;Time          ;CaptionML=[ENU=Log Time;
+                                                              ENG=Log Time] }
+    { 7   ;   ;Due Date            ;Date          ;OnValidate=BEGIN
+                                                                IF xRec."Due Date" = Rec."Due Date" THEN EXIT;
+
+                                                                IF Closed THEN ERROR(TNP001)
+                                                              END;
+
+                                                   CaptionML=[ENU=Due Date;
+                                                              ENG=Due Date] }
+    { 8   ;   ;Due Time            ;Time          ;OnValidate=VAR
+                                                                CreatedDateTime@1000000000 : DateTime;
+                                                                DueDateTime@1000000001 : DateTime;
+                                                                eDueBeforeLog@1000000002 : TextConst 'ENU=Could not set "%1" to %2 as %3 is before the "%4"/"%5" of %6;ENG=Could not set "%1" to %2 as %3 is before the "%4"/"%5" of %6';
+                                                              BEGIN
+                                                                IF xRec."Due Time" = Rec."Due Time" THEN EXIT;
+
+                                                                IF "Due Date" = 0D THEN VALIDATE("Due Date",TODAY);
+
+                                                                IF CREATEDATETIME("Due Date","Due Time") < CREATEDATETIME("Log Date","Log Time") THEN
+                                                                  ERROR(eDueBeforeLog, Rec.FIELDCAPTION("Due Time"), Rec."Due Time", CREATEDATETIME(Rec."Due Date", Rec."Due Time"),
+                                                                    Rec.FIELDCAPTION("Log Date"), Rec.FIELDCAPTION("Log Time"), CREATEDATETIME(Rec."Log Date", Rec."Log Time"));
+                                                              END;
+
+                                                   CaptionML=[ENU=Due Time;
+                                                              ENG=Due Time] }
+    { 9   ;   ;Subject             ;Text250       ;CaptionML=[ENU=Subject;
+                                                              ENG=Subject] }
+    { 10  ;   ;Comments            ;Text250       ;CaptionML=[ENU=Comments;
+                                                              ENG=Comments] }
+    { 11  ;   ;Next Chase          ;Date          ;OnValidate=VAR
+                                                                lCreditControlManagement@9062229 : Codeunit 9062618;
+                                                              BEGIN
+                                                                CreateNextLog(Rec);
+                                                              END;
+
+                                                   CaptionML=[ENU=Next Chase;
+                                                              ENG=Next Chase] }
+    { 12  ;   ;Owned By Area       ;Option        ;CaptionML=[ENU=Owned By Area;
+                                                              ENG=Owned By Area];
+                                                   OptionCaptionML=[ENU=" ,Credit Control,Sales,Customer Services,Purchasing";
+                                                                    ENG=" ,Credit Control,Sales,Customer Services,Purchasing"];
+                                                   OptionString=[ ,Credit Control,Sales,Customer Services,Purchasing] }
+    { 13  ;   ;Created by          ;Code20        ;TableRelation=Contact;
+                                                   CaptionML=[ENU=Created by;
+                                                              ENG=Created by];
+                                                   Editable=No }
+    { 14  ;   ;Assigned To         ;Code20        ;TableRelation=Contact;
+                                                   CaptionML=[ENU=Assigned To;
+                                                              ENG=Assigned To] }
+    { 16  ;   ;Payment Date Promise;Date          ;CaptionML=[ENU=Payment Date Promise;
+                                                              ENG=Payment Date Promise] }
+    { 17  ;   ;Payment Amount Promise;Decimal     ;CaptionML=[ENU=Payment Amount Promise;
+                                                              ENG=Payment Amount Promise] }
+    { 18  ;   ;Next Log Period     ;Code10        ;OnValidate=BEGIN
+                                                                IF "Next Log Period" = '' THEN EXIT;
+                                                                IF COPYSTR("Next Log Period",1,1) <> '+' THEN
+                                                                  "Next Log Period" := '+' + "Next Log Period";
+                                                                VALIDATE("Next Chase",CALCDATE("Next Log Period",TODAY));
+                                                              END;
+
+                                                   CaptionML=[ENU=Next Log Period;
+                                                              ENG=Next Log Period] }
+    { 19  ;   ;Group               ;Text100       ;CaptionML=[ENU=Group;
+                                                              ENG=Group] }
+    { 22  ;   ;Related Contact     ;Code20        ;TableRelation=Contact;
+                                                   OnValidate=VAR
+                                                                Contact@1000000000 : Record 5050;
+                                                              BEGIN
+                                                                IF Contact.GET("Related Contact") THEN BEGIN
+                                                                  VALIDATE("Related Contact (Company)",Contact."Company No.");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Related Contact;
+                                                              ENG=Related Contact] }
+    { 23  ;   ;Related Contact (Company);Code20   ;TableRelation=Contact WHERE (Type=CONST(Company));
+                                                   OnValidate=VAR
+                                                                ContBusRel@1000000000 : Record 5054;
+                                                              BEGIN
+                                                                IF ContBusRel.GET("Related Contact (Company)",'CUST')
+                                                                  THEN VALIDATE("Related Customer No.",ContBusRel."No.");
+                                                                IF ContBusRel.GET("Related Contact (Company)",'VEND')
+                                                                  THEN VALIDATE("Related Vendor No.",ContBusRel."No.");
+                                                              END;
+
+                                                   CaptionML=[ENU=Related Contact (Company);
+                                                              ENG=Related Contact (Company)] }
+    { 25  ;   ;Related Contact Name;Text50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Contact.Name WHERE (No.=FIELD(Related Contact)));
+                                                   TableRelation=Contact.Name WHERE (No.=FIELD("Related Contact (Company)"));
+                                                   CaptionML=[ENU=Related Contact Name;
+                                                              ENG=Related Contact Name];
+                                                   Editable=No }
+    { 26  ;   ;Related Company Name;Text50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Contact.Name WHERE (No.=FIELD("Related Contact (Company)")));
+                                                   CaptionML=[ENU=Related Company Name;
+                                                              ENG=Related Company Name];
+                                                   Editable=No }
+    { 29  ;   ;Name of Assigned Person;Text50     ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Contact.Name WHERE (No.=FIELD(Assigned To)));
+                                                   CaptionML=[ENU=Name of Assigned Person;
+                                                              ENG=Name of Assigned Person];
+                                                   Editable=No }
+    { 31  ;   ;Status              ;Code20        ;TableRelation="General Lookup".Code WHERE (Type=CONST(CRMLOGSTATUS));
+                                                   CaptionML=[ENU=Status;
+                                                              ENG=Status] }
+    { 32  ;   ;Closed              ;Boolean       ;OnValidate=VAR
+                                                                Sysb@1000000000 : Record 9062230;
+                                                              BEGIN
+                                                              END;
+
+                                                   CaptionML=[ENU=Closed;
+                                                              ENG=Closed] }
+    { 40  ;   ;Created By (Name)   ;Text50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Contact.Name WHERE (No.=FIELD(Created by)));
+                                                   CaptionML=[ENU=Created By (Name);
+                                                              ENG=Created By (Name)];
+                                                   Editable=No }
+    { 50  ;   ;Thread ID           ;Code10        ;CaptionML=[ENU=Thread ID;
+                                                              ENG=Thread ID] }
+    { 51  ;   ;Thread Last Modified Date;Date     ;CaptionML=[ENU=Thread Last Modified Date;
+                                                              ENG=Thread Last Modified Date] }
+    { 52  ;   ;Thread Last Modified Time;Time     ;CaptionML=[ENU=Thread Last Modified Time;
+                                                              ENG=Thread Last Modified Time] }
+    { 53  ;   ;Last Modified Date  ;Date          ;CaptionML=[ENU=Last Modified Date;
+                                                              ENG=Last Modified Date] }
+    { 54  ;   ;Last Modified Time  ;Time          ;CaptionML=[ENU=Last Modified Time;
+                                                              ENG=Last Modified Time] }
+    { 55  ;   ;Line Type           ;Option        ;OnValidate=VAR
+                                                                CRMLog@1000000000 : Record 9062392;
+                                                                eThreadHeaderExists@1000000001 : TextConst 'ENU=Thread header for thread %1 already exists. It has "%2" of %3;ENG=Thread header for thread %1 already exists. It has "%2" of %3';
+                                                              BEGIN
+                                                                IF "Line Type" = "Line Type"::Header THEN BEGIN
+                                                                  CRMLog.SETFILTER("Entry No.",'<>%1',"Entry No.");
+                                                                  CRMLog.SETRANGE("Thread ID","Thread ID");
+                                                                  CRMLog.SETRANGE("Line Type","Line Type"::Header);
+                                                                  IF CRMLog.FINDSET THEN ERROR(eThreadHeaderExists, Rec."Thread ID", CRMLog.FIELDCAPTION("Entry No."), CRMLog."Entry No.");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Line Type;
+                                                              ENG=Line Type];
+                                                   OptionCaptionML=[ENU=" ,Header,Line";
+                                                                    ENG=" ,Header,Line"];
+                                                   OptionString=[ ,Header,Line] }
+    { 60  ;   ;Incident No.        ;Code20        ;TableRelation=Incident;
+                                                   OnValidate=BEGIN
+                                                                IF (Rec."Incident No." <> xRec."Incident No.") THEN
+                                                                  UpdateFromIncident();
+                                                              END;
+
+                                                   CaptionML=[ENU=Incident No.;
+                                                              ENG=Incident No.] }
+    { 61  ;   ;Incident Description;Text50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Incident.Description WHERE (No.=FIELD(Incident No.)));
+                                                   CaptionML=[ENU=Incident Description;
+                                                              ENG=Incident Description];
+                                                   Editable=No }
+    { 70  ;   ;Time Spent          ;Duration      ;CaptionML=[ENU=Time Spent;
+                                                              ENG=Time Spent] }
+    { 79  ;   ;E-mail              ;Boolean       ;CaptionML=[ENU=E-mail;
+                                                              ENG=E-mail] }
+    { 80  ;   ;E-mail Body HTML    ;BLOB          ;CaptionML=[ENU=E-mail Body HTML;
+                                                              ENG=E-mail Body HTML] }
+    { 81  ;   ;E-mail Recipients   ;Text250       ;CaptionML=[ENU=E-mail Recipients;
+                                                              ENG=E-mail Recipients] }
+    { 82  ;   ;E-mail CC           ;Text250       ;CaptionML=[ENU=E-mail CC;
+                                                              ENG=E-mail CC] }
+    { 83  ;   ;E-mail BCC          ;Text250       ;CaptionML=[ENU=E-mail BCC;
+                                                              ENG=E-mail BCC] }
+    { 84  ;   ;E-mail Sender Name  ;Text250       ;CaptionML=[ENU=E-mail Sender Name;
+                                                              ENG=E-mail Sender Name] }
+    { 85  ;   ;E-mail Sender E-Mail;Text250       ;CaptionML=[ENU=E-mail Sender E-Mail;
+                                                              ENG=E-mail Sender E-Mail] }
+    { 100 ;   ;Appointment Code    ;Code20        ;CaptionML=[ENU=Appointment Code;
+                                                              ENG=Appointment Code] }
+    { 101 ;   ;Meeting Agenda Item No.;Integer    ;CaptionML=[ENU=Meeting Agenda Item No.;
+                                                              ENG=Meeting Agenda Item No.] }
+    { 200 ;   ;Logs in this Thread ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("CRM Log Entry" WHERE (Thread ID=FIELD(Thread ID)));
+                                                   CaptionML=[ENU=Logs in this Thread;
+                                                              ENG=Logs in this Thread];
+                                                   Editable=No }
+    { 300 ;   ;Related Record      ;Text250       ;CaptionML=[ENU=Related Record;
+                                                              ENG=Related Record] }
+    { 301 ;   ;Related Record Type ;Code50        ;CaptionML=[ENU=Related Record Type;
+                                                              ENG=Related Record Type] }
+    { 400 ;   ;Related Table No.   ;Integer       ;CaptionML=[ENU=Related Table No.;
+                                                              ENG=Related Table No.] }
+    { 401 ;   ;Related Primary Key 1;Text250      ;CaptionML=[ENU=Related Primary Key 1;
+                                                              ENG=Related Primary Key 1] }
+    { 402 ;   ;Related Primary Key 2;Text250      ;CaptionML=[ENU=Related Primary Key 2;
+                                                              ENG=Related Primary Key 2] }
+    { 403 ;   ;Related Primary Key 3;Text250      ;CaptionML=[ENU=Related Primary Key 3;
+                                                              ENG=Related Primary Key 3] }
+    { 404 ;   ;Related Primary Key 4;Text250      ;CaptionML=[ENU=Related Primary Key 4;
+                                                              ENG=Related Primary Key 4] }
+    { 405 ;   ;Related Primary Key 5;Text250      ;CaptionML=[ENU=Related Primary Key 5;
+                                                              ENG=Related Primary Key 5] }
+    { 410 ;   ;Related Record Desc.;Text250       ;CaptionML=[ENU=Related Record Desc.;
+                                                              ENG=Related Record Desc.] }
+    { 500 ;   ;Table No. to Pass   ;Integer       ;FieldClass=FlowFilter;
+                                                   CaptionML=[ENU=Table No. to Pass;
+                                                              ENG=Table No. to Pass] }
+    { 501 ;   ;Primary Key 1 to Pass;Text250      ;FieldClass=FlowFilter;
+                                                   CaptionML=[ENU=Primary Key 1 to Pass;
+                                                              ENG=Primary Key 1 to Pass] }
+    { 502 ;   ;Primary Key 2 to Pass;Text250      ;FieldClass=FlowFilter;
+                                                   CaptionML=[ENU=Primary Key 2 to Pass;
+                                                              ENG=Primary Key 2 to Pass] }
+    { 503 ;   ;Primary Key 3 to Pass;Text250      ;FieldClass=FlowFilter;
+                                                   CaptionML=[ENU=Primary Key 3 to Pass;
+                                                              ENG=Primary Key 3 to Pass] }
+    { 504 ;   ;Primary Key 4 to Pass;Text250      ;FieldClass=FlowFilter;
+                                                   CaptionML=[ENU=Primary Key 4 to Pass;
+                                                              ENG=Primary Key 4 to Pass] }
+    { 505 ;   ;Primary Key 5 to Pass;Text250      ;FieldClass=FlowFilter;
+                                                   CaptionML=[ENU=Primary Key 5 to Pass;
+                                                              ENG=Primary Key 5 to Pass] }
+    { 1000;   ;Misc FlowFilter1    ;Text250       ;FieldClass=FlowFilter;
+                                                   CaptionML=[ENU=Misc FlowFilter1;
+                                                              ENG=Misc FlowFilter1] }
+  }
+  KEYS
+  {
+    {    ;Entry No.                               ;Clustered=Yes }
+    {    ;Related Customer No.                     }
+    {    ;Thread ID,Line Type,Entry No.            }
+    {    ;Thread ID                                }
+    {    ;Thread Last Modified Date,Thread Last Modified Time }
+    {    ;Related Customer No.,Due Date            }
+    {    ;Related Contact (Company),Due Date       }
+    {    ;Log Date,Log Time,Related Customer No.   }
+    {    ;Incident No.,Log Date,Log Time          ;SumIndexFields=Time Spent }
+  }
+  FIELDGROUPS
+  {
+    { 1   ;Brick               ;Owned By Area,Subject,Assigned To,Log Date,Due Date }
+  }
+  CODE
+  {
+    VAR
+      Customer@1000000000 : Record 18;
+      TNPUtils@1000000001 : Codeunit 9062229;
+      CRMLogMgt@1000000002 : Codeunit 9062332;
+      NoSeriesManagement@1000000003 : Codeunit 396;
+      TNP001@1000000004 : TextConst 'ENU=You cannot set the Due date as the log is closed .. remove closed flag if you wish to change the due date;ENG=You cannot set the Due date as the log is closed .. remove closed flag if you wish to change the due date';
+      cThreadNoSeries@1000000005 : TextConst 'ENU=CRMLOGTHRD;ENG=CRMLOGTHRD';
+      cThreadNoSeriesDesc@1000000006 : TextConst 'ENU=CRM Log Entry Threads;ENG=CRM Log Entry Threads';
+      cThreadNoSeriesStart@1000000007 : TextConst 'ENU=CLT00001;ENG=CLT00001';
+
+    PROCEDURE CreateNextLog@1000000003(VAR LogIn@1000000001 : Record 9062392);
+    VAR
+      CRMLog@1000000000 : Record 9062392;
+      Sysb@1000000002 : Record 9062230;
+    BEGIN
+      IF NOT Sysb.GetBoolean('NEXTCRMLOG') THEN EXIT;
+      CRMLog.SETRANGE("Related Contact",LogIn."Related Contact");
+      CRMLog.INSERT(TRUE);
+      CRMLog.Group := LogIn.Group;
+      CRMLog.Subject := LogIn.Subject;
+      CRMLog."Owned By Area" := LogIn."Owned By Area";
+      CRMLog."Due Date" := LogIn."Next Chase";
+      CRMLog."Next Chase" := 0D;
+      CRMLog."Next Log Period" := '';
+
+      CRMLog.MODIFY;
+    END;
+
+    LOCAL PROCEDURE GetPassedRecord@1000000002(VAR TableNo@1000000002 : Integer;VAR PositionText@1000000000 : Text) RecordFound : Boolean;
+    VAR
+      i@1000000001 : Integer;
+      PrimaryKey1@1000000003 : Text;
+      PrimaryKey2@1000000004 : Text;
+      PrimaryKey3@1000000005 : Text;
+      PrimaryKey4@1000000006 : Text;
+      PrimaryKey5@1000000007 : Text;
+    BEGIN
+      //DOC NA2015.4
+      i := -1;
+      REPEAT
+        i += 1;
+        FILTERGROUP(i);
+      UNTIL (i>=10) OR (GETFILTER("Related Table No.") <> '') OR (GETFILTER("Table No. to Pass") <> '');
+
+      IF GETFILTER("Related Table No.") <> '' THEN BEGIN
+        EVALUATE(TableNo,GETFILTER("Related Table No."));
+        IF GETFILTER("Related Primary Key 1") <> '' THEN PrimaryKey1 := GETFILTER("Related Primary Key 1");
+        IF GETFILTER("Related Primary Key 2") <> '' THEN PrimaryKey2 := GETFILTER("Related Primary Key 2");
+        IF GETFILTER("Related Primary Key 3") <> '' THEN PrimaryKey3 := GETFILTER("Related Primary Key 3");
+        IF GETFILTER("Related Primary Key 4") <> '' THEN PrimaryKey4 := GETFILTER("Related Primary Key 4");
+        IF GETFILTER("Related Primary Key 5") <> '' THEN PrimaryKey5 := GETFILTER("Related Primary Key 5");
+      END ELSE BEGIN
+        IF GETFILTER("Table No. to Pass") <> '' THEN BEGIN
+          EVALUATE(TableNo,GETFILTER("Table No. to Pass"));
+          IF GETFILTER("Primary Key 1 to Pass") <> '' THEN PrimaryKey1 := GETFILTER("Primary Key 1 to Pass");
+          IF GETFILTER("Primary Key 2 to Pass") <> '' THEN PrimaryKey1 := GETFILTER("Primary Key 2 to Pass");
+          IF GETFILTER("Primary Key 3 to Pass") <> '' THEN PrimaryKey1 := GETFILTER("Primary Key 3 to Pass");
+          IF GETFILTER("Primary Key 4 to Pass") <> '' THEN PrimaryKey1 := GETFILTER("Primary Key 4 to Pass");
+          IF GETFILTER("Primary Key 5 to Pass") <> '' THEN PrimaryKey1 := GETFILTER("Primary Key 5 to Pass");
+        END;
+      END;
+
+      IF (TableNo = 0) OR (PrimaryKey1 = '') THEN EXIT(FALSE);
+
+      PositionText := TNPUtils.GetPositionTextUsingPrimaryKeyValues(TableNo,PrimaryKey1,PrimaryKey2,PrimaryKey3,PrimaryKey4,PrimaryKey5);
+      EXIT(PositionText <> '');
+    END;
+
+    LOCAL PROCEDURE SetRelatedRecord@1000000015(TableNo@1000000000 : Integer;PositionText@1000000001 : Text);
+    BEGIN
+      VALIDATE("Related Table No.",TableNo);
+      VALIDATE("Related Primary Key 1",TNPUtils.GetPrimaryKey(TableNo,PositionText,1));
+      VALIDATE("Related Primary Key 2",TNPUtils.GetPrimaryKey(TableNo,PositionText,2));
+      VALIDATE("Related Primary Key 3",TNPUtils.GetPrimaryKey(TableNo,PositionText,3));
+      VALIDATE("Related Primary Key 4",TNPUtils.GetPrimaryKey(TableNo,PositionText,4));
+      VALIDATE("Related Primary Key 5",TNPUtils.GetPrimaryKey(TableNo,PositionText,5));
+      VALIDATE("Related Record Desc.",TNPUtils.GetRecordDescription(TableNo,PositionText));
+    END;
+
+    LOCAL PROCEDURE UpdateFromIncident@9062230();
+    VAR
+      lIncident@9062230 : Record 9062305;
+    BEGIN
+      //DOC NH2016.11 - Updating the record from incident (if the incident is there)
+
+      IF (Rec."Incident No." = '') THEN
+        EXIT;
+      IF ( NOT (lIncident.GET(Rec."Incident No."))) THEN
+        EXIT;
+
+      Rec.VALIDATE("Related Customer No.", lIncident."Customer No.");
+      Rec.VALIDATE("Related Contact (Company)", lIncident."Company Contact No.");
+      Rec.VALIDATE("Related Contact", lIncident."Person Contact No.");
+    END;
+
+    BEGIN
+    {
+      //DOC NH2015.1  IH 17/12/2012 - CRM
+      //DOC NH2015.1  PC 18/06/2013 - Made "Log Date" and "Log Time" fields editable
+      //DOC NH2015.1  PC 02/08/2013 - Added code to automatically create Thread No. Series
+      //DOC NH2015.4  JH 18/02/2015 - Threads code retired
+      //DOC NH2016.10 JH 29/09/2015 - Upgraded to 2016, moved to "NH"
+      //DOC NH2016.11 JH 06/11/2015 - "Last Chase Date" removed, logic changed
+      //DOC NH2016.11 JH 11/11/2015 - Incident fields + key + a bit of logic added
+      //DOC NH2016.14 PC 02/03/2016 - E-mail fields added
+      //DOC NH2016.14 NM 14/03/2016 - Added Brick field group for Phone Client view
+      //DOC NH2016.15 JH 15/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

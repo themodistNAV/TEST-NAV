@@ -1,0 +1,321 @@
+OBJECT Codeunit 9062677 Enhanced View - QR Source
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/04/16;
+    Time=[ 5:03:22 PM];
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EnhView@1000000006 : TEMPORARY Record 9062804;
+      EnhViewField@1000000000 : TEMPORARY Record 9062807;
+      BaseQuickReport@1000000007 : Record 9062697;
+      QuickReportData@1000000008 : Record 9062699;
+      QuickReportTotals@1000000004 : Record 9062699;
+      QuickReportContext@1000000003 : Record 9062755;
+      QuickReportFieldContext@1000000002 : ARRAY [20] OF Record 9062756;
+      QuickReportCode@1000000001 : Code[50];
+      QuickReportPageManagement@1000000005 : Codeunit 9062621;
+      QuickReportInteraction@1000000010 : Codeunit 9062543;
+      QuickReportExport@1000000011 : Codeunit 9062549;
+      GroupByFieldIndex@1000000009 : Integer;
+      DeleteDataOnClose@1000000012 : Boolean;
+
+    PROCEDURE ShowQuickReport@1000000001(VAR QuickReport@1000000000 : Record 9062697;NewDeleteDataOnClose@1000000002 : Boolean);
+    VAR
+      NewEnhView@1000000001 : TEMPORARY Record 9062804;
+      QuickReportDataSource@1000000018 : Codeunit 9062677;
+      EnhViewSource@1000000003 : Codeunit 9062659;
+      EnhViewData@1000000009 : Codeunit 9062678;
+    BEGIN
+      QuickReportDataSource.SetQuickReport(QuickReport, NewDeleteDataOnClose);
+      QuickReportDataSource.GetEnhView(NewEnhView);
+      EnhViewSource.Initialize(CODEUNIT::"Enhanced View - QR Source", QuickReportDataSource);
+      EnhViewData.SetEnhViewSource(EnhViewSource);
+      COMMIT;
+      PAGE.RUN(PAGE::"Enhanced View Card", NewEnhView);
+    END;
+
+    LOCAL PROCEDURE CreateCellField@1000000002(VAR EnhView@1000000001 : Record 9062804;VAR EnhViewField@1000000000 : Record 9062807;VAR FieldLineNo@1000000002 : Integer;FieldName@1000000003 : Text;SourceFieldNo@1000000004 : Integer);
+    BEGIN
+      FieldLineNo += 10000;
+      EnhViewField.INIT();
+      EnhViewField."View Code" := EnhView.Code;
+      EnhViewField."Line No." := FieldLineNo;
+      EnhViewField.Type := EnhViewField.Type::Cell;
+      EnhViewField.VALIDATE("Table No.", EnhView."Source Table No.");
+      EnhViewField.Name := FieldName;
+      EnhViewField."Field Type" := EnhViewField."Field Type"::Field;
+      EnhViewField.VALIDATE("Field No.", SourceFieldNo);
+      EnhViewField.INSERT();
+    END;
+
+    LOCAL PROCEDURE "--- Settings ---"@1000000012();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE PrepareData@1000000003();
+    VAR
+      QuickReportField@1000000001 : Record 9062698;
+      QRData@1000000000 : Record 9062699;
+      FieldLineNo@1000000002 : Integer;
+    BEGIN
+      //create enhanced view header
+      EnhView.INIT();
+      EnhView.Code := COPYSTR(BaseQuickReport.Code, 1, MAXSTRLEN(EnhView.Code));
+      EnhView.Description := COPYSTR(BaseQuickReport.Description, 1, MAXSTRLEN(EnhView.Description));
+      EnhView."Source Table No." := DATABASE::"Quick Report Data";
+      EnhView."Read Only" := TRUE;
+      EnhView."View Mode" := EnhView."View Mode"::Grid;
+      EnhView.INSERT(TRUE);
+
+      //create data source filter using local QRData
+      QRData.RESET();
+      QRData.SETRANGE("Quick Report Code", QuickReportCode);
+      QRData.SETRANGE("Row Type", QuickReportData."Row Type"::Record);
+      EnhView."Source View Text" := QRData.GETVIEW(FALSE);
+      EnhView.MODIFY();
+
+      //create detail fields
+      QuickReportField.RESET();
+      QuickReportField.SETRANGE("Quick Report Code", QuickReportCode);
+      QuickReportField.FINDSET();
+
+      CreateCellField(EnhView, EnhViewField, FieldLineNo, 'No', QuickReportField."Data Field ID");
+      QuickReportField.NEXT();
+
+      CreateCellField(EnhView, EnhViewField, FieldLineNo, 'Caption', QuickReportField."Data Field ID");
+      QuickReportField.NEXT();
+
+      CreateCellField(EnhView, EnhViewField, FieldLineNo, 'Description', QuickReportField."Data Field ID");
+
+      //create grid fields
+      QuickReportField.RESET();
+      QuickReportField.SETRANGE("Quick Report Code", QuickReportCode);
+      IF (QuickReportField.FINDSET()) THEN BEGIN
+        REPEAT
+          FieldLineNo += 10000;
+          EnhViewField.INIT();
+          EnhViewField."View Code" := EnhView.Code;
+          EnhViewField."Line No." := FieldLineNo;
+          EnhViewField.Type := EnhViewField.Type::"Grid Column";
+          EnhViewField.VALIDATE("Table No.", EnhView."Source Table No.");
+          EnhViewField."Field Type" := EnhViewField."Field Type"::Field;
+          EnhViewField.VALIDATE("Field No.", QuickReportField."Data Field ID");
+          EnhViewField.Caption := QuickReportField.Caption;
+          EnhViewField."Source Record Id" := QuickReportField.RECORDID;
+
+          CASE (QuickReportField.Grouping) OF
+            QuickReportField.Grouping::Average:
+              EnhViewField."Aggregate Function" := EnhViewField."Aggregate Function"::Average;
+            QuickReportField.Grouping::Count:
+              EnhViewField."Aggregate Function" := EnhViewField."Aggregate Function"::Count;
+            QuickReportField.Grouping::Maximum:
+              EnhViewField."Aggregate Function" := EnhViewField."Aggregate Function"::Max;
+            QuickReportField.Grouping::Minimum:
+              EnhViewField."Aggregate Function" := EnhViewField."Aggregate Function"::Min;
+            QuickReportField.Grouping::Sum:
+              EnhViewField."Aggregate Function" := EnhViewField."Aggregate Function"::Sum;
+            QuickReportField.Grouping::"Group By":
+              EnhViewField.Groupable := TRUE;
+          END;
+
+          EnhViewField.INSERT();
+        UNTIL (QuickReportField.NEXT() = 0);
+      END;
+    END;
+
+    PROCEDURE GetEnhView@1000000009(VAR NewEnhView@1000000000 : Record 9062804);
+    BEGIN
+      NewEnhView.COPY(EnhView, TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Quick Report Specific Functions ---"@1000000007();
+    BEGIN
+    END;
+
+    PROCEDURE SetQuickReport@1000000008(VAR NewQuickReport@1000000000 : Record 9062697;NewDeleteDataOnClose@1000000001 : Boolean);
+    BEGIN
+      //load quick report
+      DeleteDataOnClose := NewDeleteDataOnClose;
+      BaseQuickReport := NewQuickReport;
+      QuickReportCode := NewQuickReport.Code;
+
+      QuickReportData.RESET();
+      QuickReportData.SETRANGE("Quick Report Code", QuickReportCode);
+      QuickReportData.SETRANGE("Delete Record on Close", DeleteDataOnClose);
+
+      QuickReportPageManagement.LoadQuickReport(QuickReportData, QuickReportTotals,
+        QuickReportContext, QuickReportFieldContext);
+
+      QuickReportCode := QuickReportContext."Quick Report Code";
+
+      //prepare data
+      PrepareData();
+    END;
+
+    LOCAL PROCEDURE "--- Data Source Implementation ---"@1000000000();
+    BEGIN
+    END;
+
+    PROCEDURE GetData@1000000004(VAR ForEnhView@1000000001 : Record 9062804;VAR NewEnhViewField@1000000000 : Record 9062807);
+    BEGIN
+      NewEnhViewField.COPY(EnhViewField, TRUE);
+    END;
+
+    PROCEDURE DisposeData@1000000005();
+    BEGIN
+      QuickReportPageManagement.ClearQuickReportData(QuickReportContext);
+    END;
+
+    PROCEDURE EditView@1000000006(VAR ForEnhView@1000000000 : Record 9062804);
+    BEGIN
+      QuickReportPageManagement.EditQuickReport(QuickReportContext);
+    END;
+
+    PROCEDURE ShowAsNavList@1000000010(VAR SourceRecRef@1000000001 : RecordRef);
+    VAR
+      QRData@1000000000 : Record 9062699;
+    BEGIN
+      QRData.RESET();
+      QRData.SETRANGE("Quick Report Code", QuickReportCode);
+      QRData.SETRANGE("Delete Record on Close", FALSE); //DeleteDataOnClose);
+      PAGE.RUN(PAGE::"Quick Report", QRData);
+    END;
+
+    PROCEDURE ShowRecRefCard@1000000017(VAR EnhView@1000000007 : Record 9062804;VAR RecRef@1000000001 : RecordRef) : Boolean;
+    VAR
+      QRData@1000000000 : Record 9062699;
+      RunWithRecRef@1000000005 : Codeunit 9062239;
+      DataRecRef@1000000002 : RecordRef;
+      SourceTable@1000000003 : Integer;
+      SourcePosition@1000000004 : Text;
+      Result@1000000006 : Boolean;
+    BEGIN
+      RecRef.SETTABLE(QRData);
+      IF (QRData."Table ID" = 0) OR (QRData."Table Position" = '') THEN BEGIN
+        QuickReportPageManagement.ShowDetails(QRData, QuickReportContext, QuickReportFieldContext);
+        EXIT(FALSE);
+      END;
+
+      DataRecRef.OPEN(QRData."Table ID");
+      DataRecRef.SETPOSITION(QRData."Table Position");
+      Result := RunWithRecRef.RunCardPage(DataRecRef, TRUE);
+      DataRecRef.CLOSE();
+
+      EXIT(Result);
+    END;
+
+    PROCEDURE HasMapView@1000000065(VAR ForEnhView@1000000001 : Record 9062804) : Boolean;
+    VAR
+      GeolocationMgt@1000000000 : Codeunit 9062729;
+    BEGIN
+      EXIT(GeolocationMgt.HasCoordinates(BaseQuickReport."Table ID"));
+    END;
+
+    PROCEDURE SetGroupByFieldList@1000000011(VAR GroupListField@1000000000 : TEMPORARY Record 9062807);
+    VAR
+      QRField@1000000005 : Record 9062698;
+      QRFieldRef@1000000006 : RecordRef;
+      NewFieldIndex@1000000001 : Integer;
+    BEGIN
+      NewFieldIndex := 0;
+      IF (GroupListField.FINDFIRST()) THEN BEGIN
+        QRFieldRef.GET(GroupListField."Source Record Id");
+        NewFieldIndex := QRFieldRef.FIELD(QRField.FIELDNO(Index)).VALUE;
+      END;
+      QuickReportPageManagement.GroupByField(QuickReportData, QuickReportContext, QuickReportFieldContext, NewFieldIndex);
+    END;
+
+    LOCAL PROCEDURE "--- Quick Report Functions ---"@1000000013();
+    BEGIN
+    END;
+
+    PROCEDURE EditQuickReport@1000000021();
+    BEGIN
+      QuickReportPageManagement.EditQuickReport(QuickReportContext);
+    END;
+
+    PROCEDURE ShowDetails@1000000026();
+    BEGIN
+      QuickReportPageManagement.ShowDetails(QuickReportData, QuickReportContext, QuickReportFieldContext);
+    END;
+
+    PROCEDURE ShowCard@1000000027();
+    BEGIN
+      QuickReportPageManagement.ShowCard(QuickReportData);
+    END;
+
+    LOCAL PROCEDURE "--- Message Handling ---"@1000000064();
+    BEGIN
+    END;
+
+    PROCEDURE ProcessMessage@1000000066(VAR EventArgs@1000000000 : Record 9062811);
+    VAR
+      QRData@1000000004 : Record 9062699;
+      EnhViewConst@1000000001 : Codeunit 9062689;
+      SourceRecRef@1000000003 : RecordRef;
+      MessageHandled@1000000002 : Boolean;
+    BEGIN
+      IF (EventArgs.Handled) THEN
+        EXIT;
+
+      QRData.RESET();
+      QRData.SETRANGE("Quick Report Code", QuickReportCode);
+      //QRData.SETRANGE("Row Type", QuickReportData."Row Type"::Record);
+
+      MessageHandled := TRUE;
+      CASE (EventArgs.Type) OF
+        EnhViewConst.CMD_ExportToWord:
+          QuickReportExport.ExportDataToWord(QRData);
+        EnhViewConst.CMD_ExportToExcel:
+          QuickReportExport.ExportDataToExcel(QRData);
+        EnhViewConst.CMD_ExportToPdf:
+          QuickReportExport.ExportDataToPdf(QRData);
+        EnhViewConst.CMD_ExportToHtml:
+          QuickReportExport.ExportDataToHtml(QRData);
+        EnhViewConst.CMD_ExportToXml:
+          QuickReportExport.ExportDataToXml(QRData, FALSE, FALSE);
+        EnhViewConst.CMD_ExportToCsv:
+          QuickReportExport.ExportDataToCsv(QRData, '');
+        EnhViewConst.CMD_Print:
+          QuickReportInteraction.PrintData(QRData);
+        ELSE
+          MessageHandled := FALSE;
+      END;
+
+      IF (MessageHandled) THEN
+        EventArgs.Handled := TRUE;
+    END;
+
+    PROCEDURE MessageTypeSupported@1000000014(MessageType@1000000000 : Text) : Boolean;
+    VAR
+      EnhViewConst@1000000001 : Codeunit 9062689;
+    BEGIN
+      EXIT(MessageType IN [
+        EnhViewConst.CMD_ExportToWord,
+        EnhViewConst.CMD_ExportToExcel,
+        EnhViewConst.CMD_ExportToPdf,
+        EnhViewConst.CMD_ExportToHtml,
+        EnhViewConst.CMD_ExportToXml,
+        EnhViewConst.CMD_ExportToCsv,
+        EnhViewConst.CMD_Print
+        ]);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.15 AZ 12/04/2016 - Created
+    }
+    END.
+  }
+}
+

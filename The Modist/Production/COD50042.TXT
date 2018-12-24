@@ -1,0 +1,217 @@
+OBJECT Codeunit 50042 Payment Mgmt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=21/02/18;
+    Time=[ 7:22:10 PM];
+    Modified=Yes;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SalesPaymentSetup@1000000000 : Record 50010;
+      PaymentSetupRead@1000000001 : Boolean;
+
+    [EventSubscriber(Codeunit,80,OnAfterPostSalesDoc)]
+    LOCAL PROCEDURE PostSalesBalanceEntry_OnAfterPostSalesDoc@1000000007(VAR SalesHeader@1000000000 : Record 36;VAR GenJnlPostLine@1000000001 : Codeunit 12;SalesShptHdrNo@1000000002 : Code[20];RetRcpHdrNo@1000000003 : Code[20];SalesInvHdrNo@1000000004 : Code[20];SalesCrMemoHdrNo@1000000005 : Code[20]);
+    BEGIN
+      IF SalesHeader."Internet Order Reference" = '' THEN
+        EXIT;
+    END;
+
+    LOCAL PROCEDURE RefundCapturedCreditCard@1000000002(VAR pSalesPayments@1000000000 : Record 50008);
+    VAR
+      lSalesInvoiceHeader@1000000003 : Record 112;
+      lResponseID@1000000001 : Text;
+      lResponseCode@1000000002 : Code[10];
+      lJournalDocumentNo@1000000004 : Code[20];
+    BEGIN
+      WITH pSalesPayments DO BEGIN
+        CLEARLASTERROR;
+        lResponseCode := '';
+        lResponseID := '';
+        lJournalDocumentNo := '';
+
+        lSalesInvoiceHeader.RESET;
+        lSalesInvoiceHeader.SETCURRENTKEY("Order GuID");
+        lSalesInvoiceHeader.SETRANGE("Order GuID","Order Guid");
+        lSalesInvoiceHeader.FINDFIRST;
+
+        IF NOT RefundCaptureCreditCardAPI(pSalesPayments,lResponseID,lResponseCode) THEN
+          Status := Status::Failed
+        ELSE BEGIN
+          Status := Status::Refunded;
+          CreateAndPostJournal(pSalesPayments,lSalesInvoiceHeader,lJournalDocumentNo);
+          "Payment Doc. No." := lJournalDocumentNo;
+          "Payment Journal Created" := TRUE;
+        END;
+        "Error Text" := GETLASTERRORTEXT;
+        "Response ID" := lResponseID;
+        "Response Reason Code" := lResponseCode;
+        MODIFY;
+      END;
+    END;
+
+    LOCAL PROCEDURE RefundCapturedPayPal@1000000004(VAR pSalesPayments@1000000000 : Record 50008);
+    BEGIN
+      WITH pSalesPayments DO BEGIN
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE RefundCaptureCreditCardAPI@1000000006(pSalesPayments@1000000000 : Record 50008;VAR pResponseID@1000000018 : Text;VAR pReasonCode@1000000017 : Code[10]);
+    VAR
+      StrBuild@1000000016 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      URIObj@1000000015 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Uri";
+      WebRequest@1000000014 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      StrWriter@1000000013 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamWriter";
+      WebResponse@1000000012 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+      Stream@1000000011 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Stream";
+      Reader@1000000010 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlTextReader";
+      Encoding@1000000009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      CredCache@1000000008 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.CredentialCache";
+      NWCred@1000000007 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.NetworkCredential";
+      SysConvert@1000000006 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Convert";
+      STREAD@1000000005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader";
+      AuthLevel@1000000004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.Security.AuthenticationLevel";
+    BEGIN
+      //Refund CC API
+      CLEAR(StrBuild);
+      CLEARLASTERROR;
+      URIObj := URIObj.Uri(SalesPaymentSetup."Cybersource url");
+      WebRequest := WebRequest.CreateDefault(URIObj);
+      WebRequest.Method := 'POST';
+      WebRequest.ContentType := 'application/soap+xml; charset=utf-8';
+      WebRequest.Headers.Add('SOAPAction','runTransaction');
+      StrBuild := StrBuild.StringBuilder();
+      StrBuild.Append('<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:schemas-cybersource-com:transaction-data-1.132">');
+      StrBuild.Append(' <soapenv:Header> <wsse:Security soapenv:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">');
+      StrBuild.Append(' <wsse:UsernameToken> <wsse:Username>' + SalesPaymentSetup."Cybersource Merchant ID" + '</wsse:Username>');
+      StrBuild.Append(' <wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">' +
+                            SalesPaymentSetup."Cybersource Security Key 1" + SalesPaymentSetup."Cybersource Security Key 2" + '</wsse:Password>');
+      StrBuild.Append(' </wsse:UsernameToken> </wsse:Security> </soapenv:Header>');
+      StrBuild.Append(' <soapenv:Body> <urn:requestMessage xmlns="urn:schemas-cybersource-com:transaction-data-1.37">');
+      StrBuild.Append('<urn:merchantID>' + SalesPaymentSetup."Cybersource Merchant ID" + '</urn:merchantID>');
+      StrBuild.Append('<urn:merchantReferenceCode>' + pSalesPayments."Internet Order No." + '</urn:merchantReferenceCode>');
+      StrBuild.Append('<urn:purchaseTotals> <urn:currency>' + pSalesPayments."Currency Code" + '</urn:currency>');
+      StrBuild.Append('<urn:grandTotalAmount>' + FORMAT(pSalesPayments."Refund Amount",0,'<Integer><Decimals,3>') + '</urn:grandTotalAmount> </urn:purchaseTotals>');
+      StrBuild.Append(' <urn:ccCreditService run="true"> <urn:captureRequestID>' + pSalesPayments."Capture ID"+ '</urn:captureRequestID> </urn:ccCreditService>');
+      StrBuild.Append(' </urn:requestMessage> </soapenv:Body> </soapenv:Envelope>');
+
+      StrWriter := StrWriter.StreamWriter(WebRequest.GetRequestStream(), Encoding.ASCII);
+      StrWriter.Write(StrBuild.ToString());
+      StrWriter.Close();
+      WebResponse := WebRequest.GetResponse();
+      Stream := WebResponse.GetResponseStream();
+      Reader := Reader.XmlTextReader(Stream);
+      WHILE Reader.Read DO BEGIN
+        IF Reader.IsStartElement THEN BEGIN
+          CASE Reader.Name OF
+            'c:requestToken':
+              pResponseID := Reader.ReadString;
+            'c:reasonCode':
+              pReasonCode := Reader.ReadString;
+          END;
+        END;
+      END;
+      Reader.Close();
+      Stream.Close();
+      CLEAR(StrBuild);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE CreateAndPostJournal@1000000012(pSalesPayments@1000000000 : Record 50008;pSalesInvoiceHeader@1000000004 : Record 112;VAR pJournalDocumentNo@1000000010 : Code[20]);
+    VAR
+      lGenJournalLine@1000000003 : Record 81;
+      lPaymentMethod@1000000007 : Record 289;
+      lGenJnlPost@1000000009 : Codeunit 12;
+      lLastDocNo@1000000002 : Code[20];
+      lLastLineNo@1000000001 : Integer;
+      lText000@1000000006 : TextConst 'ENU=Default Batch not found for %1';
+      lText001@1000000005 : TextConst 'ENU=Payment Journal No. %1 Created Successfully.';
+      lPaymentTxt@1000000008 : TextConst 'ENU=%1 Cust. No. %2 Order No. %3';
+    BEGIN
+      WITH pSalesPayments DO BEGIN
+        CLEARLASTERROR;
+        GetPaymentSetup;
+        SalesPaymentSetup.TESTFIELD("Payment Journal Template");
+        SalesPaymentSetup.TESTFIELD("Payment Journal Batch");
+
+        lPaymentMethod.GET(pSalesInvoiceHeader."Payment Method Code");
+        lPaymentMethod.TESTFIELD("Bal. Account No.");
+
+        lGenJournalLine.RESET;
+        lGenJournalLine.SETRANGE("Journal Template Name",SalesPaymentSetup."Payment Journal Template");
+        lGenJournalLine.SETRANGE("Journal Batch Name",SalesPaymentSetup."Payment Journal Batch");
+        lGenJournalLine.DELETEALL;
+
+        lLastLineNo := 0;
+        lLastDocNo := '';
+
+        lGenJournalLine.INIT;
+        lGenJournalLine."Journal Template Name" := SalesPaymentSetup."Payment Journal Template";
+        lGenJournalLine."Journal Batch Name" := SalesPaymentSetup."Payment Journal Batch";
+        lGenJournalLine."Line No." := lLastLineNo + 10000;
+        lGenJournalLine.VALIDATE("Posting Date",TODAY);
+
+        CASE Status OF
+          Status::Captured : lGenJournalLine."Document Type" := lGenJournalLine."Document Type"::Payment;
+          Status::Refunded : lGenJournalLine."Document Type" := lGenJournalLine."Document Type"::Refund;
+        END;
+        lGenJournalLine."Account Type" := lGenJournalLine."Account Type"::Customer;
+        lGenJournalLine.VALIDATE("Account No.",pSalesInvoiceHeader."Sell-to Customer No.");
+        lGenJournalLine."Bal. Account Type" := lPaymentMethod."Bal. Account Type";
+        lGenJournalLine.VALIDATE("Bal. Account No.",lPaymentMethod."Bal. Account No.");
+        lGenJournalLine.VALIDATE("Currency Code","Currency Code");
+        lGenJournalLine.Description := STRSUBSTNO(lPaymentTxt,Status);
+        lGenJournalLine."Shortcut Dimension 1 Code" := pSalesInvoiceHeader."Shortcut Dimension 1 Code";
+        lGenJournalLine."Shortcut Dimension 2 Code" := pSalesInvoiceHeader."Shortcut Dimension 2 Code";
+        lGenJournalLine."Dimension Set ID" := pSalesInvoiceHeader."Dimension Set ID";
+        lGenJournalLine.VALIDATE(Amount,"Refund Amount");
+        lGenJournalLine."Applies-to Ext. Doc. No." := "Internet Order No.";
+        lGenJournalLine."External Document No." := "Order Guid";
+        lGenJournalLine."Document No." := GetDocumentNo(lGenJournalLine,lLastDocNo);
+        lGenJournalLine.INSERT;
+        pJournalDocumentNo := lGenJournalLine."Document No.";
+        lLastLineNo += 10000;
+        CLEAR(lGenJnlPost);
+        lGenJnlPost.RUN(lGenJournalLine); //The TryFunction will handle error in the CU
+      END;
+    END;
+
+    LOCAL PROCEDURE GetDocumentNo@1000000005(pGenJournalLine@1000000003 : Record 81;pLasDocNo@1000000002 : Code[20]) : Code[20];
+    VAR
+      lGenJournalBatch@1000000000 : Record 232;
+      lNoSeriesMgt@1000000001 : Codeunit 396;
+      lText000@1000000004 : TextConst 'ENU=No. Series is missing for Template %1 Batch %2';
+    BEGIN
+      lGenJournalBatch.GET(pGenJournalLine."Journal Template Name",pGenJournalLine."Journal Batch Name");
+      IF lGenJournalBatch."No. Series" = '' THEN
+        IF pLasDocNo = '' THEN
+          ERROR(lText000,pGenJournalLine."Journal Template Name",pGenJournalLine."Journal Batch Name");
+        //EXIT(INCSTR(pLasDocNo));
+
+      CLEAR(lNoSeriesMgt);
+      EXIT(lNoSeriesMgt.GetNextNo(lGenJournalBatch."No. Series",pGenJournalLine."Posting Date",FALSE));
+    END;
+
+    LOCAL PROCEDURE GetPaymentSetup@1000000003();
+    BEGIN
+      IF NOT PaymentSetupRead THEN BEGIN
+        SalesPaymentSetup.GET;
+        PaymentSetupRead := TRUE;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

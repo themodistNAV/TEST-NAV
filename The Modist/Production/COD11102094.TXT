@@ -1,0 +1,222 @@
+OBJECT Codeunit 11102094 OM - Compare Directory
+{
+  OBJECT-PROPERTIES
+  {
+    Date=04/02/15;
+    Time=12:00:00 PM;
+    Version List=OMA9.05;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            Progressbar@1000 : Codeunit 11102044;
+            CommonDialog@1001 : Codeunit 11102059;
+            ClientDirectoryName@1002 : Text;
+            FilesFound@1003 : Boolean;
+            ctComparingFiles@1004 : TextConst 'DEU=Comparing files...;ENU=Comparing files...;ESP=Comparing files...;FRA=Comparing files...;NLD=Bestanden vergelijken...;DEA=Comparing files...';
+            ctNoFilesFound@1005 : TextConst 'DEU=No files found.;ENU=No files found.;ESP=No files found.;FRA=No files found.;NLD=Geen bestanden gevonden.;DEA=No files found.';
+          BEGIN
+            CommonDialog.SelectDirectory(ClientDirectoryName);
+
+            IF ClientDirectoryName <> '' THEN BEGIN
+
+              Progressbar.Open(ctComparingFiles, 1);
+
+              IF CompareObjectDirectory(ClientDirectoryName, Progressbar) THEN
+                FilesFound := TRUE;
+
+              IF CompareFieldDirectory(ClientDirectoryName, Progressbar) THEN
+                FilesFound := TRUE;
+
+              Progressbar.Close;
+
+              IF NOT FilesFound THEN
+                MESSAGE(ctNoFilesFound);
+
+            END;
+          END;
+
+  }
+  CODE
+  {
+
+    LOCAL PROCEDURE CompareObjectDirectory@1(ClientDirectoryName@1000 : Text;VAR Progressbar@1001 : Codeunit 11102044) : Boolean;
+    VAR
+      TmpCALHistoryObject@1002 : TEMPORARY Record 11102052;
+      SourceControl@1003 : Codeunit 11102050;
+      ClientDirectoryNameToCompare@1004 : Text;
+    BEGIN
+      Progressbar.UseRange(0, 40);
+      ReadObjects(ClientDirectoryName, TmpCALHistoryObject, Progressbar);
+
+      IF TmpCALHistoryObject.ISEMPTY THEN
+        EXIT;
+
+      ClientDirectoryNameToCompare := DELCHR(ClientDirectoryName, '>', '\') + '-db\';
+
+      Progressbar.UseRange(40, 100);
+
+      WriteObjectCompareFiles(ClientDirectoryNameToCompare, TmpCALHistoryObject, Progressbar);
+
+      SourceControl.StartCompareToolFile(ClientDirectoryName, ClientDirectoryNameToCompare);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ReadObjects@2(VAR ClientDirectoryName@1000 : Text;VAR TmpCALHistoryObject@1001 : Record 11102052;VAR Progressbar@1002 : Codeunit 11102044);
+    VAR
+      TmpFileRec@1003 : TEMPORARY Record 11102094;
+      Object@1004 : Record 2000000001;
+      SourceControl@1005 : Codeunit 11102050;
+      FileHandler@1006 : Codeunit 11102097;
+      oFile@1007 : File;
+      ObjectLine@1008 : Text[1024];
+      ServerFileName@1009 : Text;
+    BEGIN
+      FileHandler.GetClientDirectoryContent(TmpFileRec, ClientDirectoryName);
+      TmpFileRec.SETFILTER(Name, '*.txt|*.TXT');
+      IF TmpFileRec.FINDSET THEN BEGIN
+        Progressbar.BarSize := TmpFileRec.COUNT;
+
+        REPEAT
+
+          Progressbar.AddToBar(1);
+
+          ServerFileName := FileHandler.UploadToServer(ClientDirectoryName + TmpFileRec.Name, '');
+
+          oFile.WRITEMODE(FALSE);
+          oFile.TEXTMODE(TRUE);
+          oFile.OPEN(ServerFileName);
+          oFile.READ(ObjectLine);
+          oFile.CLOSE;
+
+          SourceControl.GetObjectProperties(Object, ObjectLine);
+          Progressbar.Text1Object := Object;
+
+          TmpCALHistoryObject."Entry No." += 1;
+          TmpCALHistoryObject."Object Type" := Object.Type;
+          TmpCALHistoryObject."Object No." := Object.ID;
+          TmpCALHistoryObject."Added By" := COPYSTR(TmpFileRec.Name, 1, MAXSTRLEN(TmpCALHistoryObject."Added By"));
+          TmpCALHistoryObject.INSERT;
+
+        UNTIL TmpFileRec.NEXT = 0;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE WriteObjectCompareFiles@3(VAR ClientDirectoryName@1000 : Text;VAR TmpCALHistoryObject@1001 : Record 11102052;VAR Progressbar@1002 : Codeunit 11102044);
+    VAR
+      Object@1003 : Record 2000000001;
+      TmpObject@1004 : TEMPORARY Record 2000000001;
+      ImExportMgt@1005 : Codeunit 11102043;
+    BEGIN
+      IF TmpCALHistoryObject.FINDSET THEN
+        REPEAT
+          IF Object.GET(TmpCALHistoryObject."Object Type", '', TmpCALHistoryObject."Object No.") THEN
+            IF NOT TmpObject.GET(TmpCALHistoryObject."Object Type", '', TmpCALHistoryObject."Object No.") THEN BEGIN
+              TmpObject := Object;
+              TmpObject."BLOB Size" := -1;
+              TmpObject."Version List" := COPYSTR(TmpCALHistoryObject."Added By", 1, MAXSTRLEN(TmpObject."Version List"));
+              TmpObject.INSERT;
+            END;
+        UNTIL TmpCALHistoryObject.NEXT = 0;
+
+      ImExportMgt.ExportSplitTextFiles(TmpObject, ClientDirectoryName, Progressbar);
+    END;
+
+    LOCAL PROCEDURE CompareFieldDirectory@6(VAR DirectoryName@1000 : Text[1024];VAR Progressbar@1001 : Codeunit 11102044) : Boolean;
+    VAR
+      TmpCALHistoryObject@1002 : TEMPORARY Record 11102052;
+      SourceControl@1003 : Codeunit 11102050;
+      DirectoryToCompare@1004 : Text[1024];
+    BEGIN
+      Progressbar.UseRange(0, 40);
+      ReadFieldObjects(DirectoryName, TmpCALHistoryObject, Progressbar);
+
+      DirectoryToCompare := DELCHR(DirectoryName, '>', '\') + '-db\';
+
+      Progressbar.UseRange(40, 100);
+      IF TmpCALHistoryObject.ISEMPTY THEN
+        EXIT;
+
+      WriteFieldCompareFiles(DirectoryToCompare, TmpCALHistoryObject, Progressbar);
+
+      SourceControl.StartCompareToolFile(DirectoryName, DirectoryToCompare);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ReadFieldObjects@5(VAR DirectoryName@1000 : Text[1024];VAR TmpCALHistoryObject@1001 : Record 11102052;VAR Progressbar@1002 : Codeunit 11102044);
+    VAR
+      TmpFieldCompareLine@1003 : TEMPORARY Record 11102067;
+      TmpFileRec@1004 : TEMPORARY Record 11102094;
+      Object@1005 : Record 2000000001;
+      ImExportMgt@1006 : Codeunit 11102043;
+      FileHandler@1007 : Codeunit 11102097;
+      oFile@1008 : File;
+      ObjectLine@1009 : Text[1024];
+    BEGIN
+      FileHandler.GetClientDirectoryContent(TmpFileRec, DirectoryName);
+      TmpFileRec.SETFILTER(Name, '*.fld|*.FLD');
+      IF TmpFileRec.FINDSET THEN BEGIN
+        Progressbar.BarSize := TmpFileRec.COUNT;
+
+        REPEAT
+
+          Progressbar.AddToBar(1);
+
+          oFile.WRITEMODE(FALSE);
+          oFile.TEXTMODE(TRUE);
+          oFile.OPEN(DirectoryName + TmpFileRec.Name);
+          oFile.READ(ObjectLine);
+          oFile.CLOSE;
+
+          TmpFieldCompareLine.RESET;
+          TmpFieldCompareLine.DELETEALL;
+
+          ImExportMgt.ImportFldFromFile(DirectoryName + TmpFileRec.Name, TmpFieldCompareLine, Progressbar, 0, 0);
+
+          IF TmpFieldCompareLine.FINDFIRST THEN BEGIN
+
+            Object.Type := Object.Type::Table;
+            Object.ID := TmpFieldCompareLine."No.";
+            Object.Name := COPYSTR(TmpFieldCompareLine."Table Name", 1, MAXSTRLEN(Object.Name));
+            Progressbar.Text1Object := Object;
+
+            TmpCALHistoryObject."Entry No." += 1;
+            TmpCALHistoryObject."Object Type" := TmpCALHistoryObject."Object Type"::Table;
+            TmpCALHistoryObject."Object No." := TmpFieldCompareLine."Table No.";
+            TmpCALHistoryObject."Added By" := COPYSTR(TmpFileRec.Name, 1, MAXSTRLEN(TmpCALHistoryObject."Added By"));
+            TmpCALHistoryObject.INSERT;
+          END;
+
+        UNTIL TmpFileRec.NEXT = 0;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE WriteFieldCompareFiles@4(VAR ClientDirectoryName@1000 : Text[30];VAR TmpCALHistoryObject@1001 : Record 11102052;VAR Progressbar@1002 : Codeunit 11102044);
+    VAR
+      Object@1003 : Record 2000000001;
+      TmpObject@1004 : TEMPORARY Record 2000000001;
+      ImExportMgt@1005 : Codeunit 11102043;
+    BEGIN
+      IF TmpCALHistoryObject.FINDSET THEN
+        REPEAT
+          IF Object.GET(TmpCALHistoryObject."Object Type", '', TmpCALHistoryObject."Object No.") THEN
+            IF NOT TmpObject.GET(TmpCALHistoryObject."Object Type", '', TmpCALHistoryObject."Object No.") THEN BEGIN
+              TmpObject := Object;
+              TmpObject."BLOB Size" := -1;
+              TmpObject."Version List" := COPYSTR(TmpCALHistoryObject."Added By", 1, MAXSTRLEN(TmpObject."Version List"));
+              TmpObject.INSERT;
+            END;
+        UNTIL TmpCALHistoryObject.NEXT = 0;
+
+      ImExportMgt.ExportSplitFieldsFiles(TmpObject, ClientDirectoryName, Progressbar);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

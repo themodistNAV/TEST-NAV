@@ -1,0 +1,305 @@
+OBJECT Codeunit 9062271 Auto Message Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=17/09/15;
+    Time=[ 5:08:56 PM];
+    Version List=NA2016.10;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            TxtNotProcessing@1000000000 : TextConst 'ENU=Not processing auto-message entries as task AUTOMESSAGEPROCESS is not for user %1;ENG=Not processing auto-message entries as task AUTOMESSAGEPROCESS is not for user %1';
+            TxtChecking@1000000001 : TextConst 'ENU=Checking for auto-message entries to process;ENG=Checking for auto-message entries to process';
+          BEGIN
+            Logger.Log('AUTOMSG', Logger.Type::Debug, TxtChecking, USERID);
+            ProcessImmediateEntries;
+            ProcessAllEntries;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Logger@1000000000 : Record 9062280;
+      TNLUtils@1000000001 : Codeunit 9062229;
+      AutoMsg@1000000002 : Codeunit 9062270;
+      mFileSystem@1000000003 : Codeunit 9062264;
+      mEMailTmp@1000000006 : TEMPORARY Record 9062281;
+      mEMailLineTmp@1000000005 : TEMPORARY Record 9062282;
+      mEMailAttachmentTmp@1000000004 : TEMPORARY Record 9062283;
+
+    PROCEDURE ProcessImmediateEntries@1000000000();
+    VAR
+      MsgEntry@1000000000 : Record 9062278;
+      TxtProcessing@1000000001 : TextConst 'ENU=Processing %1 immediate entries;ENG=Processing %1 immediate entries';
+    BEGIN
+      MsgEntry.SETRANGE(Completed, FALSE);
+      MsgEntry.SETRANGE(Errored,FALSE);
+      MsgEntry.SETRANGE("Immediate Action",TRUE);
+
+      IF MsgEntry.FINDSET THEN BEGIN
+        Logger.Log('AUTOMSG', Logger.Type::Debug, STRSUBSTNO(TxtProcessing, MsgEntry.COUNT), USERID);
+        REPEAT
+          ProcessEntry(MsgEntry);
+        UNTIL MsgEntry.NEXT =0;
+      END;
+    END;
+
+    PROCEDURE ProcessAllEntries@1000000003();
+    VAR
+      MsgEntry@1000000000 : Record 9062278;
+      TxtProcessing@1000000001 : TextConst 'ENU=Processing %1 entries;ENG=Processing %1 entries';
+    BEGIN
+      MsgEntry.SETRANGE(Completed, FALSE);
+      MsgEntry.SETRANGE(Errored,FALSE);
+
+      IF MsgEntry.FINDSET THEN BEGIN
+        Logger.Log('AUTOMSG', Logger.Type::Debug, STRSUBSTNO(TxtProcessing, MsgEntry.COUNT), USERID);
+        REPEAT
+          ProcessEntry(MsgEntry);
+        UNTIL MsgEntry.NEXT =0;
+      END;
+    END;
+
+    PROCEDURE ProcessEntry@1000000002(Entry@1000000000 : Record 9062278);
+    VAR
+      MsgType@1000000001 : Record 9062274;
+      perms@1000000002 : Record 9062277;
+      found@1000000003 : Boolean;
+      MsgAction@1000000005 : Codeunit 9062272;
+      MailItem@1000000004 : DotNet "'Microsoft.Office.Interop.Outlook, Version=14.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c'.Microsoft.Office.Interop.Outlook.MailItem";
+      ContNo@1000000006 : Code[20];
+      TxtCreatedContact@1000000007 : TextConst 'ENU=Created new contact "%1" from entry "%2";ENG=Created new contact "%1" from entry "%2"';
+      TxtPermissionDenied@1000000008 : TextConst 'ENU=User permission denied;ENG=User permission denied';
+      TxtProcessingEntry@1000000009 : TextConst 'ENU=Processing entry "%1";ENG=Processing entry "%1"';
+    BEGIN
+      IF MsgType.GET(Entry."Message Type Code") THEN BEGIN
+        IF GetContact(Entry,ContNo) THEN
+          Logger.Log('AUTOMSG', Logger.Type::Information, STRSUBSTNO(TxtCreatedContact, ContNo, Entry."GUID No."), USERID);
+        Entry."Contact No." := ContNo;
+        Entry."Interaction Entry No." := CreateInteraction(Entry,ContNo);
+        Entry.MODIFY(TRUE);
+        IF MsgType."Restricted Access" THEN BEGIN
+          perms.SETRANGE("Message Type Code",Entry."Message Type Code");
+
+          IF perms.FINDSET THEN BEGIN
+           found := FALSE;
+            REPEAT
+
+              IF (UPPERCASE(perms."Contact E-Mail") = UPPERCASE(Entry.SenderEmail)) THEN BEGIN
+                IF MsgType."Allow by Default" THEN BEGIN
+                  Entry.Errored := TRUE;
+                  Entry."Error Reason" := TxtPermissionDenied;
+                  Entry.MODIFY;
+                  found := TRUE;
+                END ELSE BEGIN
+                  found := TRUE;
+                  IF NOT CODEUNIT.RUN(MsgType."Action Codeunit No.",Entry) THEN BEGIN
+                    Entry.Errored := TRUE;
+                    Entry."Error Reason" := COPYSTR(GETLASTERRORTEXT(), 1, MAXSTRLEN(Entry."Error Reason"));
+                    Entry.MODIFY;
+                  END;
+                END;
+              END;
+            UNTIL (perms.NEXT = 0) OR found;
+            IF NOT found THEN BEGIN
+              IF MsgType."Allow by Default" THEN BEGIN
+                COMMIT;
+                IF NOT CODEUNIT.RUN(MsgType."Action Codeunit No.",Entry) THEN BEGIN
+                  Entry.Errored := TRUE;
+                  Entry."Error Reason" := COPYSTR(GETLASTERRORTEXT(), 1, MAXSTRLEN(Entry."Error Reason"));
+                  Entry.MODIFY;
+                END;
+              END ELSE BEGIN
+                Entry.Errored := TRUE;
+                Entry."Error Reason" := TxtPermissionDenied;
+                Entry.MODIFY;
+              END;
+            END;
+
+          END ELSE BEGIN
+            IF MsgType."Allow by Default" THEN
+              CODEUNIT.RUN(MsgType."Action Codeunit No.",Entry)
+            ELSE BEGIN
+              Entry.Errored := TRUE;
+              Entry."Error Reason" := TxtPermissionDenied;
+              Entry.MODIFY;
+            END;
+          END;
+
+        END ELSE BEGIN
+          Logger.Log('AUTOMSG', Logger.Type::Debug, STRSUBSTNO(TxtProcessingEntry, Entry."GUID No."), USERID);
+          IF GetMailItem(Entry, mEMailTmp, mEMailLineTmp, mEMailAttachmentTmp) THEN
+            MsgAction.SetMailItem(mEMailTmp, mEMailLineTmp, mEMailAttachmentTmp);
+          COMMIT;
+          IF NOT MsgAction.RUN(Entry) THEN BEGIN
+            Entry.Errored := TRUE;
+            Entry."Error Reason" := COPYSTR(GETLASTERRORTEXT(), 1, MAXSTRLEN(Entry."Error Reason"));
+            Entry.MODIFY;
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE IdentifyType@1000000001(pEMail@1000000000 : Record 9062281) found : Boolean;
+    VAR
+      MsgType@1000000001 : Record 9062274;
+      MsgEntry@1000000004 : Record 9062278;
+      Subject@1000000002 : Text[1024];
+      MsgAction@1000000003 : Codeunit 9062272;
+      SaveTo@1000000005 : Text[1024];
+      FSO@1000000006 : Automation "{420B2830-E718-11CF-893D-00A0C9054228} 1.0:{0D43FE01-F093-11CF-8940-00A0C9054228}:'Microsoft Scripting Runtime'.FileSystemObject";
+      TypeCode@1000000007 : Code[20];
+      TxtDidntFindMatchingType@1000000008 : TextConst 'ENU=Didn''t find matching type in subject "%1";ENG=Didn''t find matching type in subject "%1"';
+      TxtMatchedType@1000000009 : TextConst 'ENU=Matched type "%1" to subject "%2" at pos %3;ENG=Matched type "%1" to subject "%2" at pos %3';
+    BEGIN
+      MsgType.SETRANGE("Identify Keywords",FALSE);
+      IF NOT MsgType.FINDSET THEN EXIT(FALSE);
+      Subject := UPPERCASE(pEMail.Subject);
+      found := FALSE;
+      REPEAT
+        IF STRPOS(Subject,MsgType.Code) <> 0 THEN BEGIN
+          found := TRUE;
+          TypeCode := MsgType.Code;
+        END;
+      UNTIL found OR (MsgType.NEXT =0);
+
+
+      IF NOT found THEN BEGIN
+        Logger.Log('AUTOMSG', Logger.Type::Debug, STRSUBSTNO(TxtDidntFindMatchingType, Subject), USERID);
+        EXIT(found);
+      END;
+      MsgType.GET(TypeCode);
+      Logger.Log('AUTOMSG', Logger.Type::Debug, STRSUBSTNO(TxtMatchedType, MsgType.Code, Subject, STRPOS(Subject,MsgType.Code)), USERID);
+
+      MsgEntry.INIT;
+      MsgEntry."GUID No." := CREATEGUID;
+      MsgEntry."Message Type Code" := MsgType.Code;
+      MsgEntry."Immediate Action" := MsgType."Process Immediately";
+      MsgEntry.SenderEmail := pEMail."Sender E-Mail";
+      MsgEntry.SenderName := pEMail."Sender Name";
+      MsgEntry."Received DateTime" := CURRENTDATETIME;
+      MsgEntry."MailItem BLOB" := pEMail.Body;
+
+      MsgEntry.INSERT;
+    END;
+
+    PROCEDURE GetMailItem@1000000006(pAutoMessageEntry@1000000003 : Record 9062278;VAR pEMailTmp@1000000008 : Record 9062281;VAR pEMailLineTmp@1000000007 : Record 9062282;VAR pEMailAttachmentTmp@1000000006 : Record 9062283) OK : Boolean;
+    VAR
+      lTempBlob@1000000002 : Record 99008535;
+      lEMail@1000000000 : Record 9062281;
+      lEMailLine@1000000001 : Record 9062282;
+      lEMailAttachment@1000000004 : Record 9062283;
+    BEGIN
+      IF (pAutoMessageEntry."E-Mail Entry No." = 0) THEN
+        EXIT(FALSE);
+      IF ( NOT (lEMail.GET(pAutoMessageEntry."E-Mail Entry No."))) THEN
+        EXIT(FALSE);
+
+      pEMailTmp := lEMail;
+      pEMailTmp.INSERT();
+
+      lEMailLine.RESET();
+      lEMailLine.SETRANGE("E-Mail Entry No.", lEMail."Entry No.");
+      IF (lEMailLine.FINDSET()) THEN
+      REPEAT
+        pEMailLineTmp := lEMailLine;
+        pEMailLineTmp.INSERT();
+      UNTIL (lEMailLine.NEXT() = 0);
+
+      lEMailAttachment.RESET();
+      lEMailAttachment.SETRANGE("E-Mail Entry No.", lEMail."Entry No.");
+      IF (lEMailAttachment.FINDSET()) THEN
+      REPEAT
+        pEMailAttachmentTmp := lEMailAttachment;
+        pEMailAttachmentTmp.INSERT();
+      UNTIL (lEMailAttachment.NEXT() = 0);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetMailItemFromBLOB@1000000007(pAutoMessageEntry@1000000003 : Record 9062278;VAR pEMailTmp@1000000008 : Record 9062281;VAR pEMailLineTmp@1000000007 : Record 9062282;VAR pEMailAttachmentTmp@1000000006 : Record 9062283) OK : Boolean;
+    VAR
+      lTempBlob@1000000002 : Record 99008535;
+      lEMail@1000000000 : Record 9062281;
+      lEMailLine@1000000001 : Record 9062282;
+    BEGIN
+      IF ( NOT (pAutoMessageEntry."MailItem BLOB".HASVALUE())) THEN
+        EXIT(FALSE);
+      lTempBlob.Blob := pAutoMessageEntry."MailItem BLOB";
+      AutoMsg.GetEMailFromBlob(lTempBlob, pEMailTmp, pEMailLineTmp, pEMailAttachmentTmp);
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetContact@1000000004(VAR Entry@1000000000 : Record 9062278;VAR ContactNo@1000000004 : Code[20]) CreatedNew : Boolean;
+    VAR
+      MailItem@1000000001 : DotNet "'Microsoft.Office.Interop.Outlook, Version=14.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c'.Microsoft.Office.Interop.Outlook.MailItem";
+      Contact@1000000002 : Record 5050;
+      EntryType@1000000003 : Record 9062274;
+    BEGIN
+      Contact.SETFILTER("E-Mail", '@' + CONVERTSTR(Entry.SenderEmail, '@', '?'));
+      IF Contact.FINDSET THEN BEGIN
+        ContactNo := Contact."No.";
+        EXIT(FALSE);
+      END;
+      EntryType.GET(Entry."Message Type Code");
+      IF NOT EntryType."Create Interaction" THEN EXIT(FALSE);
+
+      GetMailItem(Entry, mEMailTmp, mEMailLineTmp, mEMailAttachmentTmp);
+
+      Contact.INIT;
+      Contact.INSERT(TRUE);
+      Contact.VALIDATE(Name,Entry.SenderName);
+      Contact.VALIDATE("E-Mail",COPYSTR(Entry.SenderEmail,1,80));
+      Contact.MODIFY(TRUE);
+      ContactNo := Contact."No.";
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CreateInteraction@1000000005(VAR Entry@1000000001 : Record 9062278;ContactNo@1000000000 : Code[20]) EntryNo : Integer;
+    VAR
+      MailItem@1000000003 : DotNet "'Microsoft.Office.Interop.Outlook, Version=14.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c'.Microsoft.Office.Interop.Outlook.MailItem";
+      Contact@1000000002 : Record 5050;
+      Interaction@1000000004 : Record 5065;
+      LastEntry@1000000005 : Integer;
+      EntryType@1000000006 : Record 9062274;
+      TxtCreatedInteraction@1000000007 : TextConst 'ENU=Created interaction for contact "%1" from entry "%2";ENG=Created interaction for contact "%1" from entry "%2"';
+    BEGIN
+      IF ContactNo = '' THEN EXIT;
+      EntryType.GET(Entry."Message Type Code");
+      IF NOT EntryType."Create Interaction" THEN EXIT;
+
+      IF NOT Contact.GET(ContactNo) THEN EXIT;
+      GetMailItem(Entry, mEMailTmp, mEMailLineTmp, mEMailAttachmentTmp);
+      Interaction.LOCKTABLE;
+
+      Interaction.FINDLAST;
+      LastEntry := Interaction."Entry No.";
+
+      Interaction.INIT;
+      Interaction.VALIDATE("Entry No.",LastEntry+1);
+      Interaction.VALIDATE("Contact No.",ContactNo);
+      Interaction.VALIDATE("Contact Company No.",Contact."Company No.");
+      Interaction.VALIDATE(Date,TODAY);
+      Interaction.VALIDATE("Time of Interaction",TIME);
+      Interaction.VALIDATE("Interaction Template Code",EntryType."Interaction Template Code");
+      Interaction.VALIDATE(Description,EntryType."Interaction Description");
+      Interaction.INSERT(TRUE);
+      COMMIT;
+
+      Logger.Log('AUTOMSG', Logger.Type::Information, STRSUBSTNO(TxtCreatedInteraction, ContactNo, Entry."GUID No."), USERID);
+
+      EXIT(Interaction."Entry No.");
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  JH 10/08/2012 - Migrated to 2013
+      //DOC NA2015.1  PC 25/03/2014 - Remove reliance on AutoNAV Tasks
+      //DOC NA2016.10 JH 26/08/2015 - Upgraded to 2016
+    }
+    END.
+  }
+}
+

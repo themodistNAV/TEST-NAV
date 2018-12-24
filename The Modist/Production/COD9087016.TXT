@@ -1,0 +1,484 @@
+OBJECT Codeunit 9087016 Store Allocation Transfer
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/09/16;
+    Time=[ 5:19:49 PM];
+    Version List=NS2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      InventoryEventBufferTmp@1000000013 : TEMPORARY Record 5530;
+      StoreAllocationLine@1000000003 : Record 9087036;
+      StoreAllocationLineTmp@1000000019 : TEMPORARY Record 9087036;
+      TransferHeader@1000000020 : Record 5740;
+      TransferHeaderTmp@1000000007 : TEMPORARY Record 5740;
+      TransferLine@1000000023 : Record 5741;
+      DialogManagement@1000000005 : Codeunit 9062249;
+      DialogIndex@1000000004 : ',Collecting,Processing';
+      TableId@1000000010 : Integer;
+      TableView@1000000011 : Text[1024];
+      LocationCodeFieldId@1000000017 : Integer;
+      ItemNoFieldId@1000000016 : Integer;
+      VariantCodeFieldId@1000000015 : Integer;
+      QuantityAllocatedFieldId@1000000025 : Integer;
+      StoreAllocationCodeFieldId@1000000026 : Integer;
+      OutboundDocument@1000000018 : Boolean;
+      DocumentName@1000000006 : Text[100];
+      ReasonCode@1000000022 : Code[20];
+      ReleaseTransferOrders@1000000000 : Boolean;
+      Counter@1000000008 : ARRAY [2] OF Integer;
+      CounterIndex@1000000009 : ' ,Header,Line';
+      InventoryEventBufferEntryNo@1000000014 : Integer;
+      TransferLineNo@1000000021 : Integer;
+      RecRef@1000000024 : RecordRef;
+      FldRef@1000000012 : FieldRef;
+
+    PROCEDURE "--- General Methods ---"@1000000001();
+    BEGIN
+    END;
+
+    PROCEDURE CreateTransferOrders@1000000018(pTableId@1000000002 : Integer;pTableView@1000000001 : Text[1024];pLocationCodeFieldId@1000000005 : Integer;pItemNoFieldId@1000000003 : Integer;pVariantCodeFieldId@1000000004 : Integer;pQuantityAllocatedFieldId@1000000011 : Integer;pStoreAllocationCodeFieldId@1000000012 : Integer;pOutboundDocument@1000000006 : Boolean;pDocumentName@1000000000 : Text[100];pReasonCode@1000000007 : Code[20];pReleaseTransferOrders@1000000013 : Boolean);
+    VAR
+      eDialogHeader@1000000010 : TextConst 'ENU=Creating transfer orders for %1...;ENG=Creating transfer orders for %1...';
+      eDialogCollecting@1000000009 : TextConst 'ENU=Collecting store allocations;ENG=Collecting store allocations';
+      eDialogProcessing@1000000008 : TextConst 'ENU=Processing store allocations;ENG=Processing store allocations';
+    BEGIN
+      //DOC NS2015.1 - Creating transfer orders
+      //  -> pTableId: Table ID
+      //  -> pTableView: Table view
+      //  -> pLocationCodeFieldId: Location code field ID
+      //  -> pItemNoFieldId: Item no. field ID
+      //  -> pVariantCodeFieldId: Variant code field ID
+      //  -> pQuantityAllocatedFieldId: Quantity allocated field ID
+      //  -> pStoreAllocationCodeFieldId: Store allocation code field ID
+      //  -> pOutboundDocument: TRUE = outbound (sale) document, FALSE = inbound (purchase) document
+      //  -> pDocumentName: Document name
+      //  -> pReasonCode: Reason code
+      //  -> pReleaseTransferOrders: Flag to release transfer orders created
+
+      TableId := pTableId;
+      TableView := pTableView;
+      LocationCodeFieldId := pLocationCodeFieldId;
+      ItemNoFieldId := pItemNoFieldId;
+      VariantCodeFieldId := pVariantCodeFieldId;
+      QuantityAllocatedFieldId := pQuantityAllocatedFieldId;
+      StoreAllocationCodeFieldId := pStoreAllocationCodeFieldId;
+      OutboundDocument := pOutboundDocument;
+      DocumentName := pDocumentName;
+      ReasonCode := pReasonCode;
+      ReleaseTransferOrders := pReleaseTransferOrders;
+
+      ClearBuffers();
+
+      Check();
+
+      Initialise();
+
+      CollectStoreAllocations();
+      ProcessStoreAllocations();
+      _ReleaseTransferOrders();
+
+      Finalise();
+
+      ClearBuffers();
+    END;
+
+    PROCEDURE ShowTransferOrders@1000000009(pTableId@1000000011 : Integer;pTableView@1000000010 : Text[1024];pItemNoFieldId@1000000007 : Integer;pVariantCodeFieldId@1000000006 : Integer;pStoreAllocationCodeFieldId@1000000000 : Integer;pDocumentName@1000000003 : Text[100]);
+    VAR
+      lFilter@1000000001 : Text[1024];
+      eNoTransferOrders@1000000002 : TextConst 'ENU=There are no allocation transfer orders for %1.;ENG=There are no allocation transfer orders for %1.';
+    BEGIN
+      //DOC NS2015.1 - Creating transfer orders
+      //  -> pTableId: Table ID
+      //  -> pTableView: Table view
+      //  -> pItemNoFieldId: Item no. field ID
+      //  -> pVariantCodeFieldId: Variant code field ID
+      //  -> pStoreAllocationCodeFieldId: Store allocation code field ID
+      //  -> pDocumentName: Document name
+
+      TableId := pTableId;
+      TableView := pTableView;
+      ItemNoFieldId := pItemNoFieldId;
+      VariantCodeFieldId := pVariantCodeFieldId;
+      StoreAllocationCodeFieldId := pStoreAllocationCodeFieldId;
+      DocumentName := pDocumentName;
+
+      TransferHeaderTmp.RESET();
+      TransferHeaderTmp.DELETEALL();
+
+      OpenStoreAllocationRecordRef();
+      IF (RecRef.FINDSET()) THEN
+      REPEAT
+        FilterStoreAllocationLines();
+        IF (StoreAllocationLine.FINDSET()) THEN
+        REPEAT
+          IF (StoreAllocationLine."Transfer Order No." <> '') THEN
+            IF ( NOT (TransferHeaderTmp.GET(StoreAllocationLine."Transfer Order No."))) THEN
+            BEGIN
+              TransferHeaderTmp."No." := StoreAllocationLine."Transfer Order No.";
+              TransferHeaderTmp.INSERT();
+            END;
+        UNTIL (StoreAllocationLine.NEXT() = 0);
+      UNTIL (RecRef.NEXT() = 0);
+      CloseStoreAllocationRecordRef();
+
+      TransferHeaderTmp.RESET();
+      CASE (TransferHeaderTmp.COUNT) OF
+        0:
+          MESSAGE(eNoTransferOrders, DocumentName);
+        1:
+          BEGIN
+            TransferHeaderTmp.FINDFIRST();
+            TransferHeader.GET(TransferHeaderTmp."No.");
+            PAGE.RUN(PAGE::"Transfer Order", TransferHeader);
+          END;
+        ELSE
+          BEGIN
+            lFilter := '';
+            TransferHeaderTmp.FINDSET();
+            REPEAT
+              IF (lFilter <> '') THEN
+                lFilter := lFilter + '|';
+              lFilter := lFilter + TransferHeaderTmp."No.";
+            UNTIL (TransferHeaderTmp.NEXT() = 0);
+            TransferHeader.RESET();
+            TransferHeader.FILTERGROUP(2);
+            TransferHeader.SETFILTER("No.", lFilter);
+            TransferHeader.FILTERGROUP(0);
+            PAGE.RUN(0, TransferHeader);
+          END
+      END;
+    END;
+
+    PROCEDURE "--- Internal Methods ---"@1000000002();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE Check@1000000017();
+    VAR
+      eNoLinesToAllocate@1000000000 : TextConst 'ENU=%1 doesn''t have any lines to allocate.;ENG=%1 doesn''t have any lines to allocate.';
+      eLinesAllocated@1000000001 : TextConst 'ENU=%1 has already been allocated.;ENG=%1 has already been allocated.';
+      lLinesExist@1000000002 : Boolean;
+      lAllLinesAllocated@1000000003 : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Checking before transfer orders creation
+
+      lLinesExist := FALSE;
+      lAllLinesAllocated := TRUE;
+
+      OpenStoreAllocationRecordRef();
+      IF (RecRef.FINDSET()) THEN
+        REPEAT
+          FilterStoreAllocationLines();
+          IF ( NOT (StoreAllocationLine.ISEMPTY)) THEN
+            lLinesExist := TRUE;
+          StoreAllocationLine.SETRANGE("Transfer Order No.", '');
+          IF ( NOT (StoreAllocationLine.ISEMPTY)) THEN
+            lAllLinesAllocated := FALSE;
+        UNTIL (RecRef.NEXT() = 0)
+      ELSE
+        lAllLinesAllocated := FALSE;
+      CloseStoreAllocationRecordRef();
+
+      IF ( NOT (lLinesExist)) THEN
+        ERROR(eNoLinesToAllocate, DocumentName);
+      IF (lAllLinesAllocated) THEN
+        ERROR(eLinesAllocated, DocumentName);
+    END;
+
+    LOCAL PROCEDURE Initialise@1000000007();
+    VAR
+      eConfirmation@1000000003 : TextConst 'ENU=Do you want to create store allocation transfer orders for %1?;ENG=Do you want to create store allocation transfer orders for %1?';
+      eDialogHeader@1000000002 : TextConst 'ENU=Creating transfer orders for %1...;ENG=Creating transfer orders for %1...';
+      eDialogCollecting@1000000001 : TextConst 'ENU=Collecting store allocations;ENG=Collecting store allocations';
+      eDialogProcessing@1000000000 : TextConst 'ENU=Processing store allocations;ENG=Processing store allocations';
+    BEGIN
+      //DOC NS2015.1 - Initialising
+
+      IF (GUIALLOWED) THEN
+        IF ( NOT (CONFIRM(eConfirmation, TRUE, DocumentName))) THEN
+          ERROR('');
+
+      CLEAR(DialogManagement);
+      DialogManagement.Add(eDialogCollecting, 20, DialogIndex::Collecting, 20, TRUE, TRUE);
+      DialogManagement.Add(eDialogProcessing, 20, DialogIndex::Processing, 20, TRUE, TRUE);
+      DialogManagement.Open(STRSUBSTNO(eDialogHeader, DocumentName));
+    END;
+
+    LOCAL PROCEDURE CollectStoreAllocations@1000000016();
+    VAR
+      lDocumentLocationCode@1000000000 : Code[10];
+      lLocationCode@1000000001 : Code[10];
+      lNewLocationCode@1000000002 : Code[10];
+    BEGIN
+      //DOC NS2015.1 - Collecting store allocations
+
+      OpenStoreAllocationRecordRef();
+      IF (RecRef.FINDSET()) THEN
+      REPEAT
+        lDocumentLocationCode := RecordRefFieldCode(LocationCodeFieldId);
+        FilterStoreAllocationLines();
+        StoreAllocationLine.SETRANGE("Transfer Order No.", '');
+        IF (StoreAllocationLine.FINDSET()) THEN
+        REPEAT
+          IF (OutboundDocument) THEN
+          BEGIN
+            lLocationCode := StoreAllocationLine."Location Code";
+            lNewLocationCode := lDocumentLocationCode;
+          END
+          ELSE
+          BEGIN
+            lLocationCode := lDocumentLocationCode;
+            lNewLocationCode := StoreAllocationLine."Location Code";
+          END;
+          InventoryEventBufferTmp.RESET();
+          InventoryEventBufferTmp.SETRANGE("Location Code", lLocationCode);
+          InventoryEventBufferTmp.SETRANGE("New Location Code", lNewLocationCode);
+          IF (InventoryEventBufferTmp.ISEMPTY) THEN
+          BEGIN
+            InventoryEventBufferEntryNo += 1;
+            InventoryEventBufferTmp."Entry No." := InventoryEventBufferEntryNo;
+            InventoryEventBufferTmp."Location Code" := lLocationCode;
+            InventoryEventBufferTmp."New Location Code" := lNewLocationCode;
+            InventoryEventBufferTmp.INSERT();
+          END;
+        UNTIL (StoreAllocationLine.NEXT() = 0);
+        DialogManagement.StepCounter(DialogIndex::Collecting);
+      UNTIL (RecRef.NEXT() = 0);
+      CloseStoreAllocationRecordRef();
+    END;
+
+    LOCAL PROCEDURE ProcessStoreAllocations@1000000015();
+    VAR
+      lDocumentLocationCode@1000000000 : Code[10];
+    BEGIN
+      //DOC NS2015.1 - Processing store allocations
+
+      InventoryEventBufferTmp.RESET();
+      DialogManagement.SetCounterCount(DialogIndex::Processing, InventoryEventBufferTmp.COUNT);
+
+      InventoryEventBufferTmp.RESET();
+      IF (InventoryEventBufferTmp.FINDSET()) THEN
+      REPEAT
+        CreateTransferHeader();
+        OpenStoreAllocationRecordRef();
+        IF (OutboundDocument) THEN
+          lDocumentLocationCode := InventoryEventBufferTmp."New Location Code"
+        ELSE
+          lDocumentLocationCode := InventoryEventBufferTmp."Location Code";
+        RecordRefSetRangeCode(LocationCodeFieldId, lDocumentLocationCode);
+        IF (RecRef.FINDSET()) THEN
+        REPEAT
+          FilterStoreAllocationLines();
+          IF (OutboundDocument) THEN
+            StoreAllocationLine.SETRANGE("Location Code", InventoryEventBufferTmp."Location Code")
+          ELSE
+            StoreAllocationLine.SETRANGE("Location Code", InventoryEventBufferTmp."New Location Code");
+          StoreAllocationLine.SETRANGE("Transfer Order No.", '');
+          IF (StoreAllocationLine.FINDSET()) THEN
+          REPEAT
+            CreateTransferLine();
+            IF ( NOT (StoreAllocationLineTmp.GET(StoreAllocationLine."Store Allocation Code", StoreAllocationLine."Line No."))) THEN
+            BEGIN
+              StoreAllocationLineTmp := StoreAllocationLine;
+              StoreAllocationLineTmp.INSERT();
+            END;
+          UNTIL (StoreAllocationLine.NEXT() = 0);
+        UNTIL(RecRef.NEXT() = 0);
+        StoreAllocationLineTmp.RESET();
+        IF (StoreAllocationLineTmp.FINDSET()) THEN
+        REPEAT
+          StoreAllocationLine.GET(StoreAllocationLineTmp."Store Allocation Code", StoreAllocationLineTmp."Line No.");
+          StoreAllocationLine.VALIDATE("Transfer Order No.", TransferHeader."No.");
+          StoreAllocationLine.MODIFY(TRUE);
+        UNTIL (StoreAllocationLineTmp.NEXT() = 0);
+        CloseStoreAllocationRecordRef();
+        StoreAllocationLineTmp.RESET();
+        StoreAllocationLineTmp.DELETEALL();
+        DialogManagement.StepCounter(DialogIndex::Processing);
+      UNTIL (InventoryEventBufferTmp.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE CreateTransferHeader@1000000014();
+    BEGIN
+      //DOC NS2015.1 - Creating transfer header
+
+      CLEAR(TransferHeader);
+      TransferHeader.INIT();
+      TransferHeader.INSERT(TRUE);
+      TransferHeader.VALIDATE("Posting Date", WORKDATE());
+      TransferHeader.VALIDATE("Transfer-from Code", InventoryEventBufferTmp."Location Code");
+      TransferHeader.VALIDATE("Transfer-to Code", InventoryEventBufferTmp."New Location Code");
+      TransferHeader.VALIDATE("Reason Code", ReasonCode);
+      TransferHeader.MODIFY(TRUE);
+      TransferHeaderTmp := TransferHeader;
+      TransferHeaderTmp.INSERT();
+
+      TransferLineNo := 0;
+
+      Counter[CounterIndex::Header] += 1;
+    END;
+
+    LOCAL PROCEDURE CreateTransferLine@1000000013();
+    BEGIN
+      //DOC NS2015.1 - Creating transfer line
+
+      TransferLineNo += 10000;
+
+      CLEAR(TransferLine);
+      TransferLine.INIT();
+      TransferLine.VALIDATE("Document No.", TransferHeader."No.");
+      TransferLine.VALIDATE("Line No.", TransferLineNo);
+      TransferLine.INSERT(TRUE);
+      TransferLine.VALIDATE("Item No.", RecordRefFieldCode(ItemNoFieldId));
+      TransferLine.VALIDATE("Variant Code", RecordRefFieldCode(VariantCodeFieldId));
+      TransferLine.VALIDATE(Quantity, RecordRefFieldDecimal(QuantityAllocatedFieldId));
+      TransferLine.VALIDATE("Allocation Code", StoreAllocationLine."Store Allocation Code");
+      TransferLine.MODIFY(TRUE);
+
+      Counter[CounterIndex::Line] += 1;
+    END;
+
+    LOCAL PROCEDURE _ReleaseTransferOrders@1000000012();
+    VAR
+      lReleaseTransferDocument@1000000000 : Codeunit 5708;
+    BEGIN
+      //DOC NS2015.1 - Releasing all transfer orders created
+
+      IF ( NOT (ReleaseTransferOrders)) THEN
+        EXIT;
+
+      COMMIT;
+
+      TransferHeaderTmp.RESET();
+      IF (TransferHeaderTmp.FINDSET()) THEN
+      REPEAT
+        TransferHeader.GET(TransferHeaderTmp."No.");
+        IF (TransferHeader.Status <> TransferHeader.Status::Released) THEN
+        BEGIN
+          CLEAR(lReleaseTransferDocument);
+          IF (lReleaseTransferDocument.RUN(TransferHeader)) THEN;
+        END;
+      UNTIL (TransferHeaderTmp.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE OpenStoreAllocationRecordRef@1000000011();
+    BEGIN
+      //DOC NS2015.1 - Opening store allocation record reference
+
+      RecRef.OPEN(TableId);
+      IF (TableView <> '') THEN
+        RecRef.SETVIEW(TableView);
+    END;
+
+    LOCAL PROCEDURE CloseStoreAllocationRecordRef@1000000019();
+    BEGIN
+      //DOC NS2015.1 - Closing store allocation record reference
+
+      RecRef.CLOSE();
+    END;
+
+    LOCAL PROCEDURE FilterStoreAllocationLines@1000000010();
+    BEGIN
+      //DOC NS2015.1 - Filtering store allocation lines for the current document line
+
+      StoreAllocationLine.RESET();
+      StoreAllocationLine.SETRANGE("Store Allocation Code", RecordRefFieldCode(StoreAllocationCodeFieldId));
+      StoreAllocationLine.SETFILTER(Quantity, '<>0');
+    END;
+
+    LOCAL PROCEDURE Finalise@1000000008();
+    VAR
+      eTransferOrderCreated@1000000002 : TextConst 'ENU=1 transfer order has been created. Do you want to open it?;ENG=1 transfer order has been created. Do you want to open it?';
+      eTransferOrdersCreated@1000000001 : TextConst 'ENU=%1 transfer orders have been created. Do you want to open them?;ENG=%1 transfer orders have been created. Do you want to open them?';
+      eNoTransferOrdersCreated@1000000000 : TextConst 'ENU=No transfer orders have been created.;ENG=No transfer orders have been created.';
+      lFinalMessage@1000000003 : Text[250];
+    BEGIN
+      //DOC NS2015.1 - Finalising
+
+      DialogManagement.Close();
+
+      IF (GUIALLOWED) THEN
+        IF (Counter[CounterIndex::Header] <> 0) THEN
+        BEGIN
+          IF (Counter[CounterIndex::Header] = 1) THEN
+            lFinalMessage := eTransferOrderCreated
+          ELSE
+            lFinalMessage := eTransferOrdersCreated;
+          IF (CONFIRM(lFinalMessage, TRUE, Counter[CounterIndex::Header])) THEN
+          BEGIN
+            COMMIT;
+            ShowTransferOrders(TableId, TableView, ItemNoFieldId, VariantCodeFieldId, StoreAllocationCodeFieldId, DocumentName);
+          END;
+        END
+        ELSE
+          MESSAGE(eNoTransferOrdersCreated);
+    END;
+
+    PROCEDURE "--- Tools ---"@1000000020();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ClearBuffers@1000000023();
+    BEGIN
+      //DOC NS2015.1 - Clearing transfer order creation buffers
+
+      InventoryEventBufferTmp.RESET();
+      InventoryEventBufferTmp.DELETEALL();
+      InventoryEventBufferEntryNo := 0;
+
+      StoreAllocationLineTmp.RESET();
+      StoreAllocationLineTmp.DELETEALL();
+    END;
+
+    LOCAL PROCEDURE RecordRefSetRangeCode@1000000029(pFieldId@1000000000 : Integer;pFieldFilter@1000000001 : Code[250]);
+    BEGIN
+      //DOC NS2015.1 - Setting range on record reference field (for code data type)
+      //  -> pFieldId: Field ID
+      //  -> pFieldFilter: Field filter
+
+      FldRef := RecRef.FIELD(pFieldId);
+      FldRef.SETRANGE(pFieldFilter);
+    END;
+
+    LOCAL PROCEDURE RecordRefFieldCode@1000000021(pFieldId@1000000000 : Integer) : Code[250];
+    BEGIN
+      //DOC NS2015.1 - Returning record reference field (for code data type)
+      //  -> pFieldId: Field ID
+      //  <- Field value
+
+      FldRef := RecRef.FIELD(pFieldId);
+      EXIT(FldRef.VALUE);
+    END;
+
+    LOCAL PROCEDURE RecordRefFieldDecimal@1000000000(pFieldId@1000000000 : Integer) : Decimal;
+    BEGIN
+      //DOC NS2015.1 - Returning record reference field (for decimal data type)
+      //  -> pFieldId: Field ID
+      //  -> pCalcField: Flag telling to do a CALCFIELD (for a FlowField)
+      //  <- Field value
+
+      FldRef := RecRef.FIELD(pFieldId);
+      IF (LOWERCASE(FORMAT(FldRef.CLASS)) = 'flowfield') THEN
+        FldRef.CALCFIELD();
+      EXIT(FldRef.VALUE);
+    END;
+
+    BEGIN
+    {
+      //DOC NS2015.1  JH 19/11/2013 - Created
+      //DOC NS2015.6  JH 09/04/2015 - Name changed to "*Store*" (clash with order stock allocation)
+      //DOC NS2016.16 JH 07/09/2016 - nSemble 2016
+    }
+    END.
+  }
+}
+

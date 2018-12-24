@@ -1,0 +1,227 @@
+OBJECT Codeunit 50028 DW Catalogue Import
+{
+  OBJECT-PROPERTIES
+  {
+    Date=20/12/18;
+    Time=[ 4:05:21 PM];
+    Modified=Yes;
+    Version List=TM0032;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            GetModistSetup;
+            GetIntegrationProcessingGrpSetup;
+
+            IF IntegrationProcessingGroup."Enable SFTP Connect" THEN
+              DownloadftpFiles;
+            ProcessFTPFiles;
+            MoveSuccessFileToArchLocation;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TmpXMLBuffer@1170000000 : TEMPORARY Record 1235;
+      Item@1170000002 : Record 27;
+      OnlineItem@1170000006 : Record 27;
+      TmpNewOnlineItem@1170000007 : TEMPORARY Record 27;
+      ModistSetup@1170000015 : Record 50000;
+      IntegrationProcessingGroup@1170000014 : Record 50007;
+      AutoNAVTask@1170000013 : Record 9062734;
+      IntegrationErrorLog@1170000012 : Record 50011;
+      TypeHelper@1170000003 : Codeunit 10;
+      AutoNAVToolkit@1170000011 : Codeunit 9062602;
+      FileManagement@1170000016 : Codeunit 419;
+      SuccessList@1170000010 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      OnlineFrom@1170000004 : Variant;
+      OnlineTo@1170000005 : Variant;
+      ModistSetupOK@1170000009 : Boolean;
+      IntegrationProcessingGrpSetupOK@1170000008 : Boolean;
+      SuccessFile@1170000001 : Text;
+
+    [TryFunction]
+    LOCAL PROCEDURE ImportDWCat@1170000000(pFilePath@1170000001 : Text);
+    VAR
+      lSkip@1170000000 : Boolean;
+    BEGIN
+      OnlineFrom := 0D;
+      OnlineTo := 0D;
+
+      TmpXMLBuffer.RESET;
+      TmpXMLBuffer.DELETEALL;
+
+      TmpNewOnlineItem.RESET;
+      TmpNewOnlineItem.DELETEALL;
+
+      TmpXMLBuffer.Load(pFilePath);
+
+      OnlineItem.RESET;
+      OnlineItem.SETRANGE(Online,TRUE);
+
+      lSkip := FALSE;
+
+      TmpXMLBuffer.RESET;
+      IF TmpXMLBuffer.FINDSET THEN BEGIN
+        REPEAT
+          lSkip := FALSE;
+          CASE TmpXMLBuffer.Name OF
+            'id':
+              BEGIN
+                lSkip := Item.GET(TmpXMLBuffer.Value);
+              END;
+            'online':
+              BEGIN
+                IF NOT lSkip THEN
+                  IF EVALUATE(Item.Online,TmpXMLBuffer.Value) THEN;
+              END;
+            'onlineFrom':
+              BEGIN
+                IF NOT lSkip THEN BEGIN
+                  IF TmpXMLBuffer.Value <> '' THEN BEGIN
+                    TypeHelper.Evaluate(OnlineFrom,TmpXMLBuffer.Value,'','');
+                    Item."Online From" := OnlineFrom;
+                  END;
+                END;
+              END;
+            'onlineFrom':
+              BEGIN
+                IF NOT lSkip THEN BEGIN
+                  IF TmpXMLBuffer.Value <> '' THEN BEGIN
+                    TypeHelper.Evaluate(OnlineTo,TmpXMLBuffer.Value,'','');
+                    Item."Online To" := OnlineTo;
+                  END;
+                END;
+              END;
+            'searchStatus':
+              BEGIN
+                IF NOT lSkip THEN BEGIN
+                  IF EVALUATE(Item."Search Status",TmpXMLBuffer.Value) THEN;
+                  Item.MODIFY;
+                  TmpNewOnlineItem := Item;
+                  IF TmpNewOnlineItem.INSERT THEN;
+                END;
+              END;
+          END;
+        UNTIL TmpXMLBuffer.NEXT=0;
+      END;
+
+      TmpNewOnlineItem.RESET;
+
+      OnlineItem.FINDSET;
+      REPEAT
+        TmpNewOnlineItem.SETRANGE("No.",OnlineItem."No.");
+        IF TmpNewOnlineItem.ISEMPTY THEN BEGIN
+          OnlineItem.Online := FALSE;
+          OnlineItem.MODIFY;
+        END;
+      UNTIL OnlineItem.NEXT=0;
+
+      IF GUIALLOWED THEN
+        MESSAGE('Import Done.');
+    END;
+
+    LOCAL PROCEDURE ProcessFTPFiles@1000000003();
+    VAR
+      lFile@1000000000 : Record 2000000022;
+    BEGIN
+      CLEARLASTERROR;
+      SuccessList := SuccessList.List;
+      lFile.SETRANGE(Path,IntegrationProcessingGroup."Working Location");
+      lFile.SETRANGE("Is a file",TRUE);
+      lFile.SETFILTER(Name,'%1','*.xml');
+      IF lFile.FINDSET THEN BEGIN
+        ClearErrorLogs;
+        REPEAT
+          IF ImportDWCat(IntegrationProcessingGroup."Working Location" + '\' + lFile.Name) THEN
+            SuccessList.Add(IntegrationProcessingGroup."Working Location" + '\' + lFile.Name)
+          ELSE
+            LogError('',0,GETLASTERRORTEXT,'Import XML File',GETLASTERRORCODE,lFile.Name);
+        UNTIL lFile.NEXT=0;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetModistSetup@1000000000();
+    BEGIN
+      IF NOT ModistSetupOK THEN BEGIN
+        ModistSetup.GET;
+        ModistSetup.TESTFIELD("Demandware Integration Type");
+        ModistSetup.TESTFIELD("DW Catalogue Imp. Grp.");
+        ModistSetupOK := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetIntegrationProcessingGrpSetup@1000000001();
+    BEGIN
+      GetModistSetup;
+      IF NOT IntegrationProcessingGrpSetupOK THEN BEGIN
+        IntegrationProcessingGroup.GET(ModistSetup."Demandware Integration Type",ModistSetup."DW Catalogue Imp. Grp.");
+        IntegrationProcessingGrpSetupOK := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE ClearErrorLogs@1000000005();
+    BEGIN
+      GetIntegrationProcessingGrpSetup;
+      IntegrationErrorLog.RESET;
+      IntegrationErrorLog.SETCURRENTKEY("Integration Type","Integration Process Group");
+      IntegrationErrorLog.SETRANGE("Integration Type",IntegrationProcessingGroup."Platform Code");
+      IntegrationErrorLog.SETRANGE("Integration Process Group",IntegrationProcessingGroup.Code);
+      IF NOT IntegrationErrorLog.ISEMPTY THEN
+        IntegrationErrorLog.DELETEALL;
+    END;
+
+    LOCAL PROCEDURE LogError@1000000015(OrderRef@1000000001 : Code[20];LineNo@1000000006 : Integer;ErrMessage@1000000002 : Text;ErrorLocation@1000000004 : Text;ErrCode@1000000005 : Text;pFileName@1000000007 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+    BEGIN
+      ErrorHandler.LogError(ModistSetup."Demandware Integration Type",
+                            ModistSetup."DW Catalogue Imp. Grp.",
+                            '',
+                            DATABASE::Item,
+                            OrderRef,
+                            LineNo,
+                            ErrMessage,
+                            ErrorLocation,
+                            0,
+                            ErrCode,
+                            pFileName);
+    END;
+
+    LOCAL PROCEDURE MoveSuccessFileToArchLocation@1000000017();
+    BEGIN
+      FOREACH SuccessFile IN SuccessList DO BEGIN
+        IF SuccessFile <> '' THEN BEGIN
+          FileManagement.MoveFile(SuccessFile,IntegrationProcessingGroup."Archive Location" + '\' + FileManagement.GetFileName(SuccessFile));
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE DownloadftpFiles@1000000002();
+    VAR
+      lWebIntegrationManagement@1000000000 : Codeunit 50100;
+    BEGIN
+      {IF NOT lWebIntegrationManagement.DownloadftpFiles(IntegrationProcessingGroup."Working Location",
+                                                        ModistSetup."Demandware Import SFTP Server",
+                                                        IntegrationProcessingGroup."FTP Folder")
+      THEN BEGIN
+        AutoNAVToolkit.AddEntryForTask(AutoNAVTask,GETLASTERRORTEXT,2);
+        ERROR(GETLASTERRORTEXT);
+      END;
+      }
+      IF NOT lWebIntegrationManagement.DownloadFTPFiles2(IntegrationProcessingGroup."Working Location",
+                                                        ModistSetup."Demandware Import SFTP Server",
+                                                        IntegrationProcessingGroup."FTP Folder",
+                                                        IntegrationProcessingGroup."FTP Archive Folder")
+      THEN BEGIN
+        AutoNAVToolkit.AddEntryForTask(AutoNAVTask,GETLASTERRORTEXT,2);
+        ERROR(GETLASTERRORTEXT);
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

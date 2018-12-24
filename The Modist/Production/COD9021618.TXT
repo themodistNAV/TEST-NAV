@@ -1,0 +1,247 @@
+OBJECT Codeunit 9021618 TriggerSync
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:17 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1000000001 : TextConst 'ENU=This action will synchronise data between the web site and NAV.\\Do you wish to continue with the sync?;ENG=This action will synchronise data between the web site and NAV.\\Do you wish to continue with the sync?';
+      Text002@1000000003 : TextConst 'ENU=The system is currently configured to wait anything up to %1 seconds (%2 minutes) for notification that the sync has completed.\\If you ask the system to tell you when the process is complete, the system will be unavailable while you wait.\\Do you wish to wait for confirmation that the sync has completed sucessfully?\\(If you click "No" the sync will be triggered but you will not receive notification when it completes.);ENG=The system is currently configured to wait anything up to %1 seconds (%2 minutes) for notification that the sync has completed.\\If you ask the system to tell you when the process is complete, the system will be unavailable while you wait.\\Do you wish to wait for confirmation that the sync has completed sucessfully?\\(If you click "No" the sync will be triggered but you will not receive notification when it completes.)';
+      Text003@1000000000 : TextConst 'ENU=The sync task has not yet finished and the system has waited for the specified length of time (%1 secs (%2 mins)).\\Please contact your system administrator for confirmation that the process has completed, and consider increasing the "Sync Wait Time" setting.;ENG=The sync task has not yet finished and the system has waited for the specified length of time (%1 secs (%2 mins)).\\Please contact your system administrator for confirmation that the process has completed, and consider increasing the "Sync Wait Time" setting.';
+      Text004@1000000002 : TextConst 'ENU=The sync was completed successfully.;ENG=The sync was completed successfully.';
+      Text005@1000000004 : TextConst 'ENU=Another sync request is currently being processed.\\Please try again in a few seconds when it''s had time to complete.\\File found at ''%2''.\\Sync details: %1;ENG=Another sync request is currently being processed.\\Please try again in a few seconds when it''s had time to complete.\\File found at ''%2''.\\Sync details: %1';
+      Text006@1000000005 : TextConst 'ENU=The sync has been triggered as requested.;ENG=The sync has been triggered as requested.';
+      Text007@1000000008 : TextConst 'ENU=No Label was passed to the function.  Operation aborted.;ENG=No Label was passed to the function.  Operation aborted.';
+      Text008@1000000009 : TextConst 'ENU=No Sync Collection modules are flagged to include in the next sync.  Operation aborted.;ENG=No Sync Collection modules are flagged to include in the next sync.  Operation aborted.';
+      Text009@1000000011 : TextConst 'ENU=No Setup record found.  Operation aborted.;ENG=No Setup record found.  Operation aborted.';
+      Text010@1000000012 : TextConst 'ENU=In the selected list of %1 records there are no %2 records marked for synchronisation.  Sync cancelled.;ENG=In the selected list of %1 records there are no %2 records marked for synchronisation.  Sync cancelled.';
+      Text011@1000000013 : TextConst 'ENU=The ''%1'' table (ID %2 (%5)) in %3 ''%4'' is already marked for extraction in another %3.\\Please ensure that your sync request only includes it in a single %3 and try again.\\Operation aborted.;ENG=The ''%1'' table (ID %2 (%5)) in %3 ''%4'' is already marked for extraction in another %3.\\Please ensure that your sync request only includes it in a single %3 and try again.\\Operation aborted.';
+      Status001@1000000006 : TextConst 'ENU=Waiting for sync completion;ENG=Waiting for sync completion';
+      Status002@1000000007 : TextConst 'ENU=Polling for file deletion.;ENG=Polling for file deletion.';
+      InternetSetup@1000000010 : Record 9021609;
+      LabelConfigNotOK@1000000014 : Boolean;
+      Text012@1000000015 : TextConst 'ENU=You cannot run a Sync which includes ePages if the Label Configuration is not OK.;ENG=You cannot run a Sync which includes ePages if the Label Configuration is not OK.';
+      Text013@1000000016 : TextConst 'ENU=Too many %1 records have been selected (which would exceed the 30 character limit).\\Please try again, running multiple syncs to split up you selection.\\TECHNICAL INFO:\%2\(%3 characters);ENG=Too many %1 records have been selected (which would exceed the 30 character limit).\\Please try again, running multiple syncs to split up you selection.\\TECHNICAL INFO:\%2\(%3 characters)';
+
+    PROCEDURE SetSyncFlags@1000000000(VAR DoExtract@1000000003 : Integer;VAR DoUpload@1000000002 : Integer;VAR DoDownload@1000000001 : Integer;VAR DoInject@1000000000 : Integer;VAR SyncCollectionList@1000000007 : Text[250]);
+    VAR
+      SyncColl@1000000004 : Record 9021612;
+      SyncCollTable@1000000005 : Record 9021614;
+      SyncTable@1000000006 : Record 9021611;
+      TableIdCheckString@1000000012 : Text[1024];
+      DoExtractCheck@1000000008 : Integer;
+      DoUploadCheck@1000000009 : Integer;
+      DoDownloadCheck@1000000010 : Integer;
+      DoInjectCheck@1000000011 : Integer;
+      TxtUp@1000000013 : TextConst 'ENU=UP;ENG=UP';
+      TxtDown@1000000014 : TextConst 'ENU=DOWN;ENG=DOWN';
+    BEGIN
+      //find all collections included for next sync...
+      //DOC EC2015.5.03 SyncColl.SETFILTER("Include Module in Next Sync",'Yes');
+      SyncColl.SETRANGE("Include Module in Next Sync",TRUE);  //DOC EC2015.5.03
+      IF NOT SyncColl.FINDFIRST THEN BEGIN
+        IF GUIALLOWED THEN ERROR(Text008);
+        EXIT;
+      END;
+      //loop through all the modules flagged for sync...
+      TableIdCheckString+='|';
+      REPEAT
+        //build list of collections to pass to TriggerSync file...
+        SyncCollectionList+=SyncColl.Code+'|';
+        SyncCollTable.RESET;
+        SyncCollTable.SETRANGE("Collection Code",SyncColl.Code);
+        IF SyncCollTable.FINDFIRST THEN BEGIN
+          //loop through each table in modules flagged for sync...
+          REPEAT
+            SyncTable.RESET;
+            SyncTable.SETRANGE("Entry No.",SyncCollTable."Table Entry No.");
+            IF SyncTable.FINDFIRST THEN BEGIN
+              SyncTable.CALCFIELDS("Dynamics Table Name");
+
+              //DOC EC2013.3.20 -
+              IF (SyncTable."Dynamics Table ID" = 9021628) AND (LabelConfigNotOK = TRUE) THEN BEGIN
+                IF GUIALLOWED THEN
+                  ERROR(Text012);
+                EXIT;
+              END;
+              //DOC EC2013.3.20 +
+
+              //don't allow extract of the same table to multiple web tables in same sync (e.g. ProductTable & StockAvailability)...
+              IF STRPOS(TableIdCheckString,'|'+FORMAT(SyncTable."Dynamics Table ID")+'|')>0 THEN BEGIN
+                IF GUIALLOWED THEN
+                  ERROR(Text011,SyncTable."Dynamics Table Name",SyncTable."Dynamics Table ID",SyncColl.TABLENAME,SyncColl.Code,
+                          SyncTable."Table Name");
+                EXIT;
+              END;
+              //skip the SyncAction and TriggerSync tables which are included in all Collections...
+              IF (SyncTable."Dynamics Table ID"<>9021615) AND (SyncTable."Dynamics Table ID"<>0) AND
+                  (SyncTable."Table Name"<>'TriggerSync') THEN
+                TableIdCheckString+=FORMAT(SyncTable."Dynamics Table ID") + '|';
+              //set sync flags based on table's sync direction...
+              //<EC2009.2.73> sync v3
+              //CASE SyncTable."Sync Direction" OF
+              //  SyncTable."Sync Direction"::Up : BEGIN
+              //    DoExtract:=1;
+              //    DoUpload:=1;
+              //  END;
+              //  SyncTable."Sync Direction"::Down : BEGIN
+              //    DoDownload:=1;
+              //    DoInject:=1;
+              //  END;
+              //END;
+              CASE SyncTable."Sync Table Group Code" OF
+                TxtUp : BEGIN
+                  DoExtract:=1;
+                  DoUpload:=1;
+                END;
+                TxtDown : BEGIN
+                  DoDownload:=1;
+                  DoInject:=1;
+                END;
+              END;
+              //</EC2009.2.73>
+            END;
+          UNTIL SyncCollTable.NEXT=0;
+        END;
+        //override flags based on user option on sync collection...
+        IF NOT (SyncColl."Extract / Inject") THEN BEGIN
+          IF DoExtractCheck=0 THEN DoExtract:=0;
+          IF DoInjectCheck = 0 THEN DoInject:=0;
+        END;
+        IF NOT (SyncColl."Upload / Download") THEN BEGIN
+          IF DoUploadCheck = 0 THEN DoUpload:=0;
+          IF DoDownloadCheck = 0 THEN DoDownload:=0;
+        END;
+        //record values from this loop...
+        DoExtractCheck:=DoExtract;
+        DoUploadCheck:=DoUpload;
+        DoDownloadCheck:=DoDownload;
+        DoInjectCheck:=DoInject;
+      UNTIL SyncColl.NEXT=0;
+
+      //use recorded values:
+      DoExtract:=DoExtractCheck;
+      DoUpload:=DoUploadCheck;
+      DoDownload:=DoDownloadCheck;
+      DoInject:=DoInjectCheck;
+    END;
+
+    PROCEDURE TriggerSync@1000000001(LabelRecForSync@1000000009 : Record 9021618;SyncSingleLabel@1000000017 : Boolean);
+    VAR
+      DoExtract@1000000011 : Integer;
+      DoUpload@1000000012 : Integer;
+      DoDownload@1000000013 : Integer;
+      DoInject@1000000014 : Integer;
+      FileName@1000000001 : Text[150];
+      LabelCodesToProcess@1000000010 : Text[250];
+      LongestLabelCodeLength@1000000002 : Integer;
+      SyncCollectionList@1000000015 : Text[250];
+      SyncText@1000000005 : Text[250];
+      TriggerFile@1000000000 : File;
+      TxtSyncCollection@1000000003 : TextConst 'ENU=Sync Collection;ENG=Sync Collection';
+      TxtSyncTable@1000000004 : TextConst 'ENU=Sync Table;ENG=Sync Table';
+    BEGIN
+      InternetSetup.GET;
+
+      IF GUIALLOWED THEN
+        IF NOT CONFIRM(Text001,FALSE) THEN
+          EXIT;
+
+      FileName:=InternetSetup."Drop Location for Trigger Sync"+'TriggerSync.txt';
+      IF TriggerFile.OPEN(FileName) THEN BEGIN
+        //file already exists; another sync still in progress...
+        TriggerFile.READ(SyncText);
+        IF GUIALLOWED THEN
+          MESSAGE(Text005, SyncText, FileName);
+        TriggerFile.CLOSE;
+        EXIT;
+      END ELSE BEGIN
+
+        IF SyncSingleLabel THEN
+          LabelRecForSync.SETRECFILTER
+        ELSE
+          LabelRecForSync.SETFILTER(Active,'%1',TRUE);
+
+        //create a string of Label Codes to process...
+        IF NOT LabelRecForSync.FINDFIRST THEN BEGIN
+          IF GUIALLOWED THEN ERROR(Text007);
+          EXIT
+        END;
+        LabelConfigNotOK := FALSE;
+        REPEAT
+          IF (STRLEN(LabelRecForSync.Code)>LongestLabelCodeLength) THEN
+            LongestLabelCodeLength:=STRLEN(LabelRecForSync.Code);     //<EC2013.4.50 />
+          LabelCodesToProcess+=LabelRecForSync.Code+'|';
+          IF LabelRecForSync."Configuration OK" = FALSE THEN
+            LabelConfigNotOK := TRUE;  //DOC EC2013.3.20
+        UNTIL LabelRecForSync.NEXT=0;
+
+        //set the sync flags for extract etc based on tables in sync...
+        SetSyncFlags(DoExtract,DoUpload,DoDownload,DoInject,SyncCollectionList);
+        IF (DoExtract=0) AND (DoUpload=0) AND (DoDownload=0) AND (DoInject=0) THEN BEGIN
+          IF GUIALLOWED THEN
+            ERROR(Text010,TxtSyncCollection,TxtSyncTable);
+          EXIT;
+        END;
+
+        //<EC2013.4.50>
+        IF (STRLEN(SyncCollectionList)+LongestLabelCodeLength+2>30) THEN
+          ERROR(Text013,TxtSyncCollection,SyncCollectionList+'_'+PADSTR('XXXX',LongestLabelCodeLength,'X')+'_',
+                STRLEN(SyncCollectionList)+LongestLabelCodeLength+2);
+        //</EC2013.4.50>
+
+        //create the file to trigger the sync...
+        TriggerFile.CREATE(FileName);
+
+        TriggerFile.CLOSE; //DOC EC2013.3.20 added
+
+        TriggerFile.OPEN(FileName);
+
+        SyncText:= InternetSetup."Registered Product Name" + ';'+
+                   SyncCollectionList+';'+
+                   USERID+';'+
+                   LabelCodesToProcess+';'+
+                   FORMAT(DoExtract)+';'+
+                   FORMAT(DoUpload)+';'+
+                   FORMAT(DoDownload)+';'+
+                   FORMAT(DoInject)+';';
+        TriggerFile.WRITE(SyncText);
+        TriggerFile.CLOSE;
+
+      END;
+
+      IF GUIALLOWED THEN
+        MESSAGE(Text006);
+    END;
+
+    PROCEDURE OpenSyncLog@1000000002();
+    VAR
+      LabelRec@1000000000 : Record 9021618;
+    BEGIN
+      LabelRec.SETRANGE("Default Label in Company",TRUE);
+      IF LabelRec.FINDFIRST THEN
+        HYPERLINK(LabelRec."Staging Site URL" + '/admin/triggersynclog.aspx');
+    END;
+
+    BEGIN
+    {
+      //DOC EC2009.2.73 MQ 01/01/2012 - Change to use "Sync Table Group Code" in place of "Sync Direction"
+      //DOC EC2013.3.20 MQ 30/10/2012 - GW121030 Close TriggerSync file after creating otherwise get error in RTC.; If Syncing ePage, check Label Configuration is OK.
+      //DOC EC2013.4.50 MA 06/02/2014 - MA140206 added code to check for total length of profile name
+      //DOC EC2015.5.03 MQ 13/05/2015 - GW150513 Correct problem with Finbrands Germany
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

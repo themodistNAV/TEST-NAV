@@ -1,0 +1,91 @@
+OBJECT Codeunit 9021600 Reservation Functions
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:15 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      CreateIPI@1000000000 : Codeunit 9021601;
+
+    PROCEDURE SalesLineReserve@1000000000(VAR SalesLine@1000000000 : Record 37;FromInternetAuto@1000000005 : Boolean) ModifyRequired : Boolean;
+    VAR
+      FullAutoReservation@1000000003 : Boolean;
+      Text000@1000000004 : TextConst 'ENU=Warning.. could not fully reserve Item %1 on Line No. %2.;ENG=Warning.. could not fully reserve Item %1 on Line No. %2.';
+      VersionCalls@1000000008 : Codeunit 9021662;
+      ReservMgt@1000000001 : Codeunit 99000845;
+      ReservedQuantity@1000000007 : Decimal;
+      MaxQtyToReserveBase@1000000002 : Decimal;
+    BEGIN
+      IF (SalesLine.Type = SalesLine.Type::Item) AND (SalesLine.Reserve = SalesLine.Reserve::Always) AND
+         (SalesLine."Shipment Date" <> 0D) THEN BEGIN
+        //DOC EC2013.4.00 -
+        //ReservedQuantity := ReserveSalesLine.ReservQuantity(SalesLine);
+        ReservedQuantity := VersionCalls.ReserveSalesLine(SalesLine);
+        //DOC EC2013.4.00 +
+        IF ReservedQuantity <> 0 THEN BEGIN
+          //Expect a compile error here if compiling in MC.  This is not a problem.
+          //DOC EC2013.4.00 ReservMgt.SetSalesLine(SalesLine);
+          SalesLine.TESTFIELD("Shipment Date");
+          //DOC EC2013.4.00 -
+          //ReservMgt.AutoReserve(FullAutoReservation,'',SalesLine."Shipment Date",
+          //                      ReservedQuantity);
+          MaxQtyToReserveBase := SalesLine."Qty. per Unit of Measure" *
+                                  ReservedQuantity;
+          VersionCalls.AutoReserve(FullAutoReservation,'',SalesLine."Shipment Date",
+                                    ReservedQuantity,MaxQtyToReserveBase,SalesLine);
+          //DOC EC2013.4.00 +
+          IF FullAutoReservation THEN BEGIN
+            EXIT(TRUE);
+          END ELSE BEGIN
+            IF FromInternetAuto THEN
+              CreateIPI.CreateIPI(5,FORMAT(SalesLine."Document Type"),SalesLine."Document No.",'AUTORESERVE',
+                '',STRSUBSTNO(Text000,SalesLine."No.",SalesLine."Line No."),
+                TRUE,FALSE,SalesLine."Sell-to Customer No.",FALSE)
+            ELSE
+              MESSAGE('%1',STRSUBSTNO(Text000,SalesLine."No.",SalesLine."Line No."));
+            EXIT(FALSE);
+          END;
+        END;
+      END ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE SalesLineItemCheckAvail@1000000001(VAR SalesLine@1000000000 : Record 37);
+    VAR
+      Text000@1000000003 : TextConst 'ENU=The update has been interrupted to respect the warning.;ENG=The update has been interrupted to respect the warning.';
+      SalesInfoPaneMgt@1000000004 : Codeunit 7171;
+      AvailQty@1000000001 : Decimal;
+    BEGIN
+      AvailQty := SalesInfoPaneMgt.CalcAvailability(SalesLine) + SalesLine.Quantity;
+      IF AvailQty < 0 THEN
+        AvailQty := 0;
+      IF AvailQty < SalesLine.Quantity THEN BEGIN
+        SalesLine.VALIDATE("Qty. to Ship",AvailQty);
+        SalesLine.MODIFY;
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC EC2009.2    MQ 22/04/2013 - GW130422 Created; SalesLineReserve called from Internet Order to Sales-Doc and in Custom Mods - TD
+      //DOC EC2009.2    MQ 22/04/2013 - SalesLineItemCheckAvail called from Internet Order to Sales-Doc - Split Orders
+      //DOC EC2013.3.60 MQ 02/07/2013 - GW130702 updated CreateIPI for extra parameter
+      //DOC EC2013.3.61 MQ 26/07/2013 - GW130726 Modified for MC cos they have a custom AutoReserve function.
+      //DOC EC2013.3.61 MQ 26/07/2013 - Will not work with NAV codebase 3.7 (DERM AU)
+      //DOC EC2013.4.00 MQ 07/11/2013 - GW131107 RTC
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

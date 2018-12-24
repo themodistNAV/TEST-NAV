@@ -1,0 +1,788 @@
+OBJECT Codeunit 9062426 OCR Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=26/09/16;
+    Time=[ 3:43:27 PM];
+    Version List=NH2016.16.2;
+  }
+  PROPERTIES
+  {
+    TableNo=9062440;
+    OnRun=BEGIN
+            ProcessDocumentsFromFolder(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      String@1000000005 : Codeunit 9062236;
+      DocumentDate@1000000002 : Date;
+      DocumentDueDate@1000000003 : Date;
+      tNoVendorTemplate@1000000006 : TextConst 'ENU=No Vendor Template found for Vendor %1;ENG=No Vendor Template found for Vendor %1';
+      tPurchaseOrderTextFound@1000000008 : TextConst 'ENU=Purchase order text found on Sentence ID %1 with value: "%2";ENG=Purchase order text found on Sentence ID %1 with value: "%2"';
+      tIdentifiedPurchOrdNo@1000000007 : TextConst 'ENU=Identified PO No. on the Sentence %1 after Label: "%2" with value "%3";ENG=Identified PO No. on the Sentence %1 after Label: "%2" with value "%3"';
+      FileLines@1000000009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.ArrayList";
+      FileContent@1000000010 : Text;
+      errProcessingError@1000000011 : TextConst 'ENU=Processing of file ''%1'' failed with ''%2'' error message.;ENG=Processing of file ''%1'' failed with ''%2'' error message.';
+      errNoText@1000000019 : TextConst 'ENU=No Invoice Text found for Vendor Template %1;ENG=No Invoice Text found for Vendor Template %1';
+      txtInvoiceNo@1000000015 : TextConst 'ENU=Invoice No.;ENG=Invoice No.';
+      txtPONo@1000000016 : TextConst 'ENU=Purchase Order No.;ENG=Purchase Order No.';
+      txtDocumentDate@1000000012 : TextConst 'ENU=Document Date;ENG=Document Date';
+      txtDocumentDueDate@1000000014 : TextConst 'ENU=Due Date;ENG=Due Date';
+      txtTotalAmount@1000000017 : TextConst 'ENU=Total Amount;ENG=Total Amount';
+      txtPossibleValueFound@1000000000 : TextConst 'ENU=Identified posible ''%1'' value in line %3 with value: %2.;ENG=Identified Posible Total Amount Value on the Sentence %1 after Label: "%2" with value: - "%3"';
+      txtFieldFound@1000000013 : TextConst 'ENU="Field ''%1'' (%2) found in line %3. ";ENG=Field ''%1'' (%2) found in line %3.';
+      txtVendorTemplateFound@1000000004 : TextConst 'ENU=Vendor Template %1 for vendor %2 found.;ENG=Identified Vendor from Document as : "%1"';
+      txtGenericTemplateFound@1000000001 : TextConst 'ENU=Generic Template %1 found.;ENG=Identified Document as Invoice using Generic Template';
+      txtProcessingFile@1000000018 : TextConst 'ENU=Processing file no %1 from: "%2";ENG=Processing file no %1 from: "%2"';
+      txtProcessingTxtFound@1000000021 : TextConst 'ENU=Processing .txt file found for : "%1" on the same location;ENG=Processing .txt file found for : "%1" on the same location';
+      txtRecognisingFailed@1000000020 : TextConst 'ENU=Recognising file %1 has faild with error: %2;ENG=Recognising file %1 has faild with error: %2';
+      StartingNextLinePos@1000000022 : Integer;
+
+    PROCEDURE "--- Document Functions ---"@1000000006();
+    BEGIN
+    END;
+
+    PROCEDURE ProcessDocumentsFromFolder@1000000009(VAR PurchInvMatchingBatchRec@1000000003 : Record 9062440);
+    VAR
+      nAblementUSer@1000000000 : Record 9062729;
+      WorkflowInterface@1000000012 : Codeunit 9062262;
+      DialogManagement@1000000006 : Codeunit 9062249;
+      Folder@1000000008 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+      Lst@1000000007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      Path@1000000010 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Path";
+      FolderPath@1000000032 : Text;
+      SourceFileName@1000000001 : Text;
+      ProcesedFile@1000000018 : Text;
+      ProcessedFolderName@1000000039 : Text;
+      i@1000000011 : Integer;
+      WorkflowContact@1000000009 : Code[20];
+      eDlgFound@1000000029 : TextConst 'ENU=Found %1 documents;ENG=Found %1 documents';
+      eDlgProcessingFile@1000000030 : TextConst 'ENU=Processing file;ENG=Processing file';
+      eDlgTitle@1000000031 : TextConst 'ENU="OCR Documents in progress... ";ENG="OCR Documents in progress... "';
+    BEGIN
+      //initialize variables and folders
+      FolderPath := PurchInvMatchingBatchRec."Invoice Scaning Folder";
+      IF FolderPath = '' THEN EXIT;
+      ProcessedFolderName := FolderPath + '\Processed\';
+      CheckFolder(FolderPath);
+      CheckFolder(ProcessedFolderName);
+      CheckGenericTemplates();
+
+      //get list of images
+      Lst := Lst.List();
+      Lst.AddRange(Folder.GetFiles(FolderPath,'*.pdf'));
+      Lst.AddRange(Folder.GetFiles(FolderPath,'*.jpg'));
+      Lst.AddRange(Folder.GetFiles(FolderPath,'*.jpeg'));
+      Lst.AddRange(Folder.GetFiles(FolderPath,'*.bmp'));
+      Lst.AddRange(Folder.GetFiles(FolderPath,'*.png'));
+      Lst.AddRange(Folder.GetFiles(FolderPath,'*.tif'));
+
+      //images not found, get text files
+      IF (Lst.Count = 0) THEN
+        Lst.AddRange(Folder.GetFiles(FolderPath,'*.txt'));
+
+      IF Lst.Count > 0 THEN BEGIN
+        DialogManagement.Add(STRSUBSTNO(eDlgFound, Lst.Count), 21, 1, 100, FALSE, FALSE);
+        DialogManagement.Add(eDlgProcessingFile, 18, 2, 100, FALSE, FALSE);
+        DialogManagement.Open(eDlgTitle);
+
+        //process files
+        FOR i := 0 TO Lst.Count - 1 DO BEGIN
+          SourceFileName := Lst.Item(i);
+          DialogManagement.SetCounterTextValue(2, ' ' + FORMAT(i + 1) + '.  ' + Path.GetFileName(SourceFileName));
+
+          //process single document
+          LogDebugMsg(STRSUBSTNO(txtProcessingFile, i, SourceFileName));
+          COMMIT;
+          IF (NOT(ProcessDocument(PurchInvMatchingBatchRec, SourceFileName, FolderPath, ProcessedFolderName))) THEN
+            LogDebugMsg(STRSUBSTNO(errProcessingError, SourceFileName, GETLASTERRORTEXT));
+          COMMIT;
+        END;
+
+        DialogManagement.Close();
+      END;
+
+      IF NOT GUIALLOWED THEN BEGIN
+        IF nAblementUSer.GET(USERID) THEN
+          WorkflowContact := nAblementUSer."Contact No.";
+        WorkflowInterface.New('P.INV.-MATCH-NOTIF', PurchInvMatchingBatchRec.Description,
+          WorkflowContact, 0, '', PurchInvMatchingBatchRec.GETPOSITION);
+      END;
+    END;
+
+    LOCAL PROCEDURE ProcessDocument@1000000011(VAR PurchInvMatchingBatchRec@1000000025 : Record 9062440;FilePath@1000000000 : Text;FolderPath@1000000016 : Text;ProcessedFolderName@1000000002 : Text) Success : Boolean;
+    VAR
+      VendorTemplate@1000000023 : Record 9062578;
+      PurchInvMatchingLine@1000000024 : Record 9062441;
+      OCREngine@1000000015 : Codeunit 9062429;
+      Path@1000000005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Path";
+      File@1000000029 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+      OutputFileExtension@1000000017 : 'txt,rtf,docx,xlsx,pptx,pdfSearchable,pdfTextAndImages,xml';
+      IdentifiedDocument@1000000001 : Code[30];
+      IdentifiedVendorNo@1000000018 : Code[20];
+      ProcessDateTime@1000000003 : DateTime;
+      TemplateFound@1000000006 : Boolean;
+      TextFilePath@1000000004 : Text;
+      PosiblePONo@1000000021 : Code[30];
+      LineNo@1000000026 : Integer;
+      ProcessedPDF@1000000027 : Text;
+      ProcessedTxt@1000000028 : Text;
+    BEGIN
+      ProcessDateTime := CURRENTDATETIME;
+      TextFilePath := Path.ChangeExtension(FilePath, 'txt');
+
+      //process image
+      IF (File.Exists(TextFilePath)) THEN
+        LogDebugMsg(STRSUBSTNO(txtProcessingTxtFound, FilePath))
+      ELSE IF NOT OCREngine.RecogniseFile(FilePath, FolderPath, OutputFileExtension::txt) THEN
+        LogDebugMsg(STRSUBSTNO(txtRecognisingFailed, FilePath, GETLASTERRORTEXT));
+      IF (NOT(File.Exists(TextFilePath))) THEN
+        EXIT(FALSE);
+
+      //load file
+      LoadSourceFile(TextFilePath);
+
+      //find document template
+      TemplateFound := FindVendorInvTemplate(VendorTemplate);
+
+      IF (VendorTemplate."Template Type" = VendorTemplate."Template Type"::Generic) THEN BEGIN
+        PosiblePONo := IdentifyGenericPONo(VendorTemplate);
+        IF FindVendorPurchOrder(PosiblePONo, IdentifiedVendorNo) THEN
+          CreateVendorTemplateFromVendor(VendorTemplate, IdentifiedVendorNo);
+      END;
+
+      //create invoice matching line
+      LineNo := 0;
+      PurchInvMatchingLine.RESET();
+      PurchInvMatchingLine.SETRANGE("Batch Code", PurchInvMatchingBatchRec.Code);
+      IF PurchInvMatchingLine.FINDLAST THEN
+        LineNo := PurchInvMatchingLine."Line No.";
+      LineNo += 10000;
+
+      PurchInvMatchingLine.INIT;
+      PurchInvMatchingLine.VALIDATE("Batch Code",PurchInvMatchingBatchRec.Code);
+      PurchInvMatchingLine."Line No." := LineNo;
+      PurchInvMatchingLine.VALIDATE("Vendor No. Filter", VendorTemplate."Vendor No.");
+      //PurchInvMatchingLine.VALIDATE("Identified Document ID", DocumentID);
+      PurchInvMatchingLine.INSERT(TRUE);
+      ProcessInvoiceAdv(VendorTemplate, PurchInvMatchingLine);
+
+      //move files to processed folder
+      ArchiveFile(PurchInvMatchingBatchRec.Code, PurchInvMatchingLine."Alocated Invoice No.",
+        FilePath, ProcessedFolderName);
+      ArchiveFile(PurchInvMatchingBatchRec.Code, PurchInvMatchingLine."Alocated Invoice No.",
+        TextFilePath, ProcessedFolderName);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ProcessInvoice@1000000023(PurchInvMatchingLine@1000000000 : Record 9062441);
+    VAR
+      VendorTemplate@1000000001 : Record 9062578;
+      DummyDate@1000000003 : Date;
+    BEGIN
+      //Find Vendor Template
+
+      //Find Vendor Template
+      //DOC AP ++
+        IF (PurchInvMatchingLine."Vendor No. Filter" <> '') AND (PurchInvMatchingLine."Vendor No." = '') THEN
+          PurchInvMatchingLine.VALIDATE("Vendor No.",PurchInvMatchingLine."Vendor No. Filter");
+      //DOC AP --
+
+      VendorTemplate.RESET();
+      VendorTemplate.SETRANGE("Template Type", VendorTemplate."Template Type"::Vendor);
+      VendorTemplate.SETRANGE("Vendor No.", PurchInvMatchingLine."Vendor No.");
+      IF NOT VendorTemplate.FINDSET(FALSE,FALSE) THEN
+      BEGIN
+         LogDebugMsg(STRSUBSTNO(tNoVendorTemplate, PurchInvMatchingLine."Vendor No."));
+         EXIT;
+      END;
+      IF VendorTemplate."Invoice Text" = '' THEN
+      BEGIN
+         LogDebugMsg(STRSUBSTNO(errNoText, VendorTemplate.GETPOSITION));
+         EXIT;
+      END;
+      ProcessInvoiceAdv(VendorTemplate, PurchInvMatchingLine);
+    END;
+
+    LOCAL PROCEDURE ProcessInvoiceAdv@1000000001(VAR VendorTemplate@1000000001 : Record 9062578;PurchInvMatchingLine@1000000000 : Record 9062441);
+    VAR
+      DummyDate@1000000002 : Date;
+    BEGIN
+      CLEAR(DocumentDate);
+      CLEAR(DocumentDueDate);
+
+      PurchInvMatchingLine.VALIDATE("Vendor Invoice No.", IdentifyVendorInvoiceNo(VendorTemplate));
+      PurchInvMatchingLine.VALIDATE("Purch. Order No.", IdentifyVendorPONo(VendorTemplate));
+
+      DocumentDate := IdentifyVendorDocumentDate(VendorTemplate);
+      IF (DocumentDate <> 0D) THEN
+        PurchInvMatchingLine.VALIDATE("Document Date", DocumentDate);
+
+      DocumentDueDate := IdentifyVendorDocumentDueDate(VendorTemplate);
+      IF (DocumentDueDate <> 0D) THEN BEGIN
+        PurchInvMatchingLine.VALIDATE("Document Due Date",DocumentDueDate);
+        DummyDate := IdentifyVendorDocumentDate(VendorTemplate);
+        IF (DummyDate <> 0D) THEN BEGIN
+          DocumentDate := DummyDate;
+          PurchInvMatchingLine.VALIDATE("Document Date", DocumentDate);
+        END;
+      END;
+
+      IF EVALUATE(PurchInvMatchingLine."Invoice Amount",FORMAT(IdentifyVendorTotalAmount(VendorTemplate))) THEN
+        PurchInvMatchingLine.VALIDATE("Invoice Amount",PurchInvMatchingLine."Invoice Amount");
+      PurchInvMatchingLine.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE FindVendorInvTemplate@1000000014(VAR VendorTemplate@1000000000 : Record 9062578) Success : Boolean;
+    VAR
+      RegExpr@1000000003 : Record 9062532;
+      Pattern@1000000001 : Text;
+      ReturnValue@1000000006 : Text;
+    BEGIN
+      VendorTemplate.RESET();
+      VendorTemplate.SETCURRENTKEY("Template Type");
+      IF (VendorTemplate.FINDSET()) THEN BEGIN
+        REPEAT
+          Pattern := '\b' + UPPERCASE(VendorTemplate."Text To Identify Invoice") + '\b';
+          IF RegExpr.GetValueFromText(UPPERCASE(FileContent), Pattern, ReturnValue) THEN BEGIN
+            //DEBUG >>
+            CASE (VendorTemplate."Template Type") OF
+              VendorTemplate."Template Type"::Vendor:
+                LogDebugMsg(STRSUBSTNO(txtVendorTemplateFound, VendorTemplate.Code, VendorTemplate."Vendor No."));
+              VendorTemplate."Template Type"::Generic:
+                LogDebugMsg(STRSUBSTNO(txtGenericTemplateFound, VendorTemplate.Code));
+            END;
+            //DEBUG <<
+            EXIT(TRUE);
+          END;
+        UNTIL VendorTemplate.NEXT = 0;
+      END;
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE FindFieldWithLabel@1000000030(VAR VendorTemplate@1000000000 : Record 9062578;NoOfLines@1000000007 : Integer;LabelPattern@1000000001 : Text;Patterns@1000000002 : ARRAY [10] OF Text;FieldName@1000000008 : Text) : Text;
+    VAR
+      LabelFound@1000000006 : Boolean;
+      ReturnValue@1000000005 : Text;
+      LineNo@1000000004 : Integer;
+      Position@1000000003 : Integer;
+      EndPosition@1000000009 : Integer;
+    BEGIN
+      IF (FindLabel(LabelPattern, LineNo, Position, EndPosition)) THEN
+        IF (FindFirstValue(LineNo, Position, EndPosition, NoOfLines, Patterns, ReturnValue, LineNo, Position)) THEN BEGIN
+          LogDebugMsg(STRSUBSTNO(txtFieldFound, FieldName, ReturnValue, LineNo));
+          EXIT(ReturnValue);
+        END;
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE IdentifyVendorInvoiceNo@1000000016(VAR VendorTemplate@1000000025 : Record 9062578) : Text[50];
+    VAR
+      Patterns@1000000022 : ARRAY [10] OF Text;
+      TextRegExp@1000000011 : TextConst 'ENU=\b[a-zA-Z]{2,4} [a-zA-Z0-9]+\d{1,3}([\s-])?\d{2,5}\1\d{2,5}\b;ENG=\b[a-zA-Z]{2,4} [a-zA-Z0-9]+\d{1,3}([\s-])?\d{2,5}\1\d{2,5}\b';
+      TextRegExp2@1000000017 : TextConst 'ENU=\b[PINVO]{2,4}[0123456789]{3,10}|[PINV]{4}[0123456789]{3,10}|[SI]{2,2}[0123456789]{3,10}|[SI]{2}[0123456789]{3,10}|[A-Z]{4}[0123456789]{3,10}|\d{6,10}|[A-Z]{2}[0123456789]{3,10}|\b;ENG=<\b[PINVO]{2,4}[0123456789]{3,10}|[PINV]{4}[0123456789]{3,10}|[SI]{2,2}[0123456789]{3,10}|[SI]{2}[0123456789]{3,10}|[A-Z]{4}[0123456789]{3,10}|\d{6,10}|[A-Z]{2}[0123456789]{3,10}|\b>';
+      TextRegExp4@1000000001 : TextConst 'ENU=\b[a-zA-Z0-9\\\-\.\/]+\b;ENG=\b[a-zA-Z0-9\\\-\.\/]+\b';
+    BEGIN
+      CLEAR(Patterns);
+      Patterns[1] := TextRegExp;
+      Patterns[2] := TextRegExp2;
+      Patterns[3] := TextRegExp4;
+      EXIT(FindFieldWithLabel(VendorTemplate, 15, VendorTemplate."Invoice Text", Patterns, txtInvoiceNo));
+    END;
+
+    LOCAL PROCEDURE IdentifyVendorPONo@1000000019(VAR VendorTemplate@1000000000 : Record 9062578) : Text[50];
+    VAR
+      TextRegExp@1000000011 : TextConst 'ENU=\b[PO]{1,2}[0123456789]{3,10}|[PO]{2}[0123456789]{3,10}|[P][0123456789]{3,10}\b;ENG=\b[PO]{1,2}[0123456789]{3,10}|[PO]{2}[0123456789]{3,10}|[P][0123456789]{3,10}\b';
+      TextRegExp2@1000000017 : TextConst 'ENU=\b\d{6,10}\b;ENG=\b\d{6,10}\b';
+      TextRegExp3@1000000018 : TextConst 'ENU=\b[A-Z]{2,5}[0123456789]{2,10}\b;ENG=\b[A-Z]{2,5}[0123456789]{2,10}\b';
+      Patterns@1000000007 : ARRAY [10] OF Text;
+      TextRegExp4@1000000001 : TextConst 'ENU=\b[a-zA-Z0-9\\\-\.\/]+\b;ENG=\b[a-zA-Z0-9\\\-\.\/]+\b';
+    BEGIN
+      CLEAR(Patterns);
+      Patterns[1] := TextRegExp;
+      Patterns[2] := TextRegExp2;
+      Patterns[3] := TextRegExp3;
+      Patterns[4] := TextRegExp4;
+      EXIT(FindFieldWithLabel(VendorTemplate, 15, VendorTemplate."Purchase Order Text", Patterns, txtPONo));
+    END;
+
+    LOCAL PROCEDURE IdentifyGenericPONo@1000000033(VendorTemplate@1000000001 : Record 9062578) : Text[50];
+    VAR
+      Patterns@1000000022 : ARRAY [10] OF Text;
+      TextRegExp@1000000011 : TextConst 'ENU=\b[PO]{1,2}[0123456789]{3,10}|[PO]{2}[0123456789]{3,10}|[P][0123456789]{3,10}\b;ENG=\b[PO]{1,2}[0123456789]{3,10}|[PO]{2}[0123456789]{3,10}|[P][0123456789]{3,10}\b';
+      TextRegExp2@1000000017 : TextConst 'ENU=\b\d{6,10}\b;ENG=\b\d{6,10}\b';
+      TextRegExp3@1000000018 : TextConst 'ENU=\b[A-Z]{2,5}[0123456789]{2,10}\b;ENG=\b[A-Z]{2,5}[0123456789]{2,10}\b';
+    BEGIN
+      CLEAR(Patterns);
+      Patterns[1] := TextRegExp;
+      Patterns[2] := TextRegExp2;
+      Patterns[3] := TextRegExp3;
+      EXIT(FindFieldWithLabel(VendorTemplate, 15, VendorTemplate."Purchase Order Text", Patterns, txtPONo));
+    END;
+
+    LOCAL PROCEDURE IdentifyVendorDocumentDate@1000000018(VAR VendorTemplate@1000000000 : Record 9062578) : Date;
+    VAR
+      TextRegExp@1000000011 : TextConst 'ENU=\b\d{2}\/\d{2}\/\d{2,4}|\d{1,2} [a-z|A-Z]{3,10} \d{2,4}|\d{2} \d{2} \d{2,4}|\d{2}.\d{2}.\d{2,4}|\d{2}-[a-z|A-Z]{3,10}-\d{2,4}\b;ENG=\b\d{2}\/\d{2}\/\d{2,4}|\d{1,2} [a-z|A-Z]{3,10} \d{2,4}|\d{2} \d{2} \d{2,4}|\d{2}.\d{2}.\d{2,4}|\d{2}-[a-z|A-Z]{3,10}-\d{2,4}\b';
+      Patterns@1000000006 : ARRAY [10] OF Text;
+      ReturnValue@1000000003 : Text;
+      LineNo@1000000002 : Integer;
+      Position@1000000001 : Integer;
+      Index@1000000007 : Integer;
+      DateAsText@1000000008 : Text;
+      DateValue@1000000009 : Date;
+      DateLineNo@1000000010 : Integer;
+      DatePosition@1000000012 : Integer;
+      EndPosition@1000000004 : Integer;
+      NextLinePos@1000100005 : Integer;
+    BEGIN
+      IF (FindLabel(VendorTemplate."Document Date Text", LineNo, Position, EndPosition)) THEN BEGIN
+        NextLinePos := Position; //DOC NA2016.16
+        FOR Index := 1 TO 15 DO BEGIN
+          IF (FindValue(LineNo + Index - 1, NextLinePos, EndPosition, 1, TextRegExp, DateAsText, DateLineNo, DatePosition, FALSE)) THEN BEGIN
+            IF GetValidDate(DateAsText, VendorTemplate."Vendor Date Format", DateValue) THEN BEGIN
+              IF (DocumentDueDate = 0D) OR (DateValue < DocumentDueDate) THEN BEGIN
+                LogDebugMsg(STRSUBSTNO(txtFieldFound, txtDocumentDate, DateValue, LineNo));
+                EXIT(DateValue);
+              END;
+            END;
+          END;
+          EndPosition := 0;
+        END;
+      END;
+
+      EXIT(0D);
+    END;
+
+    LOCAL PROCEDURE IdentifyVendorDocumentDueDate@1000000027(VAR VendorTemplate@1000000000 : Record 9062578) : Date;
+    VAR
+      TextRegExp@1000000011 : TextConst 'ENU=\b\d{2}\/\d{2}\/\d{2,4}|\d{2} [a-z|A-Z]{3,10} \d{2,4}|\d{2} \d{2} \d{2,4}|\d{2}.\d{2}.\d{2,4}|\d{2}-[a-z|A-Z]{3,10}-\d{2,4}\b;ENG=\b\d{2}\/\d{2}\/\d{2,4}|\d{2} [a-z|A-Z]{3,10} \d{2,4}|\d{2} \d{2} \d{2,4}|\d{2}.\d{2}.\d{2,4}|\d{2}-[a-z|A-Z]{3,10}-\d{2,4}\b';
+      Patterns@1000000006 : ARRAY [10] OF Text;
+      ReturnValue@1000000003 : Text;
+      LineNo@1000000002 : Integer;
+      Position@1000000001 : Integer;
+      Index@1000000012 : Integer;
+      DateAsText@1000000010 : Text;
+      DateValue@1000000009 : Date;
+      DateLineNo@1000000008 : Integer;
+      DatePosition@1000000007 : Integer;
+      EndPosition@1000000004 : Integer;
+      NextLinePos@1000100005 : Integer;
+    BEGIN
+      IF (FindLabel(VendorTemplate."Due Date Text", LineNo, Position, EndPosition)) THEN BEGIN
+        NextLinePos := Position;
+        FOR Index := 1 TO 15 DO BEGIN
+          IF (FindValue(LineNo + Index - 1, NextLinePos, EndPosition, 1, TextRegExp, DateAsText, DateLineNo, DatePosition, FALSE)) THEN BEGIN
+            IF GetValidDate(DateAsText, VendorTemplate."Vendor Date Format", DateValue) THEN BEGIN
+              IF (DocumentDate = 0D) OR (DateValue > DocumentDate) THEN BEGIN
+                LogDebugMsg(STRSUBSTNO(txtFieldFound, txtDocumentDueDate, DateValue, LineNo));
+                EXIT(DateValue);
+              END;
+            END;
+          END;
+          EndPosition := 0;
+        END;
+      END;
+
+      EXIT(0D);
+    END;
+
+    LOCAL PROCEDURE IdentifyVendorTotalAmount@1000000005(VAR VendorTemplate@1000000000 : Record 9062578) : Decimal;
+    VAR
+      ValueRegExprComma@1000000011 : TextConst 'ENU=\b\d{1,7}\,\d{1,7}\.\d{2}|\d{1,7}\.\d{1,5}\b;ENG=\b\d{1,7}\,\d{1,7}\.\d{2}|\d{1,7}\.\d{1,5}\b';
+      ValueRegExprDot@9062230 : TextConst 'ENU=\b\d{1,7}\.\d{1,7}\,\d{2}|\d{1,7}\,\d{1,5}\b;ENG=\d{1,3}(,\d{3})*(\.\d+)?';
+      AmountPattern@1000000001 : Text;
+      Amount@1000000002 : Decimal;
+      ValueFound@1000000003 : Boolean;
+      LineNo@1000000006 : Integer;
+      Position@1000000007 : Integer;
+      AmountLineNo@1000000004 : Integer;
+      MaxLineNo@1000000008 : Integer;
+      ReturnValue@1000000009 : Text;
+      MaxValues@1000000010 : Integer;
+      Value@1000000012 : Decimal;
+      EndPosition@1000000005 : Integer;
+      NextLinePos@1001000013 : Integer;
+    BEGIN
+      IF VendorTemplate."Vendor Thousand Separator" = VendorTemplate."Vendor Thousand Separator"::Comma THEN
+        AmountPattern := ValueRegExprComma
+      ELSE
+        AmountPattern := ValueRegExprDot;
+
+      Amount := 0;
+      ValueFound := FALSE;
+      IF (FindLabel(VendorTemplate."Total Amount Text", LineNo, Position, EndPosition)) THEN BEGIN
+        NextLinePos := Position;
+
+        MaxLineNo := LineNo + 9;
+        IF (MaxLineNo > GetNoOfLines()) THEN
+          MaxLineNo := GetNoOfLines();
+        MaxValues := 10;
+
+        WHILE (LineNo <= MaxLineNo) AND (MaxValues > 0) DO BEGIN
+          IF (NOT(FindValue(LineNo, NextLinePos, EndPosition, 10, AmountPattern, ReturnValue, LineNo, EndPosition, FALSE))) THEN BEGIN
+            IF (ValueFound) THEN
+              LogDebugMsg(STRSUBSTNO(txtFieldFound, txtTotalAmount, Amount, AmountLineNo));
+            EXIT(Amount);
+          END;
+          MaxValues -= 1;
+          EndPosition := EndPosition + STRLEN(ReturnValue);
+          IF (EVALUATE(Value, ReturnValue)) THEN BEGIN
+            LogDebugMsg(STRSUBSTNO(txtPossibleValueFound, txtTotalAmount, Value, LineNo));
+            IF (Amount < Value) OR (NOT(ValueFound)) THEN BEGIN
+              Amount := Value;
+              AmountLineNo := LineNo;
+            END;
+            ValueFound := TRUE;
+          END;
+        END;
+      END;
+
+      IF (ValueFound) THEN
+        LogDebugMsg(STRSUBSTNO(txtFieldFound, txtTotalAmount, Amount, AmountLineNo));
+
+      EXIT(Amount);
+    END;
+
+    LOCAL PROCEDURE "--- Search Functions ---"@1000000073();
+    BEGIN
+    END;
+
+    PROCEDURE FindValue@1000000000(FromLineNo@1000000000 : Integer;NextLinePosition@1000000014 : Integer;FromPosition@1000000001 : Integer;MaxNoOfLines@1000000002 : Integer;Pattern@1000000003 : Text;VAR Value@1000000004 : Text;VAR LineNo@1000000005 : Integer;VAR Position@1000000010 : Integer;UseUppercase@1000000012 : Boolean) : Boolean;
+    VAR
+      dnRegEx@1000000007 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex";
+      dnMatch@1000000006 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Match";
+      LineText@1000000011 : Text;
+      CurrentLineNo@1000000008 : Integer;
+      MaxLineNo@1000000009 : Integer;
+    BEGIN
+      //DOC NA2016.16 >>
+      NextLinePosition := NextLinePosition - 5;
+      IF (NextLinePosition < 0) THEN
+        NextLinePosition := 0;
+      //DOC NA2016.16 <<
+
+      dnRegEx := dnRegEx.Regex(Pattern);
+
+      IF (MaxNoOfLines = 0) THEN
+        MaxLineNo := GetNoOfLines() - 1
+      ELSE
+        MaxLineNo := FromLineNo + MaxNoOfLines - 1;
+
+      FOR CurrentLineNo := FromLineNo TO MaxLineNo DO BEGIN
+        LineText := GetLine(CurrentLineNo);
+        IF (UseUppercase) THEN
+          LineText := UPPERCASE(LineText);
+
+        IF (FromPosition < STRLEN(LineText)) THEN BEGIN
+          dnMatch := dnRegEx.Match(LineText, FromPosition);
+          IF (dnMatch.Success) AND (dnMatch.Value() <> '') THEN BEGIN
+            Value := dnMatch.Value();
+            LineNo := CurrentLineNo;
+            Position := dnMatch.Index;
+            EXIT(TRUE);
+          END;
+        END;
+
+        //DOC NA2016.16 >>
+        //FromPosition := 0;
+        FromPosition := NextLinePosition;
+        //DOC NA2016.16 <<
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE FindFirstValue@1000000039(FromLineNo@1000000006 : Integer;NextLinePosition@1000000013 : Integer;FromPosition@1000000005 : Integer;MaxNoOfLines@1000000004 : Integer;Patterns@1000000003 : ARRAY [10] OF Text;VAR Value@1000000002 : Text;VAR LineNo@1000000001 : Integer;VAR Position@1000000000 : Integer) : Boolean;
+    VAR
+      PatternIndex@1000000008 : Integer;
+      PatternLineNo@1000000009 : Integer;
+      PatternPosition@1000000010 : Integer;
+      PatternValue@1000000011 : Text;
+      PatternFound@1000000012 : Boolean;
+      ValueFound@1000000007 : Boolean;
+    BEGIN
+      ValueFound := FALSE;
+      FOR PatternIndex := 1 TO ARRAYLEN(Patterns) DO BEGIN
+        IF (Patterns[PatternIndex] <> '') THEN BEGIN
+          PatternFound := FindValue(FromLineNo, NextLinePosition, FromPosition, MaxNoOfLines, Patterns[PatternIndex], PatternValue, PatternLineNo, PatternPosition, FALSE);
+          IF (PatternFound) THEN BEGIN
+            IF (NOT(ValueFound)) OR (PatternLineNo < LineNo) OR ((PatternLineNo = LineNo) AND (PatternPosition < Position)) THEN BEGIN
+              ValueFound := TRUE;
+              LineNo := PatternLineNo;
+              Position := PatternPosition;
+              Value := PatternValue;
+            END;
+          END;
+        END;
+      END;
+      EXIT(ValueFound);
+    END;
+
+    LOCAL PROCEDURE FindLabel@1000000044(Pattern@1000000004 : Text;VAR LineNo@1000000002 : Integer;VAR Position@1000000001 : Integer;VAR EndPosition@1000000006 : Integer) : Boolean;
+    VAR
+      ReturnValue@1000000000 : Text;
+      eLabelFound@1000000003 : TextConst 'ENU=Label ''%1'' found in line %2.';
+      Found@1000000005 : Boolean;
+      String@1000000007 : Codeunit 9062236;
+    BEGIN
+
+      //DOC AP ++
+      Pattern := String.ReplaceAll(Pattern,':','');
+      Pattern := String.ReplaceAll(Pattern,'.','');
+      //DOC AP --
+
+      Found := FindValue(0, 0, 0, 0, '\b' + UPPERCASE(Pattern) + '\b', ReturnValue, LineNo, Position, TRUE);
+      IF (Found) THEN BEGIN
+        LogDebugMsg(STRSUBSTNO(eLabelFound, LineNo, ReturnValue));
+        EndPosition := Position + STRLEN(ReturnValue);
+      END;
+
+      EXIT(Found);
+    END;
+
+    LOCAL PROCEDURE FindVendorPurchOrder@1000000037(PONo@1000000000 : Code[30];VAR VendorNo@1000000002 : Code[30]) : Boolean;
+    VAR
+      PurchaseHeader@1000000001 : Record 38;
+    BEGIN
+      //DOC NA2015.9
+      IF PONo = '' THEN EXIT(FALSE);
+      IF PurchaseHeader.GET(PurchaseHeader."Document Type"::Order,PONo) THEN BEGIN
+        VendorNo := PurchaseHeader."Buy-from Vendor No.";
+        EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@1000000017();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CheckGenericTemplates@1000000003();
+    VAR
+      VendorTemplate@1000000000 : Record 9062578;
+    BEGIN
+      //check if generic vendor template exists
+      VendorTemplate.RESET();
+      VendorTemplate.SETRANGE("Template Type", VendorTemplate."Template Type"::Generic);
+      IF (VendorTemplate.ISEMPTY) THEN BEGIN
+        VendorTemplate.INIT;
+        VendorTemplate.VALIDATE("Template Type", VendorTemplate."Template Type"::Generic);
+        VendorTemplate.INSERT(TRUE);
+        VendorTemplate.VALIDATE("Text To Identify Invoice", VendorTemplate."Invoice Text");
+        VendorTemplate.MODIFY;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateFileAttachment@1000000020(pBatchCode@1000000000 : Code[30];pInvoiceNo@1000000001 : Code[30];pFilePath@1000000002 : Text;pFileName@1000000003 : Text);
+    VAR
+      FileAttachment@1000000004 : Record 9062272;
+      Path@1000000005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Path";
+    BEGIN
+      FileAttachment.INIT;
+      FileAttachment.VALIDATE("Table ID", DATABASE::"Purchase Header");
+      FileAttachment.VALIDATE("Primary Key Value 1",'2');
+      FileAttachment.VALIDATE("Primary Key Value 2",FORMAT(pInvoiceNo));
+      FileAttachment.VALIDATE(Description,pFileName);
+      FileAttachment.VALIDATE(FileName,pFileName);
+      FileAttachment.VALIDATE("Stored FilePath",pFilePath);
+      FileAttachment.VALIDATE("Current Version",TRUE);
+      FileAttachment.VALIDATE(Extension, String.ReplaceAll(Path.GetExtension(pFileName), '.', ''));
+      FileAttachment.VALIDATE(Type, 'UNIDENTIFIED');
+      FileAttachment.VALIDATE("Storage Type",FileAttachment."Storage Type"::BLOB);
+      FileAttachment.Attachment.IMPORT(pFilePath);
+      FileAttachment.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE MonthNameToNumber@1000000008(DateText@1000000000 : Text;MonthNames@1000000001 : Text) : Text;
+    VAR
+      String@1000000004 : Codeunit 9062236;
+      MonthIndex@1000000002 : Integer;
+      MonthName@1000000003 : Text;
+      MonthNumberText@1000000005 : Text;
+    BEGIN
+      FOR MonthIndex := 1 TO 12 DO BEGIN
+        MonthName := SELECTSTR(MonthIndex, MonthNames);
+        MonthNumberText := FORMAT(MonthIndex);
+        IF (MonthIndex < 10) THEN
+          MonthNumberText := '0' + MonthNumberText;
+        DateText := String.Replace(DateText, MonthName, MonthNumberText);
+      END;
+      EXIT(DateText);
+    END;
+
+    LOCAL PROCEDURE GetValidDate@1000000024(pDateString@1000000000 : Text;pDateFormat@1000000008 : Text;VAR pReturnValue@1000000001 : Date) : Boolean;
+    VAR
+      Day@1000000006 : Integer;
+      Month@1000000007 : Integer;
+      Year@1000000005 : Integer;
+      UKDate@1000000012 : Boolean;
+    BEGIN
+      pDateString := String.Trim(UPPERCASE(pDateString));
+      IF pDateString = '' THEN
+        EXIT(FALSE);
+
+      //convert month names to text
+      pDateString := MonthNameToNumber(pDateString,
+        'JANUARY,FEBRUARY,MARCH,APRIL,MAY,JUNE,JULY,AUGUST,SEPTEMBER,OCTOMBER,NOVEMBER,DECEMBER');
+      pDateString := MonthNameToNumber(pDateString,
+        'JAN,FEB,MAR,APR,MAY,JUN,JUL,AUG,SEP,OCT,NOV,DEC');
+
+      //replace special characters
+      pDateString := String.ReplaceAll(UPPERCASE(pDateString), '-', ' ');
+      pDateString := String.ReplaceAll(UPPERCASE(pDateString), '/', ' ');
+      pDateString := String.ReplaceAll(UPPERCASE(pDateString), '.', ' ');
+
+      //check if string is empty or contains invalid characters
+      IF (pDateString = '') OR (DELCHR(pDateString, '=', '0123456789 ') <> '') THEN
+        EXIT(FALSE);
+
+      UKDate := UPPERCASE(pDateFormat) IN ['DD/MM/YYYY', 'DD/MMM/YYYY', 'DD/MM/YY', ''];
+
+      IF UKDate THEN
+        EVALUATE(Day,COPYSTR(pDateString,1,2))
+      ELSE
+        EVALUATE(Day,COPYSTR(pDateString,4,2));
+
+      IF UKDate THEN
+        EVALUATE(Month,COPYSTR(pDateString,4,2))
+      ELSE
+        EVALUATE(Month,COPYSTR(pDateString,1,2));
+
+      IF STRLEN(pDateString) = 8 THEN
+        EVALUATE(Year,COPYSTR(pDateString,7,2))
+      ELSE
+        EVALUATE(Year,COPYSTR(pDateString,7,4));
+
+      IF (Year < 100) THEN
+        Year := 2000 + Year;
+
+      IF (NOT(Month IN [1..12])) OR (NOT(Day IN [1..31])) THEN
+        EXIT(FALSE);
+
+      pReturnValue := DMY2DATE(Day, Month, Year);
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateVendorTemplateFromVendor@1000000038(VAR VendorTemplate@1000000003 : Record 9062578;VendorNo@1000000000 : Code[30]);
+    VAR
+      ExistingVendorTemplate@1000000002 : Record 9062578;
+    BEGIN
+      //DOC NA2015.9
+      IF VendorNo = '' THEN EXIT;
+
+      VendorTemplate.Code := '';
+      VendorTemplate."Template Type" := VendorTemplate."Template Type"::Vendor;
+      VendorTemplate.INSERT(TRUE);
+
+      VendorTemplate.VALIDATE("Vendor No.", VendorNo);
+      VendorTemplate.MODIFY;
+      VendorTemplate.CALCFIELDS("Vendor Name");
+      VendorTemplate.VALIDATE("Text To Identify Invoice", VendorTemplate."Vendor Name");
+      VendorTemplate.MODIFY;
+    END;
+
+    LOCAL PROCEDURE GetNoOfLines@1000000035() : Integer;
+    BEGIN
+      IF (ISNULL(FileLines)) THEN
+        EXIT(0);
+      EXIT(FileLines.Count);
+    END;
+
+    LOCAL PROCEDURE GetLine@1000000036(LineIndex@1000000000 : Integer) : Text;
+    BEGIN
+      IF (NOT(ISNULL(FileLines))) THEN
+        IF (LineIndex >= 0) AND (LineIndex < FileLines.Count) THEN
+          EXIT(FileLines.Item(LineIndex));
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE LogDebugMsg@1000000052(MessageText@1000000000 : Text);
+    VAR
+      Logger@1000000001 : Record 9062280;
+    BEGIN
+      Logger.Log('INV_MATCH', Logger.Type::Debug, MessageText, USERID);
+    END;
+
+    LOCAL PROCEDURE "-- File Management ---"@1000000025();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE GetDestFile@1000000015(FilePath@1000000000 : Text;FileName@1000000008 : Text;ProcessDateTime@9062230 : DateTime) DestFileName : Text;
+    VAR
+      Obj@1000000007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Object";
+      Folder@1000000006 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+      Lst@1000000005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      File@1000000004 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+      Path@1000000003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Path";
+      i@1000000002 : Integer;
+      StringFunc@1000000001 : Codeunit 9062236;
+    BEGIN
+      DestFileName := StringFunc.ReplaceAll(FORMAT(ProcessDateTime,20,9),':','');
+      DestFileName := StringFunc.ReplaceAll(DestFileName,'.','');
+      EXIT(Path.Combine(FilePath, DestFileName + '_' + FileName));
+    END;
+
+    PROCEDURE LoadSourceFile@1000000004(FilePath@1000000006 : Text);
+    VAR
+      File@1000000009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+      RegEx@1000000010 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex";
+      eCouldNotOpenFile@1000000008 : TextConst 'ENU=Could not open file "%1";ENG=Could not open file "%1"';
+      TabText@1000000002 : Text;
+      Tab@1000000004 : Text;
+    BEGIN
+      Tab := ' '; Tab[1] := 9;
+
+      //load file
+      FileContent := File.ReadAllText(FilePath);
+
+      //replace special characters
+      FileContent := String.Replace(FileContent, Tab, ' ');
+
+      //split text into lines
+      FileLines := FileLines.ArrayList();
+      FileLines.AddRange(RegEx.Split(FileContent, '\r\n|\r|\n'));
+    END;
+
+    LOCAL PROCEDURE CheckFolder@1000000031(FolderPath@1000000000 : Text);
+    VAR
+      Folder@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+    BEGIN
+      //check if folder exists
+      IF (NOT(Folder.Exists(FolderPath))) THEN
+        Folder.CreateDirectory(FolderPath);
+    END;
+
+    LOCAL PROCEDURE ArchiveFile@1000000032(BatchCode@1000000004 : Code[30];InvoiceNo@1000000003 : Code[30];FilePath@1000000000 : Text;ProcessedFolderPath@1000000002 : Text);
+    VAR
+      Path@1000000006 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Path";
+      File@1000000005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+      ProcessedFileName@1000000001 : Text;
+    BEGIN
+      ProcessedFileName := GetDestFile(ProcessedFolderPath, Path.GetFileName(FilePath), CURRENTDATETIME);
+
+      IF File.Exists(FilePath) THEN BEGIN
+        File.Move(FilePath, ProcessedFileName);
+        CreateFileAttachment(BatchCode, InvoiceNo, ProcessedFileName, Path.GetFileName(ProcessedFileName));
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NH2015.8    AP 01/05/2015 - Refactoring
+      //DOC NH2015.9    AP 01/06/2015 - Added Generic Template Functionality
+      //DOC NH2016.10   JH 01/10/2015 - Upgraded to 2016
+      //DOC NH2016.10   AP 02/11/2015 - Date issue when short month name was replaced with month no. on full month names (e.g SEPTEMBER --> 09TEMBER)
+      //DOC NH2016.11   JH 17/11/2015 - New version
+      //DOC NH2016.12   JH 28/01/2016 - New string codeunit
+      //DOC NH2016.15   JH 18/04/2016 - CfMD amendments
+      //DOC NH2016.16   AZ 08/06/2016 - Bugfixes, search logic changes, unused code removed, duplicate code merged and moved to separate functions
+      //DOC NH2016.16.1 AP 20/06/2016 - enhancements
+      //DOC NH2016.16.2 AZ 20/07/2016 - Bugfixes
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,128 @@
+OBJECT Codeunit 50022 BRONTO Integration Processor
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/03/17;
+    Time=[ 2:44:35 PM];
+    Modified=Yes;
+    Version List=OP9031;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ERRLOCATION@1000000000 : TextConst 'ENU=%1\Codeunit 50022;ENG=%1\Codeunit 50022';
+      TrackingURL@1000000001 : Text;
+
+    [TryFunction]
+    PROCEDURE SendMessage@1000000000(pSalesHeader@1000000001 : Record 36;pMessageID@1000000004 : Text;VAR pConfirmID@1000000008 : Text);
+    VAR
+      SessionID@1000000000 : Text;
+      ContactID@1000000002 : Text;
+      BrontoMgmnt@1000000003 : Codeunit 50021;
+      IntegrationErrorHandler@1000000005 : Codeunit 50007;
+      ModistSetup@1000000006 : Record 50000;
+      BrontoOrderRef@1000000007 : Text;
+      IntegrationFunctions@1000000009 : Codeunit 50008;
+      LOGMSG@1000000010 : TextConst 'ENU=%1 : %2;ENG=%1 : %2';
+    BEGIN
+      ModistSetup.GET;
+      TrackingURL := '';
+      CLEARLASTERROR;
+      IF NOT GetBrontoOrderID(pSalesHeader,BrontoOrderRef) THEN BEGIN
+        LogError(pSalesHeader,GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'SendMessage.BrontoMgmnt.GetBrontoOrderID'),GETLASTERRORCODE);
+      END ELSE BEGIN
+        CLEARLASTERROR;
+        IF NOT BrontoMgmnt.SOAPLogin(SessionID) THEN BEGIN
+          LogError(pSalesHeader,GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'SendMessage.BrontoMgmnt.SOAPLogin'),GETLASTERRORCODE);
+        END ELSE BEGIN
+          CLEARLASTERROR;
+          IF NOT BrontoMgmnt.SOAP_AddOrUpdateContacts(SessionID,pSalesHeader."Bill-to E-Mail",ContactID) THEN BEGIN
+            LogError(pSalesHeader,GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'SendMessage.BrontoMgmnt.SOAP_AddOrUpdateContact'),GETLASTERRORCODE);
+          END ELSE BEGIN
+            CLEARLASTERROR;
+            TrackingURL := BuildTrackingURL(pSalesHeader."Shipment Method Code",pSalesHeader."Airway Bill No.");
+            IF NOT BrontoMgmnt.SOAP_AddDeliveries(SessionID,ContactID,pMessageID,BrontoOrderRef,TrackingURL,pConfirmID) THEN BEGIN
+              LogError(pSalesHeader,GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'SendMessage.BrontoMgmnt..SOAP_AddDeliveries'),GETLASTERRORCODE);
+            END ELSE BEGIN
+              pSalesHeader."Message Confirmation ID" := pConfirmID;
+              pSalesHeader."Marketing GUID" := BrontoOrderRef;
+              pSalesHeader.MODIFY;
+              IntegrationFunctions.LogBRONTOmessageSent('',STRSUBSTNO(LOGMSG,pSalesHeader."No.",pConfirmID));
+            END;
+          END;
+          BrontoMgmnt.SOAPLogout(SessionID);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE LogError@1000000015(VAR pSalesHeader@1000000001 : Record 36;ErrMessage@1000000002 : Text;ErrorLocation@1000000004 : Text;ErrCode@1000000005 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+    BEGIN
+      //This function facilitates the logging of an error in the error log table by deriving the default values
+      //and applying the variable values
+      ModistSetup.GET;
+      ErrorHandler.LogError(ModistSetup."BRONTO Integration Type",
+                            ModistSetup."BRONTO Messaging SOAP Group",
+                            '',
+                            36,
+                            pSalesHeader."No.",
+                            0,
+                            ErrMessage,
+                            ErrorLocation,
+                            0,
+                            ErrCode,
+                            '');
+    END;
+
+    [TryFunction]
+    PROCEDURE GetBrontoOrderID@1000000001(VAR pSalesHeader@1000000007 : Record 36;VAR BrontoOrderRef@1000000000 : Text);
+    VAR
+      ModistSetup@1000000002 : Record 50000;
+      IntegrationProcessFunction@1000000001 : Record 50005;
+      IntegrationProcessingGroup@1000000003 : Record 50007;
+      BRONTOIntegrationManagment@1000000004 : Codeunit 50021;
+      AccessToken@1000000005 : Text;
+      RefreshToken@1000000006 : Text;
+    BEGIN
+      ModistSetup.GET;
+      CLEARLASTERROR;
+      IF NOT BRONTOIntegrationManagment.GetRESTAuthToken(AccessToken,RefreshToken) THEN BEGIN
+        LogError(pSalesHeader,GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'BrontoMgmnt.GetBrontoOrderID.GetRESTAuthToken'),GETLASTERRORCODE);
+      END ELSE BEGIN
+        CLEARLASTERROR;
+        IF NOT BRONTOIntegrationManagment.GetBrontoOrderRef(AccessToken,pSalesHeader."Internet Order Reference",BrontoOrderRef) THEN BEGIN
+          LogError(pSalesHeader,GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'BrontoMgmnt.GetBrontoOrderID.GetBrontoOrderRef'),GETLASTERRORCODE);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE BuildTrackingURL@1000000002(ShipMethod@1000000000 : Code[20];TrackingID@1000000001 : Text[50]) : Text;
+    VAR
+      Cust@1000000002 : Record 18;
+      ShippingAgent@1000000003 : Record 291;
+      ShipmentMethod@1000000004 : Record 10;
+    BEGIN
+      //This function builds a tracking URL for the appropriant shipping company
+      IF ShipmentMethod.GET(ShipMethod) THEN BEGIN
+        IF ShippingAgent.GET(ShipmentMethod."Default Shipping Agent") THEN BEGIN
+          IF STRPOS(ShippingAgent."Internet Address",'%1') > 0 THEN
+            EXIT(STRSUBSTNO(ShippingAgent."Internet Address",TrackingID))
+          ELSE
+            EXIT(ShippingAgent."Internet Address" + TrackingID);
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

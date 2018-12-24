@@ -1,0 +1,356 @@
+OBJECT Codeunit 9062726 XmlPort Metadata Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            IF (CONFIRM(cnfUpdateAllXmlPorts)) THEN
+              ProcessAllXmlPorts(TRUE, TRUE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ObjMetadataMgt@1000000007 : Codeunit 9062725;
+      EnhXmlPortMetadata@1000000005 : Record 9062849;
+      NodeMetadata@1000000004 : Record 9062850;
+      XmlDocument@1000000003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XmlToolkit@1000000001 : Codeunit 9062641;
+      NodeLineNo@1000000000 : Integer;
+      cnfUpdateAllXmlPorts@1000000011 : TextConst 'ENU=Do you want to update metadata of all xmlports?;ENG=Do you want to update metadata of all xmlports?';
+      errUnknownControlType@1000000010 : TextConst 'ENU=Unknown control type ''%1''.;ENG=Unknown control type ''%1''.';
+      txtProgressDialog@1000000009 : TextConst 'ENU=Processing xmlports @1@@@@@@@@@@@@@@@@@@@@;ENG=Processing xmlports @1@@@@@@@@@@@@@@@@@@@@';
+      txtObjectsProcessed@1000000008 : TextConst 'ENU=Processing finished.\Deleted: %1\Processed: %2\Updated: %3.;ENG=Processing finished.\Deleted: %1\Processed: %2\Updated: %3.';
+      ParentNodeLineNo@1000000006 : ARRAY [200] OF Integer;
+
+    PROCEDURE ProcessAllXmlPorts@1000000008(ForceRefresh@1000000002 : Boolean;WithUI@1000000001 : Boolean);
+    VAR
+      ObjectMetadata@1000000000 : Record 2000000071;
+      ProgressDlg@1000000003 : Dialog;
+      MetadataCount@1000000004 : Integer;
+      DeletedMetadata@1000000005 : Integer;
+      ProcessedMetadata@1000000007 : Integer;
+      MetadataIndex@1000000006 : Integer;
+    BEGIN
+      //Process all xml ports metadata
+      WithUI := (WithUI AND GUIALLOWED);
+      IF (WithUI) THEN
+        ProgressDlg.OPEN(txtProgressDialog);
+
+      //delete enhanced metadata for deleted xml ports
+      EnhXmlPortMetadata.RESET();
+      EnhXmlPortMetadata.SETRANGE("Object Exists", FALSE);
+      DeletedMetadata := EnhXmlPortMetadata.COUNT;
+      EnhXmlPortMetadata.DELETEALL(TRUE);
+
+      //process all xml ports
+      ObjectMetadata.RESET();
+      ObjectMetadata.SETRANGE("Object Type", ObjectMetadata."Object Type"::XMLport);
+      MetadataCount := ObjectMetadata.COUNT;
+      MetadataIndex := 0;
+      ProcessedMetadata := 0;
+      IF (ObjectMetadata.FINDSET()) THEN BEGIN
+        REPEAT
+          //update ui
+          MetadataIndex += 1;
+          IF (WithUI) THEN
+            ProgressDlg.UPDATE(1, ROUND(10000 * MetadataIndex / MetadataCount, 1));
+          //process metadata
+          IF (ProcessXmlPort(ObjectMetadata, ForceRefresh)) THEN
+            ProcessedMetadata += 1;
+        UNTIL (ObjectMetadata.NEXT() = 0);
+      END;
+
+      IF (WithUI) THEN BEGIN
+        ProgressDlg.CLOSE();
+        MESSAGE(STRSUBSTNO(txtObjectsProcessed, DeletedMetadata, MetadataCount, ProcessedMetadata));
+      END;
+    END;
+
+    PROCEDURE ProcessXmlPortById@1000000004(XmlPortId@1000000002 : Integer;ForceRefresh@1000000000 : Boolean) : Boolean;
+    VAR
+      ObjectMetadata@1000000001 : Record 2000000071;
+    BEGIN
+      //process xml port by id
+      ObjectMetadata.GET(ObjectMetadata."Object Type"::XMLport, XmlPortId);
+      EXIT(ProcessXmlPort(ObjectMetadata, ForceRefresh));
+    END;
+
+    PROCEDURE ProcessXmlPort@1000000010(VAR ObjectMetadata@1000000000 : Record 2000000071;ForceRefresh@1000000001 : Boolean) : Boolean;
+    VAR
+      Node@1000000005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      NodeList@1000000004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      MetadataTimestamp@1000000002 : BigInteger;
+    BEGIN
+      //create enhanced object metadata if record is missing
+      EnhXmlPortMetadata.RESET();
+      IF (NOT(EnhXmlPortMetadata.GET(ObjectMetadata."Object ID"))) THEN BEGIN
+        ForceRefresh := TRUE;
+        EnhXmlPortMetadata.INIT();
+        EnhXmlPortMetadata."XmlPort Id" := ObjectMetadata."Object ID";
+        EnhXmlPortMetadata.INSERT();
+      END;
+
+      //collect metadata information
+      MetadataTimestamp := ObjMetadataMgt.GetMetadataTimestamp(ObjectMetadata);
+
+      //check if enhanced metadata should be processed
+      IF (NOT(ForceRefresh)) THEN
+        ForceRefresh := (MetadataTimestamp <> EnhXmlPortMetadata."Metadata Timestamp");
+      IF (NOT(ForceRefresh)) THEN
+        EXIT(FALSE);
+
+      //load metadata
+      ObjMetadataMgt.GetMetadata(ObjectMetadata, XmlDocument);
+
+      //initialize processing
+      NodeMetadata.RESET();
+      NodeMetadata.SETRANGE("XmlPort Id", EnhXmlPortMetadata."XmlPort Id");
+      NodeMetadata.DELETEALL();
+      NodeLineNo := 0;
+      CLEAR(ParentNodeLineNo);
+
+      //update enhanced metadata
+      EnhXmlPortMetadata."Metadata Timestamp" := MetadataTimestamp;
+      EVALUATE(EnhXmlPortMetadata.Direction, GetNodeValue(XmlDocument, 'XmlPort/Direction'));
+      EnhXmlPortMetadata.MODIFY();
+
+      //import xmlport nodes
+      NodeList := XmlDocument.SelectNodes('XmlPort/Node');
+      FOREACH Node IN NodeList DO BEGIN
+        ImportXmlPortNode(Node);
+      END;
+
+      //metadata processed
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ImportXmlPortNode@1000000005(VAR Node@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode");
+    VAR
+      ParentNodeMetadata@1000000002 : Record 9062850;
+      TextValue@1000000000 : Text;
+    BEGIN
+      //import xmlport node
+      NodeLineNo += 1;
+      NodeMetadata.INIT();
+      NodeMetadata."XmlPort Id" := EnhXmlPortMetadata."XmlPort Id";
+      NodeMetadata."Line No." := NodeLineNo;
+
+      NodeMetadata.Name := GetNodeValue(Node, 'NodeName');
+      EVALUATE(NodeMetadata.Type, GetNodeValue(Node, 'NodeType'));
+      EVALUATE(NodeMetadata.Indentation, GetNodeValue(Node, 'Indentation'));
+      EVALUATE(NodeMetadata.Id, GetNodeValue(Node, 'ID'));
+      EVALUATE(NodeMetadata."Parent Id", GetNodeValue(Node, 'ParentID'));
+      EVALUATE(NodeMetadata."Source Type", GetNodeValue(Node, 'SourceType'));
+      NodeMetadata."Variable Name" := GetNodeValue(Node, 'VariableName');
+
+      CASE (NodeMetadata."Source Type") OF
+        NodeMetadata."Source Type"::Field:
+          BEGIN
+            SourceNameToTableFieldIds(GetNodeValue(Node, 'SourceField'),
+              NodeMetadata."Source Table Id", NodeMetadata."Source Field Id");
+          END;
+        NodeMetadata."Source Type"::Table:
+          EVALUATE(NodeMetadata."Source Table Id", GetNodeValue(Node, 'SourceTable'));
+      END;
+
+      TextValue := GetNodeValue(Node, 'MinOccurs');
+      IF (TextValue <> '') THEN
+        EVALUATE(NodeMetadata."Min Occurs", TextValue);
+
+      TextValue := GetNodeValue(Node, 'MaxOccurs');
+      IF (TextValue <> '') THEN
+        EVALUATE(NodeMetadata."Max Occurs", TextValue);
+
+      TextValue := GetNodeValue(Node, 'Occurrence');
+      IF (TextValue <> '') THEN
+        EVALUATE(NodeMetadata.Occurrence, TextValue);
+
+      NodeMetadata."Data Type" := GetNodeValue(Node, 'DataType');
+
+      ParentNodeLineNo[NodeMetadata.Indentation + 1] := NodeMetadata."Line No.";
+      IF (NodeMetadata.Indentation > 0) THEN
+        NodeMetadata."Parent Line No." := ParentNodeLineNo[NodeMetadata.Indentation];
+
+      NodeMetadata.INSERT();
+    END;
+
+    LOCAL PROCEDURE "--- Net Class Builder ---"@1000000011();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE BuildNetClass@1000000003(VAR OutputStream@1000000001 : OutStream);
+    VAR
+      Field@1000000000 : Record 2000000041;
+    BEGIN
+      //process nodes for .net class builder
+      NodeMetadata.RESET();
+      NodeMetadata.SETRANGE("XmlPort Id", EnhXmlPortMetadata."XmlPort Id");
+      IF (NodeMetadata.FINDSET(TRUE)) THEN BEGIN
+        REPEAT
+          //find node .net type
+          NodeMetadata.CALCFIELDS("Has Items");
+          IF (NodeMetadata."Has Items") THEN BEGIN
+            NodeMetadata."Net Class Name" := NodeMetadata.Name;
+            NodeMetadata."Net Data Type" := NodeMetadata."Net Class Name";
+          END ELSE IF (Field.GET(NodeMetadata."Source Table Id", NodeMetadata."Source Field Id")) THEN BEGIN
+            //!!! TO-DO !!!
+            //!!! Implement Field Type Detection !!!
+            NodeMetadata."Net Data Type" := 'string';
+          END ELSE BEGIN
+            NodeMetadata."Net Data Type" := 'string';
+          END;
+          NodeMetadata.MODIFY();
+        UNTIL (NodeMetadata.NEXT() = 0);
+      END;
+
+      //build .net class
+      Write(OutputStream, 'namespace TNP.XmlPorts');
+      Write(OutputStream, '{');
+
+      Write(OutputStream, '  public class XmlPort' + FORMAT(EnhXmlPortMetadata."XmlPort Id", 0, 9));
+      Write(OutputStream, '  {');
+
+      ExportClass(OutputStream, EnhXmlPortMetadata."XmlPort Id", 0);
+
+      Write(OutputStream, STRSUBSTNO('  public %1 %1 {get;set;}', 'Data', 'Data'));
+      Write(OutputStream, '  }');
+      Write(OutputStream, '}');
+    END;
+
+    LOCAL PROCEDURE ExportClass@1000000009(VAR OutputStream@1000000000 : OutStream;XmlPortId@1000000001 : Integer;NodeIndent@1000000002 : Integer);
+    VAR
+      ParentXmlPortNode@1000000003 : Record 9062850;
+      XmlPortNode@1000000004 : Record 9062850;
+    BEGIN
+      ParentXmlPortNode.RESET();
+      ParentXmlPortNode.SETRANGE("XmlPort Id", XmlPortId);
+      ParentXmlPortNode.SETRANGE("Has Items", TRUE);
+      IF (ParentXmlPortNode.FINDSET()) THEN BEGIN
+        REPEAT
+          Write(OutputStream, STRSUBSTNO('public class %1', ParentXmlPortNode."Net Class Name"));
+          Write(OutputStream, '{');
+
+          XmlPortNode.RESET();
+          XmlPortNode.SETRANGE("XmlPort Id", ParentXmlPortNode."XmlPort Id");
+          XmlPortNode.SETRANGE("Parent Line No.", ParentXmlPortNode."Line No.");
+          IF (XmlPortNode.FINDSET()) THEN BEGIN
+            REPEAT
+              Write(OutputStream, STRSUBSTNO('  public %1 %2 {get; set;}', XmlPortNode."Net Data Type", XmlPortNode.Name));
+            UNTIL (XmlPortNode.NEXT() = 0);
+          END;
+          Write(OutputStream, '}');
+          Write(OutputStream, '');
+        UNTIL (ParentXmlPortNode.NEXT() = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE Write@1000000012(VAR OutputStream@1000000000 : OutStream;LineText@1000000001 : Text);
+    VAR
+      CrLf@1000000002 : Text;
+    BEGIN
+      CrLf := '  ';CrLf[1] := 13; CrLf[2] := 10;
+      OutputStream.WRITETEXT(LineText);
+      OutputStream.WRITETEXT(CrLf);
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@1000000001();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE SourceNameToTableFieldIds@1000000002(SourceName@1000000000 : Text;VAR TableId@1000000001 : Integer;VAR FieldId@1000000002 : Integer);
+    VAR
+      TableXmlPortNode@1000000006 : Record 9062850;
+      Field@1000000007 : Record 2000000041;
+      SeparatorPos@1000000003 : Integer;
+      TableVariableName@1000000004 : Text;
+      FieldName@1000000005 : Text;
+    BEGIN
+      TableId := 0;
+      FieldId := 0;
+      IF (SourceName <> '') THEN BEGIN
+        SeparatorPos := STRPOS(SourceName, '::');
+        IF (SeparatorPos > 0) THEN BEGIN
+          TableVariableName := COPYSTR(SourceName, 1, SeparatorPos - 1);
+          FieldName := COPYSTR(SourceName, SeparatorPos + 2);
+
+          TableXmlPortNode.RESET();
+          TableXmlPortNode.SETRANGE("XmlPort Id", EnhXmlPortMetadata."XmlPort Id");
+          TableXmlPortNode.SETRANGE("Variable Name", TableVariableName);
+          TableXmlPortNode.FINDFIRST();
+          TableId := TableXmlPortNode."Source Table Id";
+
+          Field.RESET();
+          Field.SETRANGE(TableNo, TableId);
+          Field.SETRANGE(FieldName, FieldName);
+          Field.FINDFIRST();
+          FieldId := Field."No.";
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Other ---"@1000000007();
+    BEGIN
+    END;
+
+    PROCEDURE ExportToFile@1000000006(FileName@1000000000 : Text);
+    VAR
+      File@1000000001 : File;
+      OutputStream@1000000002 : OutStream;
+    BEGIN
+      File.CREATE(FileName);
+      File.TEXTMODE := TRUE;
+      File.CREATEOUTSTREAM(OutputStream);
+      BuildNetClass(OutputStream);
+      File.CLOSE();
+    END;
+
+    LOCAL PROCEDURE GetNodeValue@1000000000(VAR ParentXmlNode@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";NodeName@1000000001 : Text) : Text;
+    VAR
+      XmlNode@1000000002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+    BEGIN
+      XmlNode := ParentXmlNode.SelectSingleNode(NodeName);
+      IF (ISNULL(XmlNode)) THEN
+        EXIT('');
+      EXIT(XmlNode.InnerText);
+    END;
+
+    EVENT XmlDocument@1000000003::NodeInserting@94(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XmlDocument@1000000003::NodeInserted@95(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XmlDocument@1000000003::NodeRemoving@96(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XmlDocument@1000000003::NodeRemoved@97(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XmlDocument@1000000003::NodeChanging@98(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XmlDocument@1000000003::NodeChanged@99(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.15 AZ 14/03/2016 - Created
+      //DOC NA2016.15 JH 09/05/2016 - CfMD modifications
+    }
+    END.
+  }
+}
+

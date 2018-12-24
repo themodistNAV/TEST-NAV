@@ -1,0 +1,1137 @@
+OBJECT Codeunit 9062539 Quick Report Engine
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      QuickReportHeader@1000000000 : Record 9062697;
+      QuickReportField@1000000001 : Record 9062698;
+      QuickReportData@1000000015 : Record 9062699;
+      CriteriaManagement@1000000027 : Codeunit 9062462;
+      EnhancedFieldManagement@1000000007 : Codeunit 9062298;
+      QuickReportOperations@1000000002 : Codeunit 9062537;
+      QuickReportToolkit@1000000019 : Codeunit 9062538;
+      DialogManagement@1000000016 : Codeunit 9062249;
+      TnpToolkit@1000000036 : Codeunit 9062230;
+      XmlToolkit@1000000039 : Codeunit 9062641;
+      Fields@1000000018 : Integer;
+      FieldCount@1000000034 : Integer;
+      FieldCounts@1000000033 : ARRAY [2] OF Integer;
+      FromQuickReportFields@1000000032 : ARRAY [2,20] OF Record 9062698;
+      FromDataRecordRef@1000000009 : RecordRef;
+      FromReportTableRecordRef@1000000003 : RecordRef;
+      FromFieldRefs@1000000014 : ARRAY [20] OF FieldRef;
+      ToRecordRef@1000000012 : RecordRef;
+      ToFieldRefs@1000000013 : ARRAY [20] OF FieldRef;
+      ToFieldRefsCompact@1000000037 : ARRAY [20] OF FieldRef;
+      ToFieldRefsSetCompact@1000000038 : ARRAY [20] OF Boolean;
+      ToId@1000000010 : Integer;
+      tDialogTitle@1000000017 : TextConst 'ENU=Retrieving data...;ENG=Retrieving data...';
+      ReportRecords@1000000022 : Integer;
+      ReportTime@1000000020 : ARRAY [3] OF DateTime;
+      ReportTimeIndex@1000000021 : ' ,Start,Grouping,End';
+      FieldTime@1000000023 : ARRAY [2] OF DateTime;
+      FieldTimeIndex@1000000024 : ' ,Start,End';
+      FieldTotalTimes@1000000025 : ARRAY [20] OF Decimal;
+      ReportTableKeys@1000000026 : Integer;
+      ReportTableInUse@1000000029 : Boolean;
+      ReportTableRecordFound@1000000030 : Boolean;
+      ReportTableFieldFlags@1000000008 : ARRAY [3] OF Boolean;
+      FromReportTableFieldRefs@1000000006 : ARRAY [3] OF FieldRef;
+      ToReportTableFieldRefs@1000000011 : ARRAY [3] OF FieldRef;
+      FieldFrom@1000000004 : Integer;
+      FieldFromIndex@1000000005 : Integer;
+      QuickReportSIVariables@1000000028 : Codeunit 9062551;
+      FieldIsSet@1000000031 : ARRAY [20] OF Boolean;
+      CompactMode@1000000035 : Boolean;
+      CompactModeSet@1000000040 : Boolean;
+
+    PROCEDURE "--- General ---"@1000000003();
+    BEGIN
+    END;
+
+    PROCEDURE GenerateQuickReportData@1000000002(pQuickReportCode@1000000000 : Code[60];VAR pQuickReportData@1000000001 : Record 9062699) : Code[60];
+    BEGIN
+      //DOC NA2015.7 - Generating quick report data
+      //  -> pQuickReportCode: Quick report code
+      //  <> pQuickReportData: Target quick report data
+      //  <- Quick report code (it can be the same as requested - if it was user report, or new - if it was a regular report)
+
+      Initialise();
+
+      CheckExecutePermission(pQuickReportCode);
+
+      Clone(pQuickReportCode);
+      Check();
+
+      MarkReportStart();
+
+      UpdateQueries();
+      CollectFields();
+      CollectRecords(pQuickReportData);
+
+      MarkGroupingStart();
+
+      GroupRecords(pQuickReportData);
+
+      MarkReportEnd();
+
+      Finalise();
+
+      EXIT(QuickReportHeader.Code);
+    END;
+
+    LOCAL PROCEDURE "--- Internal ---"@1000000000();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE Initialise@1000000047();
+    BEGIN
+      //DOC NA2015.7 - Initialising the codeunit
+
+      Fields := 20;
+      ReportTableKeys := 3;
+
+      QuickReportSIVariables.ClearAll;
+
+      IF ( NOT (CompactModeSet)) THEN
+        CompactMode := QuickReportToolkit.CompactMode();
+    END;
+
+    LOCAL PROCEDURE Finalise@1000000032();
+    BEGIN
+      //DOC NA2015.7 - Finalise the codeunit
+
+      QuickReportSIVariables.ClearAll;
+    END;
+
+    LOCAL PROCEDURE Clone@1000000017(pQuickReportCode@1000000000 : Code[60]);
+    VAR
+      lFromQuickReportHeader@1000000001 : Record 9062697;
+      lToQuickReportHeader@1000000002 : Record 9062697;
+    BEGIN
+      //DOC NA2015.7 - Cloning given quick report code (if it is not user quick report)
+      //  -> pQuickReportCode: Quick report code
+
+      lFromQuickReportHeader.GET(pQuickReportCode);
+      IF ( NOT (lFromQuickReportHeader."Temporary")) THEN
+      BEGIN
+        QuickReportOperations.OpenQuickReport(USERID, TRUE, lFromQuickReportHeader, lToQuickReportHeader);
+        QuickReportHeader := lToQuickReportHeader;
+      END
+      ELSE
+        QuickReportHeader := lFromQuickReportHeader;
+    END;
+
+    LOCAL PROCEDURE Check@1000000007();
+    BEGIN
+      //DOC NA2015.7 - Checking quick report before generating data
+
+      QuickReportHeader.TESTFIELD(Blocked, FALSE);
+      QuickReportHeader.TESTFIELD("Data From");
+      CASE (QuickReportHeader."Data From") OF
+        QuickReportHeader."Data From"::Table:
+          QuickReportHeader.TESTFIELD("Table ID");
+        QuickReportHeader."Data From"::"NAV Query":
+          QuickReportHeader.TESTFIELD("NAV Query ID");
+        QuickReportHeader."Data From"::"SQL Query":
+          QuickReportHeader.TESTFIELD("SQL Query Code");
+      END;
+
+      QuickReportField.RESET();
+      QuickReportField.SETRANGE("Quick Report Code", QuickReportHeader.Code);
+      QuickReportField.SETRANGE(Blocked, FALSE);
+      IF (QuickReportHeader."Data From" = QuickReportHeader."Data From"::Table) THEN
+      BEGIN
+        QuickReportField.SETRANGE("Field ID", 0);
+        QuickReportField.DELETEALL(TRUE);
+        QuickReportField.SETRANGE("Field ID");
+      END;
+      QuickReportField.SETRANGE("Field Name", '');
+      QuickReportField.DELETEALL(TRUE);
+      QuickReportField.SETRANGE("Field Name");
+      QuickReportField.SETRANGE("Quick Report Data Type", QuickReportField."Quick Report Data Type"::" ");
+      QuickReportField.DELETEALL(TRUE);
+      QuickReportField.SETRANGE("Quick Report Data Type");
+
+      QuickReportField.RESET();
+      QuickReportField.SETRANGE("Quick Report Code", QuickReportHeader.Code);
+      QuickReportField.SETRANGE(Blocked, FALSE);
+      IF (QuickReportField.FINDSET()) THEN
+      REPEAT
+        IF (QuickReportHeader."Data From" = QuickReportHeader."Data From"::Table) THEN
+          QuickReportField.TESTFIELD("Field Type")
+        ELSE
+          QuickReportField.TESTFIELD("Field Type", QuickReportField."Field Type"::Field);
+      UNTIL (QuickReportField.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE UpdateQueries@1000000035();
+    VAR
+      lNavQueryManagment@1000000000 : Codeunit 9062300;
+      lSqlIntegration@1000000001 : Codeunit 9062299;
+    BEGIN
+      //DOC NA2016.14 - Updating queries (if necessary)
+
+      CASE (QuickReportHeader."Data From") OF
+        QuickReportHeader."Data From"::"NAV Query":
+          lNavQueryManagment.AutoUpdateQueryDefinition(QuickReportHeader."NAV Query ID");
+        QuickReportHeader."Data From"::"SQL Query":
+          lSqlIntegration.AutoUpdateResultFields(QuickReportHeader."SQL Query Code");
+      END;
+    END;
+
+    LOCAL PROCEDURE CollectFields@1000000001();
+    BEGIN
+      //DOC NA2016.11 - Collecting quick report fields
+
+      QuickReportField.RESET();
+      QuickReportField.SETRANGE("Quick Report Code", QuickReportHeader.Code);
+      QuickReportField.MODIFYALL(Index, 0);
+      QuickReportField.MODIFYALL("Data Field ID", 0);
+      QuickReportField.MODIFYALL("Data Field ID (Compact)", 0);
+
+      CLEAR(FieldCount);
+      CLEAR(FieldCounts);
+      CLEAR(FromQuickReportFields);
+      CLEAR(ReportTableInUse);
+
+      QuickReportField.RESET();
+      QuickReportField.SETCURRENTKEY("Quick Report Code", Sequence, ID);
+      QuickReportField.SETRANGE("Quick Report Code", QuickReportHeader.Code);
+      QuickReportField.SETFILTER("Field From", '>0');
+      QuickReportField.SETRANGE(Blocked, FALSE);
+      IF (QuickReportField.FINDSET(TRUE)) THEN
+      REPEAT
+        FieldCount += 1;
+        QuickReportField.SETRANGE("System Activity", TRUE);
+        QuickReportField.VALIDATE(Index, FieldCount);
+        QuickReportField.MODIFY(TRUE);
+        QuickReportField.SETRANGE("System Activity", FALSE);
+
+        FieldCounts[QuickReportField."Field From"] += 1;
+        ReportTableInUse := ((ReportTableInUse) OR (QuickReportField."Field From" = QuickReportField."Field From"::"Report Table"));
+        FromQuickReportFields[QuickReportField."Field From"][FieldCounts[QuickReportField."Field From"]] := QuickReportField;
+      UNTIL ((QuickReportField.NEXT() = 0) OR (FieldCount >= Fields));
+
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE CollectRecords@1000000008(VAR pQuickReportData@1000000001 : Record 9062699);
+    VAR
+      lDataFieldId@1000000000 : Integer;
+    BEGIN
+      //DOC NA2016.11 - Collecting records
+      //  <> pQuickReportData: Target quick report data
+
+      CLEAR(DialogManagement);
+      DialogManagement.Add('', 0, 1, 20, TRUE, TRUE);
+      DialogManagement.Open(tDialogTitle);
+
+      pQuickReportData.RESET();
+      pQuickReportData.DELETEALL();
+      ToId := 0;
+
+      CLEAR(ToRecordRef);
+      ToRecordRef.OPEN(DATABASE::"Quick Report Data");
+
+      CLEAR(ToFieldRefs);
+      CLEAR(ToFieldRefsCompact);
+      CLEAR(ToFieldRefsSetCompact);
+      FOR FieldFrom := QuickReportField."Field From"::Data TO QuickReportField."Field From"::"Report Table" DO
+        FOR FieldFromIndex := 1 TO FieldCounts[FieldFrom] DO
+        BEGIN
+          QuickReportField := FromQuickReportFields[FieldFrom][FieldFromIndex];
+          IF (QuickReportField."Data Field ID" <> 0) THEN
+            ToFieldRefs[QuickReportField.Index] := ToRecordRef.FIELD(QuickReportField."Data Field ID");
+          IF (CompactMode) THEN
+            IF (QuickReportField."Data Field ID (Compact)" <> 0) THEN
+            BEGIN
+              ToFieldRefsCompact[QuickReportField.Index] := ToRecordRef.FIELD(QuickReportField."Data Field ID (Compact)");
+              ToFieldRefsSetCompact[QuickReportField.Index] := (QuickReportField."Data Field ID" <> QuickReportField."Data Field ID (Compact)");
+            END;
+        END;
+
+      CASE (QuickReportHeader."Data From") OF
+        QuickReportHeader."Data From"::Table:
+          CollectRecordsFromTable(pQuickReportData);
+        QuickReportHeader."Data From"::"NAV Query":
+          CollectRecordsFromQuery(pQuickReportData);
+        QuickReportHeader."Data From"::"SQL Query":
+          CollectRecordsFromSqlQuery(pQuickReportData);
+      END;
+
+      ToRecordRef.CLOSE();
+
+      DialogManagement.Close();
+    END;
+
+    LOCAL PROCEDURE CollectRecordsFromTable@1000000006(VAR pQuickReportData@1000000000 : Record 9062699);
+    VAR
+      lCriteriaManagement@1000000001 : Codeunit 9062462;
+      lCriteriaFields_NotApplied@1000000002 : TEMPORARY Record 9062627;
+      lKeepRecord@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2015.7 - Collecting records from a table
+      //  <> pQuickReportData: Target quick report data
+
+      CLEAR(FromDataRecordRef);
+      FromDataRecordRef.OPEN(QuickReportHeader."Table ID");
+
+      OpenReportTableRecord();
+
+      FieldFrom := QuickReportField."Field From"::Data;
+      FOR FieldFromIndex := 1 TO FieldCounts[FieldFrom] DO
+      BEGIN
+        QuickReportField := FromQuickReportFields[FieldFrom][FieldFromIndex];
+        IF ((QuickReportField."Field Type" = QuickReportField."Field Type"::Field) AND (QuickReportField."Field ID" <> 0)) THEN
+          FromFieldRefs[QuickReportField.Index] := FromDataRecordRef.FIELD(QuickReportField."Field ID");
+      END;
+
+      IF (QuickReportHeader."Criteria ID" <> 0) THEN
+        lCriteriaManagement.ApplyCriteriaToRecRef(QuickReportHeader."Criteria ID", FromDataRecordRef);
+      IF (FromDataRecordRef.FINDSET()) THEN
+      BEGIN
+        DialogManagement.SetCounterCount(1, FromDataRecordRef.COUNT);
+        lCriteriaManagement.GetNotAppliedFields(lCriteriaFields_NotApplied);
+        REPEAT
+          DialogManagement.StepCounter(1);
+          InitialiseQuickReportData(pQuickReportData, TRUE);
+
+          lKeepRecord := FilterByEnhancedFields(pQuickReportData,lCriteriaFields_NotApplied,FromDataRecordRef);
+
+          IF lKeepRecord THEN BEGIN
+            CollectFieldValues(QuickReportField."Field From"::Data, FromDataRecordRef, pQuickReportData);
+            FinaliseQuickReportData(pQuickReportData);
+          END;
+        UNTIL (FromDataRecordRef.NEXT() = 0);
+      END;
+
+      CloseReportTableRecord();
+
+      FromDataRecordRef.CLOSE();
+    END;
+
+    LOCAL PROCEDURE CollectRecordsFromQuery@1000000009(VAR pQuickReportData@1000000000 : Record 9062699);
+    VAR
+      lNavQueryColumnDefinition@9062231 : Record 9062329;
+      lNavQueryResultEntryTmp@1000000002 : TEMPORARY Record 9062330;
+      lNavQueryManagment@1000000001 : Codeunit 9062300;
+      lQuickReportFieldsIndexed@9062230 : ARRAY [20] OF Record 9062698;
+      lRowNo@1000000005 : Integer;
+      lFieldValue@1000000004 : Variant;
+    BEGIN
+      //DOC NA2015.7 - Collecting records from a query
+      //  <> pQuickReportData: Target quick report data
+
+      lNavQueryManagment.RetrieveQueryEntriesAdv(QuickReportHeader."NAV Query ID", lNavQueryResultEntryTmp);
+
+      lNavQueryColumnDefinition.RESET();
+      lNavQueryColumnDefinition.SETRANGE("Query No.", QuickReportHeader."NAV Query ID");
+      lNavQueryColumnDefinition.SETFILTER("No.", '<>0');
+
+      CLEAR(lQuickReportFieldsIndexed);
+      lNavQueryResultEntryTmp.RESET();
+      FieldFrom := QuickReportField."Field From"::Data;
+      FOR FieldFromIndex := 1 TO FieldCounts[FieldFrom] DO
+      BEGIN
+        QuickReportField := FromQuickReportFields[FieldFrom][FieldFromIndex];
+        lNavQueryColumnDefinition.SETRANGE(Name, QuickReportField."Field Name");
+        IF (lNavQueryColumnDefinition.FINDFIRST()) THEN
+        BEGIN
+          lNavQueryResultEntryTmp.SETRANGE("Column No.", lNavQueryColumnDefinition."No.");
+          lNavQueryResultEntryTmp.MODIFYALL("Field Index", QuickReportField.Index);
+        END;
+        lQuickReportFieldsIndexed[QuickReportField.Index] := QuickReportField;
+      END;
+
+      lNavQueryResultEntryTmp.SETRANGE("Column No.");
+      lNavQueryResultEntryTmp.SETRANGE("Field Index", 0);
+      lNavQueryResultEntryTmp.DELETEALL();
+
+      OpenReportTableRecord();
+
+      lRowNo := -1;
+
+      lNavQueryResultEntryTmp.RESET();
+      IF (lNavQueryResultEntryTmp.FINDSET()) THEN
+      BEGIN
+        DialogManagement.SetCounterCount(1, lNavQueryResultEntryTmp.COUNT);
+
+        REPEAT
+          DialogManagement.StepCounter(1);
+
+          IF (lRowNo <> lNavQueryResultEntryTmp."Row No.") THEN
+          BEGIN
+            IF (lRowNo >= 0) THEN
+              FinaliseQuickReportData(pQuickReportData);
+            CLEAR(pQuickReportData);
+            InitialiseQuickReportData(pQuickReportData, FALSE);
+            lRowNo := lNavQueryResultEntryTmp."Row No.";
+            FindReportTableRecord(pQuickReportData);
+          END;
+
+          IF ((lNavQueryResultEntryTmp."Field Index" > 0) AND (lNavQueryResultEntryTmp."Field Index" < Fields)) THEN
+          BEGIN
+            QuickReportField := lQuickReportFieldsIndexed[lNavQueryResultEntryTmp."Field Index"];
+            IF (QuickReportField.ID > 0) THEN
+            BEGIN
+              MarkFieldStart();
+              IF (GetNavQueryResultValue(lNavQueryResultEntryTmp, lFieldValue)) THEN
+                SetFieldValue(lFieldValue);
+              MarkFieldEnd();
+            END;
+          END;
+        UNTIL (lNavQueryResultEntryTmp.NEXT() = 0);
+
+        IF (lRowNo >= 0) THEN
+          FinaliseQuickReportData(pQuickReportData);
+      END;
+
+      CloseReportTableRecord();
+    END;
+
+    LOCAL PROCEDURE CollectRecordsFromSqlQuery@1000000010(VAR pQuickReportData@1000000000 : Record 9062699);
+    VAR
+      lQuickReportFieldsIndexed@1000000003 : ARRAY [20] OF Record 9062698;
+      lSqlQueryResultTmp@1000000002 : TEMPORARY Record 9062333;
+      lSqlIntegration@1000000001 : Codeunit 9062299;
+      lRecordNo@1000000005 : Integer;
+      lFieldValue@1000000004 : Variant;
+    BEGIN
+      //DOC NA2015.7 - Collecting records from a SQL query
+      //  <> pQuickReportData: Target quick report data
+
+      lSqlIntegration.RunQueryAndGetResults(QuickReportHeader."SQL Query Code", lSqlQueryResultTmp);
+
+      CLEAR(lQuickReportFieldsIndexed);
+      lSqlQueryResultTmp.RESET();
+      FieldFrom := QuickReportField."Field From"::Data;
+      FOR FieldFromIndex := 1 TO FieldCounts[FieldFrom] DO
+      BEGIN
+        QuickReportField := FromQuickReportFields[FieldFrom][FieldFromIndex];
+        lSqlQueryResultTmp.SETRANGE("Field Name", QuickReportField."Field Name");
+        lSqlQueryResultTmp.MODIFYALL("Field Index", QuickReportField.Index);
+        lQuickReportFieldsIndexed[QuickReportField.Index] := QuickReportField;
+      END;
+
+      lSqlQueryResultTmp.SETRANGE("Field Name");
+      lSqlQueryResultTmp.SETRANGE("Field Index", 0);
+      lSqlQueryResultTmp.DELETEALL();
+
+      OpenReportTableRecord();
+
+      lRecordNo := -1;
+
+      lSqlQueryResultTmp.RESET();
+      IF (lSqlQueryResultTmp.FINDSET()) THEN
+      BEGIN
+        DialogManagement.SetCounterCount(1, lSqlQueryResultTmp.COUNT);
+
+        REPEAT
+          DialogManagement.StepCounter(1);
+
+          IF (lRecordNo <> lSqlQueryResultTmp."Record No.") THEN
+          BEGIN
+            IF (lRecordNo >= 0) THEN
+              FinaliseQuickReportData(pQuickReportData);
+            CLEAR(pQuickReportData);
+            InitialiseQuickReportData(pQuickReportData, FALSE);
+            lRecordNo := lSqlQueryResultTmp."Record No.";
+            FindReportTableRecord(pQuickReportData);
+          END;
+
+          IF ((lSqlQueryResultTmp."Field Index" > 0) AND (lSqlQueryResultTmp."Field Index" < Fields)) THEN
+          BEGIN
+            QuickReportField := lQuickReportFieldsIndexed[lSqlQueryResultTmp."Field Index"];
+            IF (QuickReportField.ID > 0) THEN
+            BEGIN
+              MarkFieldStart();
+              IF (GetSqlQueryResultValue(lSqlQueryResultTmp, lFieldValue)) THEN
+                SetFieldValue(lFieldValue);
+              MarkFieldEnd();
+            END;
+          END;
+        UNTIL (lSqlQueryResultTmp.NEXT() = 0);
+
+        IF (lRecordNo >= 0) THEN
+          FinaliseQuickReportData(pQuickReportData);
+      END;
+
+      CloseReportTableRecord();
+    END;
+
+    LOCAL PROCEDURE CollectFieldValues@1000000040(pFieldFrom@1000000004 : Integer;pRecordRef@1000000000 : RecordRef;VAR pQuickReportData@1000000002 : Record 9062699);
+    VAR
+      lFieldValueRetrieved@1000000001 : Boolean;
+      lFieldValue@1000000003 : Variant;
+      lFieldFilterApplied@1000000005 : Boolean;
+      lRecordRefView@1000000006 : Text;
+    BEGIN
+      //DOC NA2015.7 - Collecting field values from given record reference
+      //  -> pFieldFrom: Field from
+      //  -> pRecordRef: Record reference (source)
+      //  <> pQuickReportData: Target quick report data
+
+      FieldFrom := pFieldFrom;
+      IF ((FieldFrom = QuickReportField."Field From"::"Report Table") AND
+          (( NOT (ReportTableInUse)) OR ( NOT (ReportTableRecordFound)))) THEN
+        EXIT;
+
+      FOR FieldFromIndex := 1 TO FieldCounts[FieldFrom] DO
+      BEGIN
+        QuickReportField := FromQuickReportFields[FieldFrom][FieldFromIndex];
+        MarkFieldStart();
+        IF NOT FieldIsSet[QuickReportField.Index] THEN BEGIN
+          lFieldValueRetrieved := FALSE;
+          CASE (QuickReportField."Field Type") OF
+            QuickReportField."Field Type"::"Enhanced Field":
+              lFieldValueRetrieved := GetEnhancedFieldValue(pRecordRef, lFieldValue)
+            ELSE
+            BEGIN
+              lFieldFilterApplied := FALSE;
+              IF (QuickReportField."Field Filter ID" <> 0) THEN
+              BEGIN
+                lRecordRefView := pRecordRef.GETVIEW(FALSE);
+                CriteriaManagement.ApplyCriteriaToRecRefAdv(QuickReportField."Field Filter ID", TRUE, pRecordRef);
+                lFieldFilterApplied := TRUE;
+              END;
+              IF (QuickReportField.FlowField) THEN
+                FromFieldRefs[QuickReportField.Index].CALCFIELD();
+              lFieldValue := FromFieldRefs[QuickReportField.Index].VALUE;
+              IF (lFieldFilterApplied) THEN
+                pRecordRef.SETVIEW(lRecordRefView);
+                  lFieldValueRetrieved := TRUE;
+              lFieldValueRetrieved := TRUE;
+            END;
+          END;
+          IF (lFieldValueRetrieved) THEN
+            SetFieldValue(lFieldValue);
+        END;
+        MarkFieldEnd();
+      END;
+    END;
+
+    LOCAL PROCEDURE InitialiseQuickReportData@1000000013(VAR pQuickReportData@1000000000 : Record 9062699;pFromTable@1000000001 : Boolean);
+    BEGIN
+      //DOC NA2015.7 - Initialising quick report data record
+      //  <> pQuickReportData: The record
+      //  -> pFromTable: Flag indicating data are taken from table
+
+      ToId += 1;
+
+      pQuickReportData.INIT();
+      pQuickReportData.VALIDATE("Quick Report Code", QuickReportHeader.Code);
+      pQuickReportData.VALIDATE(ID, ToId);
+      pQuickReportData.VALIDATE("Row Type", pQuickReportData."Row Type"::Record);
+      IF (pFromTable) THEN
+      BEGIN
+        pQuickReportData.VALIDATE("Table ID", FromDataRecordRef.NUMBER);
+        pQuickReportData.VALIDATE("Table Position", FromDataRecordRef.GETPOSITION(FALSE));
+      END;
+
+      ToRecordRef.GETTABLE(pQuickReportData);
+    END;
+
+    LOCAL PROCEDURE FinaliseQuickReportData@1000000014(VAR pQuickReportData@1000000000 : Record 9062699);
+    BEGIN
+      //DOC NA2015.7 - Finalising quick report data record
+      //  <> pQuickReportData: The record
+
+      FindReportTableRecord(pQuickReportData);
+      CollectFieldValues(QuickReportField."Field From"::"Report Table", FromReportTableRecordRef, pQuickReportData);
+
+      ToRecordRef.SETTABLE(pQuickReportData);
+
+      pQuickReportData.INSERT(TRUE);
+
+      MarkReportRecord();
+    END;
+
+    LOCAL PROCEDURE SetFieldValue@1000000029(pFieldValue@1000000001 : Variant);
+    VAR
+      lDecimalValue@1000000002 : Decimal;
+      lDateValue@1000000003 : Date;
+      lDateTimeValue@1000000004 : DateTime;
+      lTextFieldValue@1000000000 : Text;
+    BEGIN
+      //DOC NA2016.14 - Setting field value
+      //  -> pFieldValue: Field value
+
+      CASE (QuickReportField."Data Type Conversion") OF
+        QuickReportField."Data Type Conversion"::Format:
+          pFieldValue := FORMAT(pFieldValue, 0, 1);
+        QuickReportField."Data Type Conversion"::"Evaluate To Decimal":
+          BEGIN
+            IF ( NOT (EVALUATE(lDecimalValue, pFieldValue))) THEN
+              CLEAR(lDecimalValue);
+            pFieldValue := lDecimalValue;
+          END;
+        QuickReportField."Data Type Conversion"::"Evaluate to Date":
+          BEGIN
+            pFieldValue := FORMAT(pFieldValue, 0, 1);
+            IF ( NOT (EVALUATE(lDateValue, pFieldValue))) THEN
+            BEGIN
+              lDateTimeValue := XmlToolkit.ParseXmlDateTime(pFieldValue);
+              IF (lDateTimeValue <> 0DT) THEN
+                lDateValue := DT2DATE(lDateTimeValue)
+              ELSE
+                CLEAR(lDateValue);
+            END;
+            pFieldValue := lDateValue;
+          END;
+        QuickReportField."Data Type Conversion"::"Evaluate to DateTime":
+          BEGIN
+            pFieldValue := FORMAT(pFieldValue, 0, 1);
+            IF ( NOT (EVALUATE(lDateTimeValue, pFieldValue))) THEN
+              lDateTimeValue := XmlToolkit.ParseXmlDateTime(pFieldValue);
+            pFieldValue := lDateTimeValue;
+          END;
+      END;
+
+      IF ((QuickReportField."Field Length" > 0) AND (QuickReportField."Quick Report Length" > 0) AND
+          (QuickReportField."Field Length" > QuickReportField."Quick Report Length")) THEN
+        pFieldValue := COPYSTR(pFieldValue, 1, QuickReportField."Quick Report Length");
+
+      ToFieldRefs[QuickReportField.Index].VALIDATE(pFieldValue);
+      IF (ToFieldRefsSetCompact[QuickReportField.Index]) THEN
+        ToFieldRefsCompact[QuickReportField.Index].VALUE(FORMAT(ToFieldRefs[QuickReportField.Index].VALUE, 0, 1));
+    END;
+
+    LOCAL PROCEDURE GroupRecords@1000000011(VAR pQuickReportData@1000000001 : Record 9062699);
+    VAR
+      lQuickReportGroupingFuncti@1000000000 : Codeunit 9062542;
+    BEGIN
+      //DOC NA2015.7 - Grouping records of quick report
+      //  <> pQuickReportData: The report data
+
+      lQuickReportGroupingFuncti.GroupAndTotalQuickReport(pQuickReportData, TRUE, FALSE);
+    END;
+
+    LOCAL PROCEDURE "--- Report Table Record ---"@1000000021();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE OpenReportTableRecord@1000000030();
+    VAR
+      lReportTableKeyRef@1000000002 : KeyRef;
+      lReportTableKeyFields@1000000003 : Integer;
+      lReportTableFieldIndex@1000000001 : Integer;
+      lReportTableFieldId@1000000000 : Integer;
+    BEGIN
+      //DOC NA2015.7 - Opening report table record (reference)
+
+      IF ( NOT (ReportTableInUse)) THEN
+        EXIT;
+
+      FromReportTableRecordRef.OPEN(QuickReportHeader."Report Table ID");
+
+      CLEAR(FromFieldRefs);
+      FieldFrom := QuickReportField."Field From"::"Report Table";
+      FOR FieldFromIndex := 1 TO FieldCounts[FieldFrom] DO
+      BEGIN
+        QuickReportField := FromQuickReportFields[FieldFrom][FieldFromIndex];
+        IF ((QuickReportField."Field Type" = QuickReportField."Field Type"::Field) AND (QuickReportField."Field ID" <> 0)) THEN
+          FromFieldRefs[QuickReportField.Index] := FromReportTableRecordRef.FIELD(QuickReportField."Field ID");
+      END;
+
+      CLEAR(ReportTableFieldFlags);
+      CLEAR(FromReportTableFieldRefs);
+      CLEAR(ToReportTableFieldRefs);
+
+      lReportTableKeyRef := FromReportTableRecordRef.KEYINDEX(1);
+      lReportTableKeyFields := lReportTableKeyRef.FIELDCOUNT;
+      FOR lReportTableFieldIndex := 1 TO ReportTableKeys DO
+      BEGIN
+        IF (lReportTableFieldIndex <= lReportTableKeyFields) THEN
+        BEGIN
+          CASE (lReportTableFieldIndex) OF
+            1: lReportTableFieldId := QuickReportHeader."Report Table Key 1 ID";
+            2: lReportTableFieldId := QuickReportHeader."Report Table Key 2 ID";
+            3: lReportTableFieldId := QuickReportHeader."Report Table Key 3 ID";
+          END;
+          IF (lReportTableFieldId <> 0) THEN
+            IF (QuickReportField.GET(QuickReportHeader.Code, lReportTableFieldId)) THEN
+              IF (QuickReportField."Data Field ID" > 0) THEN
+              BEGIN
+                ReportTableFieldFlags[lReportTableFieldIndex] := TRUE;
+                FromReportTableFieldRefs[lReportTableFieldIndex] := ToRecordRef.FIELD(QuickReportField."Data Field ID");
+                ToReportTableFieldRefs[lReportTableFieldIndex] := lReportTableKeyRef.FIELDINDEX(lReportTableFieldIndex);
+              END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE CloseReportTableRecord@1000000031();
+    BEGIN
+      //DOC NA2015.7 - Closing report table record (reference)
+
+      IF ( NOT (ReportTableInUse)) THEN
+        EXIT;
+
+      FromReportTableRecordRef.CLOSE();
+    END;
+
+    LOCAL PROCEDURE FindReportTableRecord@1000000027(VAR pQuickReportData@1000000002 : Record 9062699);
+    VAR
+      lReportTableFieldIndex@1000000000 : Integer;
+      lReportTableFieldValue@1000000001 : Variant;
+    BEGIN
+      //DOC NA2015.7 - Trying to find report table record
+
+      ReportTableRecordFound := FALSE;
+
+      IF ( NOT (ReportTableInUse)) THEN
+        EXIT;
+
+      FromReportTableRecordRef.RESET();
+      FOR lReportTableFieldIndex := 1 TO ReportTableKeys DO
+        IF (ReportTableFieldFlags[lReportTableFieldIndex]) THEN
+        BEGIN
+          lReportTableFieldValue := FromReportTableFieldRefs[lReportTableFieldIndex].VALUE;
+          ToReportTableFieldRefs[lReportTableFieldIndex].SETRANGE(lReportTableFieldValue);
+        END;
+      ReportTableRecordFound := FromReportTableRecordRef.FINDFIRST();
+
+      pQuickReportData.VALIDATE("Table ID", FromReportTableRecordRef.NUMBER());
+      IF (ReportTableRecordFound) THEN
+        pQuickReportData.VALIDATE("Table Position", FromReportTableRecordRef.GETPOSITION(FALSE))
+      ELSE
+        pQuickReportData.VALIDATE("Table Position", '');
+    END;
+
+    LOCAL PROCEDURE "--- Filtering ---"@1000000033();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE FilterByEnhancedFields@1000000034(VAR pQuickReportData@1000000000 : TEMPORARY Record 9062699;VAR pCriteriaFields_NotApplied@1000000002 : TEMPORARY Record 9062627;VAR pFromDataRecordRef@1000000003 : RecordRef) KeepRecord : Boolean;
+    VAR
+      lQuickReportData_ForTest@1000000001 : TEMPORARY Record 9062699;
+      lEnhancedFieldDefinition@1000000004 : Record 9062327;
+      lEnhancedFieldValueVar@1000000005 : Variant;
+      lFieldCounter@1000000006 : Integer;
+      QuickReportField_Position@1000000007 : Text;
+      QuickReportField_View@1000000008 : Text;
+      StartDateTime@1000000009 : DateTime;
+      EndDateTime@1000000010 : DateTime;
+    BEGIN
+      //DOC NA2015.7 - Filter Records using Enhanced Fields without values in Enhanced Field Value table
+      KeepRecord := TRUE;
+
+      pCriteriaFields_NotApplied.SETRANGE("Field Type",pCriteriaFields_NotApplied."Field Type"::"Enhanced Field");
+      IF pCriteriaFields_NotApplied.FINDSET THEN BEGIN
+        REPEAT
+          StartDateTime := CURRENTDATETIME;
+
+          lFieldCounter += 1;
+
+          lQuickReportData_ForTest.RESET;
+
+          lQuickReportData_ForTest.INIT;
+          lQuickReportData_ForTest.ID := lFieldCounter;
+
+          lQuickReportData_ForTest.SETRANGE(ID,lQuickReportData_ForTest.ID);
+
+          lEnhancedFieldDefinition.GET(pCriteriaFields_NotApplied."Table ID",pCriteriaFields_NotApplied."Field ID");
+          WITH lEnhancedFieldDefinition DO BEGIN
+
+            GetNamedEnhancedFieldValue(lEnhancedFieldDefinition,pFromDataRecordRef,lEnhancedFieldValueVar);
+
+            CASE (Type) OF
+              Type::Code:
+                BEGIN
+                  lQuickReportData_ForTest."Code Field 1" := lEnhancedFieldValueVar;
+                  lQuickReportData_ForTest.INSERT;
+                  lQuickReportData_ForTest.SETFILTER("Code Field 1",pCriteriaFields_NotApplied.Value);
+                END;
+              Type::Text:
+                BEGIN
+                  lQuickReportData_ForTest."Text Field 1" := lEnhancedFieldValueVar;
+                  lQuickReportData_ForTest.INSERT;
+                  lQuickReportData_ForTest.SETFILTER("Text Field 1",pCriteriaFields_NotApplied.Value);
+                END;
+              Type::Integer,
+              Type::Decimal:
+                BEGIN
+                  lQuickReportData_ForTest."Decimal Field 1" := lEnhancedFieldValueVar;
+                  lQuickReportData_ForTest.INSERT;
+                  lQuickReportData_ForTest.SETFILTER("Decimal Field 1",pCriteriaFields_NotApplied.Value);
+                END;
+              Type::Date:
+                BEGIN
+                  lQuickReportData_ForTest."Date Field 1" := lEnhancedFieldValueVar;
+
+                  lQuickReportData_ForTest.INSERT;
+                  lQuickReportData_ForTest.SETFILTER("Date Field 1",pCriteriaFields_NotApplied.Value);
+                END;
+              Type::Time,
+              Type::Boolean:
+                BEGIN
+                  lQuickReportData_ForTest."Code Field 1" := FORMAT(lEnhancedFieldValueVar, 0, 1);
+                  lQuickReportData_ForTest.INSERT;
+                  lQuickReportData_ForTest.SETFILTER("Code Field 1",pCriteriaFields_NotApplied.Value);
+                END;
+              ELSE
+                BEGIN
+                  lQuickReportData_ForTest."Text Field 1" := lEnhancedFieldValueVar;
+                  lQuickReportData_ForTest.INSERT;
+                  lQuickReportData_ForTest.SETFILTER("Text Field 1",pCriteriaFields_NotApplied.Value);
+                END;
+            END;
+
+          END;
+
+          IF NOT lQuickReportData_ForTest.FINDFIRST THEN KeepRecord := FALSE;
+
+
+          IF KeepRecord OR (QuickReportHeader."Performance Statistics" = QuickReportHeader."Performance Statistics"::Detailed) THEN BEGIN
+
+            QuickReportField_View := QuickReportField.GETVIEW;
+            QuickReportField_Position := QuickReportField.GETPOSITION;
+
+            QuickReportField.SETRANGE("Quick Report Code",pQuickReportData."Quick Report Code");
+
+            QuickReportField.SETRANGE("Field Type",QuickReportField."Field Type"::"Enhanced Field");
+            QuickReportField.SETRANGE("Field ID",pCriteriaFields_NotApplied."Field ID");
+            IF QuickReportField.FINDSET THEN BEGIN
+              REPEAT
+                IF KeepRecord THEN BEGIN
+                  SetFieldValue(lEnhancedFieldValueVar);
+                  FieldIsSet[QuickReportField.Index] := TRUE;
+                END;
+                EndDateTime := CURRENTDATETIME;
+                FieldTotalTimes[QuickReportField.Index] += CalculateTime(StartDateTime,EndDateTime,FALSE); //Field Statistics
+              UNTIL QuickReportField.NEXT = 0;
+            END;
+
+            QuickReportField.SETVIEW := QuickReportField_View;
+            QuickReportField.SETPOSITION := QuickReportField_Position;
+
+          END;
+
+        UNTIL (NOT KeepRecord) OR (pCriteriaFields_NotApplied.NEXT = 0);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Statistics ---"@1000000012();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE MarkReportStart@1000000018();
+    BEGIN
+      //DOC NA2015.7 - Marking report start
+
+      IF (QuickReportHeader."Performance Statistics" < QuickReportHeader."Performance Statistics"::Basic) THEN
+        EXIT;
+
+      CLEAR(ReportRecords);
+      CLEAR(ReportTime);
+      ReportTime[ReportTimeIndex::Start] := CURRENTDATETIME;
+
+      CLEAR(FieldTime);
+      CLEAR(FieldTotalTimes);
+    END;
+
+    LOCAL PROCEDURE MarkReportRecord@1000000022();
+    BEGIN
+      //DOC NA2015.7 - Marking report record
+
+      ReportRecords += 1;
+    END;
+
+    LOCAL PROCEDURE MarkGroupingStart@1000000020();
+    BEGIN
+      //DOC NA2015.7 - Marking grouping start
+
+      IF (QuickReportHeader."Performance Statistics" < QuickReportHeader."Performance Statistics"::Basic) THEN
+        EXIT;
+
+      ReportTime[ReportTimeIndex::Grouping] := CURRENTDATETIME;
+    END;
+
+    LOCAL PROCEDURE MarkReportEnd@1000000019();
+    VAR
+      lLastExecutionTime@1000000000 : Decimal;
+      lLastGroupingTime@1000000001 : Decimal;
+      lFieldIdx@1000000002 : Integer;
+    BEGIN
+      //DOC NA2015.7 - Marking report end
+
+      IF (QuickReportHeader."Performance Statistics" < QuickReportHeader."Performance Statistics"::Basic) THEN
+        EXIT;
+
+      IF (QuickReportHeader."Performance Statistics" >= QuickReportHeader."Performance Statistics"::Detailed) THEN
+      BEGIN
+        QuickReportField.RESET();
+        QuickReportField.SETCURRENTKEY("Quick Report Code", Index);
+        QuickReportField.SETRANGE("Quick Report Code", QuickReportHeader.Code);
+        FOR lFieldIdx := 1 TO FieldCount DO
+        BEGIN
+          QuickReportField.SETRANGE(Index, lFieldIdx);
+          IF (QuickReportField.FINDFIRST()) THEN
+          BEGIN
+            QuickReportField.VALIDATE("Last Execution Time [s]", FieldTotalTimes[lFieldIdx]);
+            QuickReportField.MODIFY(TRUE);
+          END;
+        END;
+      END;
+
+      QuickReportHeader.GET(QuickReportHeader.Code);
+
+      ReportTime[ReportTimeIndex::"End"] := CURRENTDATETIME;
+
+      QuickReportHeader.SETRANGE("System Activity", TRUE);
+      QuickReportHeader.VALIDATE("Last Execution Records", ReportRecords);
+      QuickReportHeader.VALIDATE("Last Execution Time [s]", CalculateTime(ReportTime[ReportTimeIndex::Start],
+        ReportTime[ReportTimeIndex::"End"], TRUE));
+      QuickReportHeader.VALIDATE("Last Grouping Time [s]", CalculateTime(ReportTime[ReportTimeIndex::Grouping],
+        ReportTime[ReportTimeIndex::"End"], TRUE));
+      QuickReportHeader.MODIFY(TRUE);
+      QuickReportHeader.SETRANGE("System Activity", FALSE);
+    END;
+
+    LOCAL PROCEDURE MarkFieldStart@1000000023();
+    BEGIN
+      //DOC NA2015.7 - Marking field start
+
+      IF (QuickReportHeader."Performance Statistics" < QuickReportHeader."Performance Statistics"::Detailed) THEN
+        EXIT;
+
+      CLEAR(FieldTime);
+      FieldTime[FieldTimeIndex::Start] := CURRENTDATETIME;
+    END;
+
+    LOCAL PROCEDURE MarkFieldEnd@1000000026();
+    BEGIN
+      //DOC NA2015.7 - Marking field end
+
+      IF (QuickReportHeader."Performance Statistics" < QuickReportHeader."Performance Statistics"::Detailed) THEN
+        EXIT;
+
+      FieldTime[FieldTimeIndex::"End"] := CURRENTDATETIME;
+      FieldTotalTimes[QuickReportField.Index] += CalculateTime(FieldTime[FieldTimeIndex::Start], FieldTime[FieldTimeIndex::"End"], FALSE);
+    END;
+
+    LOCAL PROCEDURE "--- Compact Mode ---"@1000000038();
+    BEGIN
+    END;
+
+    PROCEDURE ClearCompactMode@1000000053();
+    BEGIN
+      //DOC NA2016.15 - Clearing compact mode
+
+      CompactMode := FALSE;
+      CompactModeSet := FALSE;
+    END;
+
+    PROCEDURE SetCompactMode@1000000037(pCompactMode@1000000000 : Boolean);
+    BEGIN
+      //DOC NA2016.15 - Setting compact mode
+      //  -> pCompactMode: The compact mode flag
+
+      CompactMode := pCompactMode;
+      CompactModeSet := TRUE;
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@1000000004();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE GetEnhancedFieldValue@1000000005(pRecordRef@1000000001 : RecordRef;VAR pValue@1000000000 : Variant) : Boolean;
+    VAR
+      lResult@1000000002 : Boolean;
+    BEGIN
+      //DOC NA2015.7 - Retrieving enhanced field value
+      //  -> pRecordRef: Record reference
+      //  <> pValue: Target value
+      //  <- TRUE = Value retrieved; FALSE = Not
+
+      lResult := TRUE;
+
+      CASE (QuickReportField."Quick Report Data Type") OF
+        QuickReportField."Quick Report Data Type"::"1":
+          pValue := EnhancedFieldManagement.GetFieldValue_Boolean(pRecordRef.NUMBER, pRecordRef.GETPOSITION(FALSE), QuickReportField."Field Name");
+        QuickReportField."Quick Report Data Type"::"2":
+          pValue := EnhancedFieldManagement.GetFieldValue_Integer(pRecordRef.NUMBER, pRecordRef.GETPOSITION(FALSE), QuickReportField."Field Name");
+        QuickReportField."Quick Report Data Type"::Decimal:
+          pValue := EnhancedFieldManagement.GetFieldValue_Decimal(pRecordRef.NUMBER, pRecordRef.GETPOSITION(FALSE), QuickReportField."Field Name");
+        QuickReportField."Quick Report Data Type"::Date:
+          pValue := EnhancedFieldManagement.GetFieldValue_Date(pRecordRef.NUMBER, pRecordRef.GETPOSITION(FALSE), QuickReportField."Field Name");
+        QuickReportField."Quick Report Data Type"::Code:
+          pValue := ToQuickReportDataCode(EnhancedFieldManagement.GetFieldValue_Text(pRecordRef.NUMBER, pRecordRef.GETPOSITION(FALSE), QuickReportField."Field Name"));
+        QuickReportField."Quick Report Data Type"::Text:
+          pValue := ToQuickReportDataText(EnhancedFieldManagement.GetFieldValue_Text(pRecordRef.NUMBER, pRecordRef.GETPOSITION(FALSE), QuickReportField."Field Name"));
+        ELSE
+          lResult := FALSE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE GetNamedEnhancedFieldValue@1000000050(pEnhancedFieldDefinition@1000000003 : Record 9062327;pRecordRef@1000000001 : RecordRef;VAR pValue@1000000000 : Variant) : Boolean;
+    VAR
+      lResult@1000000002 : Boolean;
+    BEGIN
+      //DOC NA2015.7 - Retrieving enhanced field value
+      //  -> pEnhancedFieldDefinition: The Enhanced Field to get the value of
+      //  -> pRecordRef: Record reference
+      //  <> pValue: Target value
+      //  <- TRUE = Value retrieved; FALSE = Not
+
+      lResult := TRUE;
+
+      WITH pEnhancedFieldDefinition DO BEGIN
+
+        CASE (Type) OF
+          Type::Boolean:
+            pValue := EnhancedFieldManagement.GetFieldValue_Boolean(pRecordRef.NUMBER, pRecordRef.GETPOSITION(FALSE), Name);
+          Type::Integer:
+            pValue := EnhancedFieldManagement.GetFieldValue_Integer(pRecordRef.NUMBER, pRecordRef.GETPOSITION(FALSE), Name);
+          Type::Decimal:
+            pValue := EnhancedFieldManagement.GetFieldValue_Decimal(pRecordRef.NUMBER, pRecordRef.GETPOSITION(FALSE), Name);
+          Type::Date:
+            pValue := EnhancedFieldManagement.GetFieldValue_Date(pRecordRef.NUMBER, pRecordRef.GETPOSITION(FALSE), Name);
+          Type::Code:
+            pValue := ToQuickReportDataCode(EnhancedFieldManagement.GetFieldValue_Text(pRecordRef.NUMBER, pRecordRef.GETPOSITION(FALSE), Name));
+          Type::Text:
+            pValue := ToQuickReportDataText(EnhancedFieldManagement.GetFieldValue_Text(pRecordRef.NUMBER, pRecordRef.GETPOSITION(FALSE), Name));
+          ELSE
+            lResult := FALSE;
+        END;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE GetNavQueryResultValue@1000000015(pNavQueryResultEntry@1000000009 : Record 9062330;VAR pValue@1000000000 : Variant) : Boolean;
+    VAR
+      lIntegerValue@1000000005 : Integer;
+      lDecimalValue@1000000004 : Decimal;
+    BEGIN
+      //DOC NA2015.7 - Converting value to the right type
+      //  -> pNavQueryResultEntry: NAV query result entry
+      //  <> pValue: Target value
+      //  <- TRUE = Value retrieved; FALSE = Not
+
+      CASE (QuickReportField."Field Data Type") OF
+        QuickReportField."Field Data Type"::Integer:
+          BEGIN
+            IF ( NOT (EVALUATE(lIntegerValue, pNavQueryResultEntry."Value as Text"))) THEN
+              CLEAR(lIntegerValue);
+            pValue := lIntegerValue;
+          END;
+        QuickReportField."Field Data Type"::Decimal:
+          BEGIN
+            IF ( NOT (EVALUATE(lDecimalValue, pNavQueryResultEntry."Value as Text"))) THEN
+              CLEAR(lDecimalValue);
+            pValue := lDecimalValue;
+          END;
+        ELSE
+          pValue := ToQuickReportDataText(pNavQueryResultEntry."Value as Text");
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetSqlQueryResultValue@1000000016(pSqlQueryResult@1000000001 : Record 9062333;VAR pValue@1000000000 : Variant) : Boolean;
+    BEGIN
+      //DOC NA2015.7 - Retrieving SQL query result value
+      //  -> pSqlQueryResult: SQL query result
+      //  <> pValue: Target value
+
+      CASE (QuickReportField."Field Data Type") OF
+        QuickReportField."Field Data Type"::Boolean: pValue := pSqlQueryResult."Boolean Value";
+        QuickReportField."Field Data Type"::Integer: pValue := pSqlQueryResult."Integer Value";
+        QuickReportField."Field Data Type"::Decimal: pValue := pSqlQueryResult."Decimal Value";
+        QuickReportField."Field Data Type"::Date: pValue := DT2DATE(pSqlQueryResult."DateTime Value");
+        QuickReportField."Field Data Type"::Time: pValue := DT2TIME(pSqlQueryResult."DateTime Value");
+        QuickReportField."Field Data Type"::DateTime: pValue := pSqlQueryResult."DateTime Value";
+        ELSE pValue := ToQuickReportDataText(pSqlQueryResult."Text Value");
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ToQuickReportDataCode@1000000024(pValue@1000000000 : Text) : Code[250];
+    BEGIN
+      //DOC NA2015.7 - Converting given value to quick report data code
+      //  -> pValue: Value to convert
+      //  <- Converted value
+
+      EXIT(UPPERCASE(DELCHR(COPYSTR(pValue, 1, MAXSTRLEN(QuickReportData."Code Field 1")), '<>', ' ')));
+    END;
+
+    LOCAL PROCEDURE ToQuickReportDataText@1000000025(pValue@1000000000 : Text) : Text[250];
+    BEGIN
+      //DOC NA2015.7 - Converting given value to quick report data text
+      //  -> pValue: Value to convert
+      //  <- Converted value
+
+      EXIT(COPYSTR(pValue, 1, MAXSTRLEN(QuickReportData."Text Field 1")));
+    END;
+
+    LOCAL PROCEDURE CalculateTime@1000000028(pStartTime@1000000000 : DateTime;pEndTime@1000000001 : DateTime;pRound@1000000003 : Boolean) : Decimal;
+    VAR
+      lTime@1000000002 : Decimal;
+    BEGIN
+      //DOC NA2015.7 - Calculating time
+      //  -> pStartTime: Start time
+      //  -> pEndTime: End time
+      //  -> pRound: Flag to round to 2 decimal places
+      //  <- The time
+
+      IF ((pStartTime <> 0DT) AND (pEndTime <> 0DT)) THEN
+      BEGIN
+        lTime := (pEndTime - pStartTime) / 1000;
+        IF (pRound) THEN
+          lTime := ROUND(lTime, 0.01);
+      END;
+      EXIT(lTime);
+    END;
+
+    LOCAL PROCEDURE CheckExecutePermission@1000000036(pQuickReportCode@1000000000 : Code[60]);
+    VAR
+      lQuickReportHeader@1000000001 : Record 9062697;
+      lEnhancedPermissionsMgt@1000000002 : Codeunit 9062277;
+    BEGIN
+      //DOC NA2016.15 - Checking execute permission
+      //  -> pQuickReportCode: Quick report code
+
+      IF ( NOT (lQuickReportHeader.GET(pQuickReportCode))) THEN
+        EXIT;
+      IF (lQuickReportHeader."Temporary") THEN
+        IF ( NOT (lQuickReportHeader.GET(lQuickReportHeader."Copied From"))) THEN
+          EXIT;
+      lEnhancedPermissionsMgt.CheckQuickReportExecutePermission(lQuickReportHeader, USERID());
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.7  JH 18/05/2015 - Created
+      //DOC NA2015.8  JH 23/07/2015 - Fixes
+      //DOC NA2015.9  JH 10/08/2015 - Support for printing added
+      //DOC NA2016.9  JH 28/08/2015 - Upgraded to 2016
+      //DOC NA2016.10 AZ 21/10/2015 - "Alt. Target Field ID" and "Format Alt. Target" fields and code added (performance improvements for Web Client)
+      //DOC NA2016.11 JH 06/11/2015 - Bugfixes
+      //DOC NA2016.12 JH 27/12/2015 - Modified, new version
+      //DOC NA2016.12 JH 19/01/2016 - Bugfixes
+      //DOC NA2016.12 JH 28/01/2016 - Fixes
+      //DOC NA2016.14 JH 21/02/2016 - New field data types
+      //DOC NA2016.15 JH 05/05/2016 - Enhanced permissions
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,247 @@
+OBJECT Codeunit 9062602 AutoNAV Task Log Toolkit
+{
+  OBJECT-PROPERTIES
+  {
+    Date=15/06/17;
+    Time=[ 9:51:46 AM];
+    Version List=NA10.21.10;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AutoNavTaskLogEntry@1000000000 : Record 9062736;
+      NablementSetup@1000000001 : Record 9062229;
+      EmailErrSubject@1000000002 : TextConst 'ENU=AutoNAV Error for Task %1';
+      EmailErrBodyPrefix@1000000003 : TextConst 'ENU=". Error: "';
+
+    LOCAL PROCEDURE "--- General ---"@1000000007();
+    BEGIN
+    END;
+
+    PROCEDURE AddEntry@1000000000(pDescription@1000000000 : Text;pStatus@1000000001 : Integer) : Integer;
+    VAR
+      lEmptyGuid@1000000002 : GUID;
+      lDateTime@1000000003 : DateTime;
+    BEGIN
+      //DOC NA9.12 - Adding an entry with given description and status
+      //  -> pDescription: The description
+      //  -> pStatus: The status
+      //  <- Entry no. of the entry added
+
+      lDateTime := CURRENTDATETIME();
+      EXIT(UpdateEntryInternal(0, '', lEmptyGuid, lDateTime, lDateTime, 0, 0, pDescription, pStatus, ''));
+    END;
+
+    PROCEDURE AddEntryForQueue@1000000001(pAutoNavTaskQueue@1000000000 : Record 9062733;pDescription@1000000004 : Text;pStatus@1000000003 : Integer) : Integer;
+    VAR
+      lEmptyGuid@1000000002 : GUID;
+      lDateTime@1000000001 : DateTime;
+    BEGIN
+      //DOC NA9.12 - Adding an entry for a queue (AutoNAV Task Queue)
+      //  -> pAutoNavTaskQueue: The queue
+      //  -> pDescription: The description
+      //  -> pStatus: The status
+      //  <- Entry no. of the entry added
+
+      lDateTime := CURRENTDATETIME();
+      EXIT(UpdateEntryInternal(0, pAutoNavTaskQueue.Code, lEmptyGuid, lDateTime, lDateTime, 0, 0,
+        CombineDescriptions(pAutoNavTaskQueue.Description, pDescription), pStatus, ''));
+    END;
+
+    PROCEDURE AddEntryForTask@1000000003(pAutoNavTask@1000000000 : Record 9062734;pDescription@1000000002 : Text;pStatus@1000000005 : Integer) : Integer;
+    VAR
+      lDateTime@1000000001 : DateTime;
+    BEGIN
+      //DOC NA9.12 - Adding an entry for a task (AutoNAV Task)
+      //  -> pAutoNavTask: The task
+      //  -> pDescription: The description
+      //  -> pStatus: The status
+      //  <- Entry no. of the entry added
+
+      lDateTime := CURRENTDATETIME();
+      EXIT(UpdateEntryInternal(0, pAutoNavTask."AutoNAV Task Queue Code", pAutoNavTask.ID, lDateTime, lDateTime, pAutoNavTask."Object Type to Run",
+        pAutoNavTask."Object ID to Run", CombineDescriptions(pAutoNavTask.Description, pDescription), pStatus, ''));
+    END;
+
+    PROCEDURE InsertEntryForTask@7(VAR pAutoNavTask@1000 : Record 9062734) : Integer;
+    BEGIN
+      //DOC NA9.12 - Inserting an entry for a task (AutoNAV Task)
+      //  -> pAutoNavTask: The task
+      //  <- Entry no. of the entry inserted
+
+      EXIT(UpdateEntryInternal(0, pAutoNavTask."AutoNAV Task Queue Code", pAutoNavTask.ID, CURRENTDATETIME(), 0DT, pAutoNavTask."Object Type to Run",
+        pAutoNavTask."Object ID to Run", pAutoNavTask.Description, AutoNavTaskLogEntry.Status::"In Process", ''));
+    END;
+
+    PROCEDURE UpdateEntryForTask@8(pLogEntryNo@1000 : Integer;VAR pAutoNavTask@1002 : Record 9062734) : Integer;
+    VAR
+      lStatus@1000000001 : Integer;
+      lErrorMessage@1000000000 : Text;
+    BEGIN
+      //DOC NA9.12 - Updating an entry for a task (AutoNAV Task)
+      //  -> pLogEntryNo: Log entry no.
+      //  -> pAutoNavTask: The task
+      //  <- Entry no. of the entry
+
+      IF (pAutoNavTask.Status = pAutoNavTask.Status::Error) THEN
+      BEGIN
+        lStatus := AutoNavTaskLogEntry.Status::Error;
+        lErrorMessage := pAutoNavTask.GetErrorMessage();
+      END
+      ELSE
+        lStatus := AutoNavTaskLogEntry.Status::Success;
+
+      AutoNavTaskLogEntry.GET(pLogEntryNo);
+      EXIT(UpdateEntryInternal(pLogEntryNo, AutoNavTaskLogEntry."AutoNAV Task Queue Code", AutoNavTaskLogEntry."AutoNAV Task ID",
+        AutoNavTaskLogEntry."Start Date/Time", CURRENTDATETIME(), AutoNavTaskLogEntry."Object Type to Run",
+        AutoNavTaskLogEntry."Object ID to Run", AutoNavTaskLogEntry.Description, lStatus, lErrorMessage));
+    END;
+
+    LOCAL PROCEDURE "--- Internal ---"@1000000006();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE UpdateEntryInternal@1000000002(pEntryNo@1000000005 : Integer;pAutoNavTaskQueueCode@1000000000 : Code[20];pAutoNavTaskId@1000000001 : GUID;pStartDateTime@1000000002 : DateTime;pEndDateTime@1000000007 : DateTime;pObjectType@1000000003 : Integer;pObjectId@1000000004 : Integer;pDescription@1000000006 : Text;pStatus@1000000008 : Integer;pErrorMessage@1000000009 : Text) : Integer;
+    BEGIN
+      //DOC NA9.12 - Adding an entry (internal version)
+      //  -> pEntryNo: Entry no. (if zero - inserting, if non-zero - updating)
+      //  -> pAutoNavTaskQueueCode: AutoNAV task queue code
+      //  -> pAutoNavTaskId: AutoNAV task ID (GUID)
+      //  -> pStartDateTime: Start datetime
+      //  -> pEndDateTime: End datetime
+      //  -> pObjectType: Object type
+      //  -> pObjectId: Object ID
+      //  -> pDescription: Description
+      //  -> pStatus: Status
+      //  -> pErrorMessage: Error message
+      //  <- Entry no.
+
+      IF (pStatus = AutoNavTaskLogEntry.Status::Debug) THEN
+      BEGIN
+        NablementSetup.GET();
+        IF ( NOT (NablementSetup."Debug AutoNAV Tasks")) THEN
+          EXIT(0);
+      END;
+
+      IF (pEntryNo = 0) THEN
+      BEGIN
+        CLEAR(AutoNavTaskLogEntry);
+        AutoNavTaskLogEntry.INIT();
+        AutoNavTaskLogEntry.INSERT(TRUE);
+      END
+      ELSE
+        AutoNavTaskLogEntry.GET(pEntryNo);
+
+      AutoNavTaskLogEntry.VALIDATE("AutoNAV Task Queue Code", pAutoNavTaskQueueCode);
+      AutoNavTaskLogEntry.VALIDATE("AutoNAV Task ID", pAutoNavTaskId);
+      AutoNavTaskLogEntry.VALIDATE("User ID", USERID());
+      AutoNavTaskLogEntry.VALIDATE("Start Date/Time", pStartDateTime);
+      AutoNavTaskLogEntry.VALIDATE("End Date/Time", pEndDateTime);
+      AutoNavTaskLogEntry.VALIDATE("Object Type to Run", pObjectType);
+      AutoNavTaskLogEntry.VALIDATE("Object ID to Run", pObjectId);
+      AutoNavTaskLogEntry.VALIDATE(Description, pDescription);
+      AutoNavTaskLogEntry.VALIDATE(Status, pStatus);
+      AutoNavTaskLogEntry.SetErrorMessage(pErrorMessage);
+      AutoNavTaskLogEntry.MODIFY(TRUE);
+
+      //DOC PC NA10.21.10 -
+      IF AutoNavTaskLogEntry.Status = AutoNavTaskLogEntry.Status::Error THEN BEGIN
+        SendEmailNotification(AutoNavTaskLogEntry."Entry No.");
+      END;
+      //DOC PC NA10.21.10 +
+
+      EXIT(AutoNavTaskLogEntry."Entry No.");
+    END;
+
+    LOCAL PROCEDURE CombineDescriptions@1000000010(pPrimaryDescription@1000000000 : Text;pSecondaryDescription@1000000001 : Text) : Text;
+    VAR
+      lCombinedDescription@1000000002 : Text;
+    BEGIN
+      //DOC NA9.12 - Combining two descriptions together
+      //  -> pPrimaryDescription: Primary description (appears as first if present)
+      //  -> pSecondaryDescription: Secondary description (appears in brackets if the primary is present)
+      //  <- Combined description cut to 250 characters
+
+      IF ((pPrimaryDescription <> '') AND (pSecondaryDescription <> '')) THEN
+        lCombinedDescription := STRSUBSTNO('%1: %2', pPrimaryDescription, pSecondaryDescription)
+      ELSE IF (pPrimaryDescription <> '') THEN
+        lCombinedDescription := pPrimaryDescription
+      ELSE
+        lCombinedDescription := pSecondaryDescription;
+
+      EXIT(COPYSTR(lCombinedDescription, 1, 250));
+    END;
+
+    LOCAL PROCEDURE SendEmailNotification@1000000004(pEntryNo@1000000000 : Integer) EmailSent : Boolean;
+    VAR
+      AutoNAVTask@1000000002 : Record 9062734;
+      EnablementUser@1000000001 : Record 9062729;
+      nAblementSetup@1000000003 : Record 9062229;
+      SMTPMailSetup@1000000006 : Record 409;
+      EmailBody@1000000004 : Text;
+    BEGIN
+      //DOC PC NA10.21.10 -
+      IF NOT AutoNavTaskLogEntry.GET(pEntryNo) THEN BEGIN
+        EXIT(FALSE);
+      END;
+
+      IF NOT AutoNAVTask.GET(AutoNavTaskLogEntry."AutoNAV Task Queue Code",AutoNavTaskLogEntry."AutoNAV Task ID") THEN BEGIN
+        EXIT(FALSE);
+      END;
+
+      IF AutoNAVTask."User to Notify on Error" = '' THEN BEGIN
+        EXIT(FALSE);
+      END;
+
+      IF NOT EnablementUser.GET(AutoNAVTask."User to Notify on Error") THEN BEGIN
+        EXIT(FALSE);
+      END;
+
+      IF EnablementUser."E-Mail" = '' THEN BEGIN
+        EXIT(FALSE);
+      END;
+
+      IF nAblementSetup.GET THEN BEGIN
+        IF (nAblementSetup."Reply From Email Username" = '') OR (nAblementSetup."Reply From Email Address" = '') THEN BEGIN
+          EXIT(FALSE);
+        END;
+      END;
+
+      EmailBody := AutoNavTaskLogEntry.Description;
+      IF AutoNavTaskLogEntry.GetErrorMessage <> '' THEN BEGIN
+        EmailBody += EmailErrBodyPrefix + AutoNavTaskLogEntry.GetErrorMessage;
+      END;
+
+      EXIT(TrySendEmail(nAblementSetup."Reply From Email Username",
+                        nAblementSetup."Reply From Email Address",
+                        EnablementUser."E-Mail",STRSUBSTNO(EmailErrSubject,AutoNAVTask.Description),
+                        EmailBody));
+      //DOC PC NA10.21.10 +
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TrySendEmail@1000000005(pSenderName@1000000001 : Text;pSenderAddress@1000000002 : Text;pRecipients@1000000003 : Text;pSubject@1000000004 : Text;pBody@1000000005 : Text);
+    VAR
+      SMTPMail@1000000000 : Codeunit 400;
+    BEGIN
+      //DOC PC NA10.21.10 -
+      SMTPMail.CreateMessage(pSenderName,pSenderAddress,pRecipients,pSubject,pBody,FALSE);
+      SMTPMail.Send();
+      //DOC PC NA10.21.10 +
+    END;
+
+    BEGIN
+    {
+      //DOC NA9.12 JH 17/12/2015 - Created
+      //DOC NA10.21.10 PC 15/06/2017 - Added email sending functionality for Logs with status "Error"
+    }
+    END.
+  }
+}
+

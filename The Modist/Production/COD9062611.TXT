@@ -1,0 +1,552 @@
+OBJECT Codeunit 9062611 Create Tables
+{
+  OBJECT-PROPERTIES
+  {
+    Date=16/03/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.14;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            AutoCreateTables(TRUE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Table@1000000010 : Record 9062728;
+      TableObject@1000000009 : Record 2000000058;
+      PageObject@1000000008 : Record 2000000058;
+      ReportObject@1000000007 : Record 2000000058;
+      CriteriaManagement@1000000006 : Codeunit 9062462;
+      DialogManagement@1000000005 : Codeunit 9062249;
+      LanguageToolkit@1000000004 : Codeunit 9062586;
+      ObjectFieldToolkit@1000000003 : Codeunit 9062343;
+      TnpToolkit@1000000002 : Codeunit 9062230;
+      DialogIndex@1000000001 : ' ,Activity,Table,Progress';
+      Interaction@1000000000 : Boolean;
+      tDialogTitle@1000000016 : TextConst 'ENU=Detecting pages...;ENG=Detecting pages...';
+      tDialogActivity@1000000015 : TextConst 'ENU=Activity;ENG=Activity';
+      tDialogTable@1000000014 : TextConst 'ENU=Table;ENG=Table';
+      tDialogProgress@1000000013 : TextConst 'ENU=Progress;ENG=Progress';
+      tListPage@1000000012 : TextConst 'ENU=%1 List;ENG=%1 List';
+      tCardPage@1000000011 : TextConst 'ENU=%1 Card;ENG=%1 Card';
+
+    LOCAL PROCEDURE "--- General ---"@1000000015();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE AutoCreateTables@1000000013(pInteraction@1000000000 : Boolean) : Boolean;
+    VAR
+      eConfirmation@1000000001 : TextConst 'ENU=Do you want to auto-create all tables?;ENG=Do you want to auto-create all tables?';
+      eFinalMessage@1000000002 : TextConst 'ENU=All tables have been created.;ENG=All tables have been created.';
+    BEGIN
+      //DOC NA2016.14 - Auto-creating tables
+      //  -> pInteraction: Interaction flag (TRUE = With user interaction, confirmations, etc; FALSE = Without)
+      //  <- TRUE = Tables created, FALSE = Cancelled
+
+      Interaction := ((pInteraction) AND (GUIALLOWED()));
+      IF (Interaction) THEN
+        IF ( NOT (CONFIRM(eConfirmation, TRUE))) THEN
+          EXIT(FALSE);
+
+      CLEAR(DialogManagement);
+      DialogManagement.Add(tDialogActivity, 10, DialogIndex::Activity, 30, FALSE, FALSE);
+      DialogManagement.Add(tDialogTable, 10, DialogIndex::Table, 30, FALSE, FALSE);
+      DialogManagement.Add(tDialogProgress, 10, DialogIndex::Progress, 30, TRUE, TRUE);
+      DialogManagement.Open(tDialogTitle);
+
+      AddNewTables();
+      RemoveOldTables();
+      AddFilteredTables();
+
+      DialogManagement.Close();
+
+      IF (Interaction) THEN
+        MESSAGE(eFinalMessage);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE AddNewTables@1000000000();
+    VAR
+      lListPageId@1000000001 : Integer;
+      lCardPageId@1000000003 : Integer;
+      eActivity@1000000000 : TextConst 'ENU=Adding new tables;ENG=Adding new tables';
+    BEGIN
+      //DOC NA2016.10 - Adding new tables
+
+      DialogManagement.SetCounterTextValue(DialogIndex::Activity, eActivity);
+
+      TableObject.RESET();
+      TableObject.SETRANGE("Object Type", TableObject."Object Type"::Table);
+      IF (TableObject.FINDSET()) THEN
+      BEGIN
+        DialogManagement.ResetCounter(DialogIndex::Progress);
+        DialogManagement.SetCounterCount(DialogIndex::Progress, TableObject.COUNT);
+
+        PageObject.RESET();
+        PageObject.SETRANGE("Object Type", PageObject."Object Type"::Page);
+
+        REPEAT
+          DialogManagement.SetCounterTextValue(DialogIndex::Table, TableObject."Object Name");
+          DialogManagement.StepCounter(DialogIndex::Progress);
+
+          lListPageId := ReadListPageFromMetadata(TableObject);
+          lCardPageId := ReadCardPageFromMeatadata(lListPageId);
+
+          FindPageByName(PageObject, STRSUBSTNO(tListPage, TableObject."Object Name"), lListPageId);
+          FindPageByName(PageObject, STRSUBSTNO(tCardPage, TableObject."Object Name"), lCardPageId);
+
+          IF (lListPageId = 0) THEN
+            FindPageByName(PageObject, LanguageToolkit.ToPlural(TableObject."Object Name"), lListPageId);
+
+          IF (lListPageId = 0) THEN
+            FindPageByName(PageObject, TableObject."Object Name", lListPageId);
+
+          IF (lCardPageId = 0) THEN
+            lCardPageId := lListPageId;
+
+          VerifyPageId(lListPageId);
+          VerifyPageId(lCardPageId);
+
+          IF ((lListPageId <> 0) OR (lCardPageId <> 0)) THEN
+            AddTable(TableObject, lListPageId, lCardPageId);
+        UNTIL(TableObject.NEXT() = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE RemoveOldTables@1000000010();
+    VAR
+      lTableObject@1000000000 : Record 2000000058;
+      lTableToDelete@1000000001 : TEMPORARY Record 9062728;
+      eCollectingActivity@1000000002 : TextConst 'ENU=Collecting tables to remove;ENG=Collecting tables to remove';
+      eRemovingActivity@1000000003 : TextConst 'ENU=Removing old tables;ENG=Removing old tables';
+    BEGIN
+      //DOC NA2016.14 - Removing old tables
+
+      DialogManagement.SetCounterTextValue(DialogIndex::Activity, eCollectingActivity);
+
+      Table.RESET();
+      IF (Table.FINDSET()) THEN
+      BEGIN
+        DialogManagement.ResetCounter(DialogIndex::Progress);
+        DialogManagement.SetCounterCount(DialogIndex::Progress, Table.COUNT());
+        REPEAT
+          DialogManagement.SetCounterTextValue(DialogIndex::Table, Table.Description);
+          DialogManagement.StepCounter(DialogIndex::Progress);
+          IF (( NOT (lTableObject.GET(lTableObject."Object Type"::Table, Table."Table ID"))) OR
+              ((Table."List Page ID" = 0) AND (Table."Card Page ID" = 0) AND (Table."Report ID" = 0))) THEN
+          BEGIN
+            lTableToDelete := Table;
+            lTableToDelete.INSERT();
+          END;
+        UNTIL(Table.NEXT() = 0);
+      END;
+
+      DialogManagement.SetCounterTextValue(DialogIndex::Activity, eRemovingActivity);
+      IF (lTableToDelete.FINDSET()) THEN
+      BEGIN
+        DialogManagement.ResetCounter(DialogIndex::Progress);
+        DialogManagement.SetCounterCount(DialogIndex::Progress, lTableToDelete.COUNT());
+        REPEAT
+          DialogManagement.SetCounterTextValue(DialogIndex::Table, lTableToDelete.Description);
+          DialogManagement.StepCounter(DialogIndex::Progress);
+          Table.GET(lTableToDelete.ID);
+          Table.DELETE(TRUE);
+        UNTIL (lTableToDelete.NEXT() = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE AddFilteredTables@1000000016();
+    VAR
+      eActivity@1000000000 : TextConst 'ENU=Adding filtered tables;ENG=Adding filtered tables';
+    BEGIN
+      //DOC NA2016.14 - Adding filtered tables
+
+      DialogManagement.SetCounterTextValue(DialogIndex::Activity, eActivity);
+      DialogManagement.ResetCounter(DialogIndex::Progress);
+      DialogManagement.SetCounterCount(DialogIndex::Progress, 6 + 6 + 3);
+
+      CreateSalesHeaderTables();
+      CreatePurchaseHeaderTables();
+      CreateWarehouseActivityHeaderTables();
+    END;
+
+    LOCAL PROCEDURE "--- Table Creation / Removal ---"@1000000001();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE AddTable@1000000004(pTableObject@1000000002 : Record 2000000058;pListPageId@1000000000 : Integer;pCardPageId@1000000001 : Integer);
+    VAR
+      lTable@1000000003 : Record 9062728;
+    BEGIN
+      //DOC NA2016.10 - Adding a new table
+      //  -> pTableObject: The table object
+      //  -> pListPageId: List page ID
+      //  -> pCardPageId: Card page ID
+
+      lTable.RESET();
+      lTable.SETCURRENTKEY("Table ID", "Criteria ID");
+      lTable.SETRANGE("Table ID", pTableObject."Object ID");
+      lTable.SETRANGE("Criteria ID", 0);
+      IF (lTable.FINDFIRST()) THEN
+      BEGIN
+        IF ((lTable.Description <> pTableObject."Object Caption") OR (lTable."List Page ID" <> pListPageId) OR (lTable."Card Page ID" <> pCardPageId)) THEN
+        BEGIN
+          lTable.VALIDATE(Description, pTableObject."Object Caption");
+          lTable.VALIDATE("List Page ID", pListPageId);
+          lTable.VALIDATE("Card Page ID", pCardPageId);
+          lTable.MODIFY(TRUE);
+        END;
+      END
+      ELSE
+      BEGIN
+        lTable.INIT();
+        lTable.VALIDATE(Description, pTableObject."Object Caption");
+        lTable.VALIDATE("Table ID", pTableObject."Object ID");
+        lTable.VALIDATE("List Page ID", pListPageId);
+        lTable.VALIDATE("Card Page ID", pCardPageId);
+        lTable.INSERT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE AddFilteredTable@9062231(pDescription@9062238 : Text;pTableId@9062229 : Integer;VAR pTableFields@9062230 : Record 9062231;pListPageId@9062235 : Integer;pCardPageId@9062236 : Integer;pReportId@9062237 : Integer) : Boolean;
+    VAR
+      lCriteria@9062239 : Record 9062626;
+      lCriteriaField@9062233 : Record 9062627;
+      lCriteriaId@9062240 : Integer;
+      lTableFound@9062232 : Boolean;
+      lTableFieldsMatch@9062231 : Boolean;
+      lResult@9062234 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Adding a new filtered table
+      //  -> pDescription: Description
+      //  -> pTableId: Table ID
+      //  <> pTableFields: Table fields recordset
+      //  -> pListPageId: List page ID
+      //  -> pCardPageId: Card page ID
+      //  -> pReportId: Report ID
+      //  <- TRUE = Table added, FALSE = Table already there
+
+      lResult := FALSE;
+
+      lTableFound := FALSE;
+      Table.RESET();
+      Table.SETRANGE("Table ID", pTableId);
+      IF (Table.FINDSET()) THEN
+      REPEAT
+        IF (Table."Criteria ID" <> 0) THEN
+        BEGIN
+          lTableFieldsMatch := TRUE;
+          pTableFields.RESET();
+          IF (pTableFields.FINDSET()) THEN
+          REPEAT
+            lCriteriaField.RESET();
+            lCriteriaField.SETCURRENTKEY("Criteria ID", "Field ID");
+            lCriteriaField.SETRANGE("Criteria ID", Table."Criteria ID");
+            lCriteriaField.SETRANGE("Field ID", pTableFields."Field ID");
+            IF (lCriteriaField.FINDFIRST()) THEN
+              lTableFieldsMatch := ((lTableFieldsMatch) AND (pTableFields."Field Value" = lCriteriaField.Value))
+            ELSE
+              lTableFieldsMatch := FALSE;
+          UNTIL ((pTableFields.NEXT() = 0) OR ( NOT (lTableFieldsMatch)));
+          IF (lTableFieldsMatch) THEN
+            lTableFound := TRUE;
+        END;
+      UNTIL ((Table.NEXT() = 0) OR (lTableFound));
+
+      IF ( NOT (lTableFound)) THEN
+      BEGIN
+        pDescription := TnpToolkit.DefaultString(pDescription, ObjectFieldToolkit.GetTableName(pTableId));
+
+        CLEAR(Table);
+        Table.INIT();
+        Table.VALIDATE(Description, pDescription);
+        Table.VALIDATE("Table ID", pTableId);
+        Table.VALIDATE("List Page ID", pListPageId);
+        Table.VALIDATE("Card Page ID", pCardPageId);
+        Table.VALIDATE("Report ID", pReportId);
+        Table.INSERT(TRUE);
+
+        pTableFields.RESET();
+        IF (pTableFields.FINDSET()) THEN
+        BEGIN
+          lCriteriaId := CriteriaManagement.CreateCriteriaAttached(DATABASE::Table, Table.GETPOSITION(FALSE), Table.FIELDNO("Criteria ID"), FALSE);
+          lCriteria.GET(lCriteriaId);
+          lCriteria.VALIDATE("Table ID", pTableId);
+          lCriteria.VALIDATE("Add Table Name to Description", FALSE);
+          REPEAT
+            CLEAR(lCriteriaField);
+            lCriteriaField.INIT();
+            lCriteriaField.VALIDATE("Criteria ID", lCriteria.ID);
+            lCriteriaField.INSERT(TRUE);
+            lCriteriaField.VALIDATE("Table ID", lCriteria."Table ID");
+            lCriteriaField.VALIDATE("Field Type", lCriteriaField."Field Type"::Field);
+            lCriteriaField.VALIDATE("Field ID", pTableFields."Field ID");
+            lCriteriaField.VALIDATE(Value, pTableFields."Field Value");
+            lCriteriaField.MODIFY(TRUE);
+          UNTIL (pTableFields.NEXT() = 0);
+          lCriteria.UpdateDescriptionAndView(FALSE);
+          lCriteria.MODIFY(TRUE);
+          Table.VALIDATE("Criteria ID", lCriteriaId);
+          Table.MODIFY(TRUE);
+        END;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE RemoveNonFilteredTable@1000000003(pTableId@1000000000 : Integer);
+    BEGIN
+      //DOC NA2016.14 - Removing non-filtered table
+      //  -> pTableId: Table ID
+
+      Table.RESET();
+      Table.SETCURRENTKEY("Table ID", "Criteria ID");
+      Table.SETRANGE("Table ID", pTableId);
+      Table.SETRANGE("Criteria ID", 0);
+      Table.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE "--- Page Detection ---"@1000000002();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ReadListPageFromMetadata@9062230(pTableObject@9062229 : Record 2000000058) : Integer;
+    VAR
+      lTableMetadata@9062231 : Record 2000000136;
+      lListPageId@9062230 : Integer;
+    BEGIN
+      //DOC NA2016.10 - Reading list page from metadata
+      //  -> pTableObject: Table object
+      //  <- List page ID
+
+      lListPageId := 0;
+
+      IF (lTableMetadata.GET(pTableObject."Object ID")) THEN
+      BEGIN
+        lListPageId := lTableMetadata.LookupPageID;
+        IF (lListPageId = 0) THEN
+          lListPageId := lTableMetadata.DrillDownPageId;
+      END;
+
+      EXIT(lListPageId);
+    END;
+
+    LOCAL PROCEDURE ReadCardPageFromMeatadata@9062238(pListPageId@9062229 : Integer) : Integer;
+    VAR
+      lPageMetadata@9062231 : Record 2000000138;
+      lCardPageId@9062230 : Integer;
+    BEGIN
+      //DOC NA2016.10 - Reading card page from metadata
+      //  -> pListPageId: List page ID
+      //  <- Card page ID
+
+      lCardPageId := 0;
+
+      IF (pListPageId <> 0) THEN
+        IF (lPageMetadata.GET(pListPageId)) THEN
+          lCardPageId := lPageMetadata.CardPageID;
+
+      EXIT(lCardPageId);
+    END;
+
+    LOCAL PROCEDURE FindPageByName@1000000012(VAR pPageObject@1000000002 : Record 2000000058;pPageName@1000000000 : Text;VAR pPageId@1000000001 : Integer);
+    BEGIN
+      //DOC NA2016.10 - Trying to find a page with given name
+      //  <> pPageObject: Page object recordset
+      //  -> pPageName: Page name to be found
+      //  <> pPageId: Target page ID
+
+      IF (STRLEN(pPageName) <= MAXSTRLEN(pPageObject."Object Name")) THEN
+      BEGIN
+        pPageObject.SETRANGE("Object Name", pPageName);
+        IF (pPageObject.FINDFIRST()) THEN
+          pPageId := pPageObject."Object ID";
+      END;
+    END;
+
+    LOCAL PROCEDURE VerifyPageId@9062232(VAR pPageId@9062229 : Integer);
+    VAR
+      lPageObject@9062230 : Record 2000000038;
+    BEGIN
+      //DOC NA2016.10 - Verifying if page with given ID exists; if not - clearing the ID
+      //  <> pPageId: The ID
+
+      IF (pPageId <> 0) THEN
+        IF ( NOT (lPageObject.GET(lPageObject."Object Type"::Page, pPageId))) THEN
+          CLEAR(pPageId);
+    END;
+
+    PROCEDURE "--- Filtered Tables ---"@9062229();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CreateSalesHeaderTables@9062233();
+    VAR
+      lSalesHeader@9062229 : Record 36;
+    BEGIN
+      //DOC NA2016.10 - Creating sales header tables
+
+      RemoveNonFilteredTable(DATABASE::"Sales Header");
+
+      CreateSalesHeaderTable(lSalesHeader."Document Type"::Quote, PAGE::"Sales Quotes", PAGE::"Sales Quote", FindReport('Sales Quote (nH)'));
+      CreateSalesHeaderTable(lSalesHeader."Document Type"::Order, PAGE::"Sales Order List", PAGE::"Sales Order", FindReport('Sales Order (nH)'));
+      CreateSalesHeaderTable(lSalesHeader."Document Type"::Invoice, PAGE::"Sales Invoice List", PAGE::"Sales Invoice", FindReport('Sales Test Document (nH)'));
+      CreateSalesHeaderTable(lSalesHeader."Document Type"::"Credit Memo", PAGE::"Sales Credit Memos", PAGE::"Sales Credit Memo", FindReport('Sales Test Document (nH)'));
+      CreateSalesHeaderTable(lSalesHeader."Document Type"::"Blanket Order", PAGE::"Blanket Sales Orders", PAGE::"Blanket Sales Order", 0);
+      CreateSalesHeaderTable(lSalesHeader."Document Type"::"Return Order", PAGE::"Sales Return Orders", PAGE::"Sales Return Order", FindReport('Sales Return Order (nH)'));
+    END;
+
+    LOCAL PROCEDURE CreateSalesHeaderTable@1000000014(pDocumentType@9062229 : Integer;pListPageId@9062231 : Integer;pCardPageId@9062232 : Integer;pReportId@9062233 : Integer);
+    VAR
+      lSalesHeader@9062230 : Record 36;
+      eDescriptionTemplate@9062234 : TextConst 'ENU=Sales %1;ENG=Sales %1';
+      lTableFieldBuffer@1000000000 : TEMPORARY Record 9062231;
+      lDescription@1000000001 : Text;
+    BEGIN
+      //DOC NA2016.10 - Creating one sales header table
+      //  -> pDocumentType: Document type
+      //  -> pListPageId: List page ID
+      //  -> pCardPageId: Card page ID
+      //  -> pReportId: Report ID
+
+      lSalesHeader."Document Type" := pDocumentType;
+      lDescription := STRSUBSTNO(eDescriptionTemplate, FORMAT(lSalesHeader."Document Type"));
+
+      DialogManagement.SetCounterTextValue(DialogIndex::Table, lDescription);
+      DialogManagement.StepCounter(DialogIndex::Progress);
+
+      AddToTableFieldBuffer(lTableFieldBuffer, DATABASE::"Sales Header", lSalesHeader.FIELDNO("Document Type"), FORMAT(lSalesHeader."Document Type"));
+      AddFilteredTable(lDescription, DATABASE::"Sales Header", lTableFieldBuffer, pListPageId, pCardPageId, pReportId);
+    END;
+
+    LOCAL PROCEDURE CreatePurchaseHeaderTables@9062234();
+    VAR
+      lPurchaseHeader@9062229 : Record 38;
+    BEGIN
+      //DOC NA2016.10 - Creating purchase header tables
+
+      RemoveNonFilteredTable(DATABASE::"Purchase Header");
+
+      CreatePurchaseHeaderTable(lPurchaseHeader."Document Type"::Quote, PAGE::"Purchase Quotes", PAGE::"Purchase Quote", FindReport('Purchase Quote (nH)'));
+      CreatePurchaseHeaderTable(lPurchaseHeader."Document Type"::Order, PAGE::"Purchase Order List", PAGE::"Purchase Order", FindReport('Purchase Order (nH)'));
+      CreatePurchaseHeaderTable(lPurchaseHeader."Document Type"::Invoice, PAGE::"Purchase Invoices", PAGE::"Purchase Invoice", FindReport('Purchase Test Document (nH)'));
+      CreatePurchaseHeaderTable(lPurchaseHeader."Document Type"::"Credit Memo", PAGE::"Purchase Credit Memos", PAGE::"Purchase Credit Memo", FindReport('Purchase Test Document (nH)'));
+      CreatePurchaseHeaderTable(lPurchaseHeader."Document Type"::"Blanket Order", PAGE::"Blanket Purchase Orders", PAGE::"Blanket Purchase Order", 0);
+      CreatePurchaseHeaderTable(lPurchaseHeader."Document Type"::"Return Order", PAGE::"Purchase Return Orders", PAGE::"Purchase Return Order", FindReport('Purchase Return Order (nH)'));
+    END;
+
+    LOCAL PROCEDURE CreatePurchaseHeaderTable@1000000011(pDocumentType@9062233 : Integer;pListPageId@9062232 : Integer;pCardPageId@9062231 : Integer;pReportId@9062230 : Integer);
+    VAR
+      lPurchaseHeader@9062229 : Record 38;
+      eDescriptionTemplate@9062234 : TextConst 'ENU=Purchase %1;ENG=Purchase %1';
+      lTableFieldBuffer@1000000000 : TEMPORARY Record 9062231;
+      lDescription@1000000001 : Text;
+    BEGIN
+      //DOC NA2016.10 - Creating one purchase header table
+      //  -> pDocumentType: Document type
+      //  -> pListPageId: List page ID
+      //  -> pCardPageId: Card page ID
+      //  -> pReportId: Report ID
+
+      lPurchaseHeader."Document Type" := pDocumentType;
+      lDescription := STRSUBSTNO(eDescriptionTemplate, FORMAT(lPurchaseHeader."Document Type"));
+
+      DialogManagement.SetCounterTextValue(DialogIndex::Table, lDescription);
+      DialogManagement.StepCounter(DialogIndex::Progress);
+
+      AddToTableFieldBuffer(lTableFieldBuffer, DATABASE::"Purchase Header", lPurchaseHeader.FIELDNO("Document Type"), FORMAT(lPurchaseHeader."Document Type"));
+      AddFilteredTable(lDescription, DATABASE::"Purchase Header", lTableFieldBuffer, pListPageId, pCardPageId, pReportId);
+    END;
+
+    LOCAL PROCEDURE CreateWarehouseActivityHeaderTables@1000000009();
+    VAR
+      lWarehouseActivityHeader@9062229 : Record 5766;
+    BEGIN
+      //DOC NA2016.10 - Creating warehouse activity header tables
+
+      RemoveNonFilteredTable(DATABASE::"Warehouse Activity Header");
+
+      CreateWarehouseActivityHeaderTable(lWarehouseActivityHeader.Type::Pick, PAGE::"Warehouse Picks", PAGE::"Warehouse Pick", FindReport('Pick (nH)'));
+      CreateWarehouseActivityHeaderTable(lWarehouseActivityHeader.Type::"Put-away", PAGE::"Warehouse Put-aways", PAGE::"Warehouse Put-away", FindReport('Put-away (nH)'));
+      CreateWarehouseActivityHeaderTable(lWarehouseActivityHeader.Type::Movement, PAGE::"Warehouse Movements", PAGE::"Warehouse Movement", FindReport('Movement (nH)'));
+    END;
+
+    LOCAL PROCEDURE CreateWarehouseActivityHeaderTable@1000000005(pType@9062230 : Integer;pListPageId@9062233 : Integer;pCardPageId@9062232 : Integer;pReportId@9062231 : Integer);
+    VAR
+      lWarehouseActivityHeader@9062229 : Record 5766;
+      eDescriptionTemplate@9062234 : TextConst 'ENU=Warehouse %1;ENG=Warehouse %1';
+      lTableFieldBuffer@1000000000 : TEMPORARY Record 9062231;
+      lDescription@1000000001 : Text;
+    BEGIN
+      //DOC NA2016.10 - Creating one warehouse activity header table
+      //  -> pType: Warehouse activity type
+      //  -> pListPageId: List page ID
+      //  -> pCardPageId: Card page ID
+      //  -> pReportId: Report ID
+
+      lWarehouseActivityHeader.Type := pType;
+      lDescription := STRSUBSTNO(eDescriptionTemplate, FORMAT(lWarehouseActivityHeader.Type));
+
+      DialogManagement.SetCounterTextValue(DialogIndex::Table, lDescription);
+      DialogManagement.StepCounter(DialogIndex::Progress);
+
+      AddToTableFieldBuffer(lTableFieldBuffer, DATABASE::"Warehouse Activity Header", lWarehouseActivityHeader.FIELDNO(Type), FORMAT(lWarehouseActivityHeader.Type));
+      AddFilteredTable(lDescription, DATABASE::"Warehouse Activity Header", lTableFieldBuffer, pListPageId, pCardPageId, pReportId);
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@9062242();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE FindReport@9062243(pReportName@9062229 : Text) : Integer;
+    BEGIN
+      //DOC NA2016.10 - Trying to find a report and - if found - returning its ID
+      //  -> pReportName: The report name
+      //  <- Report ID or zero if not found
+
+      ReportObject.RESET();
+      ReportObject.SETRANGE("Object Type", ReportObject."Object Type"::Report);
+      ReportObject.SETRANGE("Object Name", pReportName);
+      IF (ReportObject.FINDFIRST()) THEN
+        EXIT(ReportObject."Object ID")
+      ELSE
+        EXIT(0);
+    END;
+
+    LOCAL PROCEDURE ClearTableFieldBuffer@9062239(VAR pTableFieldBuffer@1000000000 : Record 9062231);
+    BEGIN
+      //DOC NA2016.14 - Clearing table field buffer
+      //  <> pTableFieldBuffer: The buffer
+
+      pTableFieldBuffer.RESET();
+      pTableFieldBuffer.DELETEALL();
+    END;
+
+    LOCAL PROCEDURE AddToTableFieldBuffer@9062240(VAR pTableFieldBuffer@1000000000 : Record 9062231;pTableId@9062232 : Integer;pFieldId@9062230 : Integer;pFieldValue@9062231 : Text);
+    BEGIN
+      //DOC NA2016.14 - Adding to table field buffer
+      //  <> pTableFieldBuffer: The buffer
+      //  -> pTableId: Table ID
+      //  -> pFieldId: Field ID
+      //  -> pFIeldValue: Field value
+
+      pTableFieldBuffer.INIT();
+      pTableFieldBuffer."Table ID" := pTableId;
+      pTableFieldBuffer."Field ID" := pFieldId;
+      pTableFieldBuffer."Field Value" := COPYSTR(pFieldValue, 1, MAXSTRLEN(pTableFieldBuffer."Field Value"));
+      pTableFieldBuffer.INSERT();
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.14 JH 11/03/2016 - Created
+    }
+    END.
+  }
+}
+

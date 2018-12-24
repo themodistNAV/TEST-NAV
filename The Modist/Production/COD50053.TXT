@@ -1,0 +1,1126 @@
+OBJECT Codeunit 50053 Int. Sales Order Import EVENTS
+{
+  OBJECT-PROPERTIES
+  {
+    Date=22/04/18;
+    Time=11:22:38 AM;
+    Modified=Yes;
+    Version List=OP9031,DEL-119,IN37341,OP10888,OP10987,OP10933,IN41925,OP11536,IN43255;
+  }
+  PROPERTIES
+  {
+    TableNo=9062734;
+    OnRun=VAR
+            PaymentMethod@1000000000 : Record 289;
+          BEGIN
+
+            AutoNAVTask := Rec;//DOC OP10933 CB 19/06/2017 -+
+            //DOC OP9031 RK 18/01/2017 -
+            //DOC OP9031 RK 07/02/17 -
+            GLSetup.GET;
+            GLSetup.TESTFIELD("LCY Code");
+            {
+            PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::CreditCard);
+            PaymentMethod.FINDFIRST;
+            REPEAT
+              PaymentMethod.TESTFIELD("Bal. Account No.");
+            UNTIL PaymentMethod.NEXT = 0;
+            PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::"Gift Voucher");
+            PaymentMethod.FINDFIRST;
+            REPEAT
+              PaymentMethod.TESTFIELD("Bal. Account No.");
+            UNTIL PaymentMethod.NEXT = 0;
+            PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::PayPal);
+            PaymentMethod.FINDFIRST;
+            REPEAT
+              PaymentMethod.TESTFIELD("Bal. Account No.");
+            UNTIL PaymentMethod.NEXT = 0;
+            }
+            //DOC OP9031 RK 07/02/17 +
+            //DOC OP9031 RK 18/01/2017 +
+            ModistSetup.GET;
+            ModistSetup.TESTFIELD("Demandware Order Import Group");
+            ModistSetup.TESTFIELD("Demandware Default Location");
+            ModistSetup."Demandware Default Location" := 'EVENTS';
+            IntegrationProcessingGroup.GET(ModistSetup."Demandware Integration Type",ModistSetup."Demandware Order Import Group");
+            IntegrationProcessingGroup.TESTFIELD("Working Location");
+            IntegrationProcessingGroup.TESTFIELD("Archive Location");
+            IntegrationProcessingGroup.TESTFIELD("Error Location");
+            SalesSetup.GET;
+            SalesSetup.TESTFIELD("Gift Certificate G/L Account");
+            SalesSetup.TESTFIELD("Duty Account");
+            //DOC OP11536 RK 30/08/17 -
+            SalesSetup.TESTFIELD("Product Tax Account");
+            //DOC OP11536 RK 30/08/17 +
+            //IF IntegrationProcessingGroup."Enable SFTP Connect" THEN
+              //DownloadftpFiles;
+            ImportOrders;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ModistSetup@1000000000 : Record 50000;
+      IntegrationProcessingGroup@1000000005 : Record 50007;
+      SalesSetup@1000000001 : Record 311;
+      SalesLineNo@1000000004 : Integer;
+      ERRLOCATION@1000000002 : TextConst 'ENU=%1\Codeunit 50025;ENG=%1\Codeunit 50025';
+      GLSetup@1000000003 : Record 98;
+      AutoNAVTask@1000000006 : Record 9062734;
+      AutoNAVToolkit@1000000007 : Codeunit 9062602;
+
+    LOCAL PROCEDURE DownloadftpFiles@1000000001();
+    VAR
+      WebIntegrationManagement@1000000000 : Codeunit 50100;
+    BEGIN
+      // IF NOT WebIntegrationManagement.DownloadftpFiles(IntegrationProcessingGroup."Working Location",ModistSetup."Demandware Import SFTP Server",IntegrationProcessingGroup."FTP Folder") THEN BEGIN
+      //  ERROR(GETLASTERRORTEXT);
+      //  AutoNAVToolkit.AddEntryForTask(AutoNAVTask,GETLASTERRORTEXT,2); //DOC OP10933 CB 19/06/2017 -+
+      // END;
+    END;
+
+    LOCAL PROCEDURE ImportOrders@1000000002();
+    VAR
+      InternetOrder@1000000004 : Record 9021666;
+      InternetOrderLine@1000000003 : Record 9021667;
+      SalesPayment@1000000005 : Record 50008;
+      FileRec@1000000000 : Record 2000000022;
+      ImportError@1000000001 : Record 50009;
+      WebIntegrationManagement@1000000002 : Codeunit 50100;
+      List@1000000006 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      FailList@1000000007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      FileMgmnt@1000000008 : Codeunit 419;
+      IntegrationFunctions@1000000011 : Codeunit 50008;
+      element@1000000010 : Text;
+      Filename@1000000009 : Text;
+      SuccessCount@1000000012 : Integer;
+      FailCount@1000000013 : Integer;
+      FTPIntegrationLog@1000000014 : Record 50030;
+    BEGIN
+      InternetOrder.SETCURRENTKEY("File Name");
+      FileRec.SETRANGE(Path,IntegrationProcessingGroup."Working Location");
+      FileRec.SETRANGE("Is a file",TRUE);
+      FileRec.SETFILTER(Name,'%1','*.xml');
+      IF FileRec.FINDFIRST THEN BEGIN
+        //DOC OP9031 RK 25/01/17 -
+        List := List.List();
+        FailList := FailList.List();
+        SuccessCount := 0;
+        FailCount := 0;
+        //DOC OP9031 RK 25/01/17 +
+        REPEAT
+          CLEAR(InternetOrder);
+          CLEAR(InternetOrderLine);
+           //DOC IN41925 EI 26/07/2017 -
+          IF FTPIntegrationLog.READPERMISSION THEN BEGIN
+            CLEAR(FTPIntegrationLog);
+            FTPIntegrationLog.FTPFilename := FileRec.Name;
+            FTPIntegrationLog.FilenameDateTime:= CURRENTDATETIME;
+            FTPIntegrationLog.FTPAction := 'Import';
+            FTPIntegrationLog.INSERT;
+          END;
+          //DOC IN41925 EI 26/07/2017 +
+          IF ImportSalesOrder(IntegrationProcessingGroup."Working Location" + FileRec.Name, FileRec.Name) THEN BEGIN
+            //DOC OP9031 RK 25/01/17 -
+            //RENAME(IntegrationProcessingGroup."Working Location" + FileRec.Name, IntegrationProcessingGroup."Archive Location" + FileRec.Name);
+            List.Add(FileMgmnt.CombinePath(FileRec.Path, FileRec.Name));
+            SuccessCount := SuccessCount + 1;
+            //DOC OP9031 RK 25/01/17 +
+            ImportError.SETRANGE("File Name",FileRec.Name);
+            IF ImportError.FINDFIRST THEN
+              ImportError.DELETE;
+            COMMIT;
+            InternetOrder.SETRANGE("File Name",FileRec.Name);
+            IF InternetOrder.FINDFIRST THEN
+              REPEAT
+                ValidateOrder(InternetOrder."Order Guid");
+              UNTIL InternetOrder.NEXT = 0;
+          END ELSE BEGIN
+            //DOC OP9031 RK 25/01/17 -
+            //RENAME(IntegrationProcessingGroup."Working Location" + FileRec.Name, IntegrationProcessingGroup."Error Location" + FileRec.Name);
+            FailList.Add(FileMgmnt.CombinePath(FileRec.Path, FileRec.Name));
+            FailCount := FailCount + 1;
+            //DOC OP9031 RK 25/01/17 +
+            ImportError.SETRANGE("File Name",FileRec.Name);
+            IF ImportError.FINDFIRST THEN BEGIN
+              ImportError."Error Text" := GETLASTERRORTEXT;
+              AutoNAVToolkit.AddEntryForTask(AutoNAVTask,GETLASTERRORTEXT,2);//DOC OP10933 CB 19/06/2017 -+
+              ImportError.MODIFY;
+            END ELSE BEGIN
+              ImportError.INIT;
+              ImportError."File Name" := FileRec.Name;
+              ImportError."Error Text" := GETLASTERRORTEXT;
+              AutoNAVToolkit.AddEntryForTask(AutoNAVTask,GETLASTERRORTEXT,2);//DOC OP10933 CB 19/06/2017 -+
+              ImportError.INSERT;
+            END;
+            IF SalesLineNo <> 0 THEN BEGIN
+              InternetOrder.SETRANGE("File Name",FileRec.Name);
+              IF InternetOrder.FINDFIRST THEN
+                REPEAT
+                  InternetOrderLine.SETRANGE("Order Guid",InternetOrder."Order Guid");
+                  InternetOrderLine.DELETEALL;
+                  SalesPayment.SETRANGE("Order Guid",InternetOrder."Order Guid");
+                  SalesPayment.DELETEALL;
+                  InternetOrder.DELETE;
+                UNTIL InternetOrder.NEXT = 0;
+            END;
+          END;
+        UNTIL FileRec.NEXT = 0;
+      //DOC OP9031 RK 25/01/17 -
+        IF SuccessCount > 0 THEN BEGIN
+          Filename:='';
+          FOREACH element IN List DO BEGIN
+            Filename := FileMgmnt.GetFileName(element);
+            IntegrationFunctions.MoveFile(FileMgmnt.CombinePath(IntegrationProcessingGroup."Working Location", Filename),FileMgmnt.CombinePath(IntegrationProcessingGroup."Archive Location",Filename));
+          END;
+        END;
+        IF FailCount > 0 THEN BEGIN
+          Filename:='';
+          FOREACH element IN FailList DO BEGIN
+            Filename := FileMgmnt.GetFileName(element);
+            IntegrationFunctions.MoveFile(FileMgmnt.CombinePath(IntegrationProcessingGroup."Working Location", Filename),FileMgmnt.CombinePath(IntegrationProcessingGroup."Error Location",Filename));
+          END;
+        END;
+        CLEAR(List);
+        CLEAR(FailList);
+      //DOC OP9031 RK 25/01/17 +
+      END;
+    END;
+
+    [TryFunction]
+    PROCEDURE ImportSalesOrder@1000000000(FileName@1000000000 : Text;ShortFileName@1000000020 : Text);
+    VAR
+      InternetOrder@1000000019 : Record 9021666;
+      InternetOrderLine@1000000018 : Record 9021667;
+      PriceAdjOrderLine@1000000017 : Record 9021667;
+      Customer@1000000012 : Record 18;
+      GLAccount@1000000002 : Record 15;
+      SalesPayment@1000000009 : Record 50008;
+      Reader@1000000003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlTextReader";
+      Reader2@1000000005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlTextReader";
+      Shipping@1000000004 : Boolean;
+      PromoID@1000000008 : Text[50];
+      PayLineNo@1000000010 : Integer;
+      PayMethodName@1000000011 : Text;
+      giftVar@1000000013 : Text[10];
+      ProductID@1000000014 : Text;
+      CustAttrID@1000000015 : Text;
+      QtyUOMText@1000000016 : Text;
+      LongDesc@1000000001 : Text[100];
+      Reader3@1000000007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlTextReader";
+      OrderStatus@1000000006 : Text;
+      SavedInternetOrder@1000000021 : Record 9021666;
+      SkipElement@1000000022 : Boolean;
+      InternetOrderLineToDelete@1000000023 : Record 9021667;
+      InternetOrderCheck@1000000024 : Record 9021666;
+      OrderExists@1000000025 : Boolean;
+    BEGIN
+      Reader := Reader.Create(FileName);
+      WHILE Reader.Read DO BEGIN
+        //DOC IN37341 HR 06/04/2017 -
+        //IF Reader.IsStartElement THEN BEGIN
+        IF Reader.IsStartElement AND (NOT SkipElement) THEN BEGIN
+        //DOC IN37341 HR 06/04/2017 +
+
+          CASE Reader.Name OF
+            'order':
+              BEGIN
+                 //DOC IN41925 EI 25/07/2017 -
+                  OrderExists := FALSE;
+                  InternetOrderCheck.RESET;
+                  InternetOrderCheck.SETCURRENTKEY("Internet Order Reference");
+                  InternetOrderCheck.SETRANGE("Internet Order Reference",DELCHR(Reader.GetAttribute('order-no')));
+                  IF InternetOrderCheck.FINDFIRST THEN BEGIN
+                    OrderExists := TRUE;
+                  END;
+                  //DOC IN41925 EI 25/07/2017 +
+
+                InternetOrder.INIT;
+                InternetOrder."Order Guid" := CREATEGUID;
+                InternetOrder."Internet Order Reference" := DELCHR(Reader.GetAttribute('order-no'));
+                InternetOrder."Document Type" := 'Order';
+                InternetOrder."File Name" := ShortFileName;
+                InternetOrder."Inventory Location" := ModistSetup."Demandware Default Location";
+                InternetOrder."Prices Including VAT" := TRUE;
+                InternetOrder.INSERT;
+                SalesLineNo := 0;
+                PayLineNo := 0;
+              END;
+            'order-date':
+              IF EVALUATE(InternetOrder."Order Date",COPYSTR(DELCHR(Reader.ReadString),1,10),9) THEN;
+          //DOC OP11536 RK 31/08/17 -
+            'package-type':
+              BEGIN
+                InternetOrder."Package Type" := Reader.ReadString;
+                InternetOrder.MODIFY;
+              END;
+          //DOC OP11536 RK 31/08/17 +
+
+          //DOC OP9031 RK 07/03/17 -
+            'order-status':
+              BEGIN
+                OrderStatus := Reader.ReadString;
+                CASE UPPERCASE(OrderStatus) OF
+                  'NEW':
+                    IF NOT OrderExists THEN BEGIN //DOC IN41925 EI 25/07/2017 -+
+                      InternetOrder.Status := InternetOrder.Status::New;
+                    END ELSE //DOC IN41925 EI 25/07/2017 -+
+                      InternetOrder.Status := InternetOrder.Status::Rejected; //DOC IN41925 EI 25/07/2017 -+
+                  'CANCELLED':
+                    InternetOrder.Status := InternetOrder.Status::Rejected;
+                END;
+
+              END;
+          //DOC OP9031 RK 07/03/17 +
+            'currency':
+              InternetOrder."Currency Code" := Reader.ReadString;
+            'customer-no':
+                InternetOrder."Bill-to Net Customer No." := Reader.ReadString;
+            //DOC OP9031 RK 20/02/17 -
+            //'customer-name':
+            //  InternetOrder."Bill-to Name" := Reader.ReadString;
+            'first-name':
+              IF Shipping = TRUE THEN
+                InternetOrder."Ship-to Name" := Reader.ReadString
+              ELSE
+                InternetOrder."Bill-to Name" := Reader.ReadString;
+            'last-name':
+              IF Shipping = TRUE THEN
+                InternetOrder."Ship-to Name 2" := Reader.ReadString
+              ELSE
+                InternetOrder."Bill-to Name 2" := Reader.ReadString;
+            //DOC OP9031 RK 20/02/17 +
+            //OP10987 <<
+            'customer-locale':
+              InternetOrder."Customer Locale" := Reader.ReadString;
+            //OP10987 >>
+            'customer-email':
+              InternetOrder."Bill-to E-Mail" := Reader.ReadString;
+            'billing-address':
+              Shipping := FALSE;
+            'shipping-address':
+              Shipping := TRUE;
+            'shipment':
+              BEGIN
+                //DOC IN37341 HR 06/04/2017 -
+                SavedInternetOrder := InternetOrder;
+                //DOC IN37341 HR 06/04/2017 +
+                InternetOrder."Shipment ID" := DELCHR(Reader.GetAttribute('shipment-id'));
+                InternetOrder.MODIFY;
+              END;
+            'shipping-method':
+              BEGIN
+                InternetOrder."Shipment Method" := Reader.ReadString;
+                //DOC IN37341 HR 06/04/2017 -
+                IF InternetOrder."Shipment Method" = '' THEN BEGIN
+                  //DELETE THE LINES CREATED FOR THE SHIPMENT WITHOUT SHIPMENT-METHOD
+                  InternetOrderLineToDelete.RESET;
+                  InternetOrderLineToDelete.SETRANGE("Order Guid",InternetOrder."Order Guid");
+                  InternetOrderLineToDelete.SETRANGE("Shipment ID",InternetOrder."Shipment ID");
+                  InternetOrderLineToDelete.SETRANGE("Line Type",InternetOrderLineToDelete."Line Type"::Shipping);
+                  IF NOT InternetOrderLineToDelete.ISEMPTY THEN
+                    InternetOrderLineToDelete.DELETEALL;
+
+                  InternetOrder := SavedInternetOrder;
+                  SkipElement := TRUE;
+                END;
+                //DOC IN37341 HR 06/04/2017 +
+                InternetOrder.MODIFY;
+              END;
+            'address1':
+              BEGIN
+                IF Shipping = TRUE THEN
+                  InternetOrder."Ship-to Address" := Reader.ReadString
+                ELSE
+                  InternetOrder."Bill-to Address" := Reader.ReadString;
+              END;
+            'address2':
+              BEGIN
+                IF Shipping = TRUE THEN
+                  InternetOrder."Ship-to Address 2" := Reader.ReadString
+                ELSE
+                  InternetOrder."Bill-to Address 2" := Reader.ReadString;
+              END;
+            'custom-attribute':
+              BEGIN
+                CustAttrID := Reader.GetAttribute('attribute-id');
+              //DOC OP9031 RK 09/02/17 -
+                //IF UPPERCASE(CustAttrID) = 'ADDRESS3' THEN BEGIN
+                CASE UPPERCASE(CustAttrID) OF
+                  'ADDRESS3':
+                    BEGIN
+                      IF Shipping THEN
+                        InternetOrder."Ship-to Address 3" := Reader.ReadString
+                      ELSE
+                        InternetOrder."Bill-to Address 3" := Reader.ReadString;
+                    END;
+                  'BRONTO_TID':
+                    BEGIN
+                      InternetOrder."Marketing ID" := Reader.ReadString;
+                      InternetOrder.MODIFY;
+                    END;
+                //DOC OP9031 RK 09/02/17 +
+                //DOC OP11536 RK 07/09/17 -
+                  'PACKAGINGOPTION':
+                    BEGIN
+                      InternetOrder."Package Type" := Reader.ReadString;
+                      InternetOrder.MODIFY;
+                    END;
+                //DOC OP11536 RK 07/09/17 +
+                END;
+              END;
+            'city':
+              BEGIN
+                IF Shipping = TRUE THEN
+                  InternetOrder."Ship-to City" := Reader.ReadString
+                ELSE
+                  InternetOrder."Bill-to City" := Reader.ReadString;
+              END;
+            'postal-code':
+              BEGIN
+                IF Shipping = TRUE THEN
+                  InternetOrder."Ship-to Post Code" := Reader.ReadString
+                ELSE
+                  InternetOrder."Bill-to Post Code" := Reader.ReadString;
+              END;
+            'state-code':
+              BEGIN
+                IF Shipping = TRUE THEN
+                  InternetOrder."Ship-to State" := Reader.ReadString
+                ELSE
+                  InternetOrder."Bill-to State" := Reader.ReadString;
+              END;
+            'country-code':
+              BEGIN
+                IF Shipping = TRUE THEN
+                  InternetOrder."Ship-to Country Code" := Reader.ReadString
+                ELSE
+                  InternetOrder."Bill-to Country Code" := Reader.ReadString;
+              END;
+            'phone':
+              BEGIN
+                IF Shipping = TRUE THEN
+                  InternetOrder."Ship-to Phone No." := Reader.ReadString
+                ELSE
+                  InternetOrder."Phone No." := Reader.ReadString;
+              END;
+            'product-lineitem','shipping-lineitem','giftcertificate-lineitem':
+              BEGIN
+                InternetOrderLine.INIT;
+                InternetOrderLine."Order Line Guid" := CREATEGUID;
+                SalesLineNo := SalesLineNo + 10000;
+                InternetOrderLine."Line No." := SalesLineNo;
+                InternetOrderLine."Order Guid" := InternetOrder."Order Guid";
+                InternetOrderLine."Internet Order Reference" := InternetOrder."Internet Order Reference";
+                IF Reader.Name = 'product-lineitem' THEN BEGIN
+                  InternetOrderLine."Line Type" := InternetOrderLine."Line Type"::Item;
+                END ELSE IF Reader.Name = 'shipping-lineitem' THEN BEGIN
+                  InternetOrderLine."Line Type" := InternetOrderLine."Line Type"::Shipping;
+                  InternetOrderLine.Quantity := 1;
+                END ELSE IF Reader.Name = 'giftcertificate-lineitem' THEN BEGIN
+                  InternetOrderLine."Line Type" := InternetOrderLine."Line Type"::Gift;
+                  InternetOrderLine.VALIDATE(Type,InternetOrderLine.Type::"G/L Account");
+                  InternetOrderLine.VALIDATE("No.",SalesSetup."Gift Certificate G/L Account");
+                  InternetOrderLine.Quantity := 1;
+                  InternetOrderLine.Validated := TRUE;
+                END;
+                //MESSAGE(Reader.Name);
+                InternetOrderLine.Status := InternetOrder.Status; //DOC IN43255 NC 31/08/17 -+
+                InternetOrderLine.INSERT;
+                Reader2 := Reader.ReadSubtree;
+                WHILE Reader2.Read DO BEGIN
+                  IF Reader2.IsStartElement THEN BEGIN
+                    CASE Reader2.Name OF
+                      'net-price':
+                        BEGIN
+                          EVALUATE(InternetOrderLine.Amount,Reader2.ReadString);
+                        //DOC OP11536 RK 30/08/17 -
+                          //InternetOrderLine."Duty Amount" := 0;
+                          InternetOrderLine."Amount Including Tax" := InternetOrderLine.Amount;
+                        //DOC OP11536 RK 30/08/17 +
+                        END;
+                    //DOC OP11536 RK 30/08/17 -
+                    {
+                      'gross-price':
+                        BEGIN
+                          EVALUATE(InternetOrderLine."Amount Including Tax",Reader2.ReadString);
+                        //DOC OP11536 RK 30/08/17 -
+                          //InternetOrderLine."Total Duty Amount" := InternetOrderLine."Amount Including Tax" - InternetOrderLine.Amount;
+                        //DOC OP11536 RK 30/08/17 +
+                          InternetOrderLine."Amount Including Tax" := InternetOrderLine.Amount;
+                        END;
+                    }
+                    //DOC OP11536 RK 30/08/17 +
+                      'lineitem-text':
+                        BEGIN
+                          LongDesc := Reader2.ReadString;
+                          IF STRLEN(LongDesc) > 50 THEN BEGIN
+                            InternetOrderLine.Description := COPYSTR(LongDesc,1,50);
+                            InternetOrderLine."Description 2" := COPYSTR(LongDesc,51);
+                          END ELSE BEGIN
+                            InternetOrderLine.Description := LongDesc;
+                            InternetOrderLine."Description 2" := '';
+                          END;
+                        END;
+                      'product-id':
+                        BEGIN
+                          ProductID := Reader2.ReadString;
+                          InternetOrderLine."Line ID" := ProductID;
+                          InternetOrderLine.VALIDATE(Type,InternetOrderLine.Type::Item);
+                          IF STRPOS(ProductID,'-') > 0 THEN BEGIN
+                            InternetOrderLine.VALIDATE("No.",UPPERCASE(DELCHR(COPYSTR(ProductID,1,STRPOS(ProductID,'-') - 1))));
+                            InternetOrderLine.VALIDATE("Variant Code",UPPERCASE(DELCHR(COPYSTR(ProductID,STRPOS(ProductID,'-') + 1))));
+                          END ELSE BEGIN
+                            InternetOrderLine.VALIDATE("No.",UPPERCASE(DELCHR(ProductID)));
+                          END;
+                        END;
+                      'quantity':
+                        BEGIN
+                          EVALUATE(InternetOrderLine.Quantity,Reader2.ReadString);
+                          QtyUOMText := Reader2.GetAttribute('unit');
+                          IF DELCHR(QtyUOMText) = '' THEN
+                            QtyUOMText := '1';
+                          EVALUATE(InternetOrderLine."Qty. Per UOM",QtyUOMText);
+                        END;
+                      'shipment-id':
+                        BEGIN
+                          InternetOrderLine."Shipment ID" := Reader2.ReadString;
+                          InternetOrderLine."Unit Price" := ROUND(InternetOrderLine.Amount / InternetOrderLine.Quantity);
+                          InternetOrderLine."Unit Price Including Tax" := InternetOrderLine."Unit Price";
+                          InternetOrderLine."Duty Amount" := ROUND(InternetOrderLine."Total Duty Amount" / InternetOrderLine.Quantity);
+                        //DOC OP11536 RK 30/08/17 -
+                          InternetOrderLine."Product Tax Amount" := ROUND(InternetOrderLine."Total Product Tax" / InternetOrderLine.Quantity);
+                        //DOC OP11536 RK 30/08/17 +
+                          InternetOrderLine.MODIFY;
+                        END;
+                      'item-id':
+                        BEGIN
+                          InternetOrderLine."Line ID" := Reader2.ReadString;
+                          InternetOrderLine.VALIDATE(Type,InternetOrderLine.Type::"G/L Account");
+                        END;
+                      'gift':
+                        BEGIN
+                          giftVar := Reader2.ReadString;
+                          IF giftVar = 'true' THEN
+                            InternetOrderLine.Gift := TRUE
+                          ELSE
+                            InternetOrderLine.Gift := FALSE;
+                          InternetOrderLine.MODIFY;
+                        END;
+                      'message','gift-message':
+                        BEGIN
+                          InternetOrderLine."Gift Message" := COPYSTR(Reader2.ReadString,1,250);
+                          InternetOrderLine.MODIFY;
+                        END;
+                      'tax-rate':
+                        IF InternetOrderLine.MODIFY THEN;
+                      //Doc OP10888 GT 30.05.17 -
+                      'custom-attribute': BEGIN
+                        CustAttrID := Reader2.GetAttribute('attribute-id');
+                        CASE UPPERCASE(CustAttrID) OF
+                          'DEFAULTNAME': BEGIN
+                            LongDesc := Reader2.ReadString;
+                            IF STRLEN(LongDesc) > 50 THEN BEGIN
+                              InternetOrderLine.Description := COPYSTR(LongDesc,1,50);
+                              InternetOrderLine."Description 2" := COPYSTR(LongDesc,51);
+                            END ELSE BEGIN
+                              InternetOrderLine.Description := LongDesc;
+                              InternetOrderLine."Description 2" := '';
+                            END;
+                            InternetOrderLine.MODIFY;
+                          END;
+                        //DOC OP11536 RK 30/08/17 -
+                          'CUSTOMPRODUCTTAX':
+                            BEGIN
+                              EVALUATE(InternetOrderLine."Total Product Tax",Reader2.ReadString);
+                              IF InternetOrderLine.Quantity <> 0 THEN
+                                InternetOrderLine."Product Tax Amount" := ROUND(InternetOrderLine."Total Product Tax" / InternetOrderLine.Quantity);
+                              InternetOrderLine.MODIFY;
+                            END;
+                          'CUSTOMPRODUCTDUTY':
+                            BEGIN
+                              EVALUATE(InternetOrderLine."Total Duty Amount",Reader2.ReadString);
+                              IF InternetOrderLine.Quantity <> 0 THEN
+                                InternetOrderLine."Duty Amount" := ROUND(InternetOrderLine."Total Duty Amount" / InternetOrderLine.Quantity);
+                              InternetOrderLine.MODIFY;
+                            END;
+                        //DOC OP11536 RK 30/08/17 +
+                        END;
+                      END;
+                      //Doc OP10888 GT 30.05.17 +
+
+
+                      'price-adjustment':
+                        BEGIN
+                          PriceAdjOrderLine.INIT;
+                          PriceAdjOrderLine."Order Line Guid" := CREATEGUID;
+                          SalesLineNo := SalesLineNo + 10000;
+                          PriceAdjOrderLine."Line No." := SalesLineNo;
+                          PriceAdjOrderLine."Order Guid" := InternetOrder."Order Guid";
+                          PriceAdjOrderLine."Internet Order Reference" := InternetOrder."Internet Order Reference";
+                          PriceAdjOrderLine."Line Type" := PriceAdjOrderLine."Line Type"::Promotion;
+                          PriceAdjOrderLine.Quantity := 1;
+                          PriceAdjOrderLine."Parent Line No." := InternetOrderLine."Line No.";
+                          PriceAdjOrderLine.INSERT;
+                          Reader3 := Reader2.ReadSubtree;
+                          WHILE Reader3.Read DO BEGIN
+                            IF Reader3.IsStartElement THEN BEGIN
+                              CASE Reader3.Name OF
+                                'net-price':
+                                  BEGIN
+                                    EVALUATE(PriceAdjOrderLine.Amount,Reader3.ReadString);
+                                  //DOC OP11536 RK 30/08/17 -
+                                    //PriceAdjOrderLine."Duty Amount" := 0;
+                                    PriceAdjOrderLine."Amount Including Tax" := PriceAdjOrderLine.Amount;
+                                  //DOC OP11536 RK 30/08/17 +
+                                  END;
+                                //DOC OP11536 RK 30/08/17 -
+                                {
+                                'gross-price':
+                                  BEGIN
+                                    EVALUATE(PriceAdjOrderLine."Amount Including Tax",Reader3.ReadString);
+                                    PriceAdjOrderLine."Total Duty Amount" := PriceAdjOrderLine."Amount Including Tax" - PriceAdjOrderLine.Amount;
+                                    PriceAdjOrderLine."Amount Including Tax" := PriceAdjOrderLine.Amount;
+                                  END;
+                                }
+                              //DOC OP11536 RK 30/08/17 -
+                                'custom-attribute':
+                                  BEGIN
+                                    CustAttrID := Reader3.GetAttribute('attribute-id');
+                                    CASE UPPERCASE(CustAttrID) OF
+                                      'CUSTOMPRODUCTTAX':
+                                        BEGIN
+                                          EVALUATE(PriceAdjOrderLine."Total Product Tax",Reader3.ReadString);
+                                          IF PriceAdjOrderLine.Quantity <> 0 THEN
+                                            PriceAdjOrderLine."Product Tax Amount" := ROUND(PriceAdjOrderLine."Total Product Tax" / PriceAdjOrderLine.Quantity);
+                                          PriceAdjOrderLine.MODIFY;
+                                        END;
+                                      'CUSTOMPRODUCTDUTY':
+                                        BEGIN
+                                          EVALUATE(PriceAdjOrderLine."Total Duty Amount",Reader3.ReadString);
+                                          IF PriceAdjOrderLine.Quantity <> 0 THEN
+                                            PriceAdjOrderLine."Duty Amount" := ROUND(PriceAdjOrderLine."Total Duty Amount" / PriceAdjOrderLine.Quantity);
+                                          PriceAdjOrderLine.MODIFY;
+                                        END;
+                                    END;
+                                  END;
+                              //DOC OP11536 RK 30/08/17 +
+                                'lineitem-text':
+                                  BEGIN
+                                    LongDesc := Reader3.ReadString;
+                                    IF STRLEN(LongDesc) > 50 THEN BEGIN
+                                      PriceAdjOrderLine.Description := COPYSTR(LongDesc,1,50);
+                                      PriceAdjOrderLine."Description 2" := COPYSTR(LongDesc,51);
+                                    END ELSE BEGIN
+                                      PriceAdjOrderLine.Description := LongDesc;
+                                      PriceAdjOrderLine."Description 2" := '';
+                                    END;
+                                  END;
+                                'promotion-id':
+                                  BEGIN
+                                    PromoID := Reader3.ReadString;
+                                    PriceAdjOrderLine."Line ID" := UPPERCASE(DELCHR(PromoID));
+                                    PriceAdjOrderLine."Unit Price" := ROUND(PriceAdjOrderLine.Amount / PriceAdjOrderLine.Quantity);
+                                    PriceAdjOrderLine."Unit Price Including Tax" := PriceAdjOrderLine."Unit Price";
+                                    PriceAdjOrderLine."Duty Amount" := ROUND(PriceAdjOrderLine."Total Duty Amount" / PriceAdjOrderLine.Quantity);
+                                  //DOC OP11536 RK 30/08/17 -
+                                    PriceAdjOrderLine."Product Tax Amount" := ROUND(PriceAdjOrderLine."Total Product Tax" / PriceAdjOrderLine.Quantity);
+                                  //DOC OP11536 RK 30/08/17 +
+                                    PriceAdjOrderLine.MODIFY;
+                                  END;
+                                'coupon-id':
+                                  BEGIN
+                                    PriceAdjOrderLine."Coupon Code" := Reader3.ReadString;
+                                    PriceAdjOrderLine.MODIFY;
+                                  END;
+                                'campaign-id':
+                                  BEGIN
+                                    PriceAdjOrderLine.Campaign := Reader3.ReadString;
+                                    PriceAdjOrderLine.MODIFY;
+                                  END;
+                              END;
+                            END;
+                          END;
+                          Reader3.Close;
+                          CLEAR(Reader3);
+                        END;
+                    END;
+                  END;
+                END;
+                Reader2.Close;
+                CLEAR(Reader2);
+              END;
+            'price-adjustment':
+              BEGIN
+                PriceAdjOrderLine.INIT;
+                PriceAdjOrderLine."Order Line Guid" := CREATEGUID;
+                SalesLineNo := SalesLineNo + 10000;
+                PriceAdjOrderLine."Line No." := SalesLineNo;
+                PriceAdjOrderLine."Order Guid" := InternetOrder."Order Guid";
+                PriceAdjOrderLine."Internet Order Reference" := InternetOrder."Internet Order Reference";
+                PriceAdjOrderLine."Line Type" := PriceAdjOrderLine."Line Type"::Promotion;
+                PriceAdjOrderLine.Quantity := 1;
+                PriceAdjOrderLine."Parent Line No." := 0;
+                PriceAdjOrderLine.INSERT;
+                Reader3 := Reader.ReadSubtree;
+                WHILE Reader3.Read DO BEGIN
+                  IF Reader3.IsStartElement THEN BEGIN
+                    CASE Reader3.Name OF
+                      'net-price':
+                        BEGIN
+                          EVALUATE(PriceAdjOrderLine.Amount,Reader3.ReadString);
+                        //DOC OP11536 RK 30/08/17 -
+                          //PriceAdjOrderLine."Duty Amount" := 0;
+                          PriceAdjOrderLine."Amount Including Tax" := PriceAdjOrderLine.Amount;
+                        //DOC OP11536 RK 30/08/17 +
+                        END;
+                      //DOC OP11536 RK 30/08/17 -
+                      {
+                      'gross-price':
+                        BEGIN
+                          EVALUATE(PriceAdjOrderLine."Amount Including Tax",Reader3.ReadString);
+                          PriceAdjOrderLine."Total Duty Amount" := PriceAdjOrderLine."Amount Including Tax" - PriceAdjOrderLine.Amount;
+                          PriceAdjOrderLine."Amount Including Tax" := PriceAdjOrderLine.Amount;
+                        END;
+                      }
+                      //DOC OP11536 RK 30/08/17 +
+                    //DOC OP11536 RK 30/08/17 -
+                      'custom-attribute':
+                        BEGIN
+                          CustAttrID := Reader3.GetAttribute('attribute-id');
+                          CASE UPPERCASE(CustAttrID) OF
+                            'CUSTOMPRODUCTTAX':
+                              BEGIN
+                                EVALUATE(PriceAdjOrderLine."Total Product Tax",Reader3.ReadString);
+                                IF PriceAdjOrderLine.Quantity <> 0 THEN
+                                  PriceAdjOrderLine."Product Tax Amount" := ROUND(PriceAdjOrderLine."Total Product Tax" / PriceAdjOrderLine.Quantity);
+                                PriceAdjOrderLine.MODIFY;
+                              END;
+                            'CUSTOMPRODUCTDUTY':
+                              BEGIN
+                                EVALUATE(PriceAdjOrderLine."Total Duty Amount",Reader3.ReadString);
+                                IF PriceAdjOrderLine.Quantity <> 0 THEN
+                                  PriceAdjOrderLine."Duty Amount" := ROUND(PriceAdjOrderLine."Total Duty Amount" / PriceAdjOrderLine.Quantity);
+                                PriceAdjOrderLine.MODIFY;
+                              END;
+                          END;
+                        END;
+                    //DOC OP11536 RK 30/08/17 +
+                      'lineitem-text':
+                        BEGIN
+                          LongDesc := Reader3.ReadString;
+                          IF STRLEN(LongDesc) > 50 THEN BEGIN
+                            PriceAdjOrderLine.Description := COPYSTR(LongDesc,1,50);
+                            PriceAdjOrderLine."Description 2" := COPYSTR(LongDesc,51);
+                          END ELSE BEGIN
+                            PriceAdjOrderLine.Description := LongDesc;
+                            PriceAdjOrderLine."Description 2" := '';
+                          END;
+                        END;
+                      'promotion-id':
+                        BEGIN
+                          PromoID := Reader3.ReadString;
+                          PriceAdjOrderLine."Line ID" := UPPERCASE(DELCHR(PromoID));
+                          PriceAdjOrderLine."Unit Price" := ROUND(PriceAdjOrderLine.Amount / PriceAdjOrderLine.Quantity);
+                          PriceAdjOrderLine."Unit Price Including Tax" := PriceAdjOrderLine."Unit Price";
+                          PriceAdjOrderLine."Duty Amount" := ROUND(PriceAdjOrderLine."Total Duty Amount" / PriceAdjOrderLine.Quantity);
+                        //DOC OP11536 RK 30/08/17 -
+                          PriceAdjOrderLine."Product Tax Amount" := ROUND(PriceAdjOrderLine."Total Product Tax" / PriceAdjOrderLine.Quantity);
+                        //DOC OP11536 RK 30/08/17 +
+                          PriceAdjOrderLine.MODIFY;
+                        END;
+                      'coupon-id':
+                        BEGIN
+                          PriceAdjOrderLine."Coupon Code" := Reader3.ReadString;
+                          PriceAdjOrderLine.MODIFY;
+                        END;
+                      'campaign-id':
+                        BEGIN
+                          PriceAdjOrderLine.Campaign := Reader3.ReadString;
+                          PriceAdjOrderLine.MODIFY;
+                        END;
+                    END;
+                  END;
+                END;
+                Reader3.Close;
+                CLEAR(Reader3);
+              END;
+            'gift':
+              BEGIN
+                giftVar := Reader.ReadString;
+                IF giftVar = 'true' THEN
+                  InternetOrder.Gift := TRUE
+                ELSE
+                  InternetOrder.Gift := FALSE;
+                InternetOrder.MODIFY;
+              END;
+            'gift-message':
+              BEGIN
+                InternetOrder."Gift Message" := COPYSTR(Reader.ReadString,1,250);
+                InternetOrder.MODIFY;
+              END;
+            'order-total':
+              BEGIN
+                Reader2 := Reader.ReadSubtree;
+                WHILE Reader2.Read DO BEGIN
+                  IF Reader2.IsStartElement THEN BEGIN
+                    CASE Reader2.Name OF
+                      'net-price':
+                          EVALUATE(InternetOrder.Amount,Reader2.ReadString);
+                      'gross-price':
+                        BEGIN
+                          EVALUATE(InternetOrder."Amount Including Tax",Reader2.ReadString);
+                          InternetOrder."Total Tax Amount" := InternetOrder."Amount Including Tax" - InternetOrder.Amount;
+                          InternetOrder."Amount Including Tax" := InternetOrder.Amount;
+                        //DOC OP9031 RK 07/02/17 -
+                          IF InternetOrder."Currency Code" = '' THEN
+                            InternetOrder."Currency Code" := GLSetup."LCY Code";
+                        //DOC OP9031 RK 07/02/17 +
+                          InternetOrder.MODIFY;
+                        END;
+                    END;
+                  END;
+                END;
+                Reader2.Close;
+                CLEAR(Reader2);
+              END;
+            'payment':
+              BEGIN
+                PayLineNo := PayLineNo + 1;
+                SalesPayment.INIT;
+                SalesPayment."Order Guid" := InternetOrder."Order Guid";
+                SalesPayment."Internet Order No." := InternetOrder."Internet Order Reference";
+                SalesPayment."Currency Code" := InternetOrder."Currency Code";
+                SalesPayment."Line No." := PayLineNo;
+                SalesPayment.Status := SalesPayment.Status::Authorized;
+              //DOC OP11536 RK 03/10/17 -
+                SalesPayment."Payment Type" := SalesPayment."Payment Type"::COD;
+              //DOC OP11536 RK 03/10/17 +
+                SalesPayment.INSERT;
+                Reader2 := Reader.ReadSubtree;
+                WHILE Reader2.Read DO BEGIN
+                  IF Reader2.IsStartElement THEN BEGIN
+                    CASE Reader2.Name OF
+                      'credit-card':
+                          SalesPayment."Payment Type" := SalesPayment."Payment Type"::CreditCard;
+                      'gift-certificate':
+                        BEGIN
+                          SalesPayment."Payment Type" := SalesPayment."Payment Type"::"Gift Voucher";
+                          SalesPayment.Status := SalesPayment.Status::Captured;
+                        END;
+                      'method-name':
+                        BEGIN
+                          PayMethodName := Reader2.ReadString;
+                          IF PayMethodName = 'PayPal' THEN
+                            SalesPayment."Payment Type" := SalesPayment."Payment Type"::PayPal
+                        //DOC OP11536 RK 03/10/17 -
+                          ELSE IF PayMethodName = 'DW_COD' THEN
+                            SalesPayment."Payment Type" := SalesPayment."Payment Type"::COD;
+                        //DOC OP11536 RK 03/10/17 +
+                        END;
+                      'transaction-id':
+                        BEGIN
+                          SalesPayment."Transaction ID" := Reader2.ReadString;
+                          SalesPayment.MODIFY;
+                        END;
+                      'amount':
+                        BEGIN
+                          EVALUATE(SalesPayment.Amount,Reader2.ReadString);
+                          SalesPayment."Capture Amount" := SalesPayment.Amount;
+                          SalesPayment.MODIFY;
+                        END;
+                      'MerchantReferenceCode':
+                        BEGIN
+                          SalesPayment.MerchantReferenceCode := Reader2.ReadString;
+                          SalesPayment.MODIFY;
+                        END;
+                      'card-type':
+                        BEGIN
+                          SalesPayment."Card Type" := Reader2.ReadString;
+                          SalesPayment.MODIFY;
+                        END;
+                      'custom-attribute':
+                        BEGIN
+                          CustAttrID := Reader2.GetAttribute('attribute-id');
+                          CASE CustAttrID OF
+                            'requestId':
+                              BEGIN
+                                SalesPayment."Request ID" := Reader2.ReadString;
+                                SalesPayment.MODIFY;
+                              END;
+                            'requestToken':
+                              BEGIN
+                                SalesPayment."Request Token" := Reader2.ReadString;
+                                SalesPayment.MODIFY;
+                              END;
+                          END;
+                        END;
+                    END;
+                  END;
+                END;
+                Reader2.Close;
+                CLEAR(Reader2);
+              END;
+      {      'credit-card':
+              BEGIN
+                PayLineNo := PayLineNo + 1;
+                SalesPayment.INIT;
+                SalesPayment."Order Guid" := InternetOrder."Order Guid";
+                SalesPayment."Internet Order No." := InternetOrder."Internet Order Reference";
+                SalesPayment."Line No." := PayLineNo;
+                SalesPayment."Payment Type" := SalesPayment."Payment Type"::CreditCard;
+                SalesPayment.INSERT;
+              END;}
+          END;
+        //DOC IN37341 HR 06/04/2017 -
+        END ELSE BEGIN //IF NOT START ELEMENT
+          IF Reader.Name = 'shipment' THEN
+            SkipElement := FALSE;
+        //DOC IN37341 HR 06/04/2017 +
+        END;
+      END;
+      Reader.Close;
+      CLEAR(Reader);
+    END;
+
+    PROCEDURE ValidateOrder@1000000003(lGuid@1000000000 : GUID) : Boolean;
+    VAR
+      InternetOrder@1000000002 : Record 9021666;
+      InternetOrderLine@1000000001 : Record 9021667;
+      Item@1000000006 : Record 27;
+      ItemVariant@1000000005 : Record 5401;
+      ShipmentMethod@1000000004 : Record 10;
+      SalesPromotion@1000000003 : Record 50006;
+      IntegrationErrorLog@1000000015 : Record 50011;
+      ErrorHandler@1000000007 : Codeunit 50007;
+      ErrorMessage@1000000009 : Text;
+      ErrorCode@1000000008 : Text;
+      ErrorFound@1000000010 : Boolean;
+      InvalieErrorTxt@1000000011 : TextConst 'ENU=Invalid %1.;ENG=Invalid %1.';
+      LineError@1000000012 : Boolean;
+      ShipmentError1@1000000013 : TextConst 'ENU=No shipment method found with code %1.;ENG=No shipment method found with code %1.';
+      GLerror@1000000014 : TextConst 'ENU=%1 %2 must have G/L Account No. setup.;ENG=%1 %2 must have G/L Account No. setup.';
+      OrderTotal@1000000016 : Decimal;
+      DutyTotal@1000000017 : Decimal;
+      TotalError@1000000018 : TextConst 'ENU=%1 on header and lines different.;ENG=%1 on header and lines different.';
+      lRecCurrency@1000000019 : Record 4;
+      SalesPayments@1000000020 : Record 50008;
+      PaymentMethod@1000000021 : Record 289;
+      NoPaymentMethodError@1000000022 : TextConst 'ENU=No payment method found with payment type %1 and currency %2.;ENG=No payment method found with payment type %1 and currency %2.';
+      PaymentBalancingAccError@1000000023 : TextConst 'ENU=Payment method %1 must have balancing account setup.;ENG=Payment method %1 must have balancing account setup.';
+    BEGIN
+      ErrorFound := FALSE;
+      InternetOrder.GET(lGuid);
+      ShipmentMethod.RESET;
+      ShipmentMethod.SETRANGE("Ecom Item ID",InternetOrder."Shipment Method");
+      IF NOT ShipmentMethod.FINDFIRST THEN BEGIN
+        ShipmentMethod.SETRANGE(Code,InternetOrder."Shipment Method");
+      END;
+      IntegrationErrorLog.SETRANGE("Source Type",DATABASE::"Internet Order Line");
+      IntegrationErrorLog.SETRANGE("Document No.",InternetOrder."Internet Order Reference");
+      IntegrationErrorLog.DELETEALL;
+      OrderTotal := 0;
+      DutyTotal := 0;
+      InternetOrderLine.SETRANGE("Order Guid",lGuid);
+      //InternetOrderLine.SETRANGE(Validated,FALSE);
+      IF InternetOrderLine.FINDFIRST THEN
+        REPEAT
+          OrderTotal := OrderTotal + InternetOrderLine.Amount;
+        //DOC OP11536 RK 30/08/17 -
+          //DutyTotal := DutyTotal + InternetOrderLine."Total Duty Amount";
+          DutyTotal := DutyTotal + InternetOrderLine."Total Duty Amount" + InternetOrderLine."Total Product Tax";
+        //DOC OP11536 RK 30/08/17 +
+          LineError := FALSE;
+          CASE InternetOrderLine."Line Type" OF
+            InternetOrderLine."Line Type"::Item:
+              BEGIN
+                IF NOT ErrorHandler.ItemExists(InternetOrderLine."No.",ErrorMessage,ErrorCode) THEN BEGIN
+                  LogError(InternetOrder."Internet Order Reference",InternetOrderLine."Line No.",ErrorMessage,STRSUBSTNO(ERRLOCATION,'ValidateData'),ErrorCode,InternetOrder."File Name");
+                  ErrorFound := TRUE;
+                  LineError := TRUE;
+                END;
+                IF InternetOrderLine."Variant Code" <> '' THEN BEGIN
+                  IF NOT ItemVariant.GET(InternetOrderLine."No.",InternetOrderLine."Variant Code") THEN BEGIN
+                    LogError(InternetOrder."Internet Order Reference",InternetOrderLine."Line No.",STRSUBSTNO(InvalieErrorTxt,'Item Variant'),STRSUBSTNO(ERRLOCATION,'ValidateData'),'1001',InternetOrder."File Name");
+                    ErrorFound := TRUE;
+                    LineError := TRUE;
+                  END;
+                END;
+                IF LineError = FALSE THEN BEGIN
+                  UpdateLine(lGuid,InternetOrderLine."Line No.",TRUE,'');
+                END;
+              END;
+            InternetOrderLine."Line Type"::Shipping:
+              BEGIN
+                //ShipmentMethod.SETRANGE("Ecom Item ID",InternetOrderLine."Line ID");
+                IF NOT ShipmentMethod.FINDFIRST THEN BEGIN
+                  LogError(InternetOrder."Internet Order Reference",InternetOrderLine."Line No.",STRSUBSTNO(ShipmentError1,InternetOrder."Shipment Method"),STRSUBSTNO(ERRLOCATION,'ValidateData'),'',InternetOrder."File Name");
+                  ErrorFound := TRUE;
+                  LineError := TRUE
+                END ELSE BEGIN
+                  IF ShipmentMethod."G/L Account No." = '' THEN BEGIN
+                    LogError(InternetOrder."Internet Order Reference",InternetOrderLine."Line No.",STRSUBSTNO(GLerror,'Shipment method',ShipmentMethod.Code),STRSUBSTNO(ERRLOCATION,'ValidateData'),'',InternetOrder."File Name");
+                    ErrorFound := TRUE;
+                    LineError := TRUE;
+                  END ELSE BEGIN
+                    UpdateLine(lGuid,InternetOrderLine."Line No.",TRUE,ShipmentMethod."G/L Account No.");
+                  END;
+                END;
+              END;
+            InternetOrderLine."Line Type"::Promotion:
+              BEGIN
+                SalesPromotion.RESET;
+                SalesPromotion.SETRANGE("Promotion ID",UPPERCASE(InternetOrderLine."Line ID"));
+                IF NOT SalesPromotion.FINDFIRST THEN BEGIN
+                  SalesPromotion.INIT;
+                  SalesPromotion."Promotion ID" := UPPERCASE(InternetOrderLine."Line ID");
+                  SalesPromotion.Description := InternetOrderLine."Line ID";
+                  SalesPromotion.INSERT;
+                END;
+                IF SalesPromotion."G/L Account No." = '' THEN BEGIN
+                    LogError(InternetOrder."Internet Order Reference",InternetOrderLine."Line No.",STRSUBSTNO(GLerror,'Sales Promotion',SalesPromotion."Promotion ID"),STRSUBSTNO(ERRLOCATION,'ValidateData'),'',InternetOrder."File Name");
+                    ErrorFound := TRUE;
+                    LineError := TRUE;
+                END ELSE BEGIN
+                  UpdateLine(lGuid,InternetOrderLine."Line No.",TRUE,SalesPromotion."G/L Account No.");
+                END;
+              END;
+          END;
+        UNTIL InternetOrderLine.NEXT = 0;
+      //DOC OP11536 RK 04/09/17 -
+      //IF DutyTotal <> InternetOrder."Total Tax Amount" THEN BEGIN
+      IF ABS(DutyTotal - InternetOrder."Total Tax Amount") > 0.1 THEN BEGIN
+      //DOC OP11536 RK 04/09/17 +
+      //DOC OP11536 RK 30/08/17 -
+        //LogError(InternetOrder."Internet Order Reference",0,STRSUBSTNO(TotalError,'Duty Amount'),STRSUBSTNO(ERRLOCATION,'ValidateData'),'',InternetOrder."File Name");
+        LogError(InternetOrder."Internet Order Reference",0,STRSUBSTNO(TotalError,'Tax Amount'),STRSUBSTNO(ERRLOCATION,'ValidateData'),'',InternetOrder."File Name");
+      //DOC OP11536 RK 30/08/17 +
+        ErrorFound := TRUE;
+      END;
+      IF OrderTotal <> InternetOrder.Amount THEN BEGIN
+        LogError(InternetOrder."Internet Order Reference",0,STRSUBSTNO(TotalError,'Amount'),STRSUBSTNO(ERRLOCATION,'ValidateData'),'',InternetOrder."File Name");
+        ErrorFound := TRUE;
+      END;
+      //DOC OP9031 RK 07/02/17 -
+      IF InternetOrder."Currency Code" <> GLSetup."LCY Code" THEN BEGIN
+        lRecCurrency.SETRANGE(Code,InternetOrder."Currency Code");
+        IF NOT lRecCurrency.FINDFIRST THEN BEGIN
+          LogError(InternetOrder."Internet Order Reference",0,STRSUBSTNO(InvalieErrorTxt,'Currency ' + InternetOrder."Currency Code"),STRSUBSTNO(ERRLOCATION,'ValidateData'),'',InternetOrder."File Name");
+          ErrorFound := TRUE;
+        END;
+      END;
+      SalesPayments.SETRANGE("Order Guid",lGuid);
+      IF SalesPayments.FINDFIRST THEN
+        REPEAT
+          CASE SalesPayments."Payment Type" OF
+            SalesPayments."Payment Type"::CreditCard:
+              PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::CreditCard);
+            SalesPayments."Payment Type"::"Gift Voucher":
+              PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::"Gift Voucher");
+            SalesPayments."Payment Type"::PayPal:
+              PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::PayPal);
+          //DOC OP11536 RK 03/10/17 -
+            SalesPayments."Payment Type"::COD:
+              PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::COD);
+          //DOC OP11536 RK 03/10/17 +
+          END;
+          IF InternetOrder."Currency Code" = GLSetup."LCY Code" THEN
+            PaymentMethod.SETFILTER("Currency Code",'%1|%2','',GLSetup."LCY Code")
+          ELSE
+            PaymentMethod.SETRANGE("Currency Code",InternetOrder."Currency Code");
+          IF NOT PaymentMethod.FINDFIRST THEN BEGIN
+            ErrorFound := TRUE;
+            LogError(InternetOrder."Internet Order Reference",0,STRSUBSTNO(NoPaymentMethodError,FORMAT(SalesPayments."Payment Type"),InternetOrder."Currency Code"),STRSUBSTNO(ERRLOCATION,'ValidateData'),'',InternetOrder."File Name");
+          END ELSE BEGIN
+          //DOC OP11536 RK 03/10/17 -
+            //IF PaymentMethod."Bal. Account No." = '' THEN BEGIN
+            IF (PaymentMethod."Bal. Account No." = '') AND (PaymentMethod."Payment Type" <> PaymentMethod."Payment Type"::COD) THEN BEGIN
+          //DOC OP11536 RK 03/10/17 +
+              ErrorFound := TRUE;
+              LogError(InternetOrder."Internet Order Reference",0,STRSUBSTNO(PaymentBalancingAccError,PaymentMethod.Code),STRSUBSTNO(ERRLOCATION,'ValidateData'),'',InternetOrder."File Name");
+            END;
+          END;
+        UNTIL SalesPayments.NEXT = 0;
+      //DOC OP9031 RK 07/02/17 +
+      IF ErrorFound THEN
+        EXIT(FALSE)
+      ELSE
+        EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE LogError@1000000015(OrderRef@1000000001 : Code[20];LineNo@1000000006 : Integer;ErrMessage@1000000002 : Text;ErrorLocation@1000000004 : Text;ErrCode@1000000005 : Text;pFileName@1000000007 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+    BEGIN
+      //This function facilitates the logging of an error in the error log table by deriving the default values
+      //and applying the variable values
+      ErrorHandler.LogError(ModistSetup."Demandware Integration Type",
+                            ModistSetup."Demandware Order Import Group",
+                            '',
+                            DATABASE::"Internet Order Line",
+                            OrderRef,
+                            LineNo,
+                            ErrMessage,
+                            ErrorLocation,
+                            0,
+                            ErrCode,pFileName);
+    END;
+
+    LOCAL PROCEDURE UpdateLine@1000000004(pOrderGuid@1000000000 : GUID;pLineNo@1000000001 : Integer;pValid@1000000002 : Boolean;pNo@1000000003 : Code[20]);
+    VAR
+      InternetOrderLine@1000000004 : Record 9021667;
+      ItemVariant@1000000005 : Record 5401;
+    BEGIN
+      InternetOrderLine.SETRANGE("Order Guid",pOrderGuid);
+      InternetOrderLine.SETRANGE("Line No.",pLineNo);
+      InternetOrderLine.FINDFIRST;
+      IF pValid THEN
+        InternetOrderLine.Validated := TRUE;
+      IF pNo <> '' THEN BEGIN
+        InternetOrderLine.VALIDATE(Type,InternetOrderLine.Type::"G/L Account");
+        InternetOrderLine.VALIDATE("No.",pNo);
+      END;
+      //DOC OP9031 RK 02/02/17 -
+      IF (InternetOrderLine.Type = InternetOrderLine.Type::Item) AND (InternetOrderLine."No." <> '') AND (InternetOrderLine."Variant Code" = '') THEN BEGIN
+        ItemVariant.SETRANGE("Item No.",InternetOrderLine."No.");
+        IF ItemVariant.COUNT = 1 THEN BEGIN
+          ItemVariant.FINDFIRST;
+          InternetOrderLine."Variant Code" := ItemVariant.Code;
+        END;
+      END;
+      //DOC OP9031 RK 02/02/17 +
+      InternetOrderLine.MODIFY;
+    END;
+
+    BEGIN
+    {
+      //DOC OP9031 RK 18/01/2017 - Check that payment method exists with payment type (paypal,cc and gift voucher).
+      //DOC OP9031 RK 25/01/17 - Move file at end of processing to avoid file in both archive and working.
+      //DOC OP9031 RK 02/02/17 - Populate variant code if only one variant exists.
+      //DOC OP9031 RK 03/02/17 - Use description 2 to catch description longer than 50 char.
+      //DOC OP9031 RK 07/02/17 - Send discounted prices (after promotion) to GAC.
+      //DOC OP9031 RK 07/02/17 - Use paymetn method by currency.
+      //DOC OP9031 RK 09/02/17 - Store bronto order id.
+      //DOC OP9031 RK 20/02/17 - Use first name and last name instead of customer name.
+      //DOC OP9031 RK 27/02/17 - Take care of price adjustment in middle of shipping line.
+      //DOC OP9031 RK 07/03/17 - Cancelled order should be imported as rejected.
+      //DOC OP9031 LF 08/03/2017 - changed truncation of field "Gift Message" to 250 characters to reflect increase in field size
+      //DOC IN37341 HR 06/04/2017 - Skip import of shipments without shipment-method
+      //Doc OP10888 GT 30.05.17 - Added Code to populate Line Description with Custom Attribute if it exists.
+      //DOC OP10987 TM 16/06/17 - Add code to populate "Customer Locale" from the XML into the Internet Order Header
+      //DOC OP10933 CB 19/06/2017 - Error handling to send emails with autonav
+      //DOC IN41925 EI 25/07/2017 - added the condition to avoid duplicate orders to be created
+      //DOC IN41925 EI 26/07/2017 - added the FTP Integration Log
+      //DOC OP11536 RK 30/08/17 - Use new fields for tax and duty and comment out use of netprice and grossprice to find duty.
+      //DOC OP11536 RK 31/08/17 - Store package type on order header.
+      //DOC IN43255 NC 31/08/17 - Fix to set the internet order lines with the same status as the header.
+      //DOC OP11536 RK 04/09/17 - Allow difference of 1P on header and line duty total.
+      //DOC OP11536 RK 07/09/17 - Use custom attribute for packaging option.
+      //DOC OP11536 RK 03/10/17 - Take care of COD payments in payment section.
+    }
+    END.
+  }
+}
+

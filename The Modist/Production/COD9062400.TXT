@@ -1,0 +1,1053 @@
+OBJECT Codeunit 9062400 Ask nOra - Conversation Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ANSearchMgt@1000000000 : Codeunit 9062405;
+      TNPUtils@1000000001 : Codeunit 9062229;
+      GlobalConvEntry@1000000002 : Record 9062511;
+
+    PROCEDURE ProcessSentence@1000000001(SentenceID@1000000002 : Integer);
+    VAR
+      FunctionProcessing@1000000010 : Codeunit 9062402;
+      Sentence@1000000001 : Record 9062517;
+      Conv@1000000000 : Record 9062522;
+      EndProcessing@1000000004 : Boolean;
+      OutOfFunctions@1000000005 : Boolean;
+      NeededAnswerTo@1000000006 : Integer;
+      ActionProcessing@1000000007 : Codeunit 9062403;
+      ANFunction@1000000008 : Record 9062521;
+      ANFunction2@1000000009 : Record 9062521;
+      eIDontUnderstand@1000000003 : TextConst 'ENU=Sorry, I don''''t understand what you said;ENG=Sorry, I don''''t understand what you said';
+      eIStillDidntUnderstand@1000000011 : TextConst 'ENU=Sorry, I still didn''''t understand what you said, so I asked my friend, they said...;ENG=Sorry, I still didn''''t understand what you said, so I asked my friend, they said...';
+    BEGIN
+      Sentence.GET(SentenceID);
+      Conv.GET(Sentence."Conversation ID");
+
+      Conv.VALIDATE("Last Activity DateTime",CURRENTDATETIME);
+      Conv.VALIDATE("Last Function Success",FALSE);
+
+      Conv.VALIDATE("Curr. Sentence ID",Sentence."Sentence ID");
+      Conv.VALIDATE("Prev. Function",'');
+      Conv.MODIFY(TRUE);
+
+      EndProcessing := FALSE;
+
+      IF NOT EndProcessing THEN BEGIN
+        ANFunction2.SETRANGE("Is Reset Function",TRUE);
+        IF ANFunction2.FINDFIRST THEN BEGIN
+          Conv.VALIDATE("Curr. Function",ANFunction2.Code);
+          FunctionProcessing.RUN(Conv);
+          EndProcessing := Conv."Last Function Success";
+        END;
+      END;
+
+      IF NOT EndProcessing THEN BEGIN
+        IF Conv."Need Answer to Question" <> 0 THEN BEGIN
+          NeededAnswerTo := Conv."Need Answer to Question";
+          EndProcessing := AnswerQuestion(Conv);
+        END;
+      END;
+
+      IF NOT EndProcessing THEN BEGIN
+        IF Conv."Curr. Quest. Instance" <> 0 THEN BEGIN
+          EndProcessing := nOraResponse_Questionnaire_AnswerQuestion(Conv);
+        END;
+      END;
+
+      IF NOT EndProcessing THEN BEGIN
+        REPEAT
+          IF Sentence.GET(SentenceID) THEN Sentence.ClearUsedFlags; // Should this be part of the function code?
+          Conv.VALIDATE("Curr. Function",GetNextFunction(Conv."Prev. Function"));
+
+          OutOfFunctions := Conv."Curr. Function" = '';
+          IF NOT OutOfFunctions THEN BEGIN
+            ANFunction.GET(Conv."Curr. Function");
+            IF NOT ProcessFunction(Conv) THEN EXIT;
+
+            Conv.GET(Sentence."Conversation ID");
+            Conv.VALIDATE("Prev. Function",Conv."Curr. Function");
+
+            Conv.VALIDATE("Curr. Function",'');
+            Conv.MODIFY(TRUE);
+          END;
+        UNTIL OutOfFunctions OR Conv."Last Function Success";
+      END;
+
+      Conv.VALIDATE("Last Function Success",FALSE);
+      Conv.MODIFY(TRUE);
+
+      IF OutOfFunctions THEN BEGIN
+        Conv."Process Sentence Fail Counter" += 1;
+        Conv.MODIFY;
+        CASE Conv."Process Sentence Fail Counter" OF
+          1 : nOraResponse(eIDontUnderstand);
+          ELSE
+            BEGIN
+              nOraResponse(eIStillDidntUnderstand);
+              Conv."Curr. Action" := 'WOLFRAM';
+              Conv.MODIFY;
+              ActionProcessing.RUN(Conv);
+              ResetConversation(Conv);
+            END;
+        END;
+
+      END ELSE BEGIN
+         IF ANFunction."Don't Repeat Function" THEN BEGIN
+           Conv.VALIDATE("Prev. Function",'');
+         END;
+
+        Conv.VALIDATE("Curr. Function",'');
+        Conv.MODIFY(TRUE);
+        ClearCurrValues(Conv);
+        IF (NeededAnswerTo <> 0) AND (Conv."Need Answer to Question" = NeededAnswerTo) THEN BEGIN
+          Conv.VALIDATE("Need Answer to Question",0);
+          Conv.MODIFY(TRUE);
+        END;
+      END;
+    END;
+
+    PROCEDURE ProcessFunction@1000000023(VAR Rec@1000000001 : Record 9062522) OK : Boolean;
+    VAR
+      FunctionProcessing@1000000000 : Codeunit 9062402;
+    BEGIN
+      COMMIT;
+      IF NOT FunctionProcessing.RUN(Rec) THEN BEGIN
+        nOraResponse_Error('Oops ... ' + GETLASTERRORTEXT);
+        EXIT(FALSE);
+      END;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetConversation@1000000003(WithUserId@1000000002 : Code[50];VAR Conversation@1000000001 : Record 9062522) ConvID : Integer;
+    BEGIN
+      //If conversation exists, use that
+      Conversation.SETRANGE(Ended,FALSE);
+      Conversation.SETRANGE("User ID",WithUserId);
+      Conversation.SETRANGE("System Use",FALSE);
+      IF Conversation.FINDLAST THEN EXIT(Conversation.ID);
+
+      //If conversation doesn't exist, create one
+      Conversation.INIT;
+      Conversation.VALIDATE("User ID",WithUserId);
+      Conversation.VALIDATE("Started DateTime",CURRENTDATETIME);
+      Conversation.INSERT(TRUE);
+      EXIT(Conversation.ID);
+    END;
+
+    PROCEDURE GetNextFunction@1000000000(LastFunction@1000000001 : Code[20]) FunctionCode : Code[20];
+    VAR
+      ANFunction2@1000000002 : Record 9062521;
+      ANFunction@1000000000 : Record 9062521;
+    BEGIN
+      ANFunction.SETCURRENTKEY(Priority);
+      ANFunction.SETFILTER(Priority,'<>%1',0);
+      IF LastFunction <> '' THEN BEGIN
+        ANFunction2.GET(LastFunction);
+        ANFunction.SETFILTER(Priority,'>%1',ANFunction2.Priority);
+      END;
+
+      IF ANFunction.FINDFIRST THEN EXIT(ANFunction.Code) ELSE EXIT('');
+    END;
+
+    LOCAL PROCEDURE ClearCurrValues@1000000005(VAR Conv@1000000000 : Record 9062522);
+    BEGIN
+      WITH Conv DO BEGIN
+        VALIDATE("Prev. Function","Curr. Function");
+        VALIDATE("Curr. Function",'');
+
+        VALIDATE("Prev. Action","Curr. Action");
+        VALIDATE("Curr. Action",'');
+
+        VALIDATE("Prev. Table","Curr. Table");
+        VALIDATE("Curr. Table",0);
+
+        VALIDATE("Prev. Field Type","Curr. Field Type");
+        VALIDATE("Curr. Field Type","Curr. Field Type"::Field);
+
+        VALIDATE("Prev. Field","Curr. Field");
+        VALIDATE("Curr. Field",0);
+
+        VALIDATE("Prev. Rec. Position","Curr. Rec. Position");
+        VALIDATE("Curr. Rec. Position",'');
+
+        VALIDATE("Prev. Sentence ID","Curr. Sentence ID");
+        VALIDATE("Curr. Sentence ID",0);
+
+        Conv.MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE AnswerQuestion@1000000022(VAR Rec@1000000000 : Record 9062522) Success : Boolean;
+    VAR
+      SearchMgt@1000000001 : Codeunit 9062405;
+      SearchResultsSummary@1000000002 : Record 9062523;
+      NumResults@1000000003 : Integer;
+      SearchID@1000000004 : Integer;
+      ANQuestion@1000000006 : Record 9062512;
+      Sentence@1000000007 : Record 9062517;
+      ANQuestionChoice@1000000005 : Record 9062513;
+      eCheckingIfAnswer@1000000008 : TextConst 'ENU=I''m just checking if I needed you to answer a question;ENG=I''m just checking if I needed you to answer a question';
+      eIAskedYouAQuestion@1000000009 : TextConst 'ENU=I asked you a question, so I''ll check if you just answered that;ENG=I asked you a question, so I''ll check if you just answered that';
+      eLookingForTextAsAnswer@1000000010 : TextConst 'ENU=I was just looking for any text as answer, so I''m going to use what you just said;ENG=I was just looking for any text as answer, so I''m going to use what you just said';
+      eIGaveYouAListOfOptions@1000000011 : TextConst 'ENU=I gave you a list of options to choose from, so I''m going to check if you picked one;ENG=I gave you a list of options to choose from, so I''m going to check if you picked one';
+      eYouDidntUseOptionNumber@1000000012 : TextConst 'ENU="Looks like you didn''t use the option number; maybe you gave me something from the option desciption?";ENG="Looks like you didn''t use the option number; maybe you gave me something from the option desciption?"';
+      eICouldntMatchToAnOption@1000000013 : TextConst 'ENU=I couldn''t match what you said to an option, so I''m going to assume that you didn''t answer the question;ENG=I couldn''t match what you said to an option, so I''m going to assume that you didn''t answer the question';
+      eMoreThanOneMatchingOption@1000000014 : TextConst 'ENU=I found more than one matching option, I need you to be more specific when answering;ENG=I found more than one matching option, I need you to be more specific when answering';
+      eYouChose@1000000015 : TextConst 'ENU=You chose %1;ENG=You chose %1';
+      eIGotAnAnswer@1000000016 : TextConst 'ENU=I got an answer from you, so I''m going to go back and do whatever we were doing when I asked you the question, using sentence %1;ENG=I got an answer from you, so I''m going to go back and do whatever we were doing when I asked you the question, using sentence %1';
+    BEGIN
+      WITH Rec DO BEGIN
+        nOraResponse_Debug(eCheckingIfAnswer);
+        //Are we looking for the answer to a question?
+        IF NOT ANQuestion.GET("Need Answer to Question") THEN EXIT(FALSE);
+
+        nOraResponse_Debug(eIAskedYouAQuestion);
+        //If the current question is "Free Text", take what the user said and store it
+        IF ANQuestion."Answer Type" = ANQuestion."Answer Type"::"Free Text" THEN BEGIN
+          Sentence.GET("Curr. Sentence ID");
+          "Question Answered" := ANQuestion."Question ID";
+          VALIDATE("Question Text Answer",Sentence."Line Part 1");
+          MODIFY(TRUE);
+          nOraResponse_Debug(eLookingForTextAsAnswer);
+        END ELSE BEGIN
+          //If the current question is "Make Choice", look to see if their answer was a choice
+          //Process the sentence against the Question ID
+          nOraResponse_Debug(eIGaveYouAListOfOptions);
+
+          //First - lets see if they gave a number answer >>
+          SearchID := SearchMgt.CreateSearch(
+                        Rec."Curr. Sentence ID",
+                        '',
+                        '',
+                        FALSE,
+                        TRUE,
+                        TRUE,
+                         TRUE,
+                        FALSE,
+                        TRUE,
+                        FALSE,
+                        'QUESTION',
+                        1,
+                        0,
+                        0);
+
+          SearchMgt.AddSearchTable(SearchID,DATABASE::"Ask nOra - Question Choice");
+          SearchMgt.AddSearchTableFilter(SearchID,DATABASE::"Ask nOra - Question Choice",1,FORMAT("Need Answer to Question"));
+          SearchMgt.AddSearchField(SearchID,DATABASE::"Ask nOra - Question Choice",0,6); //Search only in the "Choice ID as Code" field
+
+          NumResults := SearchMgt.ExecuteSearch(SearchID,SearchResultsSummary);
+
+          //No results found from the number answer, try the text
+          IF NumResults = 0 THEN BEGIN
+            nOraResponse_Debug(eYouDidntUseOptionNumber);
+            SearchID := SearchMgt.CreateSearch(
+                          Rec."Curr. Sentence ID",
+                          '',
+                          '',
+                          FALSE,
+                          TRUE,
+                          TRUE,
+                          TRUE,
+                          FALSE,
+                          TRUE,
+                          FALSE,
+                          'QUESTION',
+                          1,
+                          0,
+                          0);
+
+            SearchMgt.AddSearchTable(SearchID,DATABASE::"Ask nOra - Question Choice");
+            SearchMgt.AddSearchTableFilter(SearchID,DATABASE::"Ask nOra - Question Choice",1,FORMAT("Need Answer to Question"));
+            SearchMgt.AddSearchField(SearchID,DATABASE::"Ask nOra - Question Choice",0,3); //Search only in the "Description" field
+
+            NumResults := SearchMgt.ExecuteSearch(SearchID,SearchResultsSummary);
+          END;
+
+          //If we've still go no results, then exit
+          IF NumResults = 0 THEN BEGIN
+            nOraResponse_Debug(eICouldntMatchToAnOption);
+            EXIT(FALSE)
+          END;
+
+          IF NumResults > 1 THEN BEGIN
+            SearchResultsSummary.SETRANGE("Rank Position",1);
+            IF SearchResultsSummary.COUNT <> 1 THEN BEGIN
+              nOraResponse_Debug(eMoreThanOneMatchingOption);
+              EXIT(FALSE);
+            END;
+          END;
+
+          //Found results - use the best match
+          SearchResultsSummary.SETRANGE("Rank Position",1);
+          SearchResultsSummary.FINDFIRST;
+          nOraResponse_Debug(STRSUBSTNO(eYouChose,SearchResultsSummary."Position Text"));
+          ANQuestionChoice.SETPOSITION(SearchResultsSummary."Position Text");
+          ANQuestionChoice.SETRECFILTER;
+          ANQuestionChoice.FINDFIRST;
+          "Question Answered" := ANQuestionChoice."Question ID";
+          "Question Choice Answer" := ANQuestionChoice."Choice ID";
+          SearchMgt.UseSearchResult(SearchResultsSummary);
+        END;
+
+        "Need Answer to Question" := 0;
+
+        VALIDATE("Curr. Function","Before Question Function");
+        VALIDATE("Curr. Action",Rec."Before Question Action");
+        VALIDATE("Curr. Table",Rec."Before Question Table");
+        VALIDATE("Curr. Field",Rec."Before Question Field");
+        VALIDATE("Curr. Rec. Position",Rec."Before Question Rec. Position");
+        VALIDATE("Curr. Sentence ID",Rec."Before Question Sentence ID");
+        VALIDATE("Curr. Field Type",Rec."Before Question Field Type");
+
+        VALIDATE("Prev. Function","Before Q. Prev. Function");
+        VALIDATE("Prev. Action",Rec."Before Q. Prev. Action");
+        VALIDATE("Prev. Table",Rec."Before Q. Prev. Table");
+        VALIDATE("Prev. Field",Rec."Before Q. Prev. Field");
+        VALIDATE("Prev. Rec. Position",Rec."Before Q. Prev. Rec. Position");
+        VALIDATE("Prev. Sentence ID",Rec."Before Q. Prev. Sentence ID");
+        VALIDATE("Prev. Field Type",Rec."Before Q. Prev. Field Type");
+
+        MODIFY(TRUE);
+
+        nOraResponse_Debug(STRSUBSTNO(eIGotAnAnswer, "Curr. Sentence ID"));
+        IF NOT ProcessFunction(Rec) THEN EXIT(FALSE);
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE ResetConversation@1000000036(VAR Rec@1000000000 : Record 9062522) Success : Boolean;
+    VAR
+      SearchMgt@1000000002 : Codeunit 9062405;
+      SearchResultsSummary@1000000001 : Record 9062523;
+      SearchID@1000000003 : Integer;
+      NumberOfResults@1000000004 : Integer;
+      ConvVar@1000000006 : Record 9062528;
+    BEGIN
+      WITH Rec DO BEGIN
+        Rec."Need Answer to Question" := 0;
+        Rec."Question Text Answer" := '';
+        Rec."Question Answered" := 0;
+        Rec."Question Choice Answer" := 0;
+        Rec."Curr. Function" := '';
+        Rec."Curr. Action" := '';
+        Rec."Curr. Table" := 0;
+        Rec."Curr. Field" := 0;
+        Rec."Curr. Rec. Position" := '';
+        Rec."Curr. Field Type" := Rec."Curr. Field Type"::Field;
+        Rec."Curr. Quest. Instance" := 0;
+        Rec."Prev. Function" := '';
+        Rec."Prev. Action" := '';
+        Rec."Prev. Table" := 0;
+        Rec."Prev. Field" := 0;
+        Rec."Prev. Rec. Position" := '';
+        Rec."Prev. Field Type" := Rec."Curr. Field Type"::Field;
+        Rec."Before Question Function" := '';
+        Rec."Before Question Action" := '';
+        Rec."Before Question Table" := 0;
+        Rec."Before Question Field" := 0;
+        Rec."Before Question Rec. Position" := '';
+        Rec."Before Question Field Type" := Rec."Curr. Field Type"::Field;
+        Rec."Before Q. Prev. Function" := '';
+        Rec."Before Q. Prev. Action" := '';
+        Rec."Before Q. Prev. Table" := 0;
+        Rec."Before Q. Prev. Field" := 0;
+        Rec."Before Q. Prev. Rec. Position" := '';
+        Rec."Before Q. Prev. Field Type" := Rec."Curr. Field Type"::Field;
+        Rec."Said Hello" := FALSE;
+        Rec."Said Hello DateTime" := CREATEDATETIME(0D,0T);
+        Rec."Process Sentence Fail Counter" := 0;
+        Rec.MODIFY;
+
+        ConvVar.SETRANGE("Conversation ID",ID);
+        IF ConvVar.FINDSET THEN ConvVar.DELETEALL(TRUE);
+      END;
+    END;
+
+    PROCEDURE ">> DIALOG >>"@1000000006();
+    BEGIN
+    END;
+
+    PROCEDURE AsknOra@1000000002(SentenceText@1000000000 : Text) ConversationID : Integer;
+    VAR
+      Conversation@1000000002 : Record 9062522;
+      ConvEntry@1000000001 : Record 9062511;
+    BEGIN
+      Conversation.GET(GetConversation(USERID,Conversation));
+      ConvEntry.GET(Conversation.ID,CreateEntry(Conversation,ConvEntry.Direction::"User -> nOra",ConvEntry."Entry Type"::Text,FALSE,FALSE));
+
+      ProcessSentence(CreateSentence_Simple(ConvEntry,SentenceText));
+    END;
+
+    PROCEDURE UploadFileTonOra@1000000037(SentenceText@1000000000 : Text;UploadedFileId@1000000003 : Integer) ConversationID : Integer;
+    VAR
+      Conversation@1000000002 : Record 9062522;
+      ConvEntry@1000000001 : Record 9062511;
+    BEGIN
+      //DOC NA2015.4
+      Conversation.GET(GetConversation(USERID,Conversation));
+      ConvEntry.GET(Conversation.ID,CreateEntry(Conversation,ConvEntry.Direction::"User -> nOra",ConvEntry."Entry Type"::Text,FALSE,FALSE));
+
+      ProcessSentence(CreateSentence_FileUploaded(ConvEntry,SentenceText,UploadedFileId));
+    END;
+
+    PROCEDURE nOraResponse@1000000004(SentenceText@1000000000 : Text);
+    VAR
+      Conversation@1000000002 : Record 9062522;
+      ConvEntry@1000000001 : Record 9062511;
+    BEGIN
+      Conversation.GET(GetConversation(USERID,Conversation));
+      ConvEntry.GET(Conversation.ID,CreateEntry(Conversation,ConvEntry.Direction::"nOra -> User",ConvEntry."Entry Type"::Text,FALSE,FALSE));
+      CreateSentence_Simple(ConvEntry,SentenceText);
+    END;
+
+    PROCEDURE nOraResponse_FirstSentence@1000000033(SentenceText@1000000000 : Text);
+    VAR
+      Conversation@1000000002 : Record 9062522;
+    BEGIN
+      Conversation.GET(GetConversation(USERID,Conversation));
+      GlobalConvEntry.GET(Conversation.ID,CreateEntry(Conversation,GlobalConvEntry.Direction::"nOra -> User",GlobalConvEntry."Entry Type"::Text,FALSE,FALSE));
+      CreateSentence_Simple(GlobalConvEntry,SentenceText);
+    END;
+
+    PROCEDURE nOraResponse_AddSentence@1000000034(SentenceText@1000000000 : Text);
+    BEGIN
+      CreateSentence_Simple(GlobalConvEntry,SentenceText);
+    END;
+
+    PROCEDURE nOraResponse_Bullet@1000000032(SentenceText@1000000000 : Text);
+    VAR
+      Conversation@1000000002 : Record 9062522;
+      ConvEntry@1000000001 : Record 9062511;
+    BEGIN
+      Conversation.GET(GetConversation(USERID,Conversation));
+
+      ConvEntry.SETRANGE("Conversation ID",Conversation.ID);
+      IF NOT ConvEntry.FINDLAST OR (ConvEntry."Entry Type" <> ConvEntry."Entry Type"::UnorderedList) THEN BEGIN
+        ConvEntry.GET(Conversation.ID,CreateEntry(Conversation,ConvEntry.Direction::"nOra -> User",ConvEntry."Entry Type"::UnorderedList,FALSE,FALSE));
+      END;
+      CreateSentence_Simple(ConvEntry,SentenceText);
+    END;
+
+    PROCEDURE nOraResponse_AskQuestion@1000000016(VAR Conversation@1000000003 : Record 9062522;QuestionID@1000000000 : Integer);
+    VAR
+      ANQuestion@1000000001 : Record 9062512;
+      ANQuestionChoice@1000000004 : Record 9062513;
+      ConvEntry@1000000002 : Record 9062511;
+      ePleaseTellMeYourAnswer@1000000005 : TextConst 'ENU=Please tell my your answer:;ENG=Please tell my your answer:';
+      eIveGotOptions@1000000006 : TextConst 'ENU=I''ve got %1 options for you to choose from:;ENG=I''ve got %1 options for you to choose from:';
+      eNoChoices@1000000007 : TextConst 'ENU=I was supposed to ask you a question, but I have no choices to give you;ENG=I was supposed to ask you a question, but I have no choices to give you';
+    BEGIN
+      ANQuestion.GET(QuestionID);
+      Conversation.GET(ANQuestion."Conversation ID");
+      ConvEntry.GET(Conversation.ID,CreateEntry(Conversation,ConvEntry.Direction::"nOra -> User",ConvEntry."Entry Type"::Text,FALSE,FALSE));
+
+      CASE ANQuestion."Answer Type" OF
+        ANQuestion."Answer Type"::"Free Text" :
+          BEGIN
+            IF ANQuestion."Question Text" = '' THEN ANQuestion.VALIDATE("Question Text",ePleaseTellMeYourAnswer);
+            CreateSentence_Simple(ConvEntry,ANQuestion."Question Text");
+          END;
+        ANQuestion."Answer Type"::Choice :
+          BEGIN
+            ANQuestionChoice.SETRANGE("Question ID",ANQuestion."Question ID");
+            IF ANQuestionChoice.FINDSET THEN BEGIN
+              IF ANQuestion."Question Text" = '' THEN ANQuestion.VALIDATE("Question Text",STRSUBSTNO(eIveGotOptions,ANQuestionChoice.COUNT));
+              CreateSentence_Simple(ConvEntry,ANQuestion."Question Text");
+              ConvEntry.GET(Conversation.ID,CreateEntry(Conversation,ConvEntry.Direction::"nOra -> User",ConvEntry."Entry Type"::OrderedList,FALSE,FALSE));
+              REPEAT
+                CreateSentence(ConvEntry,ANQuestionChoice.Description,0,'','',ANQuestionChoice."Choice ID");
+              UNTIL ANQuestionChoice.NEXT = 0;
+            END ELSE BEGIN
+              nOraResponse_Error(eNoChoices);
+            END;
+          END;
+      END;
+
+      Conversation.VALIDATE("Need Answer to Question",QuestionID);
+
+      Conversation.VALIDATE("Before Question Function",Conversation."Curr. Function");
+      Conversation.VALIDATE("Before Q. Prev. Function",Conversation."Prev. Function");
+
+      Conversation.VALIDATE("Before Question Action",Conversation."Curr. Action");
+      Conversation.VALIDATE("Before Q. Prev. Action",Conversation."Prev. Action");
+
+      Conversation.VALIDATE("Before Question Table",Conversation."Curr. Table");
+      Conversation.VALIDATE("Before Q. Prev. Table",Conversation."Prev. Table");
+
+      IF Conversation."Curr. Field" <> 0 THEN BEGIN
+        Conversation.VALIDATE("Before Question Field Type",Conversation."Curr. Field Type");
+        Conversation.VALIDATE("Before Question Field",Conversation."Curr. Field");
+      END;
+
+      IF Conversation."Prev. Field" <> 0 THEN BEGIN
+        Conversation.VALIDATE("Before Q. Prev. Field Type",Conversation."Prev. Field Type");
+        Conversation.VALIDATE("Before Q. Prev. Field",Conversation."Prev. Field");
+      END;
+
+      Conversation.VALIDATE("Before Question Rec. Position",Conversation."Curr. Rec. Position"); //DOC NA2015.3
+      Conversation.VALIDATE("Before Q. Prev. Rec. Position",Conversation."Prev. Rec. Position");
+
+      Conversation.VALIDATE("Before Question Sentence ID",Conversation."Curr. Sentence ID"); //DOC NA2015.3
+      Conversation.VALIDATE("Before Q. Prev. Sentence ID",Conversation."Prev. Sentence ID");
+
+
+      Conversation.MODIFY(TRUE);
+    END;
+
+    PROCEDURE nOraResponse_NAVRecord@1000000019(SentenceText@1000000000 : Text;TableNo@1000000003 : Integer;PositionText@1000000004 : Text);
+    VAR
+      Conversation@1000000002 : Record 9062522;
+      ConvEntry@1000000001 : Record 9062511;
+      ANSentence@1000000005 : Record 9062517;
+      PageNo@1000000006 : Integer;
+      RecRef@1000000008 : RecordRef;
+      RecRefVar@1000000009 : Variant;
+      TableManagement@1000000007 : Codeunit 9062585;
+    BEGIN
+      Conversation.GET(GetConversation(USERID,Conversation));
+      ConvEntry.GET(Conversation.ID,CreateEntry(Conversation,ConvEntry.Direction::"nOra -> User",ConvEntry."Entry Type"::Text,FALSE,FALSE));
+      IF ANSentence.GET(CreateSentence(ConvEntry,SentenceText,TableNo,PositionText,'',0)) THEN BEGIN
+        IF (TableNo <> 0) AND (PositionText <> '') THEN BEGIN
+          PageNo := TableManagement.GetCardPageId(TableNo,PositionText);
+          IF PageNo <> 0 THEN BEGIN
+            RecRef.OPEN(TableNo);
+            RecRef.SETPOSITION(PositionText);
+            RecRef.GET(RecRef.RECORDID);
+            ANSentence.VALIDATE("Related RTC URL",GETURL(CLIENTTYPE::Windows,COMPANYNAME,OBJECTTYPE::Page,PageNo,RecRef));
+            ANSentence.VALIDATE("Related Web Client URL",GETURL(CLIENTTYPE::Web,COMPANYNAME,OBJECTTYPE::Page,PageNo,RecRef));
+            ANSentence.MODIFY;
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE nOraResponse_Url@1000000020(SentenceText@1000000000 : Text;URL@1000000003 : Text);
+    VAR
+      Conversation@1000000002 : Record 9062522;
+      ConvEntry@1000000001 : Record 9062511;
+      ANSentence@1000000005 : Record 9062517;
+      RecRef@1000000008 : RecordRef;
+      RecRefVar@1000000007 : Variant;
+      HTML@1000000009 : BigText;
+      OutStream@1000000010 : OutStream;
+      PageNo@1000000011 : Integer;
+    BEGIN
+      Conversation.GET(GetConversation(USERID,Conversation));
+      ConvEntry.GET(Conversation.ID,CreateEntry(Conversation,ConvEntry.Direction::"nOra -> User",ConvEntry."Entry Type"::Text,FALSE,FALSE));
+      CreateSentence(ConvEntry,SentenceText,0,'',URL,0);
+    END;
+
+    PROCEDURE nOraResponse_QuickReport@1000000042(SentenceText@1000000000 : Text;QuickReportCode@1000000003 : Code[60];SentenceTextIfMoreRecords@1000000013 : Text);
+    VAR
+      Conversation@1000000002 : Record 9062522;
+      ConvEntry@1000000001 : Record 9062511;
+      ANSentence@1000000005 : Record 9062517;
+      HTML@1000000009 : BigText;
+      OutStream@1000000010 : OutStream;
+      PageNo@1000000011 : Integer;
+      MoreRecords@1000000012 : Boolean;
+      QuickReportHeader@1000000004 : Record 9062697;
+      QuickReportData@1000000015 : TEMPORARY Record 9062699;
+      QuickReportEngine@1000000006 : Codeunit 9062539;
+      QuickReportOutputtoHTML@1000000014 : Codeunit 9062549;
+      QuickReportCode_Created@1000000007 : Code[60];
+    BEGIN
+      Conversation.GET(GetConversation(USERID,Conversation));
+      ConvEntry.GET(Conversation.ID,CreateEntry(Conversation,ConvEntry.Direction::"nOra -> User",ConvEntry."Entry Type"::Text,FALSE,FALSE));
+      IF ANSentence.GET(CreateSentence_Simple(ConvEntry,SentenceText)) THEN BEGIN
+        IF (QuickReportCode <> '') THEN BEGIN
+          IF (QuickReportHeader.GET(QuickReportCode)) THEN
+          BEGIN
+            QuickReportCode_Created := QuickReportEngine.GenerateQuickReportData(QuickReportCode,QuickReportData);
+            QuickReportHeader.GET(QuickReportCode_Created);
+            PageNo := PAGE::"Quick Report Runner";
+            IF PageNo <> 0 THEN
+            BEGIN
+              ANSentence.VALIDATE("Related RTC URL",GETURL(CLIENTTYPE::Windows,COMPANYNAME,OBJECTTYPE::Page,PageNo,QuickReportHeader));
+              ANSentence.VALIDATE("Related Web Client URL",GETURL(CLIENTTYPE::Web,COMPANYNAME,OBJECTTYPE::Page,PageNo,QuickReportHeader));
+              QuickReportOutputtoHTML.ExportToHtmlText(QuickReportHeader, HTML);
+              ANSentence."HTML BLOB".CREATEOUTSTREAM(OutStream);
+              HTML.WRITE(OutStream);
+              IF (MoreRecords) THEN
+                ANSentence.SetSentenceText(SentenceText + '. ' + SentenceTextIfMoreRecords);
+              ANSentence.MODIFY;
+            END;
+          END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE nOraResponse_ImageFile@1000000039(SentenceText@1000000000 : Text;FilePath@1000000001 : Text);
+    VAR
+      ImageFile@1000000002 : File;
+      InputStream@1000000003 : InStream;
+    BEGIN
+      //DOC NA2015.4
+      ImageFile.OPEN(FilePath);
+      ImageFile.CREATEINSTREAM(InputStream);
+      nOraResponse_ImageStream(SentenceText, InputStream);
+      ImageFile.CLOSE();
+    END;
+
+    LOCAL PROCEDURE nOraResponse_ImageBlob@1000000040(SentenceText@1000000001 : Text;VAR TempBlob@1000000000 : Record 99008535);
+    VAR
+      InputStream@1000000002 : InStream;
+    BEGIN
+      //DOC NA2015.4
+      TempBlob.Blob.CREATEINSTREAM(InputStream);
+      nOraResponse_ImageStream(SentenceText, InputStream);
+    END;
+
+    LOCAL PROCEDURE nOraResponse_ImageStream@1000000041(SentenceText@1000000000 : Text;InputStream@1000000001 : InStream);
+    VAR
+      Conversation@1000000006 : Record 9062522;
+      ConvEntry@1000000004 : Record 9062511;
+      ANSentence@1000000003 : Record 9062517;
+      OutStream@1000000007 : OutStream;
+      convert@1000000005 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Convert";
+      MemoryStream@1000000002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.MemoryStream";
+    BEGIN
+      //DOC NA2015.4
+      Conversation.GET(GetConversation(USERID,Conversation));
+      ConvEntry.GET(Conversation.ID,CreateEntry(Conversation,ConvEntry.Direction::"nOra -> User",ConvEntry."Entry Type"::Text,FALSE,FALSE));
+      IF ANSentence.GET(CreateSentence_Simple(ConvEntry,SentenceText)) THEN BEGIN
+        CLEAR(ANSentence."HTML BLOB");
+        ANSentence."HTML BLOB".CREATEOUTSTREAM(OutStream);
+        MemoryStream := MemoryStream.MemoryStream();
+        COPYSTREAM(MemoryStream, InputStream);
+
+        OutStream.WRITE('<img alt="Image" src="data:image/jpg;base64,');
+        OutStream.WRITE(convert.ToBase64String(MemoryStream.ToArray()));
+        OutStream.WRITE('" />');
+
+        ANSentence.MODIFY;
+      END;
+    END;
+
+    PROCEDURE nOraResponse_Debug@1000000018(SentenceText@1000000000 : Text);
+    VAR
+      Conversation@1000000002 : Record 9062522;
+      ConvEntry@1000000001 : Record 9062511;
+    BEGIN
+      Conversation.GET(GetConversation(USERID,Conversation));
+      IF NOT Conversation."Debug Mode" THEN EXIT;
+      ConvEntry.GET(Conversation.ID,CreateEntry(Conversation,ConvEntry.Direction::"nOra -> User",ConvEntry."Entry Type"::Text,TRUE,FALSE));
+      CreateSentence_Simple(ConvEntry,SentenceText);
+    END;
+
+    PROCEDURE nOraResponse_Error@1000000021(SentenceText@1000000000 : Text);
+    VAR
+      Conversation@1000000002 : Record 9062522;
+      ConvEntry@1000000001 : Record 9062511;
+    BEGIN
+      Conversation.GET(GetConversation(USERID,Conversation));
+      ConvEntry.GET(Conversation.ID,CreateEntry(Conversation,ConvEntry.Direction::"nOra -> User",ConvEntry."Entry Type"::Text,FALSE,TRUE));
+      CreateSentence_Simple(ConvEntry,SentenceText);
+    END;
+
+    PROCEDURE CreateEntry@1000000009(VAR Conversation@1000000000 : Record 9062522;Direction@1000000001 : 'User -> nOra,nOra -> User';EntryType@1000000003 : 'Text,List';Debug@1000000004 : Boolean;Error@1000000005 : Boolean) ConvEntryID : Integer;
+    VAR
+      ConvEntry@1000000002 : Record 9062511;
+    BEGIN
+      ConvEntry.INIT;
+      ConvEntry.VALIDATE("Conversation ID",Conversation.ID);
+      ConvEntry.VALIDATE(Direction,Direction);
+      ConvEntry.VALIDATE("Entry Type",EntryType);
+      ConvEntry.VALIDATE(Debug,Debug);
+      ConvEntry.VALIDATE(Error,Error);
+      ConvEntry.INSERT(TRUE);
+
+      EXIT(ConvEntry."Entry ID");
+    END;
+
+    PROCEDURE CreateSentence_Simple@1000000017(VAR ConvEntry@1000000000 : Record 9062511;SentenceText@1000000001 : Text) SentenceID : Integer;
+    VAR
+      SentenceMgt@1000000002 : Codeunit 9062401;
+      Sentence@1000000003 : Record 9062517;
+    BEGIN
+      EXIT(CreateSentence(ConvEntry,SentenceText,0,'','',0));
+    END;
+
+    LOCAL PROCEDURE CreateSentence_FileUploaded@1000000038(VAR ConvEntry@1000000001 : Record 9062511;SentenceText@1000000000 : Text;UploadedFileId@1000000002 : Integer) : Integer;
+    VAR
+      UploadedFile@1000000003 : Record 9062630;
+    BEGIN
+      //DOC NA2015.4
+      UploadedFile.GET(UploadedFileId);
+      EXIT(CreateSentence(ConvEntry, SentenceText, DATABASE::"Uploaded File", UploadedFile.GETPOSITION(), '', 0));
+    END;
+
+    PROCEDURE CreateSentence@1000000008(VAR ConvEntry@1000000000 : Record 9062511;SentenceText@1000000001 : Text;RelatedTableNo@1000000004 : Integer;RelatedPositionText@1000000005 : Text;RelatedURL@1000000006 : Text;ListEntryNo@1000000007 : Integer) SentenceID : Integer;
+    VAR
+      SentenceMgt@1000000002 : Codeunit 9062401;
+      Sentence@1000000003 : Record 9062517;
+    BEGIN
+      Sentence.INIT;
+      Sentence.VALIDATE("Conversation ID",ConvEntry."Conversation ID");
+      Sentence.VALIDATE("Conv. Entry ID",ConvEntry."Entry ID");
+      Sentence.VALIDATE("Related Table No.",RelatedTableNo);
+      Sentence.VALIDATE("Related Position Text",RelatedPositionText);
+      Sentence.VALIDATE("Related URL",RelatedURL);
+      Sentence.VALIDATE("List Entry No.",ListEntryNo);
+      Sentence.INSERT(TRUE);
+
+      SentenceID := Sentence."Sentence ID";
+
+      SentenceMgt.SetSentence(Sentence."Sentence ID");
+      SentenceMgt.SetSentenceText(SentenceText);
+      SentenceMgt.Read(ConvEntry.Direction = ConvEntry.Direction::"User -> nOra");
+    END;
+
+    PROCEDURE "<< DIALOG <<"@1000000007();
+    BEGIN
+    END;
+
+    PROCEDURE ">> QUESTIONS >>"@1000000011();
+    BEGIN
+    END;
+
+    PROCEDURE CreateQuestion@1000000013(ConversationID@1000000000 : Integer;QuestionText@1000000001 : Text[250]) QuestionID : Integer;
+    VAR
+      ANQuestion@1000000002 : Record 9062512;
+    BEGIN
+      ANQuestion.INIT;
+      ANQuestion.VALIDATE("Conversation ID",ConversationID);
+      ANQuestion.VALIDATE("Question Text",QuestionText);
+      ANQuestion.VALIDATE("Answer Type",ANQuestion."Answer Type"::"Free Text");
+      ANQuestion.INSERT(TRUE);
+
+      EXIT(ANQuestion."Question ID");
+    END;
+
+    PROCEDURE AddQuestionChoice@1000000015(QuestionID@1000000000 : Integer;ChoiceDesc@1000000002 : Text[250];RelatedTableNo@1000000004 : Integer;RelatedPosText@1000000005 : Text[250]) ChoiceID : Integer;
+    VAR
+      ANQuestion@1000000001 : Record 9062512;
+      ANQuestionChoice@1000000003 : Record 9062513;
+    BEGIN
+      ANQuestion.GET(QuestionID);
+      IF ANQuestion."Answer Type" = ANQuestion."Answer Type"::"Free Text" THEN BEGIN
+        ANQuestion.VALIDATE("Answer Type",ANQuestion."Answer Type"::Choice);
+        ANQuestion.MODIFY(TRUE);
+      END;
+
+      ANQuestionChoice.INIT;
+      ANQuestionChoice.VALIDATE("Question ID",ANQuestion."Question ID");
+      ANQuestionChoice.VALIDATE(Description,COPYSTR(ChoiceDesc,1,MAXSTRLEN(ANQuestionChoice.Description)));
+      ANQuestionChoice.VALIDATE("Related Table No.",RelatedTableNo);
+      ANQuestionChoice.VALIDATE("Related Position Text",RelatedPosText);
+      ANQuestionChoice.INSERT(TRUE);
+
+      EXIT(ANQuestionChoice."Choice ID");
+    END;
+
+    PROCEDURE QuestionChoiceExists@1000000010(QuestionID@1000000000 : Integer;RelatedTableNo@1000000004 : Integer;RelatedPosText@1000000005 : Text[250]) : Boolean;
+    VAR
+      ANQuestionChoice@1000000003 : Record 9062513;
+    BEGIN
+      ANQuestionChoice.SETRANGE("Related Table No.",RelatedTableNo);
+      ANQuestionChoice.SETRANGE("Related Position Text",RelatedPosText);
+      EXIT(NOT ANQuestionChoice.ISEMPTY);
+    END;
+
+    PROCEDURE CreateQuestion_FromSearchResSum@1000000014(VAR Conversation@1000000003 : Record 9062522;VAR SearchResSum@1000000000 : Record 9062523;QuestionText@1000000004 : Text[250];AskNow@1000000005 : Boolean) QuestionID : Integer;
+    VAR
+      ConvEntry@1000000001 : Record 9062511;
+      ChoiceID@1000000002 : Integer;
+      eNoChoices@1000000006 : TextConst 'ENU=No choices were found in the search %1;ENG=No choices were found in the search %1';
+    BEGIN
+      SearchResSum.SETRANGE("Search ID",SearchResSum."Search ID");
+      IF NOT SearchResSum.FINDSET THEN ERROR(eNoChoices,SearchResSum."Search ID");
+
+      QuestionID := CreateQuestion(Conversation.ID,QuestionText);
+      REPEAT
+        ChoiceID := AddQuestionChoice(QuestionID,SearchResSum."Table Name" + ' ' + SearchResSum."Record Description",SearchResSum."Table No.",SearchResSum."Position Text");
+      UNTIL SearchResSum.NEXT = 0;
+
+      IF AskNow THEN nOraResponse_AskQuestion(Conversation,QuestionID);
+    END;
+
+    PROCEDURE "<< QUESTIONS <<"@1000000012();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ">> QUESTIONNAIRES >>"@1000000043();
+    BEGIN
+    END;
+
+    PROCEDURE nOraResponse_Questionnaire_Set@1000000045(VAR Conversation@1000000003 : Record 9062522;QuestInstanceNo@1000000000 : Integer);
+    VAR
+      QuestInstance@1000000001 : Record 9062704;
+      ConvEntry@1000000002 : Record 9062511;
+      eQuestionnaire@1000000004 : TextConst 'ENU=You''re now answering questionnaire %1;ENG=You''re now answering questionnaire %1';
+    BEGIN
+      QuestInstance.GET(QuestInstanceNo);
+      Conversation.VALIDATE("Curr. Quest. Instance",QuestInstance."Questionnaire No.");
+
+      nOraResponse_Debug(STRSUBSTNO(eQuestionnaire,QuestInstance."Questionnaire No."));
+      Conversation.MODIFY(TRUE);
+    END;
+
+    PROCEDURE nOraResponse_Questionnaire_AskNextQuestion@1000000048(VAR Conversation@1000000003 : Record 9062522);
+    VAR
+      QuestInstance@1000000001 : Record 9062704;
+      ConvEntry@1000000002 : Record 9062511;
+      eNextQuestion@1000000000 : TextConst 'ENU=I''m going to ask the next question from questionnaire %1;ENG=I''m going to ask the next question from questionnaire %1';
+    BEGIN
+      WITH Conversation DO BEGIN
+        QuestInstance.GET("Curr. Quest. Instance");
+        nOraResponse_Debug(STRSUBSTNO(eNextQuestion,QuestInstance."Questionnaire No."));
+        nOraResponse(QuestInstance.GetCurrentQuestionText(TRUE));
+      END;
+    END;
+
+    PROCEDURE nOraResponse_Questionnaire_AnswerQuestion@1000000051(VAR Conversation@1000000003 : Record 9062522) : Boolean;
+    VAR
+      QuestInstance@1000000001 : Record 9062704;
+      ConvEntry@1000000002 : Record 9062511;
+      Sentence@1000000004 : Record 9062517;
+      AnswerText@1000000000 : Text;
+      MoreQuestions@1000000005 : Boolean;
+      eChecking@1000000006 : TextConst 'ENU=I''m just checking if we''re answering a questionnaire;ENG=I''m just checking if we''re answering a questionnaire';
+      eWeAre@1000000007 : TextConst 'ENU=We are, so I''m going to take what you said as an answer;ENG=We are, so I''m going to take what you said as an answer';
+      eYouGaveTheAnswer@1000000008 : TextConst 'ENU=You gave the answer: %1;ENG=You gave the answer: %1';
+      eYouHaveFinished@1000000009 : TextConst 'ENU=You have finished the questionnaire;ENG=You have finished the questionnaire';
+    BEGIN
+      WITH Conversation DO BEGIN
+        nOraResponse_Debug(eChecking);
+        IF "Curr. Quest. Instance" = 0 THEN EXIT(FALSE);
+        QuestInstance.GET("Curr. Quest. Instance");
+        nOraResponse_Debug(eWeAre);
+
+        Sentence.GET("Curr. Sentence ID");
+        MoreQuestions := QuestInstance.SetCurrentAnswerText(Sentence."Line Part 1",FALSE);
+        QuestInstance.MODIFY(TRUE);
+
+
+        nOraResponse_Debug(STRSUBSTNO(eYouGaveTheAnswer,AnswerText));
+
+        IF MoreQuestions THEN
+          nOraResponse_Questionnaire_AskNextQuestion(Conversation)
+        ELSE BEGIN
+          QuestInstance.VALIDATE(Finished,TRUE);
+          QuestInstance.MODIFY(TRUE);
+          nOraResponse(eYouHaveFinished);
+          IF QuestInstance."On Finish - Status Text" <> '' THEN BEGIN
+            IF (QuestInstance."On Finish - Table No." <> 0) AND (QuestInstance."On Finish - Record Position" <> '') THEN
+              nOraResponse_NAVRecord(QuestInstance."On Finish - Status Text",QuestInstance."On Finish - Table No.",QuestInstance."On Finish - Record Position")
+            ELSE
+              nOraResponse(QuestInstance."On Finish - Status Text");
+          END;
+          VALIDATE("Curr. Quest. Instance",0);
+          MODIFY(TRUE);
+        END;
+
+        EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE "<< QUESTIONNAIRES <<"@1000000044();
+    BEGIN
+    END;
+
+    PROCEDURE ">> VARIABLES >>"@1000000024();
+    BEGIN
+    END;
+
+    PROCEDURE SetVariable@1000000026(ConversationID@1000000000 : Integer;VariableCode@1000000001 : Code[50];VariableValue@1000000002 : Text[250]);
+    VAR
+      ConvVar@1000000003 : Record 9062528;
+    BEGIN
+      IF NOT ConvVar.GET(ConversationID,VariableCode,ConvVar.State::Current) THEN BEGIN
+        ConvVar.INIT;
+        ConvVar.VALIDATE("Conversation ID",ConversationID);
+        ConvVar.VALIDATE(Code,VariableCode);
+        ConvVar.INSERT(TRUE);
+      END;
+
+      ConvVar.VALIDATE(Value,VariableValue);
+      ConvVar.MODIFY(TRUE);
+    END;
+
+    PROCEDURE GetVariable@1000000027(ConversationID@1000000002 : Integer;VariableCode@1000000001 : Code[50]) VariableValue : Text[250];
+    VAR
+      ConvVar@1000000000 : Record 9062528;
+    BEGIN
+      IF NOT ConvVar.GET(ConversationID,VariableCode,ConvVar.State::Current) THEN BEGIN
+        EXIT('');
+      END ELSE BEGIN
+        EXIT(ConvVar.Value);
+      END;
+    END;
+
+    PROCEDURE DeleteVariable@1000000028(ConversationID@1000000001 : Integer;VariableCode@1000000000 : Code[50]);
+    VAR
+      ConvVar@1000000002 : Record 9062528;
+    BEGIN
+      IF ConvVar.GET(ConversationID,VariableCode,ConvVar.State::Current) THEN ConvVar.DELETE(TRUE);
+    END;
+
+    PROCEDURE "<< VARIABLES <<"@1000000025();
+    BEGIN
+    END;
+
+    PROCEDURE ">> OUTPUT SENTENCES >>"@1000000030();
+    BEGIN
+    END;
+
+    PROCEDURE OutputSentences_HTML@1000000029(ConversationID@1000000000 : Integer;StartAfterConvEntryID@1000000001 : Integer;VAR HTMLText@1000000005 : BigText;WebClientHyperlinks@1000000006 : Boolean) LastConvEntryIDReturned : Integer;
+    VAR
+      Conv@1000000002 : Record 9062522;
+      ConvEntry@1000000003 : Record 9062511;
+      Sentence@1000000004 : Record 9062517;
+      IsHyperlink@1000000007 : Boolean;
+      PrevDirection@1000000008 : Integer;
+      LineCounter@1000000009 : Integer;
+    BEGIN
+      Conv.GET(ConversationID);
+      WITH Conv DO BEGIN
+        ConvEntry.ASCENDING(FALSE);
+
+        ConvEntry.SETRANGE("Conversation ID",ID);
+        ConvEntry.SETFILTER("Entry ID",'>%1',StartAfterConvEntryID);
+
+        IF NOT ConvEntry.FINDSET THEN EXIT(0);
+        LastConvEntryIDReturned := ConvEntry."Entry ID";
+
+        CLEAR(HTMLText);
+        HTMLText.ADDTEXT('<HTML>');
+        HTMLText.ADDTEXT('<HEAD>');
+        //CSS
+        HTMLText.ADDTEXT('<style type="text/css"><!--');
+        HTMLText.ADDTEXT('Body{');
+        HTMLText.ADDTEXT('  font-family:Verdana;');
+        HTMLText.ADDTEXT('  font-size:12px;');
+        HTMLText.ADDTEXT('}');
+        HTMLText.ADDTEXT('li {');
+        HTMLText.ADDTEXT('  padding: 0px 0px 0px 0px');
+        HTMLText.ADDTEXT('}');
+        HTMLText.ADDTEXT('.userspeak{');
+        HTMLText.ADDTEXT('  color: Orange;');
+        HTMLText.ADDTEXT('  font-style:italic;');
+        HTMLText.ADDTEXT('}');
+        HTMLText.ADDTEXT('.noraspeak{');
+        HTMLText.ADDTEXT('  color: Green;');
+        HTMLText.ADDTEXT('  font-style:bold;');
+        HTMLText.ADDTEXT('}');
+        HTMLText.ADDTEXT('.noradebug{');
+        HTMLText.ADDTEXT('  color: Grey;');
+        HTMLText.ADDTEXT('  font-style:bold;');
+        HTMLText.ADDTEXT('}');
+        HTMLText.ADDTEXT('.noraerror{');
+        HTMLText.ADDTEXT('  color: Red;');
+        HTMLText.ADDTEXT('  font-style:bold;');
+        HTMLText.ADDTEXT('}');
+
+        HTMLText.ADDTEXT('--></style>');
+        //CSS
+        HTMLText.ADDTEXT('</HEAD>');
+        HTMLText.ADDTEXT('<BODY>');
+
+        REPEAT
+          Sentence.ASCENDING(FALSE);
+          Sentence.SETRANGE("Conversation ID",ID);
+          Sentence.SETRANGE("Conv. Entry ID",ConvEntry."Entry ID");
+          IF Sentence.FINDSET THEN BEGIN
+           IF ConvEntry.Direction = ConvEntry.Direction::"User -> nOra" THEN HTMLText.ADDTEXT('<SPAN CLASS="userspeak">');
+           IF ConvEntry.Direction = ConvEntry.Direction::"nOra -> User" THEN BEGIN
+             IF ConvEntry.Error THEN
+               HTMLText.ADDTEXT('<SPAN CLASS="noraerror">')
+             ELSE
+               IF ConvEntry.Debug THEN
+                 HTMLText.ADDTEXT('<SPAN CLASS="noradebug">')
+               ELSE
+                 HTMLText.ADDTEXT('<SPAN CLASS="noraspeak">');
+
+            END;
+            IF ConvEntry.Direction <> PrevDirection THEN BEGIN
+              IF LineCounter <> 0 THEN HTMLText.ADDTEXT('</P>');
+
+              HTMLText.ADDTEXT('<P ');
+              HTMLText.ADDTEXT(' >');
+
+              PrevDirection := ConvEntry.Direction;
+            END;
+
+            IF ConvEntry."Entry Type" = ConvEntry."Entry Type"::OrderedList THEN HTMLText.ADDTEXT('<OL>');
+            IF ConvEntry."Entry Type" = ConvEntry."Entry Type"::UnorderedList THEN HTMLText.ADDTEXT('<UL>');
+
+            REPEAT
+              LineCounter += 1;
+              IF (ConvEntry."Entry Type" = ConvEntry."Entry Type"::OrderedList) OR (ConvEntry."Entry Type" = ConvEntry."Entry Type"::UnorderedList)
+                THEN HTMLText.ADDTEXT('<LI VALUE="' + FORMAT(Sentence."List Entry No.") + '">');
+
+              IsHyperlink := FALSE;
+              IF Sentence."Related Web Client URL" <> '' THEN BEGIN
+                HTMLText.ADDTEXT('<A HREF="');
+                IF WebClientHyperlinks THEN
+                  HTMLText.ADDTEXT(Sentence."Related Web Client URL")
+                ELSE
+                  HTMLText.ADDTEXT(Sentence."Related RTC URL");
+                HTMLText.ADDTEXT('">');
+                IsHyperlink := TRUE;
+              END ELSE BEGIN
+                IF Sentence."Related URL" <> '' THEN BEGIN
+                  HTMLText.ADDTEXT('<A HREF="' + Sentence."Related URL" + '">');
+                  IsHyperlink := TRUE;
+                END;
+              END;
+
+              HTMLText.ADDTEXT(Sentence."Line Part 1" + Sentence."Line Part 2" + Sentence."Line Part 3" + Sentence."Line Part 4" + Sentence."Line Part 5");
+
+              IF IsHyperlink THEN HTMLText.ADDTEXT('</A>');
+              IF (ConvEntry."Entry Type" = ConvEntry."Entry Type"::OrderedList) OR
+                 (ConvEntry."Entry Type" = ConvEntry."Entry Type"::UnorderedList) THEN
+                HTMLText.ADDTEXT('</LI>')
+                ELSE HTMLText.ADDTEXT('</BR>');
+            UNTIL Sentence.NEXT = 0;
+
+            IF ConvEntry."Entry Type" = ConvEntry."Entry Type"::OrderedList THEN HTMLText.ADDTEXT('</OL>');
+            IF ConvEntry."Entry Type" = ConvEntry."Entry Type"::UnorderedList THEN HTMLText.ADDTEXT('</UL>');
+
+            HTMLText.ADDTEXT('</SPAN>');
+          END;
+
+        UNTIL ConvEntry.NEXT = 0;
+
+        HTMLText.ADDTEXT('</BODY>');
+        HTMLText.ADDTEXT('</HTML>');
+      END;
+    END;
+
+    PROCEDURE "<< OUTPUT SENTENCES <<"@1000000031();
+    BEGIN
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.4  AZ 09/02/2015 - File Upload and Image Response functionality added
+      //DOC NA2015.6  PC 05/04/2015 - Delete Conversation Variables on ResetConversation
+      //DOC NA2015.7  PC 05/06/2015 - Added concept of "Reset Functions"
+      //DOC NA2015.7  PC 05/06/2015 - Change Information Set references to Quick Reports
+      //DOC NA2015.7  PC 05/06/2015 - Added Questionnaire Functionality
+      //DOC NA2016.7  JH 28/08/2015 - Upgraded to 2016
+      //DOC NA2016.7  AP 24/09/2015 - Changed Varaints to RecRef's when we use GETURL function
+      //DOC NA2016.14 JH 02/03/2016 - Quick report to HTML call amended
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

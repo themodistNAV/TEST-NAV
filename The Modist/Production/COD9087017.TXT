@@ -1,0 +1,295 @@
+OBJECT Codeunit 9087017 Store Allocation Matrix Mgt
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/09/16;
+    Time=[ 5:23:35 PM];
+    Version List=NS2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Location@1000000030 : Record 14;
+      StoreAllocationLine@1000000026 : Record 9087036;
+      TnpToolkit@1000000024 : Codeunit 9062230;
+      StoreAllocationCode@1000000023 : Code[20];
+      UpdateMode@1000000022 : ' ,Init,Update,Back,Forward';
+      TableId@1000000021 : Integer;
+      TableView@1000000020 : Text[1024];
+      ItemNoFieldId@1000000005 : Integer;
+      VariantCodeFieldId@1000000004 : Integer;
+      DescriptionFieldId@1000000003 : Integer;
+      QuantityFieldId@1000000002 : Integer;
+      QuantityAllocatedFieldId@1000000006 : Integer;
+      SequenceFieldId@1000000007 : Integer;
+      SetSize@1000000019 : Integer;
+      SetMaxIndex@1000000018 : Integer;
+      SetStartIndex@1000000017 : Integer;
+      SetEndIndex@1000000016 : Integer;
+      SetCode@1000000015 : ARRAY [10] OF Code[20];
+      RecRef@1000000000 : RecordRef;
+      FldRef@1000000001 : FieldRef;
+
+    PROCEDURE "--- General Methods ---"@1000000003();
+    BEGIN
+    END;
+
+    PROCEDURE Initialise@1000000000(pStoreAllocationCode@1000000000 : Code[20];pTableId@1000000003 : Integer;pTableView@1000000002 : Text[1024];pItemNoFieldId@1000000004 : Integer;pVariantCodeFieldId@1000000005 : Integer;pDescriptionFieldId@1000000006 : Integer;pQuantityFieldId@1000000007 : Integer;pQuantityAllocatedFieldId@1000000008 : Integer;pSequenceFieldId@1000000001 : Integer);
+    BEGIN
+      //DOC NS2015.1 - Initialising the page
+      //  -> pStoreAllocationCode: Store allocation code
+      //  -> pTableId: Table ID (source table for allocation)
+      //  -> pTableView: Table view (source table for allocation)
+      //  -> pItemNoFieldId: Item number field ID
+      //  -> pVariantCodeFieldId: Variant code field ID
+      //  -> pDescriptionFieldId: Description field ID
+      //  -> pQuantityFieldId: Quantity field ID
+      //  -> pQuantityAllocatedFieldId: Quantity allocated field ID
+      //  -> pSequenceFieldId: Sequence field ID
+
+      StoreAllocationCode := pStoreAllocationCode;
+      TableId := pTableId;
+      TableView := pTableView;
+      ItemNoFieldId := pItemNoFieldId;
+      VariantCodeFieldId := pVariantCodeFieldId;
+      DescriptionFieldId := pDescriptionFieldId;
+      QuantityFieldId := pQuantityFieldId;
+      QuantityAllocatedFieldId := pQuantityAllocatedFieldId;
+      SequenceFieldId := pSequenceFieldId;
+    END;
+
+    PROCEDURE CreateRecords@1000000008(VAR pInventoryBuffer@1000000001 : Record 307;VAR pData@1000000003 : ARRAY [10] OF Decimal);
+    VAR
+      lItemNo@1000000004 : Code[20];
+      lVariantCode@1000000005 : Code[10];
+      lQuantityAllocated@1000000000 : Decimal;
+    BEGIN
+      //DOC NS2015.1 - Creating records
+      //  <> pInventoryBuffer: Target inventory buffer recordset
+      //  <> pData: Target array of data
+
+      RecRef.OPEN(TableId);
+      IF (TableView <> '') THEN
+        RecRef.SETVIEW(TableView);
+      IF (RecRef.FINDSET()) THEN
+      REPEAT
+        lItemNo := RecordRefFieldCode(ItemNoFieldId);
+        lVariantCode := RecordRefFieldCode(VariantCodeFieldId);
+        IF ( NOT (pInventoryBuffer.GET(lItemNo, lVariantCode))) THEN
+        BEGIN
+          pInventoryBuffer.INIT();
+          pInventoryBuffer."Item No." := lItemNo;
+          pInventoryBuffer."Variant Code" := lVariantCode;
+          pInventoryBuffer.Description := RecordRefFieldText(DescriptionFieldId);
+          pInventoryBuffer.Quantity := RecordRefFieldDecimal(QuantityFieldId);
+          lQuantityAllocated := RecordRefFieldDecimal(QuantityAllocatedFieldId);
+          pInventoryBuffer."Remaining Quantity" := pInventoryBuffer.Quantity - lQuantityAllocated;
+          pInventoryBuffer.Position := RecRef.GETPOSITION(FALSE);
+          pInventoryBuffer.Sequence := RecordRefFieldInteger(SequenceFieldId);
+          pInventoryBuffer.INSERT(TRUE);
+        END;
+      UNTIL (RecRef.NEXT() = 0);
+      RecRef.CLOSE();
+
+      SetSize := ARRAYLEN(pData);
+    END;
+
+    PROCEDURE UpdateSets@1000000002(pUpdateMode@1000000000 : Integer;VAR pCaption@1000000004 : ARRAY [10] OF Text[100];VAR pDataEnabled@1000000003 : ARRAY [10] OF Boolean);
+    VAR
+      lIndex@1000000001 : Integer;
+      lIndexIncluded@1000000002 : Integer;
+    BEGIN
+      //DOC NS2015.1 - Updating matrix sets for given update mode
+      //  -> pUpdateMode: The mode
+      //  <> pCaption: Target array of captions
+      //  <> pDataEnabled: Target set of "data enabled" flags
+
+      CASE (pUpdateMode) OF
+        UpdateMode::Init:
+          BEGIN
+            Location.RESET();
+            Location.SETRANGE(Store, TRUE);
+            SetMaxIndex := Location.COUNT();
+            SetStartIndex := 1;
+            SetEndIndex := TnpToolkit.MinInteger(SetSize, SetMaxIndex);
+          END;
+        UpdateMode::Back:
+          SetStartIndex := TnpToolkit.MaxInteger(SetStartIndex - SetSize, 1);
+        UpdateMode::Forward:
+          SetStartIndex := TnpToolkit.MaxInteger(TnpToolkit.MinInteger(SetStartIndex + SetSize, SetMaxIndex - SetSize + 1), 1);
+      END;
+      SetEndIndex := SetStartIndex + TnpToolkit.MinInteger(SetSize, SetMaxIndex) - 1;
+
+      CLEAR(pCaption);
+      lIndex := 0;
+      lIndexIncluded := 0;
+      Location.RESET();
+      Location.SETRANGE(Store, TRUE);
+      IF (Location.FINDSET()) THEN
+      REPEAT
+        lIndex += 1;
+        IF ((lIndex >= SetStartIndex) AND (lIndex <= SetEndIndex)) THEN
+        BEGIN
+          lIndexIncluded += 1;
+          SetCode[lIndexIncluded] := Location.Code;
+          pCaption[lIndexIncluded] := SetCode[lIndexIncluded];
+        END;
+      UNTIL (Location.NEXT() = 0);
+
+      CLEAR(pDataEnabled);
+      FOR lIndex := 1 TO SetSize DO
+        pDataEnabled[lIndex] := (SetMaxIndex >= lIndex);
+    END;
+
+    PROCEDURE ClearData@1000000006(VAR pInventoryBuffer@1000000000 : Record 307;VAR pData@1000000001 : ARRAY [10] OF Decimal);
+    BEGIN
+      //DOC NS2015.1 - Clearing data
+      //  <> pInventoryBuffer: The current record
+      //  <> pData: Target data array
+
+      CLEAR(pData);
+    END;
+
+    PROCEDURE UpdateData@1000000004(VAR pInventoryBuffer@1000000000 : Record 307);
+    VAR
+      lQuantityAllocated@1000000001 : Decimal;
+    BEGIN
+      //DOC NS2015.1 - Updating data for the current record
+      //  <> pInventoryBuffer: The current record
+
+      RecRef.OPEN(TableId);
+      RecRef.SETPOSITION(pInventoryBuffer.Position);
+      RecRef.SETRECFILTER();
+      IF (RecRef.FINDFIRST()) THEN
+      BEGIN
+        lQuantityAllocated := RecordRefFieldDecimal(QuantityAllocatedFieldId);
+        pInventoryBuffer.VALIDATE("Remaining Quantity", pInventoryBuffer.Quantity - lQuantityAllocated);
+        pInventoryBuffer.MODIFY(TRUE);
+      END;
+      RecRef.CLOSE();
+    END;
+
+    PROCEDURE UpdateMatrixData@1000000005(pInventoryBuffer@1000000000 : Record 307;VAR pData@1000000001 : ARRAY [10] OF Decimal);
+    VAR
+      lIndex@1000000002 : Integer;
+    BEGIN
+      //DOC NS2015.1 - Updating matrix data for the current record
+      //  -> pInventoryBuffer: The current record
+      //  <> pData: Target data array
+
+      CLEAR(pData);
+      StoreAllocationLine.RESET();
+      StoreAllocationLine.SETRANGE("Store Allocation Code", StoreAllocationCode);
+      StoreAllocationLine.SETRANGE("Item No.", pInventoryBuffer."Item No.");
+      StoreAllocationLine.SETRANGE("Variant Code", pInventoryBuffer."Variant Code");
+      FOR lIndex := 1 TO SetSize DO
+      BEGIN
+        StoreAllocationLine.SETRANGE("Location Code", SetCode[lIndex]);
+        IF (StoreAllocationLine.FINDFIRST()) THEN
+          pData[lIndex] := StoreAllocationLine.Quantity;
+      END;
+    END;
+
+    PROCEDURE SetData@1000000001(VAR pInventoryBuffer@1000000001 : Record 307;pIndex@1000000000 : Integer;VAR pData@1000000002 : ARRAY [10] OF Decimal);
+    BEGIN
+      //DOC NS2015.1 - Setting (modifying) data for the current record
+      //  <> pInventoryBuffer: The current record
+      //  -> pIndex: Index (of the data; 1..10)
+      //  <> pData: Target data array
+
+      StoreAllocationLine.RESET();
+      StoreAllocationLine.SETRANGE("Store Allocation Code", StoreAllocationCode);
+      StoreAllocationLine.SETRANGE("Item No.", pInventoryBuffer."Item No.");
+      StoreAllocationLine.SETRANGE("Variant Code", pInventoryBuffer."Variant Code");
+      StoreAllocationLine.SETRANGE("Location Code", SetCode[pIndex]);
+      IF (StoreAllocationLine.FINDFIRST()) THEN
+      BEGIN
+        IF (StoreAllocationLine.Quantity <> pData[pIndex]) THEN
+        BEGIN
+          IF (pData[pIndex] <> 0) THEN
+          BEGIN
+            StoreAllocationLine.VALIDATE(Quantity, pData[pIndex]);
+            StoreAllocationLine.MODIFY(TRUE);
+          END
+          ELSE
+            StoreAllocationLine.DELETE(TRUE);
+        END;
+      END
+      ELSE
+      BEGIN
+        CLEAR(StoreAllocationLine);
+        StoreAllocationLine.VALIDATE("Store Allocation Code", StoreAllocationCode);
+        StoreAllocationLine.VALIDATE("Item No.", pInventoryBuffer."Item No.");
+        StoreAllocationLine.VALIDATE("Variant Code", pInventoryBuffer."Variant Code");
+        StoreAllocationLine.VALIDATE("Location Code", SetCode[pIndex]);
+        StoreAllocationLine.VALIDATE(Quantity, pData[pIndex]);
+        StoreAllocationLine.INSERT(TRUE);
+      END;
+
+      UpdateData(pInventoryBuffer);
+    END;
+
+    PROCEDURE "--- RecordRef Methods ---"@1000000013();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE RecordRefFieldCode@1000000014(pFieldId@1000000000 : Integer) : Code[250];
+    BEGIN
+      //DOC NS2015.1 - Returning RecordRef field (code data type)
+      //  -> pFieldId - Field ID
+      //  <- Value
+
+      FldRef := RecRef.FIELD(pFieldId);
+      EXIT(FldRef.VALUE);
+    END;
+
+    LOCAL PROCEDURE RecordRefFieldText@1000000015(pFieldId@1000000000 : Integer) : Text[250];
+    BEGIN
+      //DOC NS2015.1 - Returning RecordRef field (text data type)
+      //  -> pFieldId - Field ID
+      //  <- Value
+
+      FldRef := RecRef.FIELD(pFieldId);
+      EXIT(FldRef.VALUE);
+    END;
+
+    LOCAL PROCEDURE RecordRefFieldInteger@1000000009(pFieldId@1000000000 : Integer) : Integer;
+    BEGIN
+      //DOC NS2015.1 - Returning RecordRef field (integer data type)
+      //  -> pFieldId - Field ID
+      //  <- Value
+
+      FldRef := RecRef.FIELD(pFieldId);
+      IF (LOWERCASE(FORMAT(FldRef.CLASS)) = 'flowfield') THEN
+        FldRef.CALCFIELD();
+      EXIT(FldRef.VALUE);
+    END;
+
+    LOCAL PROCEDURE RecordRefFieldDecimal@1000000016(pFieldId@1000000000 : Integer) : Decimal;
+    BEGIN
+      //DOC NS2015.1 - Returning RecordRef field (decimal data type)
+      //  -> pFieldId - Field ID
+      //  <- Value
+
+      FldRef := RecRef.FIELD(pFieldId);
+      IF (LOWERCASE(FORMAT(FldRef.CLASS)) = 'flowfield') THEN
+        FldRef.CALCFIELD();
+      EXIT(FldRef.VALUE);
+    END;
+
+    BEGIN
+    {
+      //DOC NS2015.1  JH 03/02/2014 - Created
+      //DOC NS2015.6  JH 09/04/2015 - Name changed to "*Store*" (clash with order stock allocation)
+      //DOC NS2016.16 JH 07/09/2016 - nSemble 2016
+    }
+    END.
+  }
+}
+

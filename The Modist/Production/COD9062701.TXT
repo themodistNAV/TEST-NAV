@@ -1,0 +1,1097 @@
+OBJECT Codeunit 9062701 Import Toolkit
+{
+  OBJECT-PROPERTIES
+  {
+    Date=24/05/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EnhancedRapidStartSetup@1000000008 : Record 9062844;
+      GeneralLedgerSetup@1000000001 : Record 98;
+      Convert@1000000005 : Codeunit 9062683;
+      DialogManagement@1000000009 : Codeunit 9062249;
+      ExcelExportImport@1000000002 : Codeunit 9062296;
+      ObjectFieldToolkit@1000000000 : Codeunit 9062343;
+      RecordRefManagement@1000000006 : Codeunit 9062241;
+      String@1000000004 : Codeunit 9062236;
+      TableFieldManagement@1000000007 : Codeunit 9062248;
+      TNPToolkit@1000000003 : Codeunit 9062230;
+      DialogIndex@1000000010 : ',Activity,Progress,Current';
+
+    PROCEDURE Initialise@1000000000(pTableId@1000000000 : Integer;VAR pBatchNo@1000000001 : Code[20];VAR pDate@1000000012 : Date;VAR pTime@1000000013 : Time;VAR pUserId@1000000014 : Code[50]);
+    VAR
+      lNoSeriesCode@1000000002 : Code[20];
+      eCustomerImportCode@1000000009 : TextConst 'ENU=CUST IMP;ENG=CUST IMP';
+      eCustomerImportDescription@1000000005 : TextConst 'ENU=Customer Import;ENG=Customer Import';
+      eCustomerImportStartingNo@1000000006 : TextConst 'ENU=CUIM000001;ENG=CUIM000001';
+      eVendorImportCode@1000000011 : TextConst 'ENU=VEND IMP;ENG=VEND IMP';
+      eVendorImportDescription@1000000004 : TextConst 'ENU=Vendor Import;ENG=Vendor Import';
+      eVendorImportStartingNo@1000000007 : TextConst 'ENU=VEIM000001;ENG=VEIM000001';
+      eItemImportCode@1000000010 : TextConst 'ENU=ITEM IMP;ENG=ITEM IMP';
+      eItemImportDescription@1000000003 : TextConst 'ENU=Item Import;ENG=Item Import';
+      eItemImportStartingNo@1000000008 : TextConst 'ENU=ITIM000001;ENG=ITIM000001';
+      eTableNotSupported@1000000015 : TextConst 'ENU=Table "%1" is not supported by import engine.;ENG=Table "%1" is not supported by import engine.';
+      eStockImportCode@1000000018 : TextConst 'ENU=VEND IMP;ENG=VEND IMP';
+      eStockImportDescription@1000000017 : TextConst 'ENU=Vendor Import;ENG=Vendor Import';
+      eStockImportStartingNo@1000000016 : TextConst 'ENU=VEIM000001;ENG=VEIM000001';
+    BEGIN
+      EnhancedRapidStartSetup.VerifyAndGet();
+      CASE (pTableId) OF
+        DATABASE::"Customer Import Worksheet Hdr.": pBatchNo := GetNoFromNoSeries(EnhancedRapidStartSetup.FIELDNO("Customer Import Nos."));
+        DATABASE::"Vendor Import Worksheet Hdr.": pBatchNo := GetNoFromNoSeries(EnhancedRapidStartSetup.FIELDNO("Vendor Import Nos."));
+        DATABASE::"Item Import Worksheet Header": pBatchNo := GetNoFromNoSeries(EnhancedRapidStartSetup.FIELDNO("Item Import Nos."));
+        DATABASE::"Stock Import Worksheet Hdr.": pBatchNo := GetNoFromNoSeries(EnhancedRapidStartSetup.FIELDNO("Stock Import Nos."));
+        ELSE ERROR(eTableNotSupported, ObjectFieldToolkit.GetTableName(pTableId));
+      END;
+      pDate := TODAY();
+      pTime := TIME();
+      pUserId := USERID();
+    END;
+
+    LOCAL PROCEDURE GetNoFromNoSeries@1000000003(pFieldId@1000000000 : Integer) : Code[20];
+    VAR
+      lNoSeriesManagement@1000000004 : Codeunit 396;
+      lRecordRef@1000000001 : RecordRef;
+      lFieldRef@1000000002 : FieldRef;
+      lCode@1000000003 : Code[10];
+    BEGIN
+      lRecordRef.GETTABLE(EnhancedRapidStartSetup);
+      lFieldRef := lRecordRef.FIELD(pFieldId);
+      lFieldRef.TESTFIELD();
+      lCode := lFieldRef.VALUE();
+      EXIT(lNoSeriesManagement.GetNextNo(lCode, TODAY(), TRUE));
+    END;
+
+    PROCEDURE ValidateStatus@1000000002(pStatus@1000000000 : ' ,Imported,In Progress,Processed';VAR pProcessedByUserId@1000000001 : Code[50];VAR pProcessedDate@1000000002 : Date;VAR pProcessedTime@1000000003 : Time);
+    BEGIN
+      IF (pStatus = pStatus::Processed) THEN
+      BEGIN
+        pProcessedByUserId := USERID();
+        pProcessedDate := TODAY();
+        pProcessedTime := TIME();
+      END;
+    END;
+
+    PROCEDURE GetLineStyle@1000000036(pStatus@1000000000 : ' ,Imported,Ready,Warning,Processed,Error') : Text;
+    BEGIN
+      CASE (pStatus) OF
+        pStatus::Imported: EXIT('StandardAccent');
+        pStatus::Ready: EXIT('Favorable');
+        pStatus::Warning: EXIT('Attention');
+        pStatus::Processed: EXIT('Standard');
+        pStatus::Error: EXIT('Unfavorable');
+        ELSE EXIT('Subordinate');
+      END;
+    END;
+
+    PROCEDURE GetLineStyleAdv@1000000053(pStatus@1000000001 : ' ,Imported,Ready,Warning,Processed,Error';pNoOfErrors@1000000002 : Integer) : Text;
+    BEGIN
+      EXIT(GetLineStyle(pStatus));
+    END;
+
+    PROCEDURE GetNewRecordDescription@1000000046(pCode@1000000000 : Code[20]) : Text;
+    BEGIN
+      EXIT(String.ToTitleCase(pCode) + '''''''');
+    END;
+
+    PROCEDURE CreateImportTemplate@1000000054(pImportWorksheetTableId@1000000000 : Integer;pTableId@1000000001 : Integer) : Boolean;
+    VAR
+      lField@1000000002 : Record 2000000041;
+    BEGIN
+      //DOC NA2016.14 - Creating import template
+      //  -> pImportWorksheetTableId: Import worksheet table ID
+      //  -> pTableId: Table ID
+      //  <- TRUE = Created, FALSE = Cancelled
+      //Import worksheet table is the table Excel will be imported to; the other table is the target table
+      //for import worksheet records. The second ID is required only for enhanced fields
+
+      EXIT(CreateImportTemplateAdv(pImportWorksheetTableId, pTableId, lField, FALSE));
+    END;
+
+    PROCEDURE CreateImportTemplateAdv@1000000062(pImportWorksheetTableId@1000000000 : Integer;pTableId@1000000001 : Integer;VAR pSimpleFieldsFilter@1000000007 : Record 2000000041;pInteraction@1000000008 : Boolean) : Boolean;
+    VAR
+      lEnhancedRapidStartSetup@1000000011 : Record 9062844;
+      lExcelBuffer@1000000003 : TEMPORARY Record 9062715;
+      lField@1000000002 : Record 2000000041;
+      lFieldFilter@1000000013 : Text;
+      lEnhancedFieldDefinition@1000000006 : Record 9062327;
+      lObjectFieldToolkit@1000000004 : Codeunit 9062343;
+      lCreateImportTemplate@1000000009 : Report 9062348;
+      lTableCaption@1000000005 : Text;
+      lTemplateType@1000000010 : Integer;
+      lIncludeEnhancedFields@1000000012 : Boolean;
+    BEGIN
+      //DOC NA2016.14 - Creating import template (advanced version)
+      //  -> pImportWorksheetTableId: Import worksheet table ID
+      //  -> pTableId: Table ID
+      //  -> pSimpleFieldsFilter: Simple fields filter
+      //  -> pInteraction: Flag to switch on interaction with the user
+      //  <- TRUE = Created, FALSE = Cancelled
+      //Import worksheet table is the table Excel will be imported to; the other table is the target table
+      //for import worksheet records. The second ID is required only for enhanced fields
+
+      lTemplateType := lEnhancedRapidStartSetup."Import Template Type"::"Simple Fields";
+      lIncludeEnhancedFields := TRUE;
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+      IF (pInteraction) THEN
+      BEGIN
+        lCreateImportTemplate.Initialise(lTemplateType, lIncludeEnhancedFields);
+        lCreateImportTemplate.RUNMODAL();
+        IF ( NOT (lCreateImportTemplate.GetOk())) THEN
+          EXIT(FALSE);
+        lTemplateType := lCreateImportTemplate.GetTemplateType();
+        lIncludeEnhancedFields := lCreateImportTemplate.GetIncludeEnhancedFields();
+      END;
+
+      lTableCaption := lObjectFieldToolkit.GetTableName(pImportWorksheetTableId);
+
+      lExcelBuffer.AddColumn(lTableCaption, FALSE, '', TRUE, FALSE, TRUE, '', 0);
+      lExcelBuffer.NewRow();
+
+      IF (lTemplateType = lEnhancedRapidStartSetup."Import Template Type"::"Simple Fields") THEN
+        lFieldFilter := pSimpleFieldsFilter.GETFILTER("No.")
+      ELSE
+        lFieldFilter := '2|>=100';
+
+      lField.RESET();
+      lField.SETRANGE(TableNo, pImportWorksheetTableId);
+      IF (lFieldFilter <> '') THEN
+        lField.SETFILTER("No.", lFieldFilter);
+      IF (lField.FINDSET()) THEN
+      REPEAT
+        lExcelBuffer.AddColumn(lField."Field Caption", FALSE, '', TRUE, FALSE, FALSE, '', 0);
+      UNTIL (lField.NEXT() = 0);
+
+      IF (lIncludeEnhancedFields) THEN
+      BEGIN
+        lEnhancedFieldDefinition.RESET();
+        lEnhancedFieldDefinition.SETRANGE("Table No.", pTableId);
+        lEnhancedFieldDefinition.SETFILTER("Source Type", '<>%1 & <> %2 & <>%3 & <> %4', lEnhancedFieldDefinition."Source Type"::Calculated,
+          lEnhancedFieldDefinition."Source Type"::Codeunit, lEnhancedFieldDefinition."Source Type"::Concatenate, lEnhancedFieldDefinition."Source Type"::"Function");
+        IF (lEnhancedFieldDefinition.FINDSET()) THEN
+        REPEAT
+          lExcelBuffer.AddColumn(lEnhancedFieldDefinition.Name, FALSE, '', TRUE, FALSE, FALSE, '', 0);
+        UNTIL (lEnhancedFieldDefinition.NEXT() = 0);
+      END;
+
+      lExcelBuffer.NewRow();
+
+      lExcelBuffer.CreateBookAndOpenExcel(lTableCaption, lTableCaption, COMPANYNAME(), USERID());
+    END;
+
+    PROCEDURE CheckVendorExists@1000000004(VendorNo@1000000000 : Code[20]) : Boolean;
+    VAR
+      Vendor@1000000001 : Record 23;
+    BEGIN
+
+      IF Vendor.GET(VendorNo) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckCustomerExists@1000000005(CustomerNo@1000000000 : Code[20]) : Boolean;
+    VAR
+      Customer@1000000001 : Record 18;
+    BEGIN
+
+      IF Customer.GET(CustomerNo) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckItemExist@1000000001(ItemNo@1000000000 : Code[20]) : Boolean;
+    VAR
+      Item@1000000001 : Record 27;
+    BEGIN
+
+      IF Item.GET(ItemNo) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckItemVariantExist@1000000056(ItemNo@1000000000 : Code[20];VariantCode@1000000002 : Code[20]) : Boolean;
+    VAR
+      ItemVariant@1000000001 : Record 5401;
+    BEGIN
+
+      IF ItemVariant.GET(ItemNo,VariantCode) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE GetDimensionCode@1000000008(pDimensionNo@1000000000 : Integer) : Code[20];
+    BEGIN
+      GeneralLedgerSetup.GET();
+      CASE (pDimensionNo) OF
+        1: EXIT(GeneralLedgerSetup."Shortcut Dimension 1 Code");
+        2: EXIT(GeneralLedgerSetup."Shortcut Dimension 2 Code");
+        3: EXIT(GeneralLedgerSetup."Shortcut Dimension 3 Code");
+        4: EXIT(GeneralLedgerSetup."Shortcut Dimension 4 Code");
+        5: EXIT(GeneralLedgerSetup."Shortcut Dimension 5 Code");
+        6: EXIT(GeneralLedgerSetup."Shortcut Dimension 6 Code");
+        7: EXIT(GeneralLedgerSetup."Shortcut Dimension 7 Code");
+        8: EXIT(GeneralLedgerSetup."Shortcut Dimension 8 Code");
+      END;
+      EXIT('');
+    END;
+
+    PROCEDURE ValidateDimensionValue@1000000063(pDimensionNo@1000000001 : Integer;VAR pDimensionValueCode@1000000000 : Code[20]);
+    VAR
+      lDimensionValue@1000000003 : Record 349;
+      lDimensionCode@1000000002 : Code[20];
+    BEGIN
+      lDimensionCode := GetDimensionCode(pDimensionNo);
+      IF (lDimensionCode <> '') THEN
+        IF ( NOT (lDimensionValue.GET(lDimensionCode, pDimensionValueCode))) THEN
+        BEGIN
+          lDimensionValue.RESET();
+          lDimensionValue.SETRANGE("Dimension Code", lDimensionCode);
+          lDimensionValue.SETFILTER(Code, '%1*', pDimensionValueCode);
+          IF (lDimensionValue.FINDFIRST()) THEN
+            pDimensionValueCode := lDimensionValue.Code;
+        END;
+    END;
+
+    PROCEDURE DimensionValueLookup@1000000006(pDimensionNo@1000000000 : Integer;VAR pDimensionValueCode@1000000001 : Code[20]) : Boolean;
+    VAR
+      lDimensionValue@1000000003 : Record 349;
+      lDimensionCode@1000000002 : Code[20];
+      lResult@1000000004 : Boolean;
+    BEGIN
+      lResult := FALSE;
+      lDimensionCode := GetDimensionCode(pDimensionNo);
+      IF (lDimensionCode <> '') THEN
+      BEGIN
+        lDimensionValue.RESET();
+        lDimensionValue.FILTERGROUP(2);
+        lDimensionValue.SETRANGE("Dimension Code", lDimensionCode);
+        lDimensionValue.FILTERGROUP(0);
+        IF (lDimensionValue.GET(lDimensionCode, pDimensionValueCode)) THEN;
+        IF (PAGE.RUNMODAL(0, lDimensionValue) = ACTION::LookupOK) THEN
+        BEGIN
+          pDimensionValueCode := lDimensionValue.Code;
+          lResult := TRUE;
+        END;
+      END;
+      EXIT(lResult);
+    END;
+
+    PROCEDURE CheckVendorPostingGroupExists@1000000007(PostingGroupCode@1000000000 : Code[20]) : Boolean;
+    VAR
+      VendorPostingGroup@1000000001 : Record 93;
+    BEGIN
+
+      IF VendorPostingGroup.GET(PostingGroupCode) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckCustomerPostingGroup@1000000009(PostingGroupCode@1000000000 : Code[20]) : Boolean;
+    VAR
+      CustomerPostingGroup@1000000001 : Record 92;
+    BEGIN
+
+      IF CustomerPostingGroup.GET(PostingGroupCode) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckPaymentMethodExists@1000000010(PaymentMethodCode@1000000000 : Code[20]) : Boolean;
+    VAR
+      PaymentMethod@1000000001 : Record 289;
+    BEGIN
+
+      IF PaymentMethod.GET(PaymentMethodCode) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckPaymentTermExists@1000000017(PaymentTermsCode@1000000000 : Code[20]) : Boolean;
+    VAR
+      PaymentTerms@1000000001 : Record 3;
+    BEGIN
+
+      IF PaymentTerms.GET(PaymentTermsCode) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckPurchaserExists@1000000018(PurchaserCode@1000000000 : Code[20]) : Boolean;
+    VAR
+      SalespersonPurchaser@1000000001 : Record 13;
+    BEGIN
+
+      IF SalespersonPurchaser.GET(PurchaserCode) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckGenBusPostGrpExists@1000000011(GBPG@1000000000 : Code[20]) : Boolean;
+    VAR
+      GenBusinessPostingGroup@1000000001 : Record 250;
+    BEGIN
+
+      IF GenBusinessPostingGroup.GET(GBPG) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckVATBusPostGrpExists@1000000049(GBPG@1000000000 : Code[20]) : Boolean;
+    VAR
+      VATBusinessPostingGroup@1000000001 : Record 323;
+    BEGIN
+
+      IF VATBusinessPostingGroup.GET(GBPG) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckCustDisctGrpExists@1000000051(CDG@1000000000 : Code[20]) : Boolean;
+    VAR
+      CustomerDiscountGroup@1000000001 : Record 340;
+    BEGIN
+      IF CustomerDiscountGroup.GET(CDG) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckCustPostGrpExists@1000000048(GBPG@1000000000 : Code[20]) : Boolean;
+    VAR
+      GenBusinessPostingGroup@1000000001 : Record 250;
+    BEGIN
+
+      IF GenBusinessPostingGroup.GET(GBPG) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckShipmentMethodExists@1000000021(ShipmentMethodCode@1000000000 : Code[20]) : Boolean;
+    VAR
+      ShipmentMethod@1000000001 : Record 10;
+    BEGIN
+
+      IF ShipmentMethod.GET(ShipmentMethodCode) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckReminderTermsExists@1000000029(pReminderTermsCode@1000000000 : Code[10]) : Boolean;
+    VAR
+      ReminderTerms@1000000001 : Record 292;
+    BEGIN
+        IF ReminderTerms.GET(pReminderTermsCode) THEN
+          EXIT(TRUE)
+        ELSE
+          EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckTypeOfSupplyExists@1000000032(pTypeOfSupplyCode@1000000000 : Code[10]) : Boolean;
+    VAR
+      TypeofSupply@1000000001 : Record 10500;
+    BEGIN
+      IF TypeofSupply.GET(pTypeOfSupplyCode) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckShippingAgentExists@1000000037(pShippingAgent@1000000000 : Code[10]) : Boolean;
+    VAR
+      ShippingAgent@1000000001 : Record 291;
+    BEGIN
+      IF ShippingAgent.GET(pShippingAgent) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckLanguageExists@1000000040(pLangCode@1000000000 : Code[10]) : Boolean;
+    VAR
+      Language@1000000001 : Record 8;
+    BEGIN
+      IF Language.GET(pLangCode) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckCurrencyExists@1000000042(pCurrCode@1000000000 : Code[10]) : Boolean;
+    VAR
+      Currency@1000000001 : Record 4;
+    BEGIN
+      IF Currency.GET(pCurrCode) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckCountyRegion@1000000044(pCountryRegionCode@1000000000 : Code[10]) : Boolean;
+    VAR
+      CountryRegion@1000000001 : Record 9;
+    BEGIN
+      IF CountryRegion.GET(pCountryRegionCode) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckLocationExist@1000000057(LocCode@1000000000 : Code[10]) : Boolean;
+    VAR
+      Locations@1000000001 : Record 14;
+    BEGIN
+
+      IF Locations.GET(LocCode) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckLocationIsNotTansit@1000000060(LocCode@1000000000 : Code[10]) : Boolean;
+    VAR
+      Locations@1000000001 : Record 14;
+    BEGIN
+
+      IF Locations.GET(LocCode) THEN
+        IF Locations."Use As In-Transit"=FALSE THEN
+          EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckLocationIsWarehouse@1000000061(LocCode@1000000000 : Code[10]) : Boolean;
+    VAR
+      Location@1000000001 : Record 14;
+    BEGIN
+
+      IF Location.GET(LocCode) THEN
+        IF (Location."Require Receive" ) OR ( Location."Require Shipment") THEN
+          EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckZoneExist@1000000058(LocCode@1000000000 : Code[10];ZoneCode@1000000002 : Code[20]) : Boolean;
+    VAR
+      Zone@1000000001 : Record 7300;
+    BEGIN
+
+      IF Zone.GET(LocCode,ZoneCode) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckBinExist@1000000059(LocCode@1000000000 : Code[10];BinCode@1000000002 : Code[20]) : Boolean;
+    VAR
+      Bin@1000000001 : Record 7354;
+    BEGIN
+
+      IF Bin.GET(LocCode,BinCode) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CreateVendorPostingGroup@1000000015(PostingGroupCode@1000000000 : Code[20]);
+    VAR
+      VendorPostingGroup@1000000001 : Record 93;
+    BEGIN
+
+      VendorPostingGroup.INIT;
+      VendorPostingGroup.Code:=PostingGroupCode;
+      IF NOT VendorPostingGroup.INSERT(TRUE) THEN
+        VendorPostingGroup.MODIFY;
+    END;
+
+    PROCEDURE CreateCustomerPostingGroup@1000000014(PostingGroupCode@1000000000 : Code[20]);
+    VAR
+      CustomerPostingGroup@1000000001 : Record 92;
+    BEGIN
+
+      CustomerPostingGroup.INIT;
+      CustomerPostingGroup.Code:=PostingGroupCode;
+      IF NOT CustomerPostingGroup.INSERT(TRUE) THEN
+        CustomerPostingGroup.MODIFY;
+    END;
+
+    PROCEDURE CreatePaymentMethod@1000000013(PaymentMethodCode@1000000000 : Code[20]);
+    VAR
+      PaymentMethod@1000000001 : Record 289;
+    BEGIN
+
+      PaymentMethod.INIT;
+      PaymentMethod.Code:=PaymentMethodCode;
+      TNPToolkit.CodeToName(PaymentMethodCode,PaymentMethod.Description);
+      IF NOT PaymentMethod.INSERT(TRUE) THEN
+        PaymentMethod.MODIFY;
+    END;
+
+    PROCEDURE CreateGenBusPostGrp@1000000012(GBPG@1000000000 : Code[20]);
+    VAR
+      GenBusinessPostingGroup@1000000001 : Record 250;
+    BEGIN
+
+      GenBusinessPostingGroup.INIT;
+      GenBusinessPostingGroup.Code:=GBPG;
+      TNPToolkit.CodeToName(GBPG,GenBusinessPostingGroup.Description);
+      IF NOT GenBusinessPostingGroup.INSERT(TRUE) THEN
+         GenBusinessPostingGroup.MODIFY;
+    END;
+
+    PROCEDURE CreateCustDiscountGrp@1000000052(CDG@1000000000 : Code[20]);
+    VAR
+      CustomerDiscountGroup@1000000001 : Record 340;
+    BEGIN
+
+      CustomerDiscountGroup.INIT;
+      CustomerDiscountGroup.Code:=CDG;
+      TNPToolkit.CodeToName(CDG,CustomerDiscountGroup.Description);
+      IF NOT CustomerDiscountGroup.INSERT(TRUE) THEN
+         CustomerDiscountGroup.MODIFY;
+    END;
+
+    PROCEDURE CreateVATBusPostGrp@1000000050(GBPG@1000000000 : Code[20]);
+    VAR
+      VATBusinessPostingGroup@1000000001 : Record 323;
+    BEGIN
+
+      VATBusinessPostingGroup.INIT;
+      VATBusinessPostingGroup.Code:=GBPG;
+      TNPToolkit.CodeToName(GBPG,VATBusinessPostingGroup.Description);
+      IF NOT VATBusinessPostingGroup.INSERT(TRUE) THEN
+         VATBusinessPostingGroup.MODIFY;
+    END;
+
+    PROCEDURE CreateShipmentMethod@1000000024(ShipmentMethodCode@1000000000 : Code[20]);
+    VAR
+      ShipmentMethod@1000000001 : Record 10;
+    BEGIN
+
+      ShipmentMethod.INIT;
+      ShipmentMethod.Code:=ShipmentMethodCode;
+      TNPToolkit.CodeToName(ShipmentMethodCode,ShipmentMethod.Description);
+      IF NOT ShipmentMethod.INSERT(TRUE) THEN
+        ShipmentMethod.MODIFY;
+    END;
+
+    PROCEDURE CreatePaymentTerm@1000000022(PaymentTermCode@1000000000 : Code[20]);
+    VAR
+      PaymentTerms@1000000001 : Record 3;
+    BEGIN
+
+      PaymentTerms.INIT;
+      PaymentTerms.Code:=PaymentTermCode;
+      TNPToolkit.CodeToName(PaymentTermCode,PaymentTerms.Description);
+      IF NOT PaymentTerms.INSERT(TRUE) THEN
+        PaymentTerms.MODIFY;
+    END;
+
+    PROCEDURE CreatePurchaser@1000000020(PurchaserCode@1000000000 : Code[20]);
+    VAR
+      SalespersonPurchaser@1000000001 : Record 13;
+    BEGIN
+
+      SalespersonPurchaser.INIT;
+      SalespersonPurchaser.Code:=PurchaserCode;
+      TNPToolkit.CodeToName(PurchaserCode,SalespersonPurchaser.Name);
+      IF NOT SalespersonPurchaser.INSERT(TRUE) THEN
+        SalespersonPurchaser.MODIFY;
+    END;
+
+    PROCEDURE CreateReminderTerms@1000000030(pReminterTermsCode@1000000000 : Code[10]);
+    VAR
+      ReminderTerms@1000000001 : Record 292;
+    BEGIN
+      ReminderTerms.INIT;
+      ReminderTerms.Code := pReminterTermsCode;
+      TNPToolkit.CodeToName(pReminterTermsCode,ReminderTerms.Description);
+      IF NOT ReminderTerms.INSERT THEN
+        ReminderTerms.MODIFY;
+    END;
+
+    PROCEDURE CreateTypeOfSupply@1000000033(pTypeOfSupplyCode@1000000001 : Code[10]);
+    VAR
+      TypeofSupply@1000000000 : Record 10500;
+    BEGIN
+      TypeofSupply.INIT;
+      TypeofSupply.Code := pTypeOfSupplyCode;
+      TNPToolkit.CodeToName(pTypeOfSupplyCode,TypeofSupply.Description);
+      IF NOT TypeofSupply.INSERT THEN
+        TypeofSupply.MODIFY;
+    END;
+
+    PROCEDURE CreateShippingAgent@1000000038(pShippingAgent@1000000000 : Code[10]);
+    VAR
+      ShippingAgent@1000000001 : Record 291;
+    BEGIN
+      ShippingAgent.INIT;
+      ShippingAgent.Code := pShippingAgent;
+      TNPToolkit.CodeToName(pShippingAgent,ShippingAgent.Name);
+      IF NOT ShippingAgent.INSERT THEN
+        ShippingAgent.MODIFY;
+    END;
+
+    PROCEDURE CreateLanguageCode@1000000041(pLangCode@1000000000 : Code[10]);
+    VAR
+      Language@1000000001 : Record 8;
+    BEGIN
+      Language.INIT;
+      Language.Code := pLangCode;
+      TNPToolkit.CodeToName(pLangCode,Language.Name);
+      IF NOT Language.INSERT THEN
+        Language.MODIFY;
+    END;
+
+    PROCEDURE CreateCurrencyCode@1000000043(pCurrCode@1000000000 : Code[10]);
+    VAR
+      Currency@1000000001 : Record 4;
+    BEGIN
+      Currency.INIT;
+      Currency.Code := pCurrCode;
+      TNPToolkit.CodeToName(pCurrCode,Currency.Description);
+      IF NOT Currency.INSERT THEN
+        Currency.MODIFY;
+    END;
+
+    PROCEDURE CreateCountryRegion@1000000045(pCountryCode@1000000000 : Code[10]);
+    VAR
+      CountryRegion@1000000001 : Record 9;
+    BEGIN
+      CountryRegion.INIT;
+      CountryRegion.Code := pCountryCode;
+      TNPToolkit.CodeToName(pCountryCode,CountryRegion.Name);
+      IF NOT CountryRegion.INSERT THEN
+        CountryRegion.MODIFY;
+    END;
+
+    PROCEDURE GetFirstPaymentMethod@1000000016() : Code[20];
+    VAR
+      PaymentMethod@1000000001 : Record 289;
+    BEGIN
+
+      IF (PaymentMethod.FINDFIRST) AND (PaymentMethod.COUNT=1) THEN
+        EXIT(PaymentMethod.Code)
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE GetFirstPaymentTerm@1000000019() : Code[20];
+    VAR
+      PaymentTerms@1000000001 : Record 3;
+    BEGIN
+
+      IF (PaymentTerms.FINDFIRST) AND (PaymentTerms.COUNT=1) THEN
+        EXIT(PaymentTerms.Code)
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE GetFirstShipmentMethod@1000000023() : Code[20];
+    VAR
+      ShipmentMethod@1000000001 : Record 10;
+    BEGIN
+
+      IF (ShipmentMethod.FINDFIRST) AND ( ShipmentMethod.COUNT=1) THEN
+        EXIT(ShipmentMethod.Code)
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE GetFirstReminderTerm@1000000031() : Code[10];
+    VAR
+      ReminderTerms@1000000000 : Record 292;
+    BEGIN
+      IF ReminderTerms.FINDFIRST THEN
+        EXIT(ReminderTerms.Code)
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE GetFirstTypeOfSupply@1000000034() : Code[10];
+    VAR
+      TypeofSupply@1000000000 : Record 10500;
+    BEGIN
+      IF (TypeofSupply.FINDFIRST) AND (TypeofSupply.COUNT=1) THEN
+        EXIT(TypeofSupply.Code)
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE GetFirstShippingAgent@1000000039() : Code[10];
+    VAR
+      ShippingAgent@1000000000 : Record 291;
+    BEGIN
+      IF ShippingAgent.FINDFIRST THEN
+        EXIT(ShippingAgent.Code)
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE CheckSystemInBuildMode@1000000047() : Boolean;
+    VAR
+      EnablementSetup@1000000000 : Record 9062229;
+    BEGIN
+      IF EnablementSetup.GET() THEN
+        EXIT(EnablementSetup."Is In Build Mode");
+    END;
+
+    LOCAL PROCEDURE "--- Import Log ---"@1000000077();
+    BEGIN
+    END;
+
+    PROCEDURE CreateLogEntry@1000000025(pRecord@1000000001 : Variant;pBatchNo@1000000003 : Code[20];pImportHeaderTableId@1000000005 : Integer;pImportLine@1000000006 : Variant);
+    VAR
+      ImportLog@1000000000 : Record 9062843;
+      TNPUtils@1000000004 : Codeunit 9062229;
+      lRecordRef@1000000002 : RecordRef;
+      lImportLineRecordRef@1000000007 : RecordRef;
+    BEGIN
+      lRecordRef.GETTABLE(pRecord);
+
+      IF pImportLine.ISRECORD THEN
+        lImportLineRecordRef.GETTABLE(pImportLine)
+      ELSE
+        lImportLineRecordRef := pImportLine;
+
+      CLEAR(ImportLog);
+      ImportLog.INIT;
+      ImportLog."Batch No" := pBatchNo;
+      ImportLog."Insert Date" := TODAY;
+      ImportLog."Insert Time" := TIME;
+      ImportLog."Import Header Table ID" := pImportHeaderTableId;
+      ImportLog."Record Table ID" := lRecordRef.NUMBER;
+      ImportLog."Record Table Position" := lRecordRef.GETPOSITION(TRUE);
+      ImportLog."Record Table Name" := lRecordRef.NAME;
+      ImportLog."Record Name" := TNPUtils.GetRecordDescription(ImportLog."Record Table ID",ImportLog."Record Table Position");
+      ImportLog."Import Line Table ID" := lImportLineRecordRef.NUMBER;
+      ImportLog."Import Line Position" := lImportLineRecordRef.GETPOSITION(TRUE);
+
+      ImportLog.INSERT(TRUE);
+    END;
+
+    PROCEDURE ReverseLogEntry@1000000028(VAR ImportLog@1000000000 : Record 9062843);
+    VAR
+      RecRef@1000000001 : RecordRef;
+      ImportRecRef@1000000002 : RecordRef;
+      ImportFld@1000000003 : FieldRef;
+    BEGIN
+
+      ImportLog.SETRANGE(ImportLog."Import Reversed",FALSE);
+
+      IF ImportLog.FINDSET THEN BEGIN
+
+        REPEAT
+        RecRef.OPEN(ImportLog."Record Table ID");
+        RecRef.SETPOSITION(ImportLog."Record Table Position");
+        IF RecRef.FIND THEN
+          RecRef.DELETE(TRUE);
+        RecRef.CLOSE;
+        ImportLog."Import Reversed":=TRUE;
+        ImportLog.MODIFY;
+
+        ImportRecRef.OPEN(ImportLog."Import Line Table ID");
+        ImportRecRef.SETPOSITION(ImportLog."Import Line Position");
+        IF ImportRecRef.FIND THEN BEGIN
+        ImportFld:=ImportRecRef.FIELD(3);
+        ImportFld.VALUE:=1;
+        ImportRecRef.MODIFY;
+        END;
+        ImportRecRef.CLOSE;
+
+      UNTIL ImportLog.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE TransferEnhancedFields@1000000027(pVariantSource@1000000003 : Variant;VAR pVariantTarget@1000000005 : Variant) : Integer;
+    VAR
+      RecRefSource@1000000001 : RecordRef;
+      RecRefTarget@1000000000 : RecordRef;
+      SourceEnhancedFieldValue@1000000002 : Record 9062328;
+      TargetEnhancedFieldValue@1000000004 : Record 9062328;
+      EnhFieldDefSource@1000000006 : Record 9062327;
+      EnhFieldDefTarget@1000000007 : Record 9062327;
+      Field@1000000008 : Record 2000000041;
+      FieldRef@1000000009 : FieldRef;
+      SourceDataType@1000000010 : Integer;
+      TargetDataType@1000000011 : Integer;
+      SourceValue@1000000012 : Variant;
+      TargetValue@1000000013 : Variant;
+      FieldsTransferred@1000000014 : Boolean;
+      EnhancedFieldsTransferred@1000000015 : Boolean;
+      Result@1000000016 : Integer;
+    BEGIN
+      //DOC NA2016.14 - Move the Enhanced field values to the the new table.
+      //  -> pVariantSource: Source record
+      //  <> pVariantTarget: Target record
+      //  <- Transfer result (see "Enhanced Rapid Start Setup"."Enh. Fields Transfer Result" for option values)
+
+      FieldsTransferred := FALSE;
+      EnhancedFieldsTransferred := FALSE;
+
+      IF pVariantSource.ISRECORD THEN
+        RecRefSource.GETTABLE(pVariantSource)
+      ELSE
+        RecRefSource:=pVariantSource;
+
+      IF pVariantTarget.ISRECORD THEN
+        RecRefTarget.GETTABLE(pVariantTarget)
+      ELSE
+        RecRefTarget:=pVariantTarget;
+
+      //Source will be an import line
+      SourceEnhancedFieldValue.SETRANGE("Table No.",RecRefSource.NUMBER);
+      SourceEnhancedFieldValue.SETFILTER("Position Text",'%1',RecRefSource.GETPOSITION);
+
+      IF SourceEnhancedFieldValue.FINDSET THEN BEGIN
+        REPEAT
+
+          //what is this field we are starting with
+          EnhFieldDefSource.GET(SourceEnhancedFieldValue."Table No.",SourceEnhancedFieldValue."Enhanced Field No.");
+
+          //is there a normal field of the same name in the target table
+          Field.RESET();
+          Field.SETRANGE(TableNo, RecRefTarget.NUMBER());
+          Field.SETRANGE(FieldName, EnhFieldDefSource.Name);
+          IF (Field.FINDFIRST()) THEN
+          BEGIN
+            FieldRef := RecRefTarget.FIELD(Field."No.");
+            SourceDataType := TableFieldManagement.EnhancedFieldTypeToDataType(EnhFieldDefSource.Type);
+            SourceEnhancedFieldValue.GetValue(SourceValue);
+            TargetDataType := TableFieldManagement.FieldRefTypeToDataType(FieldRef);
+            Convert.ConvertValue(SourceDataType, SourceValue, TargetDataType, TargetValue);
+            FieldRef.VALIDATE(TargetValue);
+
+            FieldsTransferred := TRUE;
+          END
+          ELSE
+          BEGIN
+            //is there an enhanced field of the same name in the target table
+            EnhFieldDefTarget.SETRANGE("Table No.",RecRefTarget.NUMBER);
+            EnhFieldDefTarget.SETRANGE(Name,EnhFieldDefSource.Name);
+
+            IF NOT EnhFieldDefTarget.FINDFIRST THEN BEGIN
+            CLEAR(EnhFieldDefTarget);
+            EnhFieldDefTarget.INIT;
+            EnhFieldDefTarget.VALIDATE("Table No.",RecRefTarget.NUMBER);
+            EnhFieldDefTarget.VALIDATE(Name,EnhFieldDefSource.Name);
+            EnhFieldDefTarget.INSERT(TRUE);
+            END;
+
+            TargetEnhancedFieldValue.INIT;
+            TargetEnhancedFieldValue.COPY(SourceEnhancedFieldValue);
+            TargetEnhancedFieldValue."Table No.":=RecRefTarget.NUMBER;
+            TargetEnhancedFieldValue."Enhanced Field No.":=EnhFieldDefTarget."Enhanced Field No.";
+            TargetEnhancedFieldValue.VALIDATE("Position Text",RecRefTarget.GETPOSITION);
+            TargetEnhancedFieldValue.INSERT;
+
+            EnhancedFieldsTransferred := TRUE;
+          END;
+
+        UNTIL SourceEnhancedFieldValue.NEXT=0;
+      END;
+
+      IF (FieldsTransferred) THEN
+        IF (pVariantTarget.ISRECORD()) THEN
+          RecRefTarget.SETTABLE(pVariantTarget);
+
+      IF ((FieldsTransferred) AND (EnhancedFieldsTransferred)) THEN
+        Result := EnhancedRapidStartSetup."Enh. Fields Transfer Result"::"Normal and Enhanced Fields"
+      ELSE IF (FieldsTransferred) THEN
+        Result := EnhancedRapidStartSetup."Enh. Fields Transfer Result"::"Normal Fields"
+      ELSE IF (EnhancedFieldsTransferred) THEN
+        Result := EnhancedRapidStartSetup."Enh. Fields Transfer Result"::"Enhanced Fields"
+      ELSE
+        Result := EnhancedRapidStartSetup."Enh. Fields Transfer Result"::"No Fields";
+
+      EXIT(Result);
+    END;
+
+    PROCEDURE DeleteEnhancedFields@1000000055(pVar@1000000000 : Variant);
+    VAR
+      RecRef@1000000001 : RecordRef;
+      EnhancedFieldManagement@1000000002 : Codeunit 9062298;
+    BEGIN
+      IF pVar.ISRECORD THEN
+        RecRef.GETTABLE(pVar)
+      ELSE
+        RecRef:=pVar;
+
+      EnhancedFieldManagement.DeleteFieldsFromRecord(RecRef.NUMBER,RecRef.GETPOSITION);
+    END;
+
+    LOCAL PROCEDURE "--- Configuration Template ---"@1000000073();
+    BEGIN
+    END;
+
+    PROCEDURE GetConfigTemplateTextValue@1000000064(pConfigTemplateCode@1000000001 : Code[10];pFieldId@1000000000 : Integer) : Text;
+    VAR
+      lConfigTemplateLine@1000000002 : Record 8619;
+    BEGIN
+      lConfigTemplateLine.RESET();
+      lConfigTemplateLine.SETRANGE("Data Template Code", pConfigTemplateCode);
+      lConfigTemplateLine.SETRANGE("Field ID", pFieldId);
+      IF (lConfigTemplateLine.FINDFIRST()) THEN
+        EXIT(lConfigTemplateLine."Default Value")
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE ApplyConfigTemplate@1000000074(pConfigurationTemplateCode@1000000002 : Code[20];VAR pRecordRef@1000000001 : RecordRef) : Boolean;
+    VAR
+      lConfigTemplateHeader@1000000003 : Record 8618;
+      lConfigTemplateManagement@1000000004 : Codeunit 8612;
+      lResult@1000000000 : Boolean;
+    BEGIN
+      //DOC NH2016.14 - Applying configuration template
+      //  -> pConfigurationTemplateCode: Configuration template code
+      //  <> pRecordRef: Record reference to apply configuration template to
+      //  <- TRUE = Template applied, FALSE = Template not present
+
+      lResult := FALSE;
+      IF (pConfigurationTemplateCode <> '') THEN
+      BEGIN
+        lConfigTemplateHeader.GET(pConfigurationTemplateCode);
+        lConfigTemplateManagement.UpdateRecord(lConfigTemplateHeader, pRecordRef);
+        lResult := TRUE;
+      END;
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE "--- Miscellaneous ---"@1000000075();
+    BEGIN
+    END;
+
+    PROCEDURE GetGenBusPostGrpFromCountry@1000000076(pCountryCode@1000000000 : Code[10]) : Code[20];
+    VAR
+      lCompanyInformation@1000000003 : Record 79;
+      lCountryRegion@1000000001 : Record 9;
+      lGenBusinessPostingGroup@1000000002 : Record 250;
+    BEGIN
+      //DOC NH2016.14 - Returning gen. business posting group based on country
+      //  -> pCountryCode: The country code
+      //  <- The group
+
+      EnhancedRapidStartSetup.VerifyAndGet();
+
+      lCompanyInformation.GET();
+      IF (pCountryCode IN ['', lCompanyInformation."Country/Region Code"]) THEN
+        EXIT(EnhancedRapidStartSetup."Vend. Domestic Gen. Bus. P. G.");
+
+      IF ( NOT (lCountryRegion.GET(pCountryCode))) THEN
+        CLEAR(lCountryRegion);
+
+      IF (lCountryRegion."EU Country/Region Code" <> '') THEN
+        EXIT(EnhancedRapidStartSetup."Vendor EU Gen Bus P Grp");
+
+      EXIT(EnhancedRapidStartSetup."Vendor Overseas Gen Bus P Grp");
+    END;
+
+    LOCAL PROCEDURE "--- Dialog ---"@1000000067();
+    BEGIN
+    END;
+
+    PROCEDURE InitaliseDialog@1000000066(pDialogTitle@1000000006 : Text);
+    VAR
+      eDialogActivityCounter@1000000005 : TextConst 'ENU=Activity;ENG=Activity';
+      eDialogProgressCounter@1000000004 : TextConst 'ENU=Progress;ENG=Progress';
+      eDialogCurrentCounter@1000000003 : TextConst 'ENU=Item;ENG=Item';
+      tDialogCheckingActivity@1000000002 : TextConst 'ENU=Checking;ENG=Checking';
+      tDialogProcessingActivity@1000000001 : TextConst 'ENU=Processing;ENG=Processing';
+    BEGIN
+      //DOC NH2016.14 - Initialise dialog (dialog management)
+      //  -> pDialogTitle: Dialog title
+
+      CLEAR(DialogManagement);
+      DialogManagement.Add(eDialogActivityCounter, 20, DialogIndex::Activity, 20, FALSE, FALSE);
+      DialogManagement.Add(eDialogProgressCounter, 20, DialogIndex::Progress, 20, TRUE, TRUE);
+      DialogManagement.Add(eDialogCurrentCounter, 20, DialogIndex::Current, 20, FALSE, FALSE);
+      DialogManagement.Open(pDialogTitle);
+    END;
+
+    PROCEDURE SetDialogActivity@1000000068(pActivity@1000000000 : Text);
+    BEGIN
+      //DOC NH2016.14 - Setting dialog activity (text)
+      //  -> pActivity: The activity (text)
+
+      DialogManagement.SetCounterTextValue(DialogIndex::Activity, pActivity);
+    END;
+
+    PROCEDURE SetDialogCheckingActivity@1000000070();
+    VAR
+      eActivity@1000000000 : TextConst 'ENU=Checking;ENG=Checking';
+    BEGIN
+      //DOC NH2016.14 - Setting dialog "Checking" activity
+
+      SetDialogActivity(eActivity);
+    END;
+
+    PROCEDURE SetDialogProcessingActivity@1000000071();
+    VAR
+      eActivity@1000000000 : TextConst 'ENU=Processing;ENG=Processing';
+    BEGIN
+      //DOC NH2016.14 - Setting dialog "Processing" activity
+
+      SetDialogActivity(eActivity);
+    END;
+
+    PROCEDURE SetDialogCount@1000000069(pCount@1000000000 : Integer);
+    BEGIN
+      //DOC NH2016.14 - Setting dialog count
+      //  -> pCount: The count
+
+      DialogManagement.SetCounterCount(DialogIndex::Progress, pCount);
+      DialogManagement.SetCounterTextValue(DialogIndex::Current, '');
+    END;
+
+    PROCEDURE SetDialogCurrent@1000000072(pCurrent@1000000000 : Text);
+    BEGIN
+      //DOC NH2016.14 - Setting dialog current
+      //  -> pCurrent: The current (text)
+
+      DialogManagement.StepCounter(DialogIndex::Progress);
+      DialogManagement.SetCounterTextValue(DialogIndex::Current, pCurrent);
+    END;
+
+    PROCEDURE FinaliseDialog@1000000065();
+    BEGIN
+      //DOC NH2016.14 - Finalising dialog (dialog management)
+
+      DialogManagement.Close();
+    END;
+
+    BEGIN
+    {
+      //DOC NH2016.14 JH 07/03/2016 - Created
+      //DOC NH2016.14 JH 17/03/2016 - Proper no. series implemented
+      //DOC NH2016.14 JH 29/03/2016 - Bug fixes
+      //DOC NH2016.15 JH 09/05/2016 - CfMD amendments
+      //DOC NH2016.16 JH 24/05/2016 - Bugfixes
+    }
+    END.
+  }
+}
+

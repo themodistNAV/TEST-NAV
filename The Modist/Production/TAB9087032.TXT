@@ -1,0 +1,248 @@
+OBJECT Table 9087032 Transfer Summary Line
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/10/16;
+    Time=12:28:47 PM;
+    Version List=NS2016.16;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               Rec.TESTFIELD("Document No.");
+             END;
+
+    OnDelete=VAR
+               PurchLine@1000000000 : Record 39;
+             BEGIN
+               TransferLine.RESET();
+               TransferLine.SETRANGE("Document No.", "Document No.");
+               TransferLine.SETRANGE("Item No.", "Item No.");
+               TransferLine.DELETEALL(TRUE);
+             END;
+
+    CaptionML=[ENU=Transfer Summary Line;
+               ENG=Transfer Summary Line];
+    LookupPageID=Page9087057;
+    DrillDownPageID=Page9087057;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Document No.        ;Code20        ;TableRelation="Transfer Header";
+                                                   CaptionML=[ENU=Document No.;
+                                                              ENG=Document No.] }
+    { 2   ;   ;Line No.            ;Integer       ;CaptionML=[ENU=Line No.;
+                                                              ENG=Line No.] }
+    { 10  ;   ;Item No.            ;Code20        ;TableRelation=IF (Style No.=FILTER('')) Item
+                                                                 ELSE IF (Style No.=FILTER(<>'')) Item WHERE (Style No.=FIELD(Style No.));
+                                                   OnValidate=VAR
+                                                                ICPartner@1000 : Record 413;
+                                                                ItemCrossReference@1001 : Record 5717;
+                                                                PrepmtMgt@1002 : Codeunit 441;
+                                                              BEGIN
+                                                                IF (Rec."Item No." <> xRec."Item No.") THEN
+                                                                BEGIN
+                                                                  NsembleSetup.VerifyAndGet();
+                                                                  DeleteTransferLines();
+                                                                  IF (NsembleSetup."Pre-Create Transfer Sizes") THEN
+                                                                    CreateTransferLines();
+                                                                END;
+
+                                                                Rec.VALIDATE(Description, '');
+                                                                Rec.VALIDATE("Description 2", '');
+                                                                IF (Rec."Item No." <> '') THEN
+                                                                BEGIN
+                                                                  Item.GET(Rec."Item No.");
+                                                                  Rec.VALIDATE(Description, Item.Description);
+                                                                  Rec.VALIDATE("Description 2", Item."Description 2");
+                                                                  Rec.VALIDATE("Style No.", Item."Style No.");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=No.;
+                                                              ENG=No.] }
+    { 20  ;   ;Style No.           ;Code20        ;TableRelation=Style;
+                                                   CaptionML=[ENU=Style No.;
+                                                              ENG=Style No.] }
+    { 30  ;   ;Description         ;Text50        ;CaptionML=[ENU=Description;
+                                                              ENG=Description] }
+    { 31  ;   ;Description 2       ;Text50        ;CaptionML=[ENU=Description 2;
+                                                              ENG=Description 2] }
+    { 40  ;   ;No. of Lines        ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Transfer Line" WHERE (Document No.=FIELD(Document No.),
+                                                                                            Item No.=FIELD(Item No.)));
+                                                   CaptionML=[ENU=No. of Lines;
+                                                              ENG=No. of Lines];
+                                                   Editable=No }
+    { 50  ;   ;Total Quantity      ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Transfer Line".Quantity WHERE (Document No.=FIELD(Document No.),
+                                                                                                   Item No.=FIELD(Item No.)));
+                                                   CaptionML=[ENU=Total Quantity;
+                                                              ENG=Total Quantity];
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 60  ;   ;Variant Filter      ;Code10        ;FieldClass=FlowFilter;
+                                                   TableRelation="Item Variant".Code WHERE (Item No.=FIELD(Item No.));
+                                                   CaptionML=[ENU=Variant Filter;
+                                                              ENG=Variant Filter] }
+    { 70  ;   ;Transfer Line Quantity;Decimal     ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Transfer Line".Quantity WHERE (Document No.=FIELD(Document No.),
+                                                                                                   Item No.=FIELD(Item No.)));
+                                                   CaptionML=[ENU=Transfer Line Quantity;
+                                                              ENG=Transfer Line Quantity];
+                                                   DecimalPlaces=0:5;
+                                                   BlankZero=Yes;
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Document No.,Line No.                   ;Clustered=Yes }
+    {    ;Document No.,Item No.                    }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      NsembleSetup@1000000005 : Record 9087000;
+      TransferHeader@1000000006 : Record 5740;
+      TransferLine@1000000000 : Record 5741;
+      Item@1000000002 : Record 27;
+      ItemVariant@1000000001 : Record 5401;
+      errCannotRename@1000000003 : TextConst 'ENU=errCannotRename;ENG=errCannotRename';
+      StandardText@1000000004 : Record 7;
+
+    PROCEDURE CreateTransferLines@1000000000();
+    VAR
+      lLineNo@1000000000 : Integer;
+      lUseVariants@1000000001 : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Creating transfer lines
+
+      IF ((Rec."Document No." <> '') AND (Rec."Item No." <> '')) THEN
+      BEGIN
+        lUseVariants := FALSE;
+        ItemVariant.RESET();
+        ItemVariant.SETRANGE("Item No.", "Item No.");
+        lUseVariants := ItemVariant.FINDSET();
+        IF (lUseVariants) THEN
+        REPEAT
+          CreateTransferLine(lLineNo, '', ItemVariant.Code);
+        UNTIL (ItemVariant.NEXT() = 0);
+
+        IF ( NOT (lUseVariants)) THEN
+          CreateTransferLine(lLineNo, '', '');
+      END;
+    END;
+
+    PROCEDURE CreateTransferLine@1000000002(VAR pLineNo@1000000000 : Integer;pItemNo@1000000002 : Code[20];pVariantCode@1000000001 : Code[10]);
+    BEGIN
+      //DOC NS2015.1 - Creating one transfer line
+      //  <> pLineNo: Source / destination line number
+      //  -> pItemNo: Item no.
+      //  -> pVariantCode: Variant code
+
+      TransferLine.RESET();
+      TransferLine.SETRANGE("Document No.", "Document No.");
+      IF (TransferLine.FINDLAST()) THEN
+        pLineNo := TransferLine."Line No."
+      ELSE
+        pLineNo := 0;
+      pLineNo += 10000;
+
+      IF (pItemNo = '') THEN
+        pItemNo := Rec."Item No.";
+
+      TransferLine.INIT();
+      TransferLine.VALIDATE("Document No.", "Document No.");
+      TransferLine."Line No." := pLineNo;
+      TransferLine.INSERT(TRUE);
+      TransferLine.VALIDATE("Item No.", pItemNo);
+      IF (pVariantCode <> '') THEN
+        TransferLine.VALIDATE("Variant Code", pVariantCode);
+      TransferLine.MODIFY(TRUE);
+    END;
+
+    PROCEDURE CreateTransferLineAdv@1000000005(VAR pLineNo@1000000000 : Integer;pItemNo@1000000002 : Code[20];pVariantCode@1000000001 : Code[20];VAR pTransferLine@1000000003 : Record 5741);
+    BEGIN
+      //DOC NS2015.1 - Creating one transfer line
+      //  <> pLineNo: Source / destination line number
+      //  -> pItemNo: Item no.
+      //  -> pVariantCode: Variant code
+      //  <> pTransferLine: Transfer line created
+
+      CreateTransferLine(pLineNo, pItemNo, pVariantCode);
+      pTransferLine := TransferLine;
+    END;
+
+    PROCEDURE DeleteTransferLines@1000000001();
+    BEGIN
+      //DOC NS2015.1 - Deleting transfer lines
+
+      IF (xRec."Item No." <> '') THEN
+      BEGIN
+        TransferLine.RESET();
+        TransferLine.SETRANGE("Document No.", Rec."Document No.");
+        TransferLine.SETRANGE("Item No.", xRec."Item No.");
+        TransferLine.DELETEALL(TRUE);
+      END;
+    END;
+
+    PROCEDURE UpdateTransferLines@1000000007(pFieldId@1000000003 : Integer);
+    VAR
+      lReqSummaryLine@1000000000 : Record 9087021;
+      lPurchaseLine@1000000002 : Record 39;
+      lConsignmentLine@1000000001 : Record 9062448;
+    BEGIN
+      //DOC NS2015.1 - Updating transfer lines for specified field ID
+      //  -> pFieldId: The field ID
+
+      TransferLine.RESET();
+      TransferLine.SETRANGE("Document No.", Rec."Document No.");
+      TransferLine.SETRANGE("Item No.", Rec."Item No.");
+      IF (TransferLine.FINDSET(TRUE)) THEN
+      REPEAT
+        CASE (pFieldId) OF
+        END;
+        TransferLine.MODIFY(TRUE);
+      UNTIL (TransferLine.NEXT() = 0);
+    END;
+
+    PROCEDURE ShowLines@1000000004();
+    BEGIN
+      //DOC NS2015.1 - Showing matrix
+
+      TransferLine.RESET();
+      TransferLine.FILTERGROUP(2);
+      TransferLine.SETRANGE("Document No.", "Document No.");
+      TransferLine.SETRANGE("Item No.", "Item No.");
+      TransferLine.FILTERGROUP(0);
+
+      PAGE.RUN(0, TransferLine);
+    END;
+
+    PROCEDURE ShowMatrix@1000000003();
+    VAR
+      lTransferMatrix@1000000000 : Page 9087074;
+    BEGIN
+      //DOC NS2015.1 - Showing matrix
+
+      TransferHeader.GET(Rec."Document No.");
+
+      CLEAR(lTransferMatrix);
+      lTransferMatrix.Initialise(Rec, TransferHeader.Status <> TransferHeader.Status::Open);
+      lTransferMatrix.RUNMODAL();
+    END;
+
+    BEGIN
+    {
+      //DOC NS2015.1  JH 19/03/2014 - Created
+      //DOC NS2015.4  PC 12/02/2014 - Changed Item No. relation to filter Items based on Style No.
+      //DOC NS2015.6  JH 09/04/2015 - "Stock Allocations" renamed to "Store Allocations"
+      //DOC NS2016.16 JH 07/09/2016 - nSemble 2016
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,506 @@
+OBJECT Report 10512 VAT Audit
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/09/14;
+    Time=12:00:00 PM;
+    Version List=NAVGB8.00;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=VAT Audit;
+               ENG=VAT Audit];
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  IF CustomerExport AND (CustomerFileName = '') THEN
+                    ERROR(Text1041007);
+
+                  IF OpenPaymentExport AND (OpenPaymentFileName = '') THEN
+                    ERROR(Text1041008);
+
+                  IF LateInvoicingExport THEN BEGIN
+                    IF LateInvoicingFileName = '' THEN
+                      ERROR(Text1041009);
+                    IF LateInvoiceDelay = 0 THEN
+                      ERROR(Text1041010);
+                  END;
+
+                  IF VendorExport AND (VendorFileName = '') THEN
+                    ERROR(Text1041011);
+
+                  IF VATEntryExport AND (VATEntryFileName = '') THEN
+                    ERROR(Text1041012);
+                END;
+
+  }
+  DATASET
+  {
+    { 6836;    ;DataItem;                    ;
+               DataItemTable=Table18;
+               DataItemTableView=SORTING(No.);
+               OnPreDataItem=BEGIN
+                               IF NOT CustomerExport THEN
+                                 CurrReport.BREAK;
+                               CustomerFile.TEXTMODE := TRUE;
+                               CustomerFile.WRITEMODE := TRUE;
+                               ToFile := CustomerFileName;
+                               CustomerFileName := RBMgt.ServerTempFileName('');
+                               CustomerFile.CREATE(CustomerFileName);
+                               CustomerFile.WRITE(
+                                 STRSUBSTNO(
+                                   SevenDelimitedValuesTxt,
+                                   FIELDCAPTION("No."),
+                                   FIELDCAPTION(Name),
+                                   FIELDCAPTION(Address),
+                                   FIELDCAPTION("Address 2"),
+                                   FIELDCAPTION(City),
+                                   FIELDCAPTION(County),
+                                   FIELDCAPTION("Post Code")));
+
+                               Window.OPEN(Text1041000);
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  CustomerFile.WRITE(
+                                    STRSUBSTNO(
+                                      SevenDelimitedValuesTxt,
+                                      "No.",
+                                      Name,
+                                      Address,
+                                      "Address 2",
+                                      City,
+                                      County,
+                                      "Post Code"));
+
+                                  Window.UPDATE(1,"No.");
+                                END;
+
+               OnPostDataItem=BEGIN
+                                IF CustomerExport THEN BEGIN
+                                  CustomerFile.CLOSE;
+                                  DOWNLOAD(CustomerFileName,'','C:','',ToFile);
+                                END;
+                              END;
+                               }
+
+    { 3292;    ;DataItem;OpenPayments        ;
+               DataItemTable=Table21;
+               DataItemTableView=SORTING(Customer No.,Open,Positive)
+                                 WHERE(Open=CONST(Yes),
+                                       Positive=CONST(No));
+               OnPreDataItem=BEGIN
+                               IF NOT OpenPaymentExport THEN
+                                 CurrReport.BREAK;
+                               OpenPaymentFile.TEXTMODE := TRUE;
+                               OpenPaymentFile.WRITEMODE := TRUE;
+                               ToFile := OpenPaymentFileName;
+                               OpenPaymentFileName := RBMgt.ServerTempFileName('');
+
+                               OpenPaymentFile.CREATE(OpenPaymentFileName);
+                               OpenPaymentFile.WRITE(
+                                 STRSUBSTNO(
+                                   SevenDelimitedValuesTxt,
+                                   FIELDCAPTION("Entry No."),
+                                   FIELDCAPTION("Customer No."),
+                                   FIELDCAPTION(Description),
+                                   FIELDCAPTION("Document Type"),
+                                   FIELDCAPTION("Document No."),
+                                   FIELDCAPTION("Posting Date"),
+                                   FIELDCAPTION("Original Amt. (LCY)")));
+
+                               Window.OPEN(Text1041001);
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  OpenPaymentFile.WRITE(
+                                    STRSUBSTNO(
+                                      SevenDelimitedValuesTxt,
+                                      "Entry No.",
+                                      "Customer No.",
+                                      Description,
+                                      FORMAT("Document Type"),
+                                      "Document No.",
+                                      "Posting Date",
+                                      "Original Amt. (LCY)"));
+
+                                  Window.UPDATE(1,"Entry No.");
+                                END;
+
+               OnPostDataItem=BEGIN
+                                IF OpenPaymentExport THEN BEGIN
+                                  OpenPaymentFile.CLOSE;
+                                  DOWNLOAD(OpenPaymentFileName,'','C:','',ToFile);
+                                END;
+                              END;
+
+               CalcFields=Original Amt. (LCY) }
+
+    { 5578;    ;DataItem;LateInvoicing       ;
+               DataItemTable=Table21;
+               DataItemTableView=SORTING(Customer No.,Open,Positive)
+                                 WHERE(Open=CONST(No),
+                                       Positive=CONST(No));
+               OnPreDataItem=BEGIN
+                               IF NOT LateInvoicingExport THEN
+                                 CurrReport.BREAK;
+                               LateInvoicingFile.TEXTMODE := TRUE;
+                               LateInvoicingFile.WRITEMODE := TRUE;
+                               ToFile := LateInvoicingFileName;
+                               LateInvoicingFileName := RBMgt.ServerTempFileName('');
+
+                               LateInvoicingFile.CREATE(LateInvoicingFileName);
+                               LateInvoicingFile.WRITE(
+                                 STRSUBSTNO(
+                                   EightDelimitedValuesTxt,
+                                   FIELDCAPTION("Entry No."),
+                                   FIELDCAPTION("Customer No."),
+                                   FIELDCAPTION(Description),
+                                   FIELDCAPTION("Document Type"),
+                                   FIELDCAPTION("Document No."),
+                                   Text1041002 + FIELDCAPTION("Posting Date"),
+                                   Text1041003 + FIELDCAPTION("Posting Date"),
+                                   FIELDCAPTION("Original Amt. (LCY)")));
+
+                               Window.OPEN(Text1041004);
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  CustLedgEntry@1040000 : Record 21;
+                                  InvPostingDates@1040001 : Text[250];
+                                  LateInvoice@1040002 : Boolean;
+                                BEGIN
+                                  LateInvoice := FALSE;
+                                  InvPostingDates := '';
+                                  CustLedgEntry.RESET;
+                                  CustLedgEntry.SETCURRENTKEY("Entry No.");
+                                  CustLedgEntry.SETRANGE("Entry No.","Closed by Entry No.");
+                                  IF CustLedgEntry.FIND('-') THEN
+                                    REPEAT
+                                      IF (CustLedgEntry."Posting Date" - "Posting Date") > LateInvoiceDelay THEN BEGIN
+                                        LateInvoice := TRUE;
+                                        IF STRLEN(InvPostingDates) > 1 THEN
+                                          InvPostingDates := InvPostingDates + ';';
+                                        IF STRLEN(InvPostingDates) < 240 THEN
+                                          InvPostingDates := InvPostingDates + FORMAT(CustLedgEntry."Posting Date");
+                                      END;
+                                    UNTIL CustLedgEntry.NEXT = 0;
+                                  CustLedgEntry.RESET;
+                                  CustLedgEntry.SETCURRENTKEY("Closed by Entry No.");
+                                  CustLedgEntry.SETRANGE("Closed by Entry No.","Entry No.");
+                                  IF CustLedgEntry.FIND('-') THEN
+                                    REPEAT
+                                      IF (CustLedgEntry."Posting Date" - "Posting Date") > LateInvoiceDelay THEN BEGIN
+                                        LateInvoice := TRUE;
+                                        IF STRLEN(InvPostingDates) > 1 THEN
+                                          InvPostingDates := InvPostingDates + ';';
+                                        IF STRLEN(InvPostingDates) < 240 THEN
+                                          InvPostingDates := InvPostingDates + FORMAT(CustLedgEntry."Posting Date");
+                                      END;
+                                    UNTIL CustLedgEntry.NEXT = 0;
+
+                                  IF NOT LateInvoice THEN
+                                    CurrReport.SKIP;
+
+                                  LateInvoicingFile.WRITE(
+                                    STRSUBSTNO(
+                                      EightDelimitedValuesTxt,
+                                      "Entry No.",
+                                      "Customer No.",
+                                      Description,
+                                      FORMAT("Document Type"),
+                                      "Document No.",
+                                      "Posting Date",
+                                      InvPostingDates,
+                                      "Original Amt. (LCY)"));
+
+                                  Window.UPDATE(1,"Entry No.");
+                                END;
+
+               OnPostDataItem=BEGIN
+                                IF LateInvoicingExport THEN BEGIN
+                                  LateInvoicingFile.CLOSE;
+                                  DOWNLOAD(LateInvoicingFileName,'','C:','',ToFile);
+                                END;
+                              END;
+
+               CalcFields=Original Amt. (LCY) }
+
+    { 3182;    ;DataItem;                    ;
+               DataItemTable=Table23;
+               DataItemTableView=SORTING(No.);
+               OnPreDataItem=BEGIN
+                               IF NOT VendorExport THEN
+                                 CurrReport.BREAK;
+                               VendorFile.TEXTMODE := TRUE;
+                               VendorFile.WRITEMODE := TRUE;
+                               ToFile := VendorFileName;
+                               VendorFileName := RBMgt.ServerTempFileName('');
+
+                               VendorFile.CREATE(VendorFileName);
+                               VendorFile.WRITE(
+                                 STRSUBSTNO(
+                                   SevenDelimitedValuesTxt,
+                                   FIELDCAPTION("No."),
+                                   FIELDCAPTION(Name),
+                                   FIELDCAPTION(Address),
+                                   FIELDCAPTION("Address 2"),
+                                   FIELDCAPTION(City),
+                                   FIELDCAPTION(County),
+                                   FIELDCAPTION("Post Code")));
+
+                               Window.OPEN(Text1041005);
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  VendorFile.WRITE(
+                                    STRSUBSTNO(
+                                      EightDelimitedValuesTxt,
+                                      "No.",
+                                      Name,
+                                      Address,
+                                      "Address 2",
+                                      City,
+                                      County,
+                                      "Post Code"));
+
+                                  Window.UPDATE(1,"No.");
+                                END;
+
+               OnPostDataItem=BEGIN
+                                IF VendorExport THEN BEGIN
+                                  VendorFile.CLOSE;
+                                  DOWNLOAD(VendorFileName,'','C:','',ToFile);
+                                END;
+                              END;
+                               }
+
+    { 7612;    ;DataItem;                    ;
+               DataItemTable=Table254;
+               DataItemTableView=SORTING(Document No.,Posting Date);
+               OnPreDataItem=BEGIN
+                               IF NOT VATEntryExport THEN
+                                 CurrReport.BREAK;
+                               VATEntryFile.TEXTMODE := TRUE;
+                               VATEntryFile.WRITEMODE := TRUE;
+
+                               ToFile := VATEntryFileName;
+                               VATEntryFileName := RBMgt.ServerTempFileName('');
+
+                               VATEntryFile.CREATE(VATEntryFileName);
+                               VATEntryFile.WRITE(
+                                 STRSUBSTNO(
+                                   TenDelimitedValuesTxt,
+                                   FIELDCAPTION("Posting Date"),
+                                   FIELDCAPTION("Document No."),
+                                   FIELDCAPTION("Document Type"),
+                                   FIELDCAPTION(Base),
+                                   FIELDCAPTION(Amount),
+                                   FIELDCAPTION("VAT Calculation Type"),
+                                   FIELDCAPTION(Type),
+                                   FIELDCAPTION("Bill-to/Pay-to No."),
+                                   FIELDCAPTION("External Document No."),
+                                   FIELDCAPTION("Entry No.")));
+
+                               Window.OPEN(Text1041006);
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  VATEntryFile.WRITE(
+                                    STRSUBSTNO(
+                                      TenDelimitedValuesTxt,
+                                      "Posting Date",
+                                      "Document No.",
+                                      FORMAT("Document Type"),
+                                      Base,
+                                      Amount,
+                                      FORMAT("VAT Calculation Type"),
+                                      FORMAT(Type),
+                                      "Bill-to/Pay-to No.",
+                                      "External Document No.",
+                                      "Entry No."));
+
+                                  Window.UPDATE(1,"Entry No.");
+                                END;
+
+               OnPostDataItem=BEGIN
+                                IF VATEntryExport THEN BEGIN
+                                  VATEntryFile.CLOSE;
+                                  DOWNLOAD(VATEntryFileName,'','C:','',ToFile);
+                                END;
+                              END;
+
+               ReqFilterFields=Posting Date }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnInit=BEGIN
+               VATEntryFileNameCtrlVisible := TRUE;
+               VendorFileNameCtrlVisible := TRUE;
+               LateInvoicingFileNameCtrlVisib := TRUE;
+               OpenPaymentFileNameCtrlVisible := TRUE;
+               CustomerFileNameCtrlVisible := TRUE;
+             END;
+
+      OnOpenPage=BEGIN
+                   IF CustomerFileName = '' THEN
+                     CustomerFileName := Text1041013;
+                   IF OpenPaymentFileName = '' THEN
+                     OpenPaymentFileName := Text1041014;
+                   IF LateInvoicingFileName = '' THEN
+                     LateInvoicingFileName := Text1041015;
+                   IF VendorFileName = '' THEN
+                     VendorFileName := Text1041016;
+                   IF VATEntryFileName = '' THEN
+                     VATEntryFileName := Text1041017;
+                   IF LateInvoiceDelay = 0 THEN
+                     LateInvoiceDelay := 14;
+                   CustomerFileNameCtrlVisible := FALSE;
+                   OpenPaymentFileNameCtrlVisible := FALSE;
+                   LateInvoicingFileNameCtrlVisib := FALSE;
+                   VendorFileNameCtrlVisible := FALSE;
+                   VATEntryFileNameCtrlVisible := FALSE
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=[ENU=Options;
+                             ENG=Options] }
+
+      { 2   ;2   ;Field     ;
+                  CaptionML=[ENU=Export Customers;
+                             ENG=Export Customers];
+                  SourceExpr=CustomerExport }
+
+      { 4   ;2   ;Field     ;
+                  Name=CustomerFileNameCtrl;
+                  CaptionML=[ENU=Customer File;
+                             ENG=Customer File];
+                  SourceExpr=CustomerFileName;
+                  Visible=CustomerFileNameCtrlVisible }
+
+      { 8   ;2   ;Field     ;
+                  CaptionML=[ENU=Export Open Payments;
+                             ENG=Export Open Payments];
+                  SourceExpr=OpenPaymentExport }
+
+      { 6   ;2   ;Field     ;
+                  Name=OpenPaymentFileNameCtrl;
+                  CaptionML=[ENU=Open Payments File;
+                             ENG=Open Payments File];
+                  SourceExpr=OpenPaymentFileName;
+                  Visible=OpenPaymentFileNameCtrlVisible }
+
+      { 12  ;2   ;Field     ;
+                  CaptionML=[ENU=Export Late Invoicing;
+                             ENG=Export Late Invoicing];
+                  SourceExpr=LateInvoicingExport }
+
+      { 21  ;2   ;Field     ;
+                  CaptionML=[ENU=Late Invoice Delay (Days);
+                             ENG=Late Invoice Delay (Days)];
+                  DecimalPlaces=0:0;
+                  SourceExpr=LateInvoiceDelay;
+                  MinValue=0 }
+
+      { 10  ;2   ;Field     ;
+                  Name=LateInvoicingFileNameCtrl;
+                  CaptionML=[ENU=Late Invoicing File;
+                             ENG=Late Invoicing File];
+                  SourceExpr=LateInvoicingFileName;
+                  Visible=LateInvoicingFileNameCtrlVisib }
+
+      { 15  ;2   ;Field     ;
+                  CaptionML=[ENU=Export Vendors;
+                             ENG=Export Vendors];
+                  SourceExpr=VendorExport }
+
+      { 14  ;2   ;Field     ;
+                  Name=VendorFileNameCtrl;
+                  CaptionML=[ENU=Vendor File;
+                             ENG=Vendor File];
+                  SourceExpr=VendorFileName;
+                  Visible=VendorFileNameCtrlVisible }
+
+      { 16  ;2   ;Field     ;
+                  CaptionML=[ENU=Export VAT Entries;
+                             ENG=Export VAT Entries];
+                  SourceExpr=VATEntryExport }
+
+      { 1   ;2   ;Field     ;
+                  Name=VATEntryFileNameCtrl;
+                  CaptionML=[ENU=VAT Entry File;
+                             ENG=VAT Entry File];
+                  SourceExpr=VATEntryFileName;
+                  Visible=VATEntryFileNameCtrlVisible }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      Text1041000@1041000 : TextConst 'ENU=Exporting Customers...#1##################;ENG=Exporting Customers...             #1##################';
+      Text1041001@1041001 : TextConst 'ENU=Exporting Open Payments...#1##################;ENG=Exporting Open Payments...         #1##################';
+      Text1041002@1041002 : TextConst 'ENU="Payment ";ENG="Payment "';
+      Text1041003@1041003 : TextConst 'ENU="Invoice ";ENG="Invoice "';
+      Text1041004@1041004 : TextConst 'ENU=Exporting Late Invoicing Entries...#1##################;ENG=Exporting Late Invoicing Entries...#1##################';
+      Text1041005@1041005 : TextConst 'ENU=Exporting Vendors...#1##################;ENG=Exporting Vendors...               #1##################';
+      Text1041006@1041006 : TextConst 'ENU=Exporting VAT Entries...#1##################;ENG=Exporting VAT Entries...           #1##################';
+      Text1041007@1041007 : TextConst 'ENU=Please enter the Customer File name.;ENG=Please enter the Customer File name.';
+      Text1041008@1041008 : TextConst 'ENU=Please enter the Open Payments File name.;ENG=Please enter the Open Payments File name.';
+      Text1041009@1041009 : TextConst 'ENU=Please enter the Late Invoicing File name.;ENG=Please enter the Late Invoicing File name.';
+      Text1041010@1041010 : TextConst 'ENU=Please enter the Late Invoicing No. of Days.;ENG=Please enter the Late Invoicing No. of Days.';
+      Text1041011@1041011 : TextConst 'ENU=Please enter the Vendor File name.;ENG=Please enter the Vendor File name.';
+      Text1041012@1041012 : TextConst 'ENU=Please enter the VAT Entry File name.;ENG=Please enter the VAT Entry File name.';
+      Text1041013@1041013 : TextConst 'ENU=C:\Customer.CSV;ENG=C:\Customer.CSV';
+      Text1041014@1041014 : TextConst 'ENU=C:\OpenPay.CSV;ENG=C:\OpenPay.CSV';
+      Text1041015@1041015 : TextConst 'ENU=C:\LateInv.CSV;ENG=C:\LateInv.CSV';
+      Text1041016@1041016 : TextConst 'ENU=C:\Vendor.CSV;ENG=C:\Vendor.CSV';
+      Text1041017@1041017 : TextConst 'ENU=C:\VATentry.CSV;ENG=C:\VATentry.CSV';
+      RBMgt@1040015 : Codeunit 419;
+      Window@1040016 : Dialog;
+      CustomerFile@1040009 : File;
+      OpenPaymentFile@1040008 : File;
+      LateInvoicingFile@1040007 : File;
+      VendorFile@1040006 : File;
+      VATEntryFile@1040005 : File;
+      CustomerFileName@1040000 : Text[1024];
+      OpenPaymentFileName@1040001 : Text[1024];
+      LateInvoicingFileName@1040002 : Text[1024];
+      VendorFileName@1040003 : Text[1024];
+      VATEntryFileName@1040004 : Text[1024];
+      CustomerExport@1040010 : Boolean;
+      OpenPaymentExport@1040011 : Boolean;
+      LateInvoicingExport@1040012 : Boolean;
+      VendorExport@1040013 : Boolean;
+      VATEntryExport@1040014 : Boolean;
+      LateInvoiceDelay@1040018 : Decimal;
+      ToFile@1040022 : Text[1024];
+      CustomerFileNameCtrlVisible@19063186 : Boolean INDATASET;
+      OpenPaymentFileNameCtrlVisible@19009069 : Boolean INDATASET;
+      LateInvoicingFileNameCtrlVisib@19078463 : Boolean INDATASET;
+      VendorFileNameCtrlVisible@19047292 : Boolean INDATASET;
+      VATEntryFileNameCtrlVisible@19071291 : Boolean INDATASET;
+      SevenDelimitedValuesTxt@1040019 : TextConst '@@@={Locked};ENU="""%1"",""%2"",""%3"",""%4"",""%5"",""%6"",""%7""";ENG="""%1"",""%2"",""%3"",""%4"",""%5"",""%6"",""%7"""';
+      EightDelimitedValuesTxt@1040020 : TextConst '@@@={Locked};ENU="""%1"",""%2"",""%3"",""%4"",""%5"",""%6"",""%7"",""%8""";ENG="""%1"",""%2"",""%3"",""%4"",""%5"",""%6"",""%7"",""%8"""';
+      TenDelimitedValuesTxt@1040023 : TextConst '@@@={Locked};ENU="""%1"",""%2"",""%3"",""%4"",""%5"",""%6"",""%7"",""%8"",""%9"",""%10""";ENG="""%1"",""%2"",""%3"",""%4"",""%5"",""%6"",""%7"",""%8"",""%9"",""%10"""';
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

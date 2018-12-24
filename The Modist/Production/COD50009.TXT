@@ -1,0 +1,264 @@
+OBJECT Codeunit 50009 DW Inventory Delta Export V2
+{
+  OBJECT-PROPERTIES
+  {
+    Date=17/12/18;
+    Time=[ 5:06:59 PM];
+    Modified=Yes;
+    Version List=TM6000;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            GetModistSetup;
+            GetPlatformSetup;
+            GetPlatformProcessingSetup;
+
+            ItemDistribution.RESET;
+            ItemDistribution.SETRANGE(Code,Platform.Code);
+
+            PlatformInventoryLocation.RESET;
+            PlatformInventoryLocation.SETRANGE("Platform Code",Platform.Code);
+
+            Actions.RESET;
+            Actions.SETCURRENTKEY("Record ID","Process Code",Status);
+            Actions.SETRANGE("Process Code",Platform."Stock Synch. Process Code");
+            Actions.SETRANGE(Status,Actions.Status::Pending);
+            IF Actions.ISEMPTY THEN
+              EXIT;
+
+            BuildXmlHeader;
+
+            Actions.FINDSET(TRUE,TRUE);
+            REPEAT
+              InitVariables;
+
+              Actions.Status := Actions.Status::Processing;
+              Actions.MODIFY;
+
+              RecID := Actions."Record ID";
+              GetItemVariantDetails(RecID.GETRECORD);
+              Inventory := CalcItemInventory;
+
+              BuildXmlLines(ItemNo,VariantCode,Inventory);
+
+              Actions."Inventory Exported" := Inventory;
+              Actions.Status := Actions.Status::Completed;
+              Actions."Process Date" := TODAY;
+              Actions."Process Time" := TIME;
+              Actions."Process User ID" := USERID;
+              Actions."File Name" := FileManagement.GetFileName(FileName);
+              Actions.MODIFY;
+
+            UNTIL Actions.NEXT=0;
+            BuildXmlFooter;
+            TransferToSFTP;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Item@1170000015 : Record 27;
+      ItemVariant@1170000014 : Record 5401;
+      Platform@1170000002 : Record 50003;
+      PlatformProcessingGroup@1170000004 : Record 50007;
+      ModistSetup@1170000000 : Record 50000;
+      Actions@1170000005 : Record 50025;
+      ItemDistribution@1170000006 : Record 50026;
+      PlatformInventoryLocation@1170000013 : Record 50034;
+      XMLDocument@1170000020 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLWriter@1170000019 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlWriter";
+      AvailabletoPromise@1170000016 : Codeunit 5790;
+      WebIntegrationManagement@1170000018 : Codeunit 50100;
+      FileManagement@1170000011 : Codeunit 419;
+      FileName@1170000017 : Text;
+      ItemNo@1170000010 : Code[20];
+      VariantCode@1170000012 : Code[10];
+      RecID@1170000007 : RecordID;
+      ModistSetupOK@1170000001 : Boolean;
+      Text000@1170000003 : TextConst 'ENU=This Codeunit is not attached to any Platform.';
+      UseItemDistributionList@1170000009 : Boolean;
+      Inventory@1170000008 : Decimal;
+
+    LOCAL PROCEDURE BuildXmlHeader@1170000004();
+    BEGIN
+      XMLWriter := XMLWriter.Create(FileName);
+
+      XMLWriter.WriteStartElement('inventory','http://www.demandware.com/xml/impex/inventory/2007-05-31');
+        XMLWriter.WriteStartElement('inventory-list');
+          XMLWriter.WriteStartElement('header');
+            XMLWriter.WriteAttributeString('list-id',PlatformProcessingGroup."Primary Element ID");
+            XMLWriter.WriteElementString('default-instock','false');
+            XMLWriter.WriteElementString('description','Product Sku inventory');
+            XMLWriter.WriteElementString('use-bundle-inventory-only','false');
+            XMLWriter.WriteElementString('on-order','true');
+          XMLWriter.WriteEndElement; // </header>
+          XMLWriter.WriteStartElement('records');
+    END;
+
+    LOCAL PROCEDURE BuildXmlLines@1170000005(pItemNo@1170000000 : Code[20];pVariantCode@1170000001 : Code[10];pQty@1170000002 : Decimal);
+    BEGIN
+            XMLWriter.WriteStartElement('record');
+              IF pVariantCode = ModistSetup."One Size Code" THEN
+                XMLWriter.WriteAttributeString('product-id',pItemNo)
+              ELSE
+                XMLWriter.WriteAttributeString('product-id',pItemNo + '-' + pVariantCode);
+              XMLWriter.WriteElementString('allocation',FORMAT(pQty,0,1));
+              XMLWriter.WriteElementString('perpetual',FORMAT(FALSE, 0, 9));
+              XMLWriter.WriteElementString('preorder-backorder-handling','none');
+              XMLWriter.WriteElementString('preorder-backorder-allocation',FORMAT(0, 0, 9));
+            XMLWriter.WriteEndElement; // </record>
+    END;
+
+    LOCAL PROCEDURE BuildXmlFooter@1170000007();
+    BEGIN
+          XMLWriter.WriteEndElement; // </records>
+        XMLWriter.WriteEndElement; // </inventory-list>
+      XMLWriter.WriteEndElement; // </inventory>
+      XMLWriter.Flush;
+      XMLWriter.Close;
+    END;
+
+    LOCAL PROCEDURE TransferToSFTP@1170000006();
+    BEGIN
+      IF PlatformProcessingGroup."Enable SFTP Connect" THEN BEGIN //if we are ready to connect to sftp
+        WebIntegrationManagement.TransferFTPfiles2(PlatformProcessingGroup."Working Location",PlatformProcessingGroup."Archive Location",'.xml',PlatformProcessingGroup."FTP temporary file extension",
+                                                PlatformProcessingGroup."SFTP Server",PlatformProcessingGroup."FTP Folder",PlatformProcessingGroup."FTP Archive Folder",TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetItemVariantDetails@1170000003(pRecRef@1170000000 : RecordRef);
+    BEGIN
+      WITH pRecRef DO BEGIN
+        CASE NUMBER OF
+          DATABASE::Item:
+            BEGIN
+              Item.RESET;
+              SETTABLE(Item);
+              ItemNo := Item."No.";
+              VariantCode := '';
+              Item.SETRANGE("No.",ItemNo);
+            END;
+          DATABASE::"Item Variant":
+            BEGIN
+              Item.RESET;
+              ItemVariant.RESET;
+              SETTABLE(ItemVariant);
+              Item.GET(ItemVariant."Item No.");
+              ItemNo := ItemVariant."Item No.";
+              VariantCode := ItemVariant.Code;
+              Item.SETRANGE("No.",ItemNo);
+            END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetPlatformSetup@1170000001();
+    BEGIN
+      Platform.RESET;
+      Platform.SETRANGE("Inv. Delta Export CU",CODEUNIT::"DW Inventory Delta Export V2");
+      IF NOT Platform.FINDFIRST THEN
+        ERROR(Text000);
+      Platform.TESTFIELD("Stock Synch. Process Code");
+      UseItemDistributionList := Platform."Distribution Type" = Platform."Distribution Type"::"Distribution List";
+    END;
+
+    LOCAL PROCEDURE GetPlatformProcessingSetup@1170000002();
+    BEGIN
+      PlatformProcessingGroup.GET(Platform.Code,Platform."Stock Synch. Process Code");
+      PlatformProcessingGroup.TESTFIELD("Working Location");
+      PlatformProcessingGroup.TESTFIELD("Archive Location");
+      IF PlatformProcessingGroup."Enable SFTP Connect" THEN BEGIN
+        PlatformProcessingGroup.TESTFIELD("SFTP Server");
+        PlatformProcessingGroup.TESTFIELD("FTP Folder");
+      END;
+      FileName := WebIntegrationManagement.InventoryDeltaFileName;
+    END;
+
+    LOCAL PROCEDURE IsOfflineItem@1170000008() : Boolean;
+    BEGIN
+      IF UseItemDistributionList THEN BEGIN
+        IF NOT ItemDistribution.GET(Platform.Code,ItemNo,VariantCode) THEN
+          IF NOT ItemDistribution.GET(Platform.Code,ItemNo,'') THEN
+            EXIT(TRUE);
+        IF ItemDistribution.Status = ItemDistribution.Status::Offline THEN
+          EXIT(TRUE);
+        EXIT(FALSE);
+      END ELSE
+        EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE CalcItemInventory@1170000013() : Decimal;
+    VAR
+      lInventory@1170000000 : Decimal;
+      lGrossReq@1170000001 : Decimal;
+      lNetInventory@1170000002 : Decimal;
+    BEGIN
+      IF IsOfflineItem THEN
+        EXIT(0);
+
+      lInventory := 0;
+      lGrossReq := 0;
+      lNetInventory := 0;
+      PlatformInventoryLocation.FINDSET;
+      REPEAT
+        Item.SETRANGE("Location Filter",PlatformInventoryLocation."Location Code");
+        Item.SETFILTER("Variant Filter",'%1',VariantCode);
+        lNetInventory += AvailabletoPromise.QtyAvailabletoEcomm(Item,lInventory,lGrossReq);
+      UNTIL PlatformInventoryLocation.NEXT=0;
+
+      IF lNetInventory < 0 THEN
+        lNetInventory := 0;
+
+      EXIT(lNetInventory);
+    END;
+
+    LOCAL PROCEDURE GetModistSetup@1170000000();
+    BEGIN
+      IF NOT ModistSetupOK THEN BEGIN
+        ModistSetup.GET;
+        ModistSetupOK := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE InitVariables@1170000009();
+    BEGIN
+      CLEAR(AvailabletoPromise);
+      Inventory := 0;
+      ItemNo := '';
+      VariantCode := '';
+    END;
+
+    EVENT XMLDocument@1170000020::NodeInserting@94(sender@1170000001 : Variant;e@1170000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XMLDocument@1170000020::NodeInserted@95(sender@1170000001 : Variant;e@1170000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XMLDocument@1170000020::NodeRemoving@96(sender@1170000001 : Variant;e@1170000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XMLDocument@1170000020::NodeRemoved@97(sender@1170000001 : Variant;e@1170000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XMLDocument@1170000020::NodeChanging@98(sender@1170000001 : Variant;e@1170000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XMLDocument@1170000020::NodeChanged@99(sender@1170000001 : Variant;e@1170000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    BEGIN
+    {
+      //DOC TM6000 AW 11/05/2018 - WMS Integration
+    }
+    END.
+  }
+}
+

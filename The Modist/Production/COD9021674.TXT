@@ -1,0 +1,186 @@
+OBJECT Codeunit 9021674 Additional Doc. Search Funcs
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:21 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 9021704=rimd;
+    OnRun=BEGIN
+            BackPopSalesHeadandInvEntries(010113D,'',TRUE,0);
+            //BackPopSalesHeadandInvEntries(010113D,'C000165',TRUE,0);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AdDocSearch@1000000000 : Record 9021704;
+      AdDocSearch1@1000000001 : Record 9021704;
+      SalesShipPrintHandle@1000000002 : Codeunit 9021682;
+
+    PROCEDURE CreateSalesHeadEntry@1000000000(DocType@1000000000 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order';DocNo@1000000002 : Code[20];ShipNo@1000000003 : Code[20];ShipDate@1000000004 : Date;CustNo@1000000001 : Code[20];LabelIn@1000000005 : Code[10]);
+    BEGIN
+      CLEAR(AdDocSearch);
+      AdDocSearch.RESET;
+      AdDocSearch.SETRANGE("Document Type",DocType);
+      AdDocSearch.SETRANGE("Document Stage",AdDocSearch."Document Stage"::"In Progress In NAV");
+      AdDocSearch.SETRANGE("Document No.",DocNo);
+      AdDocSearch.SETFILTER("Search String",'%1',ShipNo);
+      IF NOT AdDocSearch.FIND('-') THEN BEGIN
+        CLEAR(AdDocSearch1);
+        AdDocSearch1.INIT;
+        AdDocSearch1."Document Type" := DocType;
+        AdDocSearch1."Document Stage" := AdDocSearch1."Document Stage"::"In Progress In NAV";
+        AdDocSearch1."Document No." := DocNo;
+        AdDocSearch1."Search String" := ShipNo;
+        AdDocSearch1."Date of Transaction" := ShipDate;
+        AdDocSearch1."Sell-to Customer No." := CustNo;
+        AdDocSearch1."Secondary Search Code" := ShipNo;
+        AdDocSearch1."Label Code" := LabelIn;
+        AdDocSearch1.INSERT(TRUE);
+      END;
+    END;
+
+    PROCEDURE CreateSalesPostedEntry@1000000001(DocNo@1000000002 : Code[20];LabelIn@1000000003 : Code[10]);
+    VAR
+      ValueEntry@1000000000 : Record 5802;
+      ItemLedgEntry@1000000001 : Record 32;
+      SalesShptLine@1000000005 : Record 111;
+    BEGIN
+      ValueEntry.RESET;
+      ValueEntry.SETCURRENTKEY("Document No.");
+      ValueEntry.SETRANGE("Document No.",DocNo);
+      ValueEntry.SETRANGE("Document Type",ValueEntry."Document Type"::"Sales Invoice");
+      IF ValueEntry.FIND('-') THEN
+        REPEAT
+          ItemLedgEntry.GET(ValueEntry."Item Ledger Entry No.");
+          IF ItemLedgEntry."Document Type" = ItemLedgEntry."Document Type"::"Sales Shipment" THEN
+            IF SalesShptLine.GET(ItemLedgEntry."Document No.",ItemLedgEntry."Document Line No.") THEN BEGIN
+              AdDocSearch.RESET;
+              AdDocSearch.SETRANGE("Document Type",AdDocSearch."Document Type"::Invoice);
+              AdDocSearch.SETRANGE("Document Stage",AdDocSearch."Document Stage"::Posted);
+              AdDocSearch.SETRANGE("Document No.",DocNo);
+              AdDocSearch.SETFILTER("Search String",'%1',FORMAT(ItemLedgEntry."Document No."));
+              IF NOT AdDocSearch.FIND('-') THEN BEGIN
+                CLEAR(AdDocSearch1);
+                AdDocSearch1.INIT;
+                AdDocSearch1."Document Type" := AdDocSearch1."Document Type"::Invoice;
+                AdDocSearch1."Document Stage" := AdDocSearch1."Document Stage"::Posted;
+                AdDocSearch1."Document No." := DocNo;
+                AdDocSearch1."Search String" := FORMAT(ItemLedgEntry."Document No.");
+                AdDocSearch1."Date of Transaction" := ItemLedgEntry."Posting Date";
+                AdDocSearch1."Sell-to Customer No." := ItemLedgEntry."Source No.";
+                AdDocSearch1."Secondary Search Code" := ItemLedgEntry."Document No.";
+                AdDocSearch1."Label Code" := LabelIn;
+                AdDocSearch1.INSERT(TRUE);
+              END;
+              IF (COPYSTR(LabelIn,1,4) = 'TOMD') OR (LabelIn = 'ELL') THEN
+                SalesShipPrintHandle.CreateInvoiceWebAttributes(ItemLedgEntry."Document No.",DocNo,LabelIn);
+            END;
+        UNTIL ValueEntry.NEXT = 0;
+    END;
+
+    PROCEDURE DeleteSalesHeadEntries@1000000002(DocType@1000000003 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order';DocNo@1000000002 : Code[20]);
+    BEGIN
+      AdDocSearch.RESET;
+      AdDocSearch.SETRANGE("Document Type",DocType);
+      AdDocSearch.SETRANGE("Document Stage",AdDocSearch."Document Stage"::"In Progress In NAV");
+      AdDocSearch.SETRANGE("Document No.",DocNo);
+      AdDocSearch.DELETEALL;
+    END;
+
+    PROCEDURE BackPopSalesHeadandInvEntries@1000000003(StartDate@1000000000 : Date;CustNo@1000000001 : Code[20];NonSilentMode@1000000007 : Boolean;ForceIsInternetCust@1000000008 : ' ,Force Yes,Force No');
+    VAR
+      SalesInvHead@1000000002 : Record 112;
+      SalesHead@1000000005 : Record 36;
+      ShipHead@1000000006 : Record 110;
+      Cust@1000000003 : Record 18;
+      Wind@1000000004 : Dialog;
+      TxtStartDateEmpty@1000000009 : TextConst 'ENU=You must supply a start date;ENG=You must supply a start date';
+      TxtWindowTitle@1000000010 : TextConst 'ENU=Processing Customer %1;ENG=Processing Customer %1';
+      TxtWindowTitle2@1000000011 : TextConst 'ENU=Checking Additional Document Search for deletable entries.;ENG=Checking Additional Document Search for deletable entries.';
+      TxtFinalMessage@1000000012 : TextConst 'ENU=Additional Document Search updated.;ENG=Additional Document Search updated.';
+    BEGIN
+      IF StartDate = 0D THEN
+        ERROR(TxtStartDateEmpty);
+      IF NonSilentMode THEN
+        Wind.OPEN(STRSUBSTNO(TxtWindowTitle, PADSTR('#1', 20, '#')));
+      Cust.RESET;
+      IF ForceIsInternetCust <> 1 THEN
+        Cust.SETRANGE("Is An Internet Customer",TRUE);
+      IF CustNo <> '' THEN
+        Cust.SETRANGE("No.",CustNo);
+      Cust.SETFILTER("Label Code",'<>%1','');
+      IF Cust.FIND('-') THEN
+      REPEAT
+        IF NonSilentMode THEN
+          Wind.UPDATE(1,Cust."No.");
+        SalesInvHead.RESET;
+        SalesInvHead.SETCURRENTKEY("Sell-to Customer No.");
+        SalesInvHead.SETRANGE("Sell-to Customer No.",Cust."No.");
+        SalesInvHead.SETFILTER("Posting Date",'>=%1',StartDate);
+        IF SalesInvHead.FIND('-') THEN
+        REPEAT
+          CreateSalesPostedEntry(SalesInvHead."No.",SalesInvHead."Label Code");
+        UNTIL SalesInvHead.NEXT = 0;
+        ShipHead.RESET;
+        ShipHead.SETCURRENTKEY("Order No.");
+        SalesHead.RESET;
+        SalesHead.SETCURRENTKEY("Document Type","Sell-to Customer No.");
+        SalesHead.SETRANGE("Document Type",SalesHead."Document Type"::Order);
+        SalesHead.SETRANGE("Sell-to Customer No.",Cust."No.");
+        SalesHead.SETFILTER("Posting Date",'>=%1',StartDate);
+        SalesHead.SETFILTER("Label Code",'<>%1','');
+        IF SalesHead.FIND('-') THEN
+        REPEAT
+          ShipHead.SETRANGE("Order No.",SalesHead."No.");
+          IF ShipHead.FIND('-') THEN
+          REPEAT
+            CreateSalesHeadEntry(SalesHead."Document Type",SalesHead."No.",ShipHead."No.",
+                       ShipHead."Posting Date",Cust."No.",SalesHead."Label Code");
+          UNTIL ShipHead.NEXT = 0;
+        UNTIL SalesHead.NEXT = 0;
+      UNTIL Cust.NEXT = 0;
+      IF NonSilentMode THEN
+        Wind.CLOSE;
+
+      IF NonSilentMode THEN
+        Wind.OPEN(TxtWindowTitle2);
+      AdDocSearch.RESET;
+      IF AdDocSearch.FIND('-') THEN
+      REPEAT
+        AdDocSearch.CALCFIELDS("Is An Internet Customer");
+        IF AdDocSearch."Is An Internet Customer" = FALSE THEN BEGIN
+          IF ForceIsInternetCust <> 1 THEN BEGIN
+            AdDocSearch1 := AdDocSearch;
+            AdDocSearch1.DELETE;
+          END;
+        END ELSE BEGIN
+          IF (ForceIsInternetCust = 2) AND (CustNo = AdDocSearch."Sell-to Customer No.") THEN BEGIN
+            AdDocSearch1 := AdDocSearch;
+            AdDocSearch1.DELETE;
+          END;
+        END;
+      UNTIL AdDocSearch.NEXT = 0;
+      IF NonSilentMode THEN
+        Wind.CLOSE;
+
+      IF NonSilentMode THEN
+        MESSAGE(TxtFinalMessage)
+    END;
+
+    BEGIN
+    {
+      //DOC EC2013.3.70 MQ 24/07/2013 - GW130724 New; Will not work with NAV codebase 3.7 (DERM AU)
+      //DOC EC2013.3.80 MQ 30/09/2013 - GW130930 Add Permissions to Additional Document Search table
+      //DOC EC2013.4.62 MQ 23/04/2014 - GW140423 Added Ellisons
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,518 @@
+OBJECT Codeunit 9062357 Consignment Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ConsignmentHeader@1000000007 : Record 9062447;
+      ConsignmentLine@1000000008 : Record 9062448;
+      PurchHeaderBuffer@1000000000 : TEMPORARY Record 38;
+      ConsignmentDescription@1000000001 : Text;
+      txtConsignmentDescription@1000000002 : TextConst 'ENU="Consignment for ";ENG="Consignment for "';
+      ConsignmentLineNo@1000000003 : Integer;
+      txtReqWkshConsignDescription@1000000004 : TextConst 'ENU=Req. Wksh. %1 - %2;ENG=Req. Wksh. %1 - %2';
+      txtPurchOrdLinesUpdated@1000000005 : TextConst 'ENU=%1 Order Line(s) updated;ENG=%1 Order Line(s) updated';
+      tNoLines@1000000009 : TextConst 'ENU=No lines were found for the Consignment %1;ENG=No lines were found for the Consignment %1';
+      SysB@9062230 : Record 9062230;
+      tSysBCode@9062231 : TextConst 'ENU=COSTALLOCATION;ENG=COSTALLOCATION';
+      tSysBName@9062236 : TextConst 'ENU=Default Cost Allocation Method;ENG=Default Cost Allocation Method';
+      tSysBDescription@9062232 : TextConst 'ENU=Used by Consignments when allocating costs to Purchase Orders;ENG=Used by Consignments when allocating costs to Purchase Orders';
+      tSysBOptionString@9062233 : TextConst 'ENU=Quantity,Amount;ENG=Quantity,Amount';
+      tSysBGroupCode@9062234 : TextConst 'ENU=CONSIGNMENTS;ENG=CONSIGNMENTS';
+      tSysBGroupDescription@9062235 : TextConst 'ENU=Consignments;ENG=Consignments';
+      tStatusesExist@9062237 : TextConst 'ENU=Consignment Statuses already exist, would you like to replace them with the example statuses?;ENG=Consignment Statuses already exist, would you like to replace them with the example statuses?';
+      tStatus_AtCustoms@9062238 : TextConst 'ENU=At Customs;ENG=At Customs';
+      tStatus_AtSea@9062239 : TextConst 'ENU=At Sea;ENG=At Sea';
+      tStatus_Confirmed@9062241 : TextConst 'ENU=Confirmed;ENG=Confirmed';
+      tStatus_Despatched@9062242 : TextConst 'ENU=Despatched;ENG=Despatched';
+      tStatus_Due@9062243 : TextConst 'ENU=Due;ENG=Due';
+      tStatus_OnRoad@9062244 : TextConst 'ENU=On Road;ENG=On Road';
+
+    PROCEDURE "--- Purchase Orders ---"@1000000001();
+    BEGIN
+    END;
+
+    PROCEDURE AssignPurchaseOrderLines@1000000000(VAR ConsignmentHeader@1000000000 : Record 9062447;ShowLinesPage@1000000008 : Boolean;DeleteLines@1000000009 : Boolean) : Boolean;
+    VAR
+      ConsignmentLine@1000000004 : Record 9062448;
+      PurchaseHeader@1000000005 : Record 38;
+      PurchaseLine@1000000001 : Record 39;
+      PurchaseLineList@1000000003 : Page 518;
+      Result@1000000002 : Boolean;
+      HeaderCreated@1000000006 : Boolean;
+      LineCreated@1000000007 : Boolean;
+    BEGIN
+      Result := FALSE;
+
+      PurchaseLine.RESET();
+      PurchaseLine.FILTERGROUP(2);
+      IF (ConsignmentHeader."Vendor No." <> '') THEN
+        PurchaseLine.SETRANGE("Buy-from Vendor No.", ConsignmentHeader."Vendor No.");
+      PurchaseLine.SETRANGE("Document Type", PurchaseLine."Document Type"::Order);
+      PurchaseLine.SETFILTER("Outstanding Qty. (Base)", '>%1', 0);
+
+      IF (ConsignmentHeader."Purchase Order No." <> '') THEN
+        PurchaseLine.SETRANGE("Document No.", ConsignmentHeader."Purchase Order No.");
+
+      IF (ShowLinesPage) THEN BEGIN
+        CLEAR(PurchaseLineList);
+        PurchaseLineList.SETTABLEVIEW(PurchaseLine);
+        PurchaseLineList.LOOKUPMODE(TRUE);
+        IF (PurchaseLineList.RUNMODAL() = ACTION::LookupOK) THEN BEGIN
+          PurchaseLine.RESET();
+          PurchaseLineList.SETSELECTIONFILTER(PurchaseLine);
+        END ELSE
+          EXIT(FALSE);
+      END;
+
+      IF (PurchaseLine.FINDSET()) THEN BEGIN
+        CLEAR(PurchaseHeader);
+
+        IF (DeleteLines) THEN BEGIN
+          ConsignmentLine.RESET();
+          ConsignmentLine.SETRANGE("Consignment No.", ConsignmentHeader."No.");
+          ConsignmentLine.SETRANGE("Quantity Received", 0);
+          ConsignmentLine.DELETEALL(TRUE);
+        END;
+
+        ConsignmentDescription := '';
+        ConsignmentLineNo := 0;
+        ConsignmentLine.RESET();
+        ConsignmentLine.SETRANGE("Consignment No.", ConsignmentHeader."No.");
+        IF (ConsignmentLine.FINDLAST()) THEN
+          ConsignmentLineNo := ConsignmentLine."Line No.";
+
+        REPEAT
+          ConsignmentLine.RESET();
+          ConsignmentLine.SETRANGE("Consignment No.", ConsignmentHeader."No.");
+          ConsignmentLine.SETRANGE("Purchase Order No.", PurchaseLine."Document No.");
+          ConsignmentLine.SETRANGE("Purchase Order Line No.", PurchaseLine."Line No.");
+          IF (ConsignmentLine.ISEMPTY) THEN BEGIN
+            IF ((PurchaseHeader."Document Type" <> PurchaseLine."Document Type") OR (PurchaseHeader."No." <> PurchaseLine."Document No.")) THEN
+              PurchaseHeader.GET(PurchaseLine."Document Type", PurchaseLine."Document No.");
+            AddPurchaseLine(ConsignmentHeader, ConsignmentLine, PurchaseHeader, PurchaseLine,
+              HeaderCreated, LineCreated);
+            Result := TRUE;
+          END;
+        UNTIL (PurchaseLine.NEXT() = 0);
+        IF (Result) THEN
+          FinalizeConsignmentCreation(ConsignmentHeader);
+      END;
+
+      EXIT(Result);
+    END;
+
+    PROCEDURE NewConsignment@1000000009(VAR ConsignmentHeader@1000000000 : Record 9062447;VAR HeaderCreated@1000000001 : Boolean);
+    BEGIN
+      PurchHeaderBuffer.RESET();
+      PurchHeaderBuffer.DELETEALL();
+      ConsignmentHeader.INIT();
+      HeaderCreated := FALSE;
+      ConsignmentDescription := '';
+    END;
+
+    PROCEDURE AddPurchaseLine@1000000006(VAR ConsignmentHeader@1000000000 : Record 9062447;VAR ConsignmentLine@1000000004 : Record 9062448;VAR PurchaseHeader@1000000005 : Record 38;VAR PurchaseLine@1000000001 : Record 39;VAR HeaderCreated@1000000002 : Boolean;VAR LineCreated@1000000003 : Boolean);
+    VAR
+      NewPurchHeader@1000000006 : Boolean;
+    BEGIN
+      LineCreated := FALSE;
+      HeaderCreated := FALSE;
+
+       IF ((PurchaseLine.Type = PurchaseLine.Type::Item) AND (PurchaseLine."No." <> ''))
+       THEN BEGIN
+        //Create consignment header
+        NewPurchHeader := FALSE;
+        IF (ConsignmentHeader."No." = '') THEN BEGIN
+          ConsignmentHeader.INIT();
+          ConsignmentHeader.VALIDATE("Vendor No.", PurchaseHeader."Buy-from Vendor No.");
+          ConsignmentHeader.INSERT(TRUE);
+
+          ConsignmentDescription := txtConsignmentDescription + PurchaseHeader."No.";
+          ConsignmentLineNo := 0;
+          HeaderCreated := TRUE;
+          NewPurchHeader := TRUE;
+        END ELSE BEGIN
+          PurchaseHeader.TESTFIELD("Buy-from Vendor No.", ConsignmentHeader."Vendor No.");
+          IF (NOT(PurchHeaderBuffer.GET(PurchaseHeader."Document Type", PurchaseHeader."No."))) THEN BEGIN
+            NewPurchHeader := TRUE;
+            IF (ConsignmentDescription = '') THEN
+              ConsignmentDescription := txtConsignmentDescription + PurchaseHeader."No."
+            ELSE
+              ConsignmentDescription := ConsignmentDescription + ', ' + PurchaseHeader."No.";
+          END;
+        END;
+        //Store purchase header in buffer
+        IF (NewPurchHeader) THEN BEGIN
+          PurchHeaderBuffer.TRANSFERFIELDS(PurchaseHeader);
+          PurchHeaderBuffer.INSERT();
+        END;
+
+        //Create consignment line
+        ConsignmentLineNo += 10000;
+        ConsignmentLine.INIT();
+        ConsignmentLine.VALIDATE("Consignment No.", ConsignmentHeader."No.");
+        ConsignmentLine.VALIDATE("Line No.", ConsignmentLineNo);
+        ConsignmentLine.VALIDATE("Vendor No.", ConsignmentHeader."Vendor No.");
+        ConsignmentLine.VALIDATE("Purchase Order No.", PurchaseLine."Document No.");
+        ConsignmentLine.VALIDATE("Purchase Order Line No.", PurchaseLine."Line No.");
+        CopyFieldsFromPurchLine(ConsignmentLine, PurchaseLine);
+        ConsignmentLine.INSERT(TRUE);
+        LineCreated := TRUE;
+       END;
+    END;
+
+    PROCEDURE FinalizeConsignmentCreation@1000000010(VAR ConsignmentHeader@1000000000 : Record 9062447);
+    BEGIN
+      IF (ConsignmentHeader."No." <> '') THEN BEGIN
+        ConsignmentHeader.Description := COPYSTR(ConsignmentDescription, 1, MAXSTRLEN(ConsignmentHeader.Description));
+        ConsignmentHeader.MODIFY();
+      END;
+    END;
+
+    PROCEDURE CopyFieldsFromPurchLine@1000000012(VAR ConsignmentLine@1000000000 : Record 9062448;VAR PurchaseLine@1000000001 : Record 39);
+    BEGIN
+      PurchaseLine.TESTFIELD(Type, PurchaseLine.Type::Item);
+      PurchaseLine.TESTFIELD("No.");
+      ConsignmentLine.VALIDATE("Item No.", PurchaseLine."No.");
+      ConsignmentLine.VALIDATE("Variant Code", PurchaseLine."Variant Code");
+      ConsignmentLine.VALIDATE("Vendor Item No.", PurchaseLine."Vendor Item No.");
+      ConsignmentLine.VALIDATE(Description, PurchaseLine.Description);
+      ConsignmentLine.VALIDATE("Description 2", PurchaseLine."Description 2");
+      ConsignmentLine.VALIDATE("Direct Unit Cost", PurchaseLine."Direct Unit Cost");
+      ConsignmentLine.VALIDATE("Unit of Measure", PurchaseLine."Unit of Measure Code");
+      ConsignmentLine.VALIDATE("Qty. Per Unit of Measure", PurchaseLine."Qty. per Unit of Measure");
+    END;
+
+    PROCEDURE UpdateReceiptDates@1000000007(VAR ConsignmentHeader@1000000000 : Record 9062447;Silent@9062230 : Boolean);
+    VAR
+      ConsignmentLine@1000000001 : Record 9062448;
+      PurchaseLine@1000000002 : Record 39;
+      LineCount@1000000005 : Integer;
+    BEGIN
+      LineCount := 0;
+      ConsignmentLine.RESET();
+      ConsignmentLine.SETRANGE("Consignment No.", ConsignmentHeader."No.");
+      IF (ConsignmentLine.FINDSET()) THEN BEGIN
+        REPEAT
+          IF (PurchaseLine.GET(PurchaseLine."Document Type"::Order,ConsignmentLine."Purchase Order No.",ConsignmentLine."Purchase Order Line No.")) THEN BEGIN
+            PurchaseLine.SuspendStatusCheck(TRUE);
+            PurchaseLine.VALIDATE("Expected Receipt Date", ConsignmentHeader."Date Due in Warehouse");
+            PurchaseLine.MODIFY(TRUE);
+            LineCount += 1;
+          END;
+        UNTIL (ConsignmentLine.NEXT() = 0);
+      END;
+
+      IF ((LineCount > 0) AND (GUIALLOWED) AND (NOT Silent))THEN
+        MESSAGE(txtPurchOrdLinesUpdated, LineCount);
+    END;
+
+    PROCEDURE "--- Status ---"@1000000002();
+    BEGIN
+    END;
+
+    PROCEDURE Release@1000000003(VAR pConsignmentHeader@1000000000 : Record 9062447) : Boolean;
+    VAR
+      lResult@1000000001 : Boolean;
+    BEGIN
+      //DOC CN2015.1 - Releaseing a consignment
+      //  -> pConsignmentHeader: Consignment header to release
+      //  <- TRUE: Released, FALSE: Already released
+      lResult := FALSE;
+
+      ConsignmentHeader := pConsignmentHeader;
+      ConsignmentHeader.OnBeforeRelease;
+
+      IF (ConsignmentHeader.Status <> ConsignmentHeader.Status::Released) THEN
+      BEGIN
+        CASE SysB_COSTALLOCATION OF
+          0 : AllocateCostByQuantity(ConsignmentHeader, FALSE);
+          1 : AllocateCostByAmount(ConsignmentHeader, FALSE);
+        END;
+        UpdateReceiptDates(ConsignmentHeader,TRUE);
+        UpdatePurchaseOrderCosts();
+        ConsignmentHeader.VALIDATE(Status, ConsignmentHeader.Status::Released);
+        ConsignmentHeader.MODIFY(TRUE);
+        lResult := TRUE;
+      END;
+
+      pConsignmentHeader := ConsignmentHeader;
+
+      ConsignmentHeader.OnAfterRelease;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE Reopen@1000000004(VAR pConsignmentHeader@1000000000 : Record 9062447) : Boolean;
+    VAR
+      lResult@1000000001 : Boolean;
+    BEGIN
+      //DOC CN2015.1 - Reopening a consignment
+      //  -> pConsignmentHeader: Consignment header to reopen
+      //  <- TRUE: Reopened, FALSE: Already reopened
+
+      lResult := FALSE;
+
+      ConsignmentHeader := pConsignmentHeader;
+
+      ConsignmentHeader.OnBeforeReOpen;
+
+      IF (ConsignmentHeader.Status <> ConsignmentHeader.Status::Open) THEN
+      BEGIN
+        ConsignmentHeader.VALIDATE(Status, ConsignmentHeader.Status::Open);
+        ConsignmentHeader.MODIFY(TRUE);
+        EXIT(TRUE);
+      END;
+
+      pConsignmentHeader := ConsignmentHeader;
+
+      ConsignmentHeader.OnAfterReOpen;
+      EXIT(lResult);
+    END;
+
+    PROCEDURE AllocateCostByQuantity@1000000013(pConsignmentHeader@1000000000 : Record 9062447;pInteraction@1000000001 : Boolean);
+    VAR
+      lTotalQuantity@1000000003 : Decimal;
+      lLandedCostAmount@1000000004 : Decimal;
+      lOverheadAmount@1000000005 : Decimal;
+      eFinalMessage@1000000006 : TextConst 'ENU=Cost has been allocated by quantity for consignment "%1";ENG=Cost has been allocated by quantity for consignment "%1"';
+    BEGIN
+      //DOC CN2015.1 - Allocating cost (consignment cost) by quantity
+      //  -> pConsignmentHeader: Consignment header to allocate cost for
+      //  -> pInteraction: TRUE = with user interaction, FALSE = silently
+      ConsignmentHeader := pConsignmentHeader;
+      ConsignmentHeader.OnBeforeAllocateCostByQuantity;
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+
+      ConsignmentLine.RESET();
+      ConsignmentLine.SETRANGE("Consignment No.", ConsignmentHeader."No.");
+      IF (ConsignmentLine.ISEMPTY) THEN
+        ERROR(tNoLines, ConsignmentHeader."No.");
+
+      ConsignmentLine.CALCSUMS("Quantity (Base)");
+      lTotalQuantity := ConsignmentLine."Quantity (Base)";
+      lLandedCostAmount := ConsignmentHeader."Freight Amount" + ConsignmentHeader."Duty Amount";
+
+      IF (ConsignmentLine.FINDSET(TRUE)) THEN
+      REPEAT
+        IF (lTotalQuantity <> 0) THEN
+          lOverheadAmount := ConsignmentLine."Quantity (Base)" / lTotalQuantity * lLandedCostAmount
+        ELSE
+          lOverheadAmount := 0;
+        ConsignmentLine.VALIDATE("Overhead Amount", lOverheadAmount);
+        ConsignmentLine.MODIFY(TRUE);
+      UNTIL (ConsignmentLine.NEXT() = 0);
+
+      ConsignmentHeader.OnAfterAllocateCostByQuantity;
+
+      IF (pInteraction) THEN
+        MESSAGE(eFinalMessage, ConsignmentHeader."No.");
+    END;
+
+    PROCEDURE AllocateCostByAmount@1000000014(pConsignmentHeader@1000000000 : Record 9062447;pInteraction@1000000001 : Boolean);
+    VAR
+      lTotalCostAmount@1000000002 : Decimal;
+      lLandedCostAmount@1000000003 : Decimal;
+      lOverheadAmount@1000000004 : Decimal;
+      eFinalMessage@1000000005 : TextConst 'ENU=Cost has been allocated by amount for consignment "%1";ENG=Cost has been allocated by amount for consignment "%1"';
+    BEGIN
+      //DOC CN2015.1 - Allocating cost (consignment cost) by amount
+      //  -> pConsignmentHeader: Consignment header to allocate cost for
+      //  -> pInteraction: TRUE = with user interaction, FALSE = silently
+
+      ConsignmentHeader := pConsignmentHeader;
+
+      ConsignmentHeader.OnBeforeAllocateCostByAmount;
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+
+      ConsignmentLine.RESET();
+      ConsignmentLine.SETRANGE("Consignment No.", ConsignmentHeader."No.");
+      IF (ConsignmentLine.ISEMPTY) THEN
+        ERROR(tNoLines, ConsignmentHeader."No.");
+
+      ConsignmentLine.CALCSUMS("Cost Amount");
+      lTotalCostAmount := ConsignmentLine."Cost Amount";
+      lLandedCostAmount := ConsignmentHeader."Freight Amount" + ConsignmentHeader."Duty Amount";
+
+      IF (ConsignmentLine.FINDSET(TRUE)) THEN
+      REPEAT
+        IF (lTotalCostAmount <> 0) THEN
+          lOverheadAmount := ConsignmentLine."Cost Amount" / lTotalCostAmount * lLandedCostAmount
+        ELSE
+          lOverheadAmount := 0;
+        ConsignmentLine.VALIDATE("Overhead Amount", lOverheadAmount);
+        ConsignmentLine.MODIFY(TRUE);
+      UNTIL (ConsignmentLine.NEXT() = 0);
+
+      ConsignmentHeader.OnAfterAllocateCostByAmount;
+
+      IF (pInteraction) THEN
+        MESSAGE(eFinalMessage, ConsignmentHeader."No.");
+    END;
+
+    LOCAL PROCEDURE UpdatePurchaseOrderCosts@1000000016();
+    VAR
+      lPurchaseLine@1000000000 : Record 39;
+      lModifyPurchaseLine@1000000003 : Boolean;
+    BEGIN
+      //DOC CN2015.4 - Updating purchase order costs
+      ConsignmentHeader.OnBeforeUpdatePurchaseOrderCosts;
+
+      ConsignmentLine.RESET();
+      ConsignmentLine.SETRANGE("Consignment No.", ConsignmentHeader."No.");
+      IF (ConsignmentLine.FINDSET()) THEN
+      REPEAT
+        lModifyPurchaseLine := FALSE;
+        IF ((ConsignmentLine."Purchase Order No." <> '') AND (ConsignmentLine."Purchase Order Line No." <> 0)) THEN
+        BEGIN
+          lPurchaseLine.GET(lPurchaseLine."Document Type"::Order, ConsignmentLine."Purchase Order No.", ConsignmentLine."Purchase Order Line No.");
+          lPurchaseLine.SuspendStatusCheck(TRUE);
+          IF (lPurchaseLine."Direct Unit Cost" <> ConsignmentLine."Direct Unit Cost") THEN
+          BEGIN
+            lPurchaseLine.VALIDATE("Direct Unit Cost", ConsignmentLine."Direct Unit Cost");
+            lModifyPurchaseLine := TRUE;
+          END;
+          IF (lPurchaseLine."Overhead Rate" <> ConsignmentLine."Overhead Rate") THEN
+          BEGIN
+            lPurchaseLine.VALIDATE("Overhead Rate", ConsignmentLine."Overhead Rate");
+            lModifyPurchaseLine := TRUE;
+          END;
+          IF (lModifyPurchaseLine) THEN BEGIN
+            lPurchaseLine.MODIFY(TRUE);
+          END;
+        END;
+      UNTIL (ConsignmentLine.NEXT() = 0);
+
+      ConsignmentHeader.OnAfterUpdatePurchaseOrderCosts;
+    END;
+
+    PROCEDURE "--- Miscellaneous ---"@1000000005();
+    BEGIN
+    END;
+
+    PROCEDURE ShowConsignment@1000000011(pConsignmentNo@1000000000 : Code[20]);
+    VAR
+      lConsignmentHeader@1000000001 : Record 9062447;
+      lArchivedConsignmentHeader@1000000002 : Record 9062480;
+      eNotFound@1000000003 : TextConst 'ENU=Consignment "%1" can''t be found.;ENG=Consignment "%1" can''t be found.';
+    BEGIN
+      //DOC CN2015.1 - Showing consignment (or archived consignment) with given number
+      //  -> pConsignmentNo: Consignment no.
+
+      IF (lConsignmentHeader.GET(pConsignmentNo)) THEN
+        PAGE.RUN(PAGE::"Consignment Card", lConsignmentHeader)
+      ELSE IF (lArchivedConsignmentHeader.GET(pConsignmentNo)) THEN
+        PAGE.RUN(PAGE::"Consignment Archive Card", lArchivedConsignmentHeader)
+      ELSE
+        MESSAGE(eNotFound, pConsignmentNo);
+    END;
+
+    PROCEDURE CreateExampleStatuses@9062233();
+    VAR
+      ConsignmentStatus@9062230 : Record 9062449;
+    BEGIN
+      IF ConsignmentStatus.FINDSET THEN BEGIN
+        IF NOT CONFIRM(tStatusesExist,FALSE) THEN
+          EXIT;
+        ConsignmentStatus.DELETEALL(TRUE);
+      END;
+
+      CreateStatus(tStatus_AtCustoms,tStatus_AtCustoms);
+      CreateStatus(tStatus_AtSea,tStatus_AtSea);
+      CreateStatus(tStatus_Confirmed,tStatus_Confirmed);
+      CreateStatus(tStatus_Despatched,tStatus_Despatched);
+      CreateStatus(tStatus_Due,tStatus_Due);
+      CreateStatus(tStatus_OnRoad,tStatus_OnRoad);
+    END;
+
+    LOCAL PROCEDURE CreateStatus@9062235(Code@9062230 : Code[20];Description@9062231 : Text[100]);
+    VAR
+      ConsignmentStatus@9062232 : Record 9062449;
+    BEGIN
+      ConsignmentStatus.INIT;
+      ConsignmentStatus.VALIDATE(Code,Code);
+      ConsignmentStatus.VALIDATE(Description,Description);
+      ConsignmentStatus.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE "---Subscriptions---"@9062230();
+    BEGIN
+    END;
+
+    [EventSubscriber(Table,7316,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE UpdateConsignmentOnDeleteWhseReceipt@9062231(VAR Rec@9062230 : Record 7316;RunTrigger@9062231 : Boolean);
+    VAR
+      ConsignmentHeader@9062233 : Record 9062447;
+      ConsignmentArchive@9062232 : Codeunit 9062359;
+    BEGIN
+      IF Rec."Create Posted Header" THEN BEGIN
+        ConsignmentHeader.SETCURRENTKEY("Vendor Shipment No.");
+        ConsignmentHeader.SETRANGE("Vendor Shipment No.",Rec."Vendor Shipment No.");
+        IF ConsignmentHeader.FINDSET THEN
+          REPEAT
+            ConsignmentArchive.DisableUserInteraction;
+            ConsignmentArchive.RUN(ConsignmentHeader);
+          UNTIL ConsignmentHeader.NEXT = 0;
+      END ELSE BEGIN
+        ConsignmentHeader.SETCURRENTKEY("Vendor Shipment No.");
+        ConsignmentHeader.SETRANGE("Vendor Shipment No.",Rec."Vendor Shipment No.");
+        IF ConsignmentHeader.FINDSET THEN
+          REPEAT
+            ConsignmentHeader.VALIDATE("Warehouse Receipt No.",'');
+            ConsignmentHeader.MODIFY;
+          UNTIL ConsignmentHeader.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- System Behaviour ---"@9062232();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE SysB_COSTALLOCATION@9062234() : Integer;
+    VAR
+      SysB@9062230 : Record 9062230;
+      SysBGroup@9062231 : Record 9062485;
+    BEGIN
+      IF NOT SysBGroup.GET(tSysBGroupCode) THEN BEGIN
+        SysBGroup.INIT;
+        SysBGroup.VALIDATE(SysBGroup.Code,tSysBGroupCode);
+        SysBGroup.VALIDATE(SysBGroup.Description,tSysBGroupDescription);
+        SysBGroup.INSERT(TRUE);
+      END;
+
+      IF NOT SysB.GET(tSysBCode,'') THEN BEGIN
+        SysB.INIT;
+        SysB.VALIDATE(SysB.Code,tSysBCode);
+        SysB.VALIDATE(SysB.Name,tSysBName);
+        SysB.VALIDATE(SysB.Description,tSysBDescription);
+        SysB.VALIDATE(SysB."Option List",tSysBOptionString);
+        SysB.VALIDATE(SysB."Answer Type",SysB."Answer Type"::Option);
+        SysB.VALIDATE(SysB.Group,tSysBGroupCode);
+        SysB.INSERT(TRUE);
+      END;
+
+      EXIT(SysB.GetOptionValue(tSysBCode));
+    END;
+
+    BEGIN
+    {
+      //DOC NH2016.11 PC 05/11/2015 - Migrated from 2015
+      //DOC NH2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

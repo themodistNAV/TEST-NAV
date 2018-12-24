@@ -1,0 +1,304 @@
+OBJECT Codeunit 11102107 OM - File Name Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    SingleInstance=Yes;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      CurrentTemplate@1000 : Text;
+      EditorExtension@1001 : Text;
+      TokenText@1002 : ARRAY [50] OF Text;
+      NoOfTokens@1003 : Integer;
+      Token@1004 : ARRAY [50] OF Integer;
+      TokenFormat@1005 : ARRAY [50] OF Integer;
+      TokenLength@1006 : ARRAY [50] OF Integer;
+      TokenFormatType@1007 : ' ,Lowercase,Uppercase';
+      TokenType@1008 : 'Text,Type Number,Type,Number,Name,Extension';
+
+    PROCEDURE FileName@1(ObjectType2@1000 : Option;ObjectNo@1001 : Integer;ObjectName@1002 : Text) : Text;
+    VAR
+      Object@1003 : Record 2000000001;
+      ctTxt@1004 : TextConst 'DEU=txt;ENU=txt;ESP=txt;FRA=txt;NLD=txt;DEA=txt';
+    BEGIN
+      CheckTokens;
+
+      Object.Type := ObjectType2;
+      Object.ID := ObjectNo;
+      Object.Name := ObjectName;
+
+      EXIT(LoopTokens(Object, FORMAT(Object.Type), ctTxt));
+    END;
+
+    PROCEDURE FileNameExtension@12(ObjectType2@1000 : Option;ObjectNo@1001 : Integer;ObjectName@1002 : Text;Extension@1003 : Text) : Text;
+    VAR
+      Object@1004 : Record 2000000001;
+    BEGIN
+      CheckTokens;
+
+      Object.Type := ObjectType2;
+      Object.ID := ObjectNo;
+      Object.Name := ObjectName;
+
+      EXIT(LoopTokens(Object, FORMAT(Object.Type), Extension));
+    END;
+
+    PROCEDURE ObjectFileName@2(VAR Object@1000 : Record 2000000001;Extension@1001 : Text) : Text;
+    BEGIN
+      CheckTokens;
+
+      EXIT(LoopTokens(Object, FORMAT(Object.Type), Extension));
+    END;
+
+    PROCEDURE FileNameUnknownObject@3(ObjectTypeNo@1000 : Integer;ObjectTypeText@1001 : Text;ObjectNoText@1002 : Text;ObjectName@1003 : Text;Extension@1004 : Text) : Text;
+    VAR
+      Object@1005 : Record 2000000001;
+    BEGIN
+      CheckTokens;
+
+      Object.Type := ObjectTypeNo;
+      IF EVALUATE(Object.ID, ObjectNoText) THEN
+        ;
+      Object.Name := ObjectName;
+
+      EXIT(LoopTokens(Object, ObjectTypeText, Extension));
+    END;
+
+    LOCAL PROCEDURE CheckTokens@4();
+    VAR
+      Setup@1000 : Record 11102035;
+    BEGIN
+      Setup.CustomGet;
+
+      IF Setup."Object File Name Format" <> CurrentTemplate THEN
+        CreateTokens(Setup."Object File Name Format");
+    END;
+
+    LOCAL PROCEDURE LoopTokens@5(VAR Object@1000 : Record 2000000001;TypeText@1001 : Text;Extension@1002 : Text) ExitValue : Text;
+    VAR
+      i@1003 : Integer;
+      ctFileName@1004 : TextConst 'DEU=%1-%2-%3 %4.%5;ENU=%1-%2-%3 %4.%5;ESP=%1-%2-%3 %4.%5;FRA=%1-%2-%3 %4.%5;NLD=%1-%2-%3 %4.%5;DEA=%1-%2-%3 %4.%5';
+    BEGIN
+      IF NoOfTokens = 0 THEN
+        ExitValue := STRSUBSTNO(ctFileName, Object.Type + 0, Object.Type, Object.ID, Object.Name, ReplaceEditorExtension(Extension))
+      ELSE
+        FOR i := 1 TO NoOfTokens DO
+          ExitValue := ExitValue + TokenValue(Object, TypeText, Extension, i);
+
+      EXIT(DELCHR(ExitValue, '=', '/\:*?"<>|'));
+    END;
+
+    LOCAL PROCEDURE TokenValue@6(VAR Object@1000 : Record 2000000001;TypeText@1001 : Text;Extension@1002 : Text;TokenNo@1003 : Integer) ExitValue : Text;
+    BEGIN
+      CASE Token[TokenNo] OF
+        TokenType::Text :
+          EXIT(TokenText[TokenNo]);
+
+        TokenType::"Type Number" :
+          EXIT(FORMAT(Object.Type + 0));
+
+        TokenType::Type :
+          ExitValue := TypeText;
+
+        TokenType::Number :
+          EXIT(FORMAT(Object.ID));
+
+        TokenType::Name :
+          ExitValue := Object.Name;
+
+        TokenType::Extension :
+          ExitValue := ReplaceEditorExtension(Extension);
+
+      END;
+
+      CASE TokenFormat[TokenNo] OF
+
+        TokenFormatType::Lowercase :
+          ExitValue := LOWERCASE(ExitValue);
+
+        TokenFormatType::Uppercase :
+          ExitValue := UPPERCASE(ExitValue);
+
+      END;
+
+      IF TokenLength[TokenNo] <> 0 THEN
+        ExitValue := COPYSTR(ExitValue, 1, TokenLength[TokenNo]);
+    END;
+
+    LOCAL PROCEDURE CreateTokens@7(NewTemplate@1000 : Text);
+    VAR
+      NewParameters@1001 : Text;
+      NewText@1002 : Text;
+      NewLength@1003 : Integer;
+      NewTokenFormatType@1004 : Integer;
+      NewTokenType@1005 : Integer;
+      Pos@1006 : Integer;
+    BEGIN
+      CurrentTemplate := NewTemplate;
+      EditorExtension := '';
+
+      NoOfTokens := 0;
+      WHILE ReadToken(CurrentTemplate, Pos, NewTokenType, NewTokenFormatType, NewLength, NewText, NewParameters) DO BEGIN
+        NoOfTokens += 1;
+        Token[NoOfTokens] := NewTokenType;
+        TokenFormat[NoOfTokens] := NewTokenFormatType;
+        TokenLength[NoOfTokens] := NewLength;
+        TokenText[NoOfTokens] := NewText;
+        IF NewParameters <> '' THEN
+          ConvertParameters(NoOfTokens, NewParameters);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE ReadToken@8(VAR Template@1000 : Text;VAR Pos@1001 : Integer;VAR NewTokenType@1002 : Integer;VAR NewTokenFormatType@1003 : Integer;VAR Length@1004 : Integer;VAR Text@1005 : Text;VAR Parameters@1006 : Text) : Boolean;
+    VAR
+      StartPos@1007 : Integer;
+    BEGIN
+      Pos += 1;
+      IF Pos > STRLEN(Template) THEN
+        EXIT;
+
+      StartPos := Pos;
+
+      IF Template[Pos] = '<' THEN
+        IF GotoCharacter(Template, Pos, '>') THEN BEGIN
+          ConvertToToken(COPYSTR(Template, StartPos + 1, Pos - StartPos - 1), NewTokenType, NewTokenFormatType, Length, Parameters);
+          EXIT(TRUE);
+        END;
+
+      IF GotoCharacter(Template, Pos, '<') THEN BEGIN
+        Pos -= 1;
+        NewTokenType := TokenType::Text;
+        Text := COPYSTR(Template, StartPos, Pos - StartPos + 1);
+        EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE GotoCharacter@9(VAR Template@1000 : Text;VAR Pos@1001 : Integer;Character@1002 : Char) : Boolean;
+    BEGIN
+      WHILE (STRLEN(Template) >= Pos) AND (Template[Pos] <> Character) DO
+        Pos += 1;
+
+      EXIT(Template[Pos] = Character);
+    END;
+
+    LOCAL PROCEDURE ConvertToToken@10(TokenText@1000 : Text;VAR NewTokenType@1001 : Integer;VAR NewTokenFormatType@1002 : Integer;VAR Length@1003 : Integer;VAR Parameters@1004 : Text);
+    VAR
+      Expression@1005 : Text;
+      LengthText@1006 : Text;
+      CommaPos@1007 : Integer;
+    BEGIN
+      Length := 0;
+      Parameters := '';
+      CommaPos := STRPOS(TokenText, ',');
+
+      IF CommaPos > 0 THEN BEGIN
+        Expression := COPYSTR(TokenText, 1, CommaPos - 1);
+        LengthText := COPYSTR(TokenText, CommaPos + 1);
+      END ELSE
+        Expression := TokenText;
+
+      CommaPos := STRPOS(LengthText, ',');
+      IF CommaPos > 0 THEN BEGIN
+        Parameters := COPYSTR(LengthText, CommaPos + 1);
+        LengthText := COPYSTR(LengthText, 1, CommaPos - 1);
+      END;
+
+      IF EVALUATE(Length, LengthText) THEN
+        ;
+
+      CASE LOWERCASE(Expression) OF
+
+        'typenumber' :
+          NewTokenType := TokenType::"Type Number";
+
+        'number' :
+          NewTokenType := TokenType::Number;
+
+        'type' :
+          NewTokenType := TokenType::Type;
+
+        'name' :
+          NewTokenType := TokenType::Name;
+
+        'ext' :
+          NewTokenType := TokenType::Extension;
+
+      END;
+
+      CASE TRUE OF
+        Expression = LOWERCASE(Expression) :
+          NewTokenFormatType := TokenFormatType::Lowercase;
+
+        Expression = UPPERCASE(Expression) :
+          NewTokenFormatType := TokenFormatType::Uppercase;
+
+        ELSE
+          NewTokenFormatType := TokenFormatType::" ";
+
+      END;
+    END;
+
+    LOCAL PROCEDURE ConvertParameters@13(VAR TokenNo@1000 : Integer;VAR Parameters@1001 : Text);
+    BEGIN
+      CASE Token[TokenNo] OF
+        TokenType::Extension :
+          IF COPYSTR(Parameters, 1, 7) = 'editor=' THEN
+            EditorExtension := COPYSTR(Parameters, 8);
+      END;
+    END;
+
+    PROCEDURE GetEditorExtension@11() : Text;
+    BEGIN
+      CheckTokens;
+
+      IF EditorExtension = '' THEN
+        EXIT('txt')
+      ELSE
+        EXIT(EditorExtension);
+    END;
+
+    LOCAL PROCEDURE ReplaceEditorExtension@14(Extension@1000 : Text) : Text;
+    BEGIN
+      IF LOWERCASE(Extension) = 'editor' THEN
+        IF EditorExtension = '' THEN
+          EXIT('txt')
+        ELSE
+          EXIT(EditorExtension);
+
+      EXIT(Extension);
+    END;
+
+    BEGIN
+    {
+      Example for codeunit 45 AutoFormatManagement
+      <TypeNumber>-<Type>-<Number> <Name>.<ext>: 5-Codeunit-45 AutoFormatManagement.txt
+      <TYPE,3><Number>.<EXT>: COD45.TXT
+      <TypeNumber>: 5
+      <Number>: 45
+      <Type>: Codeunit
+      <type>: codeunit
+      <TYPE>: CODEUNIT
+      <Type,3>: Cod
+      <Name>: AutoFormatManagement
+      <name>: autoformatmanagement
+      <NAME>: AUTOFORMATMANAGEMENT
+      <Name,4>: Auto
+      <ext>: txt
+      <EXT>: TXT
+      <ext,0,editor=nav>: nav
+    }
+    END.
+  }
+}
+

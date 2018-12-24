@@ -1,0 +1,319 @@
+OBJECT Codeunit 9062283 Excel Integration
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      mExcel@1000000000 : Record 9062287;
+      mExcelSheet@1000000004 : Record 9062287;
+      mExcelCell@1000000001 : Record 9062288;
+      mExcelBuffer@1000000002 : TEMPORARY Record 9062715;
+      mExcelConverter@1000000005 : Codeunit 9062582;
+      mFileSystem@1000000003 : Codeunit 9062264;
+      mTnpToolkit@1000000006 : Codeunit 9062230;
+      String@1000000007 : Codeunit 9062236;
+
+    PROCEDURE "--- Excel Functions ---"@1000000017();
+    BEGIN
+    END;
+
+    PROCEDURE GetExcel@1000000004(VAR pExcel@1000000000 : Record 9062287);
+    BEGIN
+      //DOC NA2015.1 - Returning current Excel
+      //  <> pExcel: Target Excel record
+
+      pExcel := mExcel;
+    END;
+
+    PROCEDURE SetExcel@1000000002(pExcel@1000000000 : Record 9062287);
+    BEGIN
+      //DOC NA2015.1 - Setting current Excel
+      //  -> pExcel: Excel record to set
+
+      mExcel := pExcel;
+    END;
+
+    PROCEDURE ReadExcel@1000000001(pPath@1000000004 : Text[1024];pShowDialog@1000000002 : Boolean;VAR pExcel@1000000001 : Record 9062287);
+    VAR
+      lExcelSheet@1000000000 : TEMPORARY Record 9062287;
+      lDialog@1000000003 : Dialog;
+      lDialogState@1000000005 : ARRAY [5] OF Decimal;
+    BEGIN
+      //DOC NA2015.1 - Reading Excel (the whole workbook)
+      //  -> pPath: Path
+      //  -> pShowDialog: Showing dialog during run
+      //  <> pExcel: Target Excel record (empty if Excel not read)
+
+      pShowDialog := ((pShowDialog) AND (GUIALLOWED()));
+
+      CLEAR(pExcel);
+      CLEAR(mExcel);
+
+      mExcelConverter.Convert(pPath, FALSE);
+
+      mExcelBuffer.GetSheetNames(pPath, lExcelSheet);
+
+      IF (pShowDialog) THEN
+      BEGIN
+        lDialog.OPEN(PADSTR('@1', 20, '@'));
+        lDialogState[1] := lExcelSheet.COUNT();
+        IF (lDialogState[1] <> 0) THEN
+          lDialogState[2] := 10000 / lDialogState[1];
+      END;
+
+      lExcelSheet.SETFILTER(Name,'<>_*');
+      IF (lExcelSheet.FINDSET()) THEN
+      BEGIN
+
+        mExcel.INIT();
+        mExcel.VALIDATE(Type, mExcel.Type::Workbook);
+        mExcel.VALIDATE(Name, mFileSystem.GetFileName(mFileSystem.Client, pPath));
+        mExcel.INSERT(TRUE);
+
+        pExcel := mExcel;
+
+        REPEAT
+
+          IF (pShowDialog) THEN
+          BEGIN
+            lDialogState[3] += lDialogState[2];
+            lDialogState[4] := ROUND(lDialogState[3], 100);
+            IF (lDialogState[4] <> lDialogState[5]) THEN
+            BEGIN
+              lDialogState[5] := lDialogState[4];
+              lDialog.UPDATE(1, lDialogState[5]);
+            END;
+          END;
+
+          mExcelSheet.INIT();
+          mExcelSheet.VALIDATE(ID, mExcel.ID);
+          mExcelSheet.VALIDATE(Type, mExcel.Type::Sheet);
+          mExcelSheet.VALIDATE(Name, lExcelSheet.Name);
+          mExcelSheet.INSERT(TRUE);
+
+          mExcelBuffer.RESET();
+          mExcelBuffer.DELETEALL();
+
+          mExcelBuffer.OpenBook(pPath, lExcelSheet.Name);
+          mExcelBuffer.SetHideProgressDialog(TRUE);
+          mExcelBuffer.ReadSheet();
+          mExcelBuffer.SetHideProgressDialog(FALSE);
+          mExcelBuffer.CloseBook();
+
+          IF (mExcelBuffer.FINDSET()) THEN
+          REPEAT
+            mExcelCell.INIT();
+            mExcelCell.VALIDATE("Excel ID", mExcel.ID);
+            mExcelCell.VALIDATE("Sheet Name", mExcelSheet.Name);
+            mExcelCell.CopyFromExcelBuffer(mExcelBuffer);
+            mExcelCell.INSERT(TRUE);
+          UNTIL (mExcelBuffer.NEXT() = 0);
+
+        UNTIL (lExcelSheet.NEXT() = 0);
+
+      END;
+
+      IF (pShowDialog) THEN
+        lDialog.CLOSE();
+    END;
+
+    PROCEDURE "--- Excel Range Functions ---"@1000000018();
+    BEGIN
+    END;
+
+    PROCEDURE FindExcelCellWithColumnRow@1000000008(pSheetName@1000000000 : Text[250];pColumn@1000000002 : Integer;pRow@1000000004 : Integer;VAR pExcelCell@1000000006 : Record 9062288) : Boolean;
+    VAR
+      lCellFound@1000000001 : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Returning a range with column and row
+      //  -> pSheetName: Sheet name
+      //  -> pColumn: Column
+      //  -> pRow: Row
+      //  <> pExcelCell: Target Excel cell
+      //  <- Excel cell found / not
+
+      CLEAR(pExcelCell);
+
+      FindExcelSheet(pSheetName);
+
+      mExcelCell.RESET();
+      mExcelCell.SETRANGE("Excel ID", mExcel.ID);
+      mExcelCell.SETRANGE("Sheet Name", mExcelSheet.Name);
+      mExcelCell.SETRANGE(Row, pRow);
+      mExcelCell.SETRANGE(Column, pColumn);
+      lCellFound := mExcelCell.FINDFIRST();
+
+      IF (lCellFound) THEN
+        pExcelCell := mExcelCell;
+
+      EXIT(lCellFound);
+    END;
+
+    PROCEDURE FindExcelCellWithAddress@1000000007(pSheetName@1000000003 : Text[250];pAddress@1000000002 : Text[250];VAR pExcelCell@1000000000 : Record 9062288) : Boolean;
+    VAR
+      lExcelCell@1000000001 : Record 9062288;
+      lCellFound@1000000006 : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Returning a range with address
+      //  -> pSheetName: Sheet name
+      //  -> pAddress: The address
+      //  <> pExcelCell: Target Excel cell
+      //  <- Excel cell found / not
+
+      CLEAR(pExcelCell);
+
+
+      lExcelCell.SetAddress(pAddress);
+      IF (lExcelCell."Sheet Name" = '') THEN
+        lExcelCell."Sheet Name" := pSheetName;
+
+      FindExcelSheet(lExcelCell."Sheet Name");
+
+      mExcelCell.RESET();
+      mExcelCell.SETCURRENTKEY("Excel ID", "Sheet Name", "Column ID", "Row ID");
+      mExcelCell.SETRANGE("Excel ID", mExcel.ID);
+      mExcelCell.SETRANGE("Sheet Name", lExcelCell."Sheet Name");
+      mExcelCell.SETRANGE("Row ID", lExcelCell."Row ID");
+      mExcelCell.SETRANGE("Column ID", lExcelCell."Column ID");
+      lCellFound := mExcelCell.FINDFIRST();
+
+      IF (lCellFound) THEN
+        pExcelCell := mExcelCell;
+
+      EXIT(lCellFound);
+    END;
+
+    PROCEDURE FindExcelCellOffset@1000000016(pExcelCell@1000000001 : Record 9062288;pColumnOffset@1000000004 : Integer;pRowOffset@1000000003 : Integer;VAR pExcelCellOffset@1000000002 : Record 9062288) : Boolean;
+    VAR
+      lOffsetFound@1000000005 : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Finding and returning excel cell offset
+      //  -> pExcelCell: Excel cell
+      //  -> pColumnOffset: Column offset
+      //  -> pRowOffset: Row offset
+      //  <> pExcelCellOffset: Target Excel cell offset
+      //  <- Excel cell offset found
+
+      CLEAR(pExcelCellOffset);
+
+      IF (pExcelCell."Excel ID" <> 0) THEN
+      BEGIN
+        FindExcelSheet(pExcelCell."Sheet Name");
+
+        pExcelCellOffset.RESET();
+        pExcelCellOffset.SETRANGE("Excel ID", pExcelCell."Excel ID");
+        pExcelCellOffset.SETRANGE("Sheet Name", pExcelCell."Sheet Name");
+        pExcelCellOffset.SETRANGE(Row, pExcelCell.Row + pRowOffset);
+        pExcelCellOffset.SETRANGE(Column, pExcelCell.Column + pColumnOffset);
+        lOffsetFound := pExcelCellOffset.FINDFIRST();
+        IF ( NOT (lOffsetFound)) THEN
+          CLEAR(pExcelCellOffset);
+      END;
+
+      EXIT(lOffsetFound);
+    END;
+
+    PROCEDURE "--- Excel Formats ---"@1000000098();
+    BEGIN
+    END;
+
+    PROCEDURE ExcelIntegerFormat@1000000097() : Text[20];
+    BEGIN
+      //DOC NA2015.1 - Returning Excel integer format
+      //  <- The format
+
+      EXIT('0');
+    END;
+
+    PROCEDURE ExcelDecimalFormat@1000000096() : Text[20];
+    BEGIN
+      //DOC NA2015.1 - Returning Excel decimal format
+      //  <- The format
+
+      EXIT('0.00');
+    END;
+
+    PROCEDURE ExcelDateFormat@1000000095() : Text[20];
+    VAR
+      lFormat@1000000000 : Text[10];
+    BEGIN
+      //DOC NA2015.1 - Returning Excel date format
+      //  <- The format
+
+      lFormat := FORMAT(DMY2DATE(22, 11, 3344));
+      lFormat := String.Replace(lFormat, '22', 'dd');
+      lFormat := String.Replace(lFormat, '11', 'mm');
+      lFormat := String.Replace(lFormat, '33', 'yy');
+      lFormat := String.Replace(lFormat, '44', 'yy');
+
+      EXIT(lFormat);
+    END;
+
+    PROCEDURE ExcelTimeFormat@1000000094() : Text[20];
+    BEGIN
+      //DOC NA2015.1 - Returning Excel time format
+      //  <- The format
+
+      EXIT('hh:mm');
+    END;
+
+    PROCEDURE ExcelDateTimeFormat@1000000093() : Text[20];
+    BEGIN
+      //DOC NA2015.1 - Returning Excel datetime format
+      //  <- The format
+
+      EXIT(ExcelDateFormat() + ' ' + ExcelTimeFormat());
+    END;
+
+    PROCEDURE "--- Tools ---"@1000000012();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CheckExcel@1000000011();
+    VAR
+      xNoExcelSet@1000000000 : TextConst 'ENU=There is currently no Excel set (Excel ID is zero). Excel integration can''t work properly without current Excel.;ENG=There is currently no Excel set (Excel ID is zero). Excel integration can''t work properly without current Excel.';
+    BEGIN
+      //DOC NA2015.1 - Checking if Excel is set
+
+      IF (mExcel.ID = 0) THEN
+        ERROR(xNoExcelSet);
+    END;
+
+    LOCAL PROCEDURE FindExcelSheet@1000000010(pSheetName@1000000000 : Text[250]);
+    VAR
+      xSheetUnknown@1000000001 : TextConst 'ENU=Excel with ID %1 doesn''t have a sheet named "%2";ENG=Excel with ID %1 doesn''t have a sheet named "%2"';
+    BEGIN
+      //DOC NA2015.1 - Finding Excel sheet
+      //  <> pSheetName: Sheet name to find
+
+      CheckExcel();
+
+      IF ((mExcelSheet.ID <> mExcel.ID) OR (mExcelSheet.Name <> pSheetName)) THEN
+        IF ( NOT (mExcelSheet.GET(mExcel.ID, mExcelSheet.Type::Sheet, pSheetName))) THEN
+          ERROR(xSheetUnknown, mExcelSheet.ID, pSheetName);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  JH 11/04/2013 - Created
+      //DOC NA2015.2  PC 25/06/2014 - Added filter to not import Sheets from Workbook that start with Underscore char (_)
+      //DOC NA2015.9  JH 19/08/2015 - Excel converter added
+      //DOC NA2016.10 JH 27/08/2015 - Upgraded to 2016
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit used
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

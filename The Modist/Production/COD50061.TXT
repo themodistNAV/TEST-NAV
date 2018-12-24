@@ -1,0 +1,151 @@
+OBJECT Codeunit 50061 Farfetch - Inventory Delta
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/12/18;
+    Time=10:58:03 AM;
+    Modified=Yes;
+    Version List=TM0200;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            ModistSetup.GET;
+            ModistSetup.TESTFIELD("Farfetch Inv. Delta Export Grp");
+            ModistSetup.TESTFIELD("Farfetch Integration Type");
+            ModistSetup.TESTFIELD("Farfetch Site ID");
+            ModistSetup.TESTFIELD("Farfetch Item Dist. Code");
+
+            IntegrationProcessingGroup.GET(ModistSetup."Farfetch Integration Type",ModistSetup."Farfetch Inv. Delta Export Grp");
+
+            FileName := BuildFarfetchInvDeltaFileName;
+
+            TmpCSVBuffer.RESET;
+            TmpCSVBuffer.DELETEALL;
+
+            Location.RESET;
+            Location.SETRANGE("Saleable Stock",TRUE);
+            Location.FINDFIRST;
+
+            ItemDistribution.RESET;
+            ItemDistribution.SETRANGE(Code,ModistSetup."Farfetch Item Dist. Code");
+            IF ItemDistribution.ISEMPTY THEN
+              EXIT;
+
+            //If it is in "Actions" table then it should be replicated.
+            Actions.RESET;
+            Actions.LOCKTABLE;
+            Actions.SETCURRENTKEY("Record ID","Process Code",Status);
+            Actions.SETRANGE("Process Code",UPPERCASE('StockSynch'));
+            Actions.SETRANGE(Status,Actions.Status::Pending);
+            IF Actions.FINDSET THEN BEGIN
+              LineNo := 1;
+              REPEAT
+                Inventory := 0;
+                CSVValue := '';
+                FieldNo := 1;
+                RecID := Actions."Record ID";
+                RecRef := RecID.GETRECORD;
+                CASE RecRef.NUMBER OF
+                  DATABASE::Item:
+                    BEGIN
+                      RecRef.SETTABLE(Item);
+
+                      ItemDistribution.SETRANGE("Item No.",Item."No.");
+                      IF NOT ItemDistribution.FINDFIRST THEN
+                        ItemDistribution.Status := ItemDistribution.Status::Offline;
+
+                      Item.SETFILTER("Location Filter",Location.Code);
+                      Item.CALCFIELDS(Inventory,"Qty. on Internet Order","Qty. on Sales Order","Trans. Ord. Shipment (Qty.)","Qty. on Purch. Return");
+                      Inventory := Item.Inventory - (Item."Qty. on Internet Order" + Item."Qty. on Sales Order" + Item."Trans. Ord. Shipment (Qty.)" - Item."Qty. on Purch. Return");
+                      CSVValue := Item."No.";
+                    END;
+                  DATABASE::"Item Variant":
+                    BEGIN
+                      RecRef.SETTABLE(ItemVariant);
+
+                      ItemDistribution.SETRANGE("Item No.",ItemVariant."Item No.");
+                      ItemDistribution.SETRANGE("Variant Code",ItemVariant.Code);
+                      IF NOT ItemDistribution.FINDFIRST THEN
+                        ItemDistribution.SETRANGE("Variant Code");
+                        IF NOT ItemDistribution.FINDFIRST THEN
+                          ItemDistribution.Status := ItemDistribution.Status::Offline;
+
+                      ItemVariant.SETFILTER("Location Filter",Location.Code);
+                      ItemVariant.CALCFIELDS(Inventory,"Qty. on Internet Order","Qty. on Sales Order","Trans. Ord. Shipment (Qty.)","Qty. on Purch. Return");
+                      Inventory := ItemVariant.Inventory - (ItemVariant."Qty. on Internet Order" + ItemVariant."Qty. on Sales Order" + ItemVariant."Trans. Ord. Shipment (Qty.)" + ItemVariant."Qty. on Purch. Return");
+                      CSVValue := ItemVariant."Item No." + '-' + ItemVariant.Code;
+                    END;
+                END;
+
+                IF Inventory < 0 THEN
+                  Inventory := 0;
+
+                TmpCSVBuffer.InsertEntry(LineNo,FieldNo,ModistSetup."Farfetch Site ID");
+                FieldNo += 1;
+                TmpCSVBuffer.InsertEntry(LineNo,FieldNo,CSVValue);
+                FieldNo += 1;
+                IF ItemDistribution.Status = ItemDistribution.Status::Online THEN
+                  TmpCSVBuffer.InsertEntry(LineNo,FieldNo,FORMAT(Inventory))
+                ELSE
+                  TmpCSVBuffer.InsertEntry(LineNo,FieldNo,FORMAT(0));
+
+                Actions2 := Actions;
+                Actions2.Status := Actions.Status::Completed;
+                Actions2."Process Date" := TODAY;
+                Actions2."Process Time" := TIME;
+                Actions2."Inventory Exported" := Inventory;
+                Actions2."File Name" := FileName + '.csv';
+                Actions2.MODIFY;
+
+                LineNo += 1;
+              UNTIL Actions.NEXT=0;
+
+              TmpCSVBuffer.SaveData(IntegrationProcessingGroup."Working Location" + FileName + '.csv','|');
+
+            //  IF IntegrationProcessingGroup."Enable SFTP Connect" THEN BEGIN
+            //    WebIntegrationManagement.TransferFTPfiles2(IntegrationProcessingGroup."Working Location",IntegrationProcessingGroup."Archive Location",'.csv','.csv',
+            //                                            ModistSetup."Farfetch SFTP Server",IntegrationProcessingGroup."FTP Folder",IntegrationProcessingGroup."FTP Archive Folder",TRUE);
+            //  END;
+
+            END; //ELSE
+              //EXIT;
+
+            IF IntegrationProcessingGroup."Enable SFTP Connect" THEN BEGIN
+              WebIntegrationManagement.TransferFTPfiles2(IntegrationProcessingGroup."Working Location",IntegrationProcessingGroup."Archive Location",'.csv','.csv',
+                                                      ModistSetup."Farfetch SFTP Server",IntegrationProcessingGroup."FTP Folder",IntegrationProcessingGroup."FTP Archive Folder",TRUE);
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ModistSetup@1170000002 : Record 50000;
+      Actions@1170000000 : Record 50025;
+      Actions2@1170000015 : Record 50025;
+      TmpCSVBuffer@1170000001 : TEMPORARY Record 1234;
+      IntegrationProcessingGroup@1170000004 : Record 50007;
+      Location@1170000005 : Record 14;
+      ItemDistribution@1170000006 : Record 50026;
+      ItemVariant@1170000007 : Record 5401;
+      Item@1170000008 : Record 27;
+      WebIntegrationManagement@1170000016 : Codeunit 50100;
+      RecRef@1170000010 : RecordRef;
+      RecID@1170000009 : RecordID;
+      FileName@1170000003 : Text;
+      CSVValue@1170000014 : Code[50];
+      Inventory@1170000011 : Decimal;
+      LineNo@1170000012 : Integer;
+      FieldNo@1170000013 : Integer;
+
+    LOCAL PROCEDURE BuildFarfetchInvDeltaFileName@1170000000() : Text;
+    BEGIN
+      EXIT('MOD-INV-D-' + FORMAT(TODAY,0,'<Month,2><Day,2><Year4>') + '-' + FORMAT(TIME,0,'<Hours24,2><Minutes,2><Seconds,2>'));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,684 @@
+OBJECT Codeunit 9062339 System Behaviour Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/04/16;
+    Time=10:52:15 AM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      mSystemBehaviour@1000000000 : Record 9062230;
+      mSystemBehaviourGroup@1000000002 : Record 9062485;
+      tSetupMissing@1000000003 : TextConst 'ENU=Setup Missing;ENG=Setup Missing';
+      mNameValueToolkit@1000000006 : Codeunit 9062587;
+      String@1000000007 : Codeunit 9062236;
+      mTnpToolkit@1000000001 : Codeunit 9062230;
+      tLastSysBGroupSysB@1000000004 : TextConst 'ENU=LAST_SYSB_GROUP;ENG=LAST_SYSB_GROUP';
+      mDirection@1000000005 : ' ,Up,Down';
+
+    PROCEDURE "--- Filter ---"@1000000002();
+    BEGIN
+    END;
+
+    PROCEDURE InitialiseFilter@1000000007(VAR pGroup@1000000000 : Code[20];VAR pSearch@1000000002 : Text;VAR pGroupEnabled@1000000003 : Boolean;VAR pSystemBehaviour@1000000001 : Record 9062230);
+    BEGIN
+      //DOC NA2015.4 - Initialising filter
+      //  <> pGroup: Target group
+      //  <> pSearch: Target search
+      //  <> pGroupEnabled: Target "Group Enabled" flag
+      //  <> pSystemBehaviour: Recordset to filter
+
+      FindGroup(pGroup, pSystemBehaviour);
+      pSearch := '';
+      pGroupEnabled := TRUE;
+
+      FilterRecordset('', pGroup, pSystemBehaviour);
+    END;
+
+    PROCEDURE SaveFilter@1000000016(pGroup@1000000000 : Code[20];pSearch@1000000001 : Text);
+    BEGIN
+      //DOC NA2015.4 - Saving filter
+      //  -> pGroup: Group
+      //  -> pSearch: Search
+
+      mSystemBehaviour.SetUserText(tLastSysBGroupSysB, USERID, pGroup, TRUE);
+    END;
+
+    PROCEDURE ValidateFilter@1000000006(VAR pGroup@1000000000 : Code[20];pSearch@1000000007 : Text;VAR pGroupEnabled@1000000008 : Boolean;VAR pSystemBehaviour@1000000001 : Record 9062230);
+    VAR
+      eUnknownGroup@1000000006 : TextConst 'ENU=Unknown group: "%1".;ENG=Unknown group: "%1".';
+    BEGIN
+      //DOC NA2015.4 - Validating filter
+      //  <> pGroup: Source / target group
+      //  -> pSearch: Search
+      //  <> pGroupEnabled: Target "Group Enabled" flag
+      //  <> pSystemBehaviour: Recordset to filter
+
+      pSearch := DELCHR(pSearch, '<>', ' ');
+      pGroupEnabled := (pSearch = '');
+      IF (pGroupEnabled) THEN
+        FindGroup(pGroup, pSystemBehaviour)
+      ELSE
+        pGroup := '';
+
+      IF (pGroupEnabled) THEN
+        ValidateGroup(pGroup, pSystemBehaviour)
+      ELSE
+        ValidateSearch(pSearch, pSystemBehaviour);
+    END;
+
+    LOCAL PROCEDURE ValidateGroup@1000000020(VAR pGroup@1000000000 : Code[20];VAR pSystemBehaviour@1000000001 : Record 9062230);
+    VAR
+      lGroup@1000000005 : Code[20];
+      lFilter@1000000003 : ARRAY [3] OF Text;
+      lFilterIndex@1000000004 : Integer;
+      lFound@1000000002 : Boolean;
+      eUnknownGroup@1000000006 : TextConst 'ENU=Unknown group: "%1".;ENG=Unknown group: "%1".';
+    BEGIN
+      //DOC NA2015.4 - Validating group
+      //  <> pGroup: Source / target group
+      //  <> pSystemBehaviour: Recordset to filter
+
+      lGroup := pGroup;
+
+      IF (pGroup <> '') THEN
+      BEGIN
+        lFilter[1] := pGroup;
+        lFilter[2] := pGroup + '*';
+        lFilter[3] := '*' + pGroup + '*';
+        lFound := FALSE;
+
+        FOR lFilterIndex := 1 TO ARRAYLEN(lFilter) DO
+          IF ( NOT (lFound)) THEN
+          BEGIN
+            mSystemBehaviourGroup.RESET();
+            mSystemBehaviourGroup.SETFILTER(Code, lFilter[lFilterIndex]);
+            lFound := mSystemBehaviourGroup.FINDFIRST();
+            IF (lFound) THEN
+            BEGIN
+              pGroup := mSystemBehaviourGroup.Code;
+              lFilterIndex := ARRAYLEN(lFilter);
+            END;
+          END;
+
+        IF ( NOT (lFound)) THEN
+          ERROR(eUnknownGroup, pGroup);
+      END;
+
+      FilterRecordset('', pGroup, pSystemBehaviour);
+    END;
+
+    LOCAL PROCEDURE ValidateSearch@1000000008(pSearch@1000000000 : Text[250];VAR pSystemBehaviour@1000000001 : Record 9062230);
+    VAR
+      lSystemBehaviourTmp@1000000003 : TEMPORARY Record 9062230;
+      lFilter@1000000002 : Text;
+      lField@1000000004 : ' ,Code,Name,Description';
+    BEGIN
+      //DOC NA2015.4 - Validating search
+      //  -> pSearch: The search
+      //  <> pSystemBehaviour: Recordset to filter
+
+      lFilter := '@*' + pSearch + '*';
+
+      FOR lField := lField::Code TO lField::Description DO
+      BEGIN
+        mSystemBehaviour.RESET();
+        CASE (lField) OF
+          lField::Code: mSystemBehaviour.SETFILTER(Code, lFilter);
+          lField::Name: mSystemBehaviour.SETFILTER(Name, lFilter);
+          lField::Description: mSystemBehaviour.SETFILTER(Description, lFilter);
+        END;
+        IF (mSystemBehaviour.FINDSET()) THEN
+        REPEAT
+          IF ( NOT (lSystemBehaviourTmp.GET(mSystemBehaviour.Code))) THEN
+          BEGIN
+            lSystemBehaviourTmp := mSystemBehaviour;
+            lSystemBehaviourTmp.INSERT();
+          END;
+        UNTIL (mSystemBehaviour.NEXT() = 0);
+      END;
+
+      lFilter := '';
+      lSystemBehaviourTmp.RESET();
+      IF (lSystemBehaviourTmp.FINDSET()) THEN
+      REPEAT
+        IF (lFilter <> '') THEN
+          lFilter := lFilter + '|';
+        lFilter := lFilter + lSystemBehaviourTmp.Code;
+      UNTIL (lSystemBehaviourTmp.NEXT() = 0);
+      IF (lFilter = '') THEN
+        lFilter := '0&1';
+
+      FilterRecordset(lFilter, '', pSystemBehaviour);
+    END;
+
+    PROCEDURE GroupLookup@1000000005(VAR pGroup@1000000001 : Code[20];VAR pSystemBehaviour@1000000004 : Record 9062230) : Boolean;
+    VAR
+      lGroup@1000000002 : Code[20];
+      lResult@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Group lookup
+      //  <> pGroup: Source / target group
+      //  <> pSystemBehaviour: Recordset to filter
+      //  <- Lookup result
+
+      lGroup := pGroup;
+
+      mSystemBehaviourGroup.RESET();
+      IF (pGroup <> '') THEN
+      BEGIN
+        mSystemBehaviourGroup.SETRANGE(Code, pGroup);
+        IF (mSystemBehaviourGroup.FINDFIRST()) THEN;
+        mSystemBehaviourGroup.SETRANGE(Code);
+      END;
+
+      IF (PAGE.RUNMODAL(0, mSystemBehaviourGroup) = ACTION::LookupOK) THEN
+      BEGIN
+        pGroup := mSystemBehaviourGroup.Code;
+        FilterRecordset('', pGroup, pSystemBehaviour);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE PreviousGroup@1000000001(VAR pGroup@1000000000 : Code[20];VAR pSystemBehaviour@1000000001 : Record 9062230) : Boolean;
+    VAR
+      lPreviousGroup@1000000002 : Code[20];
+      lGroupChanged@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Going to previous group
+      //  <> pGroup: The current group / target group
+      //  <> pSystemBehaviour: Recordset to filter
+      //  <- TRUE = Group changed, FALSE = Not
+
+      lPreviousGroup := pGroup;
+
+      IF (pGroup <> '') THEN
+        IF (mSystemBehaviourGroup.GET(pGroup)) THEN
+        BEGIN
+          mSystemBehaviourGroup.RESET();
+          mSystemBehaviourGroup.SETFILTER(Code, '<%1', pGroup);
+          IF (mSystemBehaviourGroup.FINDLAST()) THEN
+            pGroup := mSystemBehaviourGroup.Code
+          ELSE
+            pGroup := '';
+        END
+        ELSE
+          pGroup := '';
+
+      lGroupChanged := (pGroup <> lPreviousGroup);
+      IF (lGroupChanged) THEN
+        FilterRecordset('', pGroup, pSystemBehaviour);
+
+      EXIT(lGroupChanged);
+    END;
+
+    PROCEDURE NextGroup@1000000003(VAR pGroup@1000000000 : Code[20];VAR pSystemBehaviour@1000000001 : Record 9062230) : Boolean;
+    VAR
+      lPreviousGroup@1000000002 : Code[20];
+      lGroupChanged@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Going to next group
+      //  <> pGroup: The current group / target group
+      //  <> pSystemBehaviour: Recordset to filter
+      //  <- TRUE = Group changed, FALSE = Not
+
+      lPreviousGroup := pGroup;
+
+      IF (pGroup = '') THEN
+      BEGIN
+        mSystemBehaviourGroup.RESET();
+        IF (mSystemBehaviourGroup.FINDFIRST()) THEN
+          pGroup := mSystemBehaviourGroup.Code;
+        IF (pGroup = '') THEN
+          IF (mSystemBehaviourGroup.NEXT() <> 0) THEN
+            pGroup := mSystemBehaviourGroup.Code;
+      END
+      ELSE
+        IF (mSystemBehaviourGroup.GET(pGroup)) THEN
+        BEGIN
+          mSystemBehaviourGroup.RESET();
+          mSystemBehaviourGroup.SETFILTER(Code, '>%1', pGroup);
+          IF (mSystemBehaviourGroup.FINDFIRST()) THEN
+            pGroup := mSystemBehaviourGroup.Code;
+        END
+        ELSE
+          pGroup := '';
+
+      lGroupChanged := (pGroup <> lPreviousGroup);
+      IF (lGroupChanged) THEN
+        FilterRecordset('', pGroup, pSystemBehaviour);
+
+      EXIT(lGroupChanged);
+    END;
+
+    LOCAL PROCEDURE FilterRecordset@1000000012(pCodeFilter@1000000000 : Text;pGroupFilter@1000000001 : Code[20];VAR pSystemBehaviour@1000000002 : Record 9062230);
+    BEGIN
+      //DOC NA2015.4 - Filtering recordset
+      //  -> pCodeFilter: Code filter
+      //  -> pGroupFilter: Group filter
+
+      pSystemBehaviour.FILTERGROUP(2);
+      IF (pCodeFilter <> '') THEN
+        pSystemBehaviour.SETFILTER(Code, pCodeFilter)
+      ELSE
+        pSystemBehaviour.SETRANGE(Code);
+      IF ((pGroupFilter <> '') OR (pCodeFilter = '')) THEN
+        pSystemBehaviour.SETRANGE(Group, pGroupFilter)
+      ELSE
+        pSystemBehaviour.SETRANGE(Group);
+      pSystemBehaviour.FILTERGROUP(0);
+
+      IF (pSystemBehaviour.FINDFIRST()) THEN;
+    END;
+
+    LOCAL PROCEDURE FindGroup@1000000000(VAR pGroup@1000000001 : Code[20];VAR pSystemBehaviour@1000000000 : Record 9062230);
+    VAR
+      lFilterGroup@1000000002 : Integer;
+    BEGIN
+      //DOC NA2015.4 - Trying to find system behaviour group
+      //  <> pGroup: Current / target group
+      //  <> pSystemBehaviour: Recordset
+
+      pGroup := mSystemBehaviour.GetText(tLastSysBGroupSysB);
+
+      IF (pGroup = '') THEN
+      BEGIN
+        FOR lFilterGroup := 5 DOWNTO 0 DO
+        BEGIN
+          pSystemBehaviour.FILTERGROUP(lFilterGroup);
+          IF (pSystemBehaviour.GETFILTER(Group) <> '') THEN
+          BEGIN
+            pGroup := pSystemBehaviour.GETRANGEMIN(Group);
+            lFilterGroup := 0;
+          END;
+        END;
+        pSystemBehaviour.FILTERGROUP(0);
+      END;
+
+      IF (pGroup = '') THEN
+      BEGIN
+        mSystemBehaviour.RESET();
+        mSystemBehaviour.SETRANGE("User ID", '');
+        mSystemBehaviour.SETRANGE(Group, '');
+        IF (mSystemBehaviour.ISEMPTY) THEN
+        BEGIN
+          mSystemBehaviourGroup.RESET();
+          mSystemBehaviourGroup.SETFILTER(Code, '<>''''');
+          IF (mSystemBehaviourGroup.FINDFIRST()) THEN
+            pGroup := mSystemBehaviourGroup.Code;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Group Filter ---"@1000000017();
+    BEGIN
+    END;
+
+    PROCEDURE InitialiseGroupFilter@1000000019(VAR pSystemBehaviourGroup@1000000000 : Record 9062485);
+    VAR
+      lGroup@1000000001 : Code[20];
+      lGroupEnabled@1000000003 : Boolean;
+      lSearch@1000000002 : Text;
+    BEGIN
+      //DOC NA2015.4 - Initialising group filter
+      //  <> pSystemBehaviourGroup: Target group
+
+      InitialiseFilter(lGroup, lSearch, lGroupEnabled, mSystemBehaviour);
+      IF (lGroup <> '') THEN
+        IF ( NOT (pSystemBehaviourGroup.GET(lGroup))) THEN
+          IF (pSystemBehaviourGroup.FINDFIRST()) THEN;
+    END;
+
+    PROCEDURE SaveGroupFilter@1000000021(pSystemBehaviourGroup@1000000000 : Record 9062485);
+    BEGIN
+      //DOC NA2015.4 - Saving group filter
+      //  -> pSystemBehaviourGroup: The current group
+
+      SaveFilter(pSystemBehaviourGroup.Code, '');
+    END;
+
+    PROCEDURE "--- Answer Validation ---"@1000000013();
+    BEGIN
+    END;
+
+    PROCEDURE ValidateOptionAnswer@1000000014(VAR pSystemBehaviour@1000000000 : Record 9062230);
+    VAR
+      lOptionBufferTmp@1000000001 : TEMPORARY Record 9062730;
+      lOptionValue@1000000005 : Integer;
+      lFilter@1000000004 : ARRAY [3] OF Text;
+      lFilterIndex@1000000003 : Integer;
+      lFound@1000000002 : Boolean;
+      eUnknownOption@1000000006 : TextConst 'ENU=Unknown option: "%1". Please, select one from the following options: "%2".;ENG=Unknown option: "%1". Please, select one from the following options: "%2".';
+    BEGIN
+      //DOC NA2015.4 - Validating option answer
+      //  <> pSystemBehaviour: The system behaviour
+
+      IF (pSystemBehaviour.Answer <> '') THEN
+      BEGIN
+        pSystemBehaviour.TESTFIELD("Option List");
+        String.SplitAdvanced(pSystemBehaviour."Option List", ',', TRUE, TRUE, lOptionBufferTmp);
+
+        lFilter[1] := pSystemBehaviour.Answer;
+        lFilter[2] := pSystemBehaviour.Answer + '*';
+        lFilter[3] := '*' + pSystemBehaviour.Answer + '*';
+        lFound := FALSE;
+
+        FOR lFilterIndex := 1 TO ARRAYLEN(lFilter) DO
+        BEGIN
+          lOptionBufferTmp.RESET();
+          lOptionBufferTmp.SETFILTER(Value, lFilter[lFilterIndex]);
+          lFound := lOptionBufferTmp.FINDFIRST();
+          IF (lFound) THEN
+            lFilterIndex := ARRAYLEN(lFilter);
+        END;
+
+        IF ( NOT (lFound)) THEN
+          IF (EVALUATE(lOptionValue, pSystemBehaviour.Answer)) THEN
+            lFound := lOptionBufferTmp.GET(lOptionValue);
+
+        IF ( NOT (lFound)) THEN
+          ERROR(eUnknownOption, pSystemBehaviour.Answer, pSystemBehaviour."Option List");
+      END;
+
+      pSystemBehaviour.Answer := lOptionBufferTmp.Value;
+      pSystemBehaviour."Answer (Decimal)" := lOptionBufferTmp.ID;
+      pSystemBehaviour."Answer (Text)" := lOptionBufferTmp.Value;
+    END;
+
+    PROCEDURE "--- Answer Lookup ---"@1000000004();
+    BEGIN
+    END;
+
+    PROCEDURE AnswerLookup@1000000010(VAR pSystemBehaviour@1000000000 : Record 9062230) : Boolean;
+    VAR
+      lResult@1000000001 : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Performing system behaviour answer lookup
+      //  <> pSystemBehaviour: The system behaviour
+      //  <- Lookup result
+
+      lResult := FALSE;
+
+      CASE (pSystemBehaviour."Answer Type") OF
+        pSystemBehaviour."Answer Type"::Boolean:
+          lResult := BooleanAnswerLookup(pSystemBehaviour);
+        pSystemBehaviour."Answer Type"::Date:
+          lResult := DateAnswerLookup(pSystemBehaviour);
+        pSystemBehaviour."Answer Type"::Option:
+          lResult := OptionAnswerLookup(pSystemBehaviour);
+        ELSE
+          CASE (pSystemBehaviour."Special Function") OF
+            pSystemBehaviour."Special Function"::File:
+              IF (pSystemBehaviour."Answer Type" = pSystemBehaviour."Answer Type"::Text) THEN
+                lResult := FileAnswerLookup(pSystemBehaviour);
+            pSystemBehaviour."Special Function"::Folder:
+              IF (pSystemBehaviour."Answer Type" = pSystemBehaviour."Answer Type"::Text) THEN
+                lResult := FolderAnswerLookup(pSystemBehaviour);
+            ELSE
+              IF (pSystemBehaviour."Relation Table ID" <> 0) THEN
+                lResult := RelationAnswerLookup(pSystemBehaviour);
+          END;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE BooleanAnswerLookup@1000000011(VAR pSystemBehaviour@1000000005 : Record 9062230) : Boolean;
+    VAR
+      lNameValueBufferTmp@1000000001 : TEMPORARY Record 9062730;
+      lResult@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Performing boolean system behaviour answer lookup
+      //  <> pSystemBehaviour: The system behaviour
+      //  <- Lookup result
+
+      lResult := FALSE;
+
+      CLEAR(mNameValueToolkit);
+      mNameValueToolkit.AddToNameValueBuffer(lNameValueBufferTmp, 0, FORMAT(FALSE));
+      mNameValueToolkit.AddToNameValueBuffer(lNameValueBufferTmp, 1, FORMAT(TRUE));
+      IF (mNameValueToolkit.NameValueLookup(lNameValueBufferTmp, FALSE)) THEN
+      BEGIN
+        pSystemBehaviour.VALIDATE("Answer (Boolean)", lNameValueBufferTmp.ID = 1);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE DateAnswerLookup@1000000009(VAR pSystemBehaviour@1000000001 : Record 9062230) : Boolean;
+    VAR
+      lEditDate@1000000000 : Report 9062281;
+      lResult@1000000002 : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Performing date system behaviour answer lookup
+      //  <> pSystemBehaviour: The system behaviour
+      //  <- Lookup result
+
+      lResult := FALSE;
+
+      CLEAR(lEditDate);
+      lEditDate.Initialise(pSystemBehaviour."Answer (Date)");
+      lEditDate.RUNMODAL();
+      IF (lEditDate.OK) THEN
+      BEGIN
+        pSystemBehaviour.VALIDATE("Answer (Date)", lEditDate.GetDate());
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE OptionAnswerLookup@1000000018(VAR pSystemBehaviour@1000000001 : Record 9062230) : Boolean;
+    VAR
+      lOptionBufferTmp@1000000000 : TEMPORARY Record 9062730;
+      lResult@1000000002 : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Performing option system behaviour answer lookup
+      //  <> pSystemBehaviour: The system behaviour
+      //  <- Lookup result
+
+      lResult := FALSE;
+
+      pSystemBehaviour.TESTFIELD("Option List");
+
+      CLEAR(mTnpToolkit);
+      String.SplitAdvanced(pSystemBehaviour."Option List", ',', TRUE, TRUE, lOptionBufferTmp);
+
+      IF (mNameValueToolkit.NameValueLookup(lOptionBufferTmp, FALSE)) THEN
+      BEGIN
+        pSystemBehaviour.Answer := lOptionBufferTmp.Value;
+        pSystemBehaviour."Answer (Decimal)" := lOptionBufferTmp.ID;
+        pSystemBehaviour."Answer (Text)" := lOptionBufferTmp.Value;
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE FileAnswerLookup@1000000022(VAR pSystemBehaviour@1000000001 : Record 9062230) : Boolean;
+    VAR
+      lFileManagement@1000000000 : Codeunit 419;
+      lFilePath@1000000004 : Text;
+      lResult@1000000002 : Boolean;
+      eFilterString@1000000003 : TextConst 'ENU=All Files (*.*)|*.*;ENG=All Files (*.*)|*.*';
+    BEGIN
+      //DOC NA2015.4 - Performing file system behaviour answer lookup
+      //  <> pSystemBehaviour: The system behaviour
+      //  <- Lookup result
+
+      lResult := FALSE;
+
+      lFilePath := lFileManagement.OpenFileDialog('', '', eFilterString);
+      IF (lFilePath <> '') THEN
+      BEGIN
+        pSystemBehaviour.VALIDATE("Answer (Text)", lFilePath);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE FolderAnswerLookup@1000000023(VAR pSystemBehaviour@1000000001 : Record 9062230) : Boolean;
+    VAR
+      lFileManagement@1000000000 : Codeunit 419;
+      lFolder@1000000003 : Text;
+      lResult@1000000002 : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Performing folder system behaviour answer lookup
+      //  <> pSystemBehaviour: The system behaviour
+      //  <- Lookup result
+
+      lResult := FALSE;
+
+      lFolder := lFileManagement.BrowseForFolderDialog('', '', TRUE);
+      IF (lFolder <> '') THEN
+      BEGIN
+        pSystemBehaviour.VALIDATE("Answer (Text)", lFolder);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE RelationAnswerLookup@1000000015(VAR pSystemBehaviour@1000000007 : Record 9062230) : Boolean;
+    VAR
+      lRunWithRecordRef@1000000002 : Codeunit 9062239;
+      lRecordRef@1000000004 : RecordRef;
+      lKeyRef@1000000000 : KeyRef;
+      lFieldRef@1000000001 : FieldRef;
+      lResult@1000000005 : Boolean;
+      lPosition@1000000003 : Text;
+    BEGIN
+      //DOC NA2015.4 - Performing relation system behaviour answer lookup
+      //  <> pSystemBehaviour: The system behaviour
+      //  <- Lookup result
+
+      lResult := FALSE;
+
+      pSystemBehaviour.TESTFIELD("Relation Table ID");
+      lRecordRef.OPEN(pSystemBehaviour."Relation Table ID");
+      lKeyRef := lRecordRef.KEYINDEX(1);
+      lFieldRef := lKeyRef.FIELDINDEX(1);
+      lFieldRef.SETRANGE(lFieldRef.VALUE);
+      IF (lRecordRef.FINDFIRST) THEN;
+      lFieldRef.SETRANGE();
+
+      CLEAR(lRunWithRecordRef);
+      IF (lRunWithRecordRef.RunPage(lRecordRef, pSystemBehaviour."Relation Page ID", TRUE)) THEN
+      BEGIN
+        lPosition := lRunWithRecordRef.GetPosition();
+        lRecordRef.SETPOSITION(lPosition);
+        lRecordRef.SETRECFILTER();
+        IF (lRecordRef.FINDFIRST()) THEN
+        BEGIN
+          pSystemBehaviour.VALIDATE(Answer, FORMAT(lFieldRef.VALUE, 0, 1));
+          lResult := TRUE;
+        END;
+      END;
+
+      lRecordRef.CLOSE();
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE "--- Sequence ---"@1000000027();
+    BEGIN
+    END;
+
+    PROCEDURE MoveUp@1000000026(VAR pSystemBehaviour@1000000000 : Record 9062230) : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Moving system behaviour up (towards lower sequence) within its group
+      //  <> pSystemBehaviour: The system behaviour
+      //  <- TRUE = Colour moved, FALSE = Not
+
+      EXIT(Move(pSystemBehaviour, mDirection::Up));
+    END;
+
+    PROCEDURE MoveDown@1000000025(VAR pSystemBehaviour@1000000001 : Record 9062230) : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Moving system behaviour down (towards higher sequence) within its group
+      //  <> pSystemBehaviour: The system behaviour
+      //  <- TRUE = Colour moved, FALSE = Not
+
+      EXIT(Move(pSystemBehaviour, mDirection::Down));
+    END;
+
+    LOCAL PROCEDURE Move@1000000024(VAR pSystemBehaviour@1000000004 : Record 9062230;pDirection@1000000001 : Integer) : Boolean;
+    VAR
+      lFound@1000000002 : Boolean;
+      lSequenceBuffer@1000000003 : Integer;
+    BEGIN
+      //DOC NA2015.4 - Moving system behaviour (up / down) within its group
+      //  <> pSystemBehaviour: The system behaviour
+      //  -> pDirection: Direction (Up / Down)
+      //  <- TRUE = Colour moved, FALSE = Not
+
+      mSystemBehaviour.RESET();
+      mSystemBehaviour.SETCURRENTKEY(Group, Sequence, Code);
+      mSystemBehaviour.SETRANGE(Group, pSystemBehaviour.Group);
+      mSystemBehaviour.SETFILTER(Code, '<>%1', pSystemBehaviour.Code);
+      CASE (pDirection) OF
+        mDirection::Up:
+          BEGIN
+            mSystemBehaviour.SETFILTER(Sequence, '<%1', pSystemBehaviour.Sequence);
+            lFound := mSystemBehaviour.FINDLAST();
+          END;
+        mDirection::Down:
+          BEGIN
+            mSystemBehaviour.SETFILTER(Sequence, '>%1', pSystemBehaviour.Sequence);
+            lFound := mSystemBehaviour.FINDFIRST();
+          END;
+      END;
+
+      IF (lFound) THEN
+      BEGIN
+        lSequenceBuffer := mSystemBehaviour.Sequence;
+        mSystemBehaviour.Sequence := pSystemBehaviour.Sequence;
+        mSystemBehaviour.MODIFY(TRUE);
+        pSystemBehaviour.Sequence := lSequenceBuffer;
+      END;
+
+      EXIT(lFound);
+    END;
+
+    LOCAL PROCEDURE "--- Enhanced Fields Integration ---"@1000000028();
+    BEGIN
+    END;
+
+    PROCEDURE CreateEnhancedField@1000000029();
+    VAR
+      EnhancedField@1000000000 : Record 9062327;
+    BEGIN
+      //create new enhanced field
+      EnhancedField.INIT();
+      EnhancedField.VALIDATE("Table No.", DATABASE::"Enablement Setup");
+      EnhancedField.INSERT(TRUE);
+
+      EnhancedField.VALIDATE(Name, mSystemBehaviour.Name);
+      EnhancedField.VALIDATE("Source Type", EnhancedField."Source Type"::Lookup);
+      EnhancedField.MODIFY(TRUE);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.4  JH 24/11/2014 - Created
+      //DOC NA2015.4  JH 09/02/2015 - Sequence functions added
+      //DOC NA2016.10 JH 27/08/2015 - Upgraded to 2016
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit used
+      //DOC NA2016.15 AZ 11/04/2016 - Enhanced Fields Integration
+    }
+    END.
+  }
+}
+

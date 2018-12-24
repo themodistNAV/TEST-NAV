@@ -1,0 +1,410 @@
+OBJECT Codeunit 9062300 NAV Query Managment
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            XMLDoc@1000000001 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.DOMDocument";
+            ErrorMsg@1000000000 : Text;
+          BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      eXMLLoadFailed@1000000000 : TextConst 'ENU=Could not load XML file "%1";ENG=Could not load XML file "%1"';
+      eNodeMissing@1000000001 : TextConst 'ENU=The "%2" Node was not found in the XML file "%1";ENG=The "%2" Node was not found in the XML file "%1"';
+      eNoColumns@1000000002 : TextConst 'ENU=No Query Columns were found in the XML file "%1";ENG=No Query Columns were found in the XML file "%1"';
+      eColumnMissingAttribute@1000000003 : TextConst 'ENU=The Query Column at Position %2 has no %3 attribute in XML File "%1";ENG=The Query Column at Position %2 has no %3 attribute in XML File "%1"';
+      eNoResults@1000000004 : TextConst 'ENU=No Query Results were found in the XML file "%1";ENG=No Query Results were found in the XML file "%1"';
+      eNoColumnDefs@1000000005 : TextConst 'ENU=No Column Definitions were found for the NAV Query %1;ENG=No Column Definitions were found for the NAV Query %1';
+      eNoResultEntries@1000000006 : TextConst 'ENU=No entries were found in the Query Results at Position %2 in XML File "%1";ENG=No entries were found in the Query Results at Position %2 in XML File "%1"';
+      eUnknownColumns@1000000007 : TextConst 'ENU=The Column "%1" was found in the Query Results but not in the Query Definition;ENG=The Column "%1" was found in the Query Results but not in the Query Definition';
+      eWrongColumnName@1000000008 : TextConst 'ENU=The Column "%1" was found in the Query Results, but has a different name (%2) in the Query Definition;ENG=The Column "%1" was found in the Query Results, but has a different name (%2) in the Query Definition';
+      eQueryColNotFound@1000000009 : TextConst 'ENU=No Column Definitions were found for the Query %1;ENG=No Column Definitions were found for the Query %1';
+      eQueryEntryNotFound@1000000010 : TextConst 'ENU=No Entries were found for the Query %1, Entry No. %2;ENG=No Entries were found for the Query %1, Entry No. %2';
+
+    PROCEDURE LoadQueryXML@1000000002(SourceFilePath@1000000000 : Text;VAR XMLDoc@1000000003 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.DOMDocument";VAR ErrorMessage@1000000004 : Text) OK : Boolean;
+    VAR
+      XMLDocClass@1000000001 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.DOMDocumentClass";
+    BEGIN
+      //Open the XML file
+      XMLDoc := XMLDocClass.DOMDocumentClass;
+      XMLDoc.async(FALSE);
+      IF NOT XMLDoc.load(SourceFilePath) THEN BEGIN
+        ErrorMessage := STRSUBSTNO(eXMLLoadFailed,SourceFilePath);
+        EXIT(FALSE);
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetQueryDefinition@1000000001(VAR XMLDoc@1000000015 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.DOMDocument";QueryNo@1000000014 : Integer;VAR ErrorMessage@1000000006 : Text) OK : Boolean;
+    VAR
+      SourceFilePath@1000000000 : Text;
+      DataSetNode@1000000005 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNode";
+      SchemaElementsNode@1000000007 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNode";
+      SchemaElementsNodeList@1000000008 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNodeList";
+      ColumnNode@1000000009 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNode";
+      ColumnNodeAttributes@1000000011 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNamedNodeMap";
+      ColumnNodeName@1000000010 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMAttribute";
+      ColumnNodeDataType@1000000013 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMAttribute";
+      i@1000000004 : Integer;
+      NAVQueryCol@1000000012 : Record 9062329;
+      QueryObject@1000000001 : Record 2000000001;
+    BEGIN
+      SourceFilePath := XMLDoc.url;
+
+      //Get the DataSet Node
+      DataSetNode := XMLDoc.selectSingleNode('DataSet');
+      IF ISNULL(DataSetNode) THEN BEGIN
+        ErrorMessage := STRSUBSTNO(eNodeMissing,SourceFilePath,'DataSet');
+        EXIT(FALSE);
+      END;
+
+      //Get the Schema Elements (columns in the query)
+      SchemaElementsNode := DataSetNode.selectSingleNode('xs:schema/xs:element/xs:complexType/xs:choice/xs:element/xs:complexType/xs:sequence');
+      IF ISNULL(SchemaElementsNode) THEN BEGIN
+        ErrorMessage := STRSUBSTNO(eNodeMissing,SourceFilePath,
+          'xs:schema/xs:element/xs:complexType/xs:choice/xs:element/xs:complexType/xs:sequence');
+        EXIT(FALSE);
+      END;
+
+      //Get the list of Columns
+      SchemaElementsNodeList := SchemaElementsNode.childNodes;
+      IF ISNULL(SchemaElementsNodeList) OR (SchemaElementsNodeList.length = 0) THEN BEGIN
+        ErrorMessage := STRSUBSTNO(eNoColumns,SourceFilePath);
+        EXIT(FALSE);
+      END;
+
+      //Delete Existing Definition
+      NAVQueryCol.SETRANGE("Query No.",QueryNo);
+      IF NAVQueryCol.FINDSET THEN NAVQueryCol.DELETEALL(TRUE);
+
+      QueryObject.RESET();
+      QueryObject.SETRANGE(Type, QueryObject.Type::Query);
+      QueryObject.SETRANGE(ID, QueryNo);
+      QueryObject.FINDFIRST();
+
+      //Add entries to the table for each column
+      FOR i := 0 TO SchemaElementsNodeList.length - 1 DO BEGIN
+        ColumnNode := SchemaElementsNodeList.item(i);
+        ColumnNodeAttributes := ColumnNode.attributes;
+        ColumnNodeName := ColumnNodeAttributes.getNamedItem('name');
+        IF ISNULL(ColumnNodeName) THEN BEGIN
+          ErrorMessage := STRSUBSTNO(eColumnMissingAttribute,SourceFilePath,i,'name');
+          EXIT(FALSE);
+        END;
+        ColumnNodeDataType := ColumnNodeAttributes.getNamedItem('type');
+        IF ISNULL(ColumnNodeDataType) THEN BEGIN
+          ErrorMessage := STRSUBSTNO(eColumnMissingAttribute,SourceFilePath,i+1,'type');
+          EXIT(FALSE);
+        END;
+
+        NAVQueryCol.INIT;
+        NAVQueryCol.VALIDATE("Query No.",QueryNo);
+        NAVQueryCol.VALIDATE("No.",i+1);
+        NAVQueryCol.VALIDATE(Name,ColumnNodeName.text);
+        CASE ColumnNodeDataType.text OF
+          'xs:string' : NAVQueryCol.VALIDATE("Data Type",NAVQueryCol."Data Type"::Text);
+          'xs:decimal' : NAVQueryCol.VALIDATE("Data Type",NAVQueryCol."Data Type"::Decimal);
+          'xs:int' : NAVQueryCol.VALIDATE("Data Type",NAVQueryCol."Data Type"::Integer);
+        END;
+        NAVQueryCol.VALIDATE("Updated Date Time", CREATEDATETIME(QueryObject.Date, QueryObject.Time));
+        NAVQueryCol.INSERT(TRUE);
+
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE AutoUpdateQueryDefinition@1000000003(pQueryId@1000000000 : Integer) : Boolean;
+    VAR
+      lQueryObject@1000000001 : Record 2000000001;
+      lNavQueryColumnDefinition@1000000002 : Record 9062329;
+      lUpdate@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2016.14 - Auto-updating query definition
+      //  -> pQueryId: The query ID
+      //  <- TRUE = Updated, FALSE = Already up to date
+
+      lQueryObject.RESET();
+      lQueryObject.SETRANGE(Type, lQueryObject.Type::Query);
+      lQueryObject.SETRANGE(ID, pQueryId);
+      lQueryObject.FINDFIRST();
+
+      lNavQueryColumnDefinition.RESET();
+      lNavQueryColumnDefinition.SETRANGE("Query No.", pQueryId);
+      lUpdate := lNavQueryColumnDefinition.ISEMPTY();
+      IF ( NOT (lUpdate)) THEN
+      BEGIN
+        lNavQueryColumnDefinition.SETFILTER("Updated Date Time", '<>%1', CREATEDATETIME(lQueryObject.Date, lQueryObject.Time));
+        lUpdate := ( NOT (lNavQueryColumnDefinition.ISEMPTY()));
+      END;
+
+      IF (lUpdate) THEN
+        UpdateQueryDefinition(pQueryId);
+
+      EXIT(lUpdate);
+    END;
+
+    PROCEDURE UpdateQueryDefinition@1000000005(pQueryId@1000000000 : Integer);
+    VAR
+      lNavQueryColumnDefinition@1000000004 : Record 9062329;
+      lQueryXmlDocument@1000000003 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.DOMDocument";
+      lErrorMessage@1000000005 : Text;
+    BEGIN
+      //DOC NA2016.14 - Updating query definition
+      //  -> pQueryId: The query ID
+
+      lNavQueryColumnDefinition.RESET();
+      lNavQueryColumnDefinition.SETRANGE("Query No.", pQueryId);
+      lNavQueryColumnDefinition.DELETEALL(TRUE);
+
+      LoadQueryToXml(pQueryId, lQueryXmlDocument);
+      IF ( NOT (GetQueryDefinition(lQueryXmlDocument, pQueryId, lErrorMessage))) THEN
+        ERROR(lErrorMessage);
+      COMMIT;
+    END;
+
+    PROCEDURE GetQueryEntries@1000000000(VAR XMLDoc@1000000002 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.DOMDocument";QueryNo@1000000001 : Integer;VAR ErrorMessage@1000000000 : Text) QueryEntryNo : Integer;
+    VAR
+      QueryEntry@1000000003 : Record 9062330;
+    BEGIN
+      EXIT(GetQueryEntriesAdv(XMLDoc, QueryNo, ErrorMessage, QueryEntry));
+    END;
+
+    PROCEDURE GetQueryEntriesAdv@1000000008(VAR XMLDoc@1000000002 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.DOMDocument";QueryNo@1000000001 : Integer;VAR ErrorMessage@1000000000 : Text;VAR QueryEntry@1000000012 : Record 9062330) QueryEntryNo : Integer;
+    VAR
+      SourceFilePath@1000000003 : Text;
+      DataSetNode@1000000004 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNode";
+      ResultNode@1000000009 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNode";
+      ResultsNodeList@1000000005 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNodeList";
+      ResultFieldNode@1000000011 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNode";
+      ResultFieldsNodeList@1000000008 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.IXMLDOMNodeList";
+      i@1000000006 : Integer;
+      j@1000000010 : Integer;
+      NAVQueryCol@1000000007 : Record 9062329;
+      EntryNo@1000000013 : Integer;
+    BEGIN
+      SourceFilePath := XMLDoc.url;
+
+      //Are there any columns in the definition?
+      NAVQueryCol.SETRANGE("Query No.",QueryNo);
+      IF NOT NAVQueryCol.FINDSET THEN BEGIN
+        ErrorMessage := STRSUBSTNO(eNoColumnDefs,QueryNo);
+        EXIT(0);
+      END;
+
+      //Get the DataSet Node
+      DataSetNode := XMLDoc.selectSingleNode('DataSet');
+      IF ISNULL(DataSetNode) THEN BEGIN
+        ErrorMessage := STRSUBSTNO(eNodeMissing,SourceFilePath,'DataSet');
+        EXIT(0);
+      END;
+
+      //Get the Results
+      ResultsNodeList := DataSetNode.selectNodes('Result');
+      IF ISNULL(ResultsNodeList) OR (ResultsNodeList.length = 0) THEN BEGIN
+        ErrorMessage := STRSUBSTNO(eNoResults,SourceFilePath);
+        EXIT(0);
+      END;
+
+      FOR i := 0 TO ResultsNodeList.length - 1 DO BEGIN
+        //Get the Fields for each result
+        ResultNode := ResultsNodeList.item(i);
+        ResultFieldsNodeList := ResultNode.childNodes;
+        IF ISNULL(ResultFieldsNodeList) OR (ResultFieldsNodeList.length = 0) THEN BEGIN
+          ErrorMessage := STRSUBSTNO(eNoResultEntries,SourceFilePath,i+1);
+          EXIT(0);
+        END;
+
+        //Loop through each field/column in the result entry
+        FOR j := 0 TO ResultFieldsNodeList.length - 1 DO BEGIN
+          ResultFieldNode := ResultFieldsNodeList.item(j);
+
+          NAVQueryCol.SETRANGE("Query No.",QueryNo);
+          NAVQueryCol.SETRANGE(Name,ResultFieldNode.nodeName);
+          IF NOT NAVQueryCol.FINDFIRST THEN BEGIN
+            ErrorMessage := STRSUBSTNO(eUnknownColumns,ResultFieldNode.nodeName);
+            EXIT(0);
+          END;
+
+          //Record the Entry in NAV
+          QueryEntry.INIT;
+          QueryEntry.VALIDATE("Entry No.",EntryNo);
+          QueryEntry.VALIDATE("Row No.",i + 1);
+          QueryEntry.VALIDATE("Query No.",QueryNo);
+          QueryEntry.VALIDATE("Column No.",NAVQueryCol."No.");
+          QueryEntry.VALIDATE("Source File Path",SourceFilePath);
+          QueryEntry.VALIDATE("Value as Text",COPYSTR(FORMAT(ResultFieldNode.text),1,MAXSTRLEN(QueryEntry."Value as Text")));
+          QueryEntry.INSERT(TRUE);
+
+          IF EntryNo = 0 THEN EntryNo := QueryEntry."Entry No.";
+
+        END;
+
+        //Check if we got all Columns
+        NAVQueryCol.RESET;
+        NAVQueryCol.SETRANGE("Query No.",QueryNo);
+        NAVQueryCol.FINDSET;
+        REPEAT
+          IF NOT QueryEntry.GET(EntryNo,i+1,NAVQueryCol."Query No.",NAVQueryCol."No.") THEN BEGIN
+            //add a blank entry if it's missing
+            QueryEntry.INIT;
+            QueryEntry.VALIDATE("Entry No.",EntryNo);
+            QueryEntry.VALIDATE("Row No.",i + 1);
+            QueryEntry.VALIDATE("Query No.",NAVQueryCol."Query No.");
+            QueryEntry.VALIDATE("Column No.",NAVQueryCol."No.");
+            QueryEntry.VALIDATE("Source File Path",SourceFilePath);
+            QueryEntry.VALIDATE("Value as Text",'');
+            QueryEntry.INSERT(TRUE);
+          END;
+        UNTIL NAVQueryCol.NEXT = 0;
+      END;
+
+      EXIT(QueryEntry."Entry No.");
+    END;
+
+    PROCEDURE RetrieveQueryEntries@1000000009(pQueryId@1000000001 : Integer) : Integer;
+    VAR
+      lNavQueryResultEntry@1000000000 : Record 9062330;
+    BEGIN
+      //DOC NA2015.7 - Retrieving query entries into a real table
+      //  -> pQueryId: The query ID
+      //  <- New entry no.
+
+      EXIT(RetrieveQueryEntriesAdv(pQueryId, lNavQueryResultEntry));
+    END;
+
+    PROCEDURE RetrieveQueryEntriesAdv@1000000010(pQueryId@1000000001 : Integer;VAR pNavQueryResultEntry@1000000002 : Record 9062330) : Integer;
+    VAR
+      lQueryXmlDocument@1000000000 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.DOMDocument";
+      lErrorMessage@1000000003 : Text;
+    BEGIN
+      //DOC NA2015.7 - Retrieving query entries into the given recordset (real / temporary table)
+      //  -> pQueryId: The query ID
+      //  <> pNavQueryResultEntry: Target recordset
+      //  <- New entry no.
+
+      LoadQueryToXml(pQueryId, lQueryXmlDocument);
+      GetQueryEntriesAdv(lQueryXmlDocument, pQueryId, lErrorMessage, pNavQueryResultEntry);
+      IF (lErrorMessage <> '') THEN
+        ERROR(lErrorMessage);
+    END;
+
+    PROCEDURE OutputQueryToTempFile@1000000004(QueryNo@1000000000 : Integer) FilePath : Text;
+    VAR
+      FileSystem@1000000001 : Codeunit 9062264;
+    BEGIN
+      FilePath := FileSystem.GetTempFileName(FALSE);
+      QUERY.SAVEASXML(QueryNo,FilePath);
+    END;
+
+    PROCEDURE ValidateNavQueryColumn@1000000006(pQueryId@1000000001 : Integer;VAR pQueryColumnName@1000000000 : Text);
+    VAR
+      lNavQueryColumnDefinition@1000000003 : Record 9062329;
+      lResult@1000000002 : Boolean;
+      lFilter@1000000004 : ARRAY [4] OF Text;
+      lFilterIndex@1000000005 : Integer;
+    BEGIN
+      //DOC NA2015.7 - Validating NAV query column
+      //  -> pQueryId: Query ID
+      //  <> pQueryColumnName: Source / target query column name
+
+      lResult := FALSE;
+
+      IF (pQueryColumnName <> '') THEN
+      BEGIN
+        IF (AutoUpdateQueryDefinition(pQueryId)) THEN
+          COMMIT;
+
+        lFilter[1] := pQueryColumnName;
+        lFilter[2] := '@' + pQueryColumnName;
+        lFilter[3] := '@' + pQueryColumnName + '*';
+        lFilter[4] := '@*' + pQueryColumnName + '*';
+        lFilterIndex := 1;
+
+        lNavQueryColumnDefinition.RESET();
+        lNavQueryColumnDefinition.SETRANGE("Query No.", pQueryId);
+
+        WHILE (( NOT (lResult)) AND (lFilterIndex <= ARRAYLEN(lFilter))) DO
+        BEGIN
+          lNavQueryColumnDefinition.SETFILTER(Name, lFilter[lFilterIndex]);
+          lResult := lNavQueryColumnDefinition.FINDFIRST();
+          lFilterIndex += 1;
+        END;
+      END;
+
+      IF (lResult) THEN
+        pQueryColumnName := lNavQueryColumnDefinition.Name
+      ELSE
+        pQueryColumnName := '';
+    END;
+
+    PROCEDURE NavQueryColumnLookup@1000000007(pQueryId@1000000002 : Integer;VAR pQueryColumnName@1000000000 : Text) : Boolean;
+    VAR
+      lNavQueryColumnDefinition@1000000001 : Record 9062329;
+      lResult@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2015.7 - Lookup for NAV query column
+      //  -> pQueryId: Query ID
+      //  <> pQueryColumnName: Source / target query column name
+      //  <- Lookup result
+
+      IF (AutoUpdateQueryDefinition(pQueryId)) THEN
+        COMMIT;
+
+      lNavQueryColumnDefinition.RESET();
+      lNavQueryColumnDefinition.SETRANGE("Query No.", pQueryId);
+      IF (pQueryColumnName <> '') THEN
+      BEGIN
+        lNavQueryColumnDefinition.SETRANGE(Name, pQueryColumnName);
+        IF (lNavQueryColumnDefinition.FINDFIRST()) THEN;
+        lNavQueryColumnDefinition.SETRANGE(Name);
+      END;
+
+      IF (PAGE.RUNMODAL(0, lNavQueryColumnDefinition) = ACTION::LookupOK) THEN
+      BEGIN
+        pQueryColumnName := lNavQueryColumnDefinition.Name;
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE LoadQueryToXml@1000000011(pQueryId@1000000002 : Integer;VAR pQueryXmlDocument@1000000003 : DotNet "'Microsoft.MSXML, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.MSXML.DOMDocument");
+    VAR
+      lFileSystem@1000000001 : Codeunit 9062264;
+      lFilePath@1000000000 : Text;
+      lErrorMessage@1000000004 : Text;
+    BEGIN
+      //DOC NA2015.7 - Load query into XML document
+      //  -> pQueryId: Query ID
+      //  <> pQueryXmlDocument: Target XML document
+
+      lFilePath := lFileSystem.GetTempPathForExtension(FALSE, 'xml');
+      QUERY.SAVEASXML(pQueryId, lFilePath);
+      IF ( NOT (LoadQueryXML(lFilePath, pQueryXmlDocument, lErrorMessage))) THEN
+        ERROR(lErrorMessage);
+      lFileSystem.DeleteFileIfExists(FALSE, lFilePath);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.7  JH 26/05/2015 - "UpdateQueryDefinition", "ValidateNavQueryColumn", "NavQueryColumnLookup", "GetQueryEntriesAdv" added
+      //DOC NA2015.7  JH 27/05/2015 - "RetrieveQueryEntries", "RetrieveQueryEntriesAdv" added
+      //DOC NA2016.10 JH 27/08/2015 - Upgraded to 2016
+      //DOC NA2016.14 JH 23/02/2016 - Auto-update added
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

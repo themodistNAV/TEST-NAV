@@ -1,0 +1,649 @@
+OBJECT Table 9062441 Purch. Inv. Matching Line
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.15;
+  }
+  PROPERTIES
+  {
+    OnInsert=VAR
+               PurchSetup@1000000003 : Record 312;
+               NoSeriesManagement@1000000002 : Codeunit 396;
+               NextInvNo@1000000001 : Code[20];
+               Vendor@1000000000 : Record 23;
+             BEGIN
+               IF (PurchSetup.GET) AND ("Alocated Invoice No." = '') THEN
+               BEGIN
+                 NextInvNo := NoSeriesManagement.GetNextNo(PurchSetup."Posted Invoice Nos.",TODAY,TRUE);
+                 "Alocated Invoice No." := NextInvNo;
+                 IF Vendor.GET("Vendor No. Filter") THEN VALIDATE("Vendor No.","Vendor No. Filter");
+               END;
+             END;
+
+    OnModify=BEGIN
+               CheckStatus;
+               VALIDATE("Approval Workflow",GetApprovalWorkflow);
+             END;
+
+    OnDelete=VAR
+               PHdr@1000000000 : Record 38;
+               FileAttachment@1000000001 : Record 9062272;
+               FileAttachment2@1000000002 : Record 9062272;
+               eLinePosted@1000000003 : TextConst 'ENU=This line is posted and cannot be deleted;ENG=This line is posted and cannot be deleted';
+               eInvoiceMustBeDeletedFirst@1000000004 : TextConst 'ENU=Invoice "%1" must be deleted first;ENG=Invoice "%1" must be deleted first';
+               eCreditMustBeDeletedFirst@1000000005 : TextConst 'ENU=Credit "%1" must be deleted first;ENG=Credit "%1" must be deleted first';
+             BEGIN
+               IF "Posting Status" = "Posting Status"::Posted THEN ERROR(eLinePosted);
+
+               IF PHdr.GET(PHdr."Document Type"::Invoice,"Invoice No.")
+                 THEN ERROR(eInvoiceMustBeDeletedFirst, "Invoice No.");
+
+               IF PHdr.GET(PHdr."Document Type"::"Credit Memo","Purch. Credit No.")
+                 THEN ERROR(eCreditMustBeDeletedFirst, "Purch. Credit No.");
+
+               FileAttachment.SETRANGE(FileAttachment."Table ID",9062441);
+               FileAttachment.SETRANGE("Primary Key Value 1","Batch Code");
+               FileAttachment.SETRANGE("Primary Key Value 2",FORMAT("Line No."));
+               IF FileAttachment.FINDSET THEN
+               REPEAT
+                   FileAttachment2 := FileAttachment;
+                   FileAttachment.DELETE(TRUE);
+               UNTIL FileAttachment.NEXT = 0;
+             END;
+
+    CaptionML=[ENU=Purch. Inv. Matching Line;
+               ENG=Purch. Inv. Matching Line];
+  }
+  FIELDS
+  {
+    { 1   ;   ;Batch Code          ;Code20        ;TableRelation="Purch. Inv. Matching Batch";
+                                                   OnValidate=VAR
+                                                                PurchSetup@1000000003 : Record 312;
+                                                                NoSeriesManagement@1000000002 : Codeunit 396;
+                                                                NextInvNo@1000000001 : Code[20];
+                                                                Vendor@1000000000 : Record 23;
+                                                              BEGIN
+                                                                IF (PurchSetup.GET) AND ("Alocated Invoice No." = '') THEN
+                                                                BEGIN
+                                                                  NextInvNo := NoSeriesManagement.GetNextNo(PurchSetup."Posted Invoice Nos.",TODAY,TRUE);
+                                                                  "Alocated Invoice No." := NextInvNo;
+                                                                  IF Vendor.GET("Vendor No. Filter") THEN VALIDATE("Vendor No.","Vendor No. Filter");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Batch Code;
+                                                              ENG=Batch Code] }
+    { 2   ;   ;Line No.            ;Integer       ;CaptionML=[ENU=Line No.;
+                                                              ENG=Line No.] }
+    { 3   ;   ;Purch. Order No.    ;Code20        ;TableRelation="Purchase Header".No. WHERE (Document Type=CONST(Order),
+                                                                                              No.=FIELD(Purch. Order No.));
+                                                   OnValidate=VAR
+                                                                PurchHead@1000000000 : Record 38;
+                                                              BEGIN
+                                                                IF PurchHead.GET(PurchHead."Document Type"::Order,"Purch. Order No.") THEN BEGIN
+                                                                  VALIDATE("Vendor No.",PurchHead."Buy-from Vendor No.");
+                                                                  "Invalid P.O" := FALSE;
+                                                                END ELSE
+                                                                  "Invalid P.O" := TRUE;
+                                                              END;
+
+                                                   ValidateTableRelation=No;
+                                                   CaptionML=[ENU=Purch. Order No.;
+                                                              ENG=Purch. Order No.] }
+    { 4   ;   ;Vendor Del. Note. No.;Code20       ;TableRelation=IF (Vendor No. Filter=FILTER(<>'')) "Purch. Rcpt. Header"."Vendor Shipment No." WHERE (Buy-from Vendor No.=FIELD(Vendor No. Filter))
+                                                                 ELSE IF (Vendor No. Filter=FILTER('')) "Purch. Rcpt. Header"."Vendor Shipment No.";
+                                                   OnValidate=VAR
+                                                                PurchRcpt@1000000000 : Record 120;
+                                                              BEGIN
+                                                                PurchRcpt.SETRANGE("Vendor Shipment No.","Vendor Del. Note. No.");
+                                                                IF PurchRcpt.FINDFIRST THEN BEGIN
+                                                                  VALIDATE("Vendor No.",PurchRcpt."Buy-from Vendor No.");
+                                                                  "Invalid Del. Note. No." := FALSE;
+                                                                END ELSE
+                                                                  "Invalid Del. Note. No." := TRUE;
+                                                              END;
+
+                                                   ValidateTableRelation=No;
+                                                   TestTableRelation=Yes;
+                                                   CaptionML=[ENU=Vendor Del. Note. No.;
+                                                              ENG=Vendor Del. Note. No.] }
+    { 5   ;   ;Invoice Amount      ;Decimal       ;OnValidate=VAR
+                                                                lrecGLSetup@1000000000 : Record 98;
+                                                                lrecCurr@1000000001 : Record 4;
+                                                              BEGIN
+                                                                IF "Invoice Amount" <> xRec."Invoice Amount" THEN BEGIN
+                                                                  VALIDATE("Match Status","Match Status"::"Waiting to Match");
+                                                                END;
+
+                                                                lrecGLSetup.GET;
+                                                                IF lrecCurr.GET("Currency Code") THEN;
+                                                                IF "Currency Code" <> lrecGLSetup."LCY Code" THEN BEGIN
+                                                                  "Invoice Amount (LCY)" :=
+                                                                      ROUND(
+                                                                        CurrExchRate.ExchangeAmtFCYToLCY(
+                                                                          "Document Date","Currency Code","Invoice Amount",CurrExchRate.ExchangeRate("Document Date","Currency Code")),
+                                                                        lrecCurr."Unit-Amount Rounding Precision")
+                                                                END ELSE
+                                                                  "Invoice Amount (LCY)" := "Invoice Amount";
+                                                              END;
+
+                                                   CaptionML=[ENU=Invoice Amount;
+                                                              ENG=Invoice Amount] }
+    { 6   ;   ;Invoice No.         ;Code20        ;TableRelation="Purchase Header".No. WHERE (Document Type=CONST(Invoice));
+                                                   CaptionML=[ENU=Invoice No.;
+                                                              ENG=Invoice No.] }
+    { 7   ;   ;Match Status        ;Option        ;CaptionML=[ENU=Match Status;
+                                                              ENG=Match Status];
+                                                   OptionCaptionML=[ENU=Waiting to Match,Matched,Within Tolerance,Outside Tolerance;
+                                                                    ENG=Waiting to Match,Matched,Within Tolerance,Outside Tolerance];
+                                                   OptionString=Waiting to Match,Matched,Within Tolerance,Outside Tolerance;
+                                                   Editable=No }
+    { 8   ;   ;Vendor No. Filter   ;Code20        ;TableRelation=Vendor;
+                                                   OnValidate=VAR
+                                                                PurchSetup@1000000002 : Record 312;
+                                                                NoSeriesManagement@1000000001 : Codeunit 396;
+                                                                NextInvNo@1000000000 : Code[20];
+                                                                Vendor@1000000003 : Record 23;
+                                                              BEGIN
+                                                                IF (PurchSetup.GET) AND ("Alocated Invoice No." = '') THEN
+                                                                BEGIN
+                                                                  NextInvNo := NoSeriesManagement.GetNextNo(PurchSetup."Posted Invoice Nos.",TODAY,TRUE);
+                                                                  "Alocated Invoice No." := NextInvNo;
+                                                                  IF Vendor.GET("Vendor No. Filter") THEN VALIDATE("Vendor No.","Vendor No. Filter");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Vendor No. Filter;
+                                                              ENG=Vendor No. Filter] }
+    { 9   ;   ;Document Date       ;Date          ;CaptionML=[ENU=Document Date;
+                                                              ENG=Document Date] }
+    { 11  ;   ;Unposted Invoice Amount;Decimal    ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Purchase Line"."Amount Including VAT" WHERE (Document Type=CONST(Invoice),
+                                                                                                                 Document No.=FIELD(Invoice No.)));
+                                                   OnValidate=VAR
+                                                                lrecGLSetup@1000000001 : Record 98;
+                                                                lrecCurr@1000000000 : Record 4;
+                                                              BEGIN
+                                                                lrecGLSetup.GET;
+                                                                IF lrecCurr.GET("Currency Code") THEN;
+                                                                IF "Currency Code" <> lrecGLSetup."LCY Code" THEN BEGIN
+                                                                  "NAV Invoice Amount (LCY)" :=
+                                                                      ROUND(
+                                                                        CurrExchRate.ExchangeAmtFCYToLCY(
+                                                                          "Document Date","Currency Code","Unposted Invoice Amount",CurrExchRate.ExchangeRate("Document Date","Currency Code")),
+                                                                        lrecCurr."Unit-Amount Rounding Precision")
+                                                                END ELSE
+                                                                  "NAV Invoice Amount (LCY)" := "Unposted Invoice Amount";
+                                                              END;
+
+                                                   OnLookup=BEGIN
+                                                              LookupInvoiceLineList();
+                                                            END;
+
+                                                   CaptionML=[ENU=Unposted Invoice Amount;
+                                                              ENG=Unposted Invoice Amount];
+                                                   Editable=No }
+    { 12  ;   ;Vendor Invoice No.  ;Code20        ;CaptionML=[ENU=Vendor Invoice No.;
+                                                              ENG=Vendor Invoice No.] }
+    { 13  ;   ;Amount % Tolerance  ;Decimal       ;OnValidate=BEGIN
+                                                                IF "Amount % Tolerance" <> xRec."Amount % Tolerance" THEN
+                                                                  VALIDATE("Match Status","Match Status"::"Waiting to Match");
+                                                              END;
+
+                                                   CaptionML=[ENU=Amount % Tolerance (LCY);
+                                                              ENG=Amount % Tolerance (LCY)] }
+    { 14  ;   ;Amount % Difference ;Decimal       ;CaptionML=[ENU=Amount % Difference (LCY);
+                                                              ENG=Amount % Difference (LCY)] }
+    { 15  ;   ;Amount Difference   ;Decimal       ;CaptionML=[ENU=Amount Difference (LCY);
+                                                              ENG=Amount Difference (LCY)] }
+    { 16  ;   ;Next Action         ;Option        ;OnValidate=VAR
+                                                                PurchInvMatchingBatch@1000000000 : Record 9062440;
+                                                                PurchaseInvoiceMatching@1000000001 : Codeunit 9062349;
+                                                                tNextActionError@1000000002 : TextConst 'ENU=You can''t change the Next Action from ''%1'' to'' %2''  please clear the Next Action first.;ENG=You can''t change the Next Action from ''%1'' to'' %2''  please clear the Next Action first.';
+                                                              BEGIN
+                                                                IF ("Match Status" = "Match Status"::"Waiting to Match") THEN PurchaseInvoiceMatching.POMatch(Rec,NOT(GUIALLOWED));
+                                                                IF xRec."Next Action" IN [xRec."Next Action"::"Allow Difference",xRec."Next Action"::"Dispute & Raise Debit"] THEN
+                                                                  IF ("Next Action" = "Next Action"::" ") THEN  RemoveAmountDifferenceFromDocument();
+
+                                                                IF "Next Action" IN ["Next Action"::"Allow Difference","Next Action"::"Dispute & Raise Debit"] THEN
+                                                                BEGIN
+                                                                  IF xRec."Next Action" <> "Next Action"::" " THEN ERROR(STRSUBSTNO(tNextActionError,xRec."Next Action","Next Action"));
+                                                                  "Match Status"   := "Match Status"::"Waiting to Match";
+                                                                  "Posting Status" := "Posting Status" :: " ";
+                                                                   PurchaseInvoiceMatching.TakeAction(Rec,NOT(GUIALLOWED));
+                                                                   IF "Next Action" = "Next Action"::"Allow Difference" THEN BEGIN
+                                                                    VALIDATE(Adjusted,TRUE);
+                                                                    VALIDATE(Disputed,FALSE);
+                                                                   END;
+                                                                   IF "Next Action" = "Next Action"::"Dispute & Raise Debit" THEN BEGIN
+                                                                    VALIDATE(Adjusted,FALSE);
+                                                                    VALIDATE(Disputed,TRUE);
+                                                                   END;
+
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Next Action;
+                                                              ENG=Next Action];
+                                                   OptionCaptionML=[ENU=" ,Allow Difference,Dispute & Raise Debit";
+                                                                    ENG=" ,Allow Difference,Dispute & Raise Debit"];
+                                                   OptionString=[ ,Allow Difference,Dispute & Raise Debit] }
+    { 17  ;   ;Posting Status      ;Option        ;CaptionML=[ENU=Posting Status;
+                                                              ENG=Posting Status];
+                                                   OptionCaptionML=[ENU=" ,Ready to Post,Posted";
+                                                                    ENG=" ,Ready to Post,Posted"];
+                                                   OptionString=[ ,Ready to Post,Posted];
+                                                   Editable=No }
+    { 18  ;   ;Purch. Credit No.   ;Code20        ;TableRelation="Purchase Header".No. WHERE (Document Type=CONST(Credit Memo));
+                                                   OnValidate=VAR
+                                                                SystemBehaviour@1000000000 : Record 9062230;
+                                                              BEGIN
+                                                                VALIDATE("Approval Workflow",UPPERCASE(SystemBehaviour.GetText('MISC_INV_APPW_CODE')));
+                                                              END;
+
+                                                   CaptionML=[ENU=Purch. Credit No.;
+                                                              ENG=Purch. Credit No.] }
+    { 19  ;   ;Amount Tolerance    ;Decimal       ;OnValidate=BEGIN
+                                                                IF "Amount Tolerance" <> xRec."Amount Tolerance" THEN VALIDATE("Match Status","Match Status"::"Waiting to Match");
+                                                              END;
+
+                                                   CaptionML=[ENU=Amount Tolerance (LCY);
+                                                              ENG=Amount Tolerance (LCY)] }
+    { 20  ;   ;Return Order No.    ;Code20        ;TableRelation="Purchase Header".No. WHERE (Document Type=CONST(Return Order),
+                                                                                              No.=FIELD(Return Order No.));
+                                                   ValidateTableRelation=No;
+                                                   CaptionML=[ENU=Return Order No.;
+                                                              ENG=Return Order No.];
+                                                   Description=NA2015.9;
+                                                   Editable=No }
+    { 100 ;   ;Vendor No.          ;Code20        ;OnValidate=VAR
+                                                                VendorInvTemplate@1000000000 : Record 9062578;
+                                                                InvoiceMatchingSetup@9062230 : Record 9062762;
+                                                              BEGIN
+                                                                VendorInvTemplate.SETRANGE("Vendor No.","Vendor No.");
+                                                                IF VendorInvTemplate.FINDSET THEN BEGIN
+                                                                  VALIDATE("Amount % Tolerance",VendorInvTemplate."Invoice Tolerance % (LCY)");
+                                                                  VALIDATE("Amount Tolerance",VendorInvTemplate."Invoice Tolerance Amount (LCY)");
+                                                                END;
+
+                                                                IF ("Amount % Tolerance" = 0) OR ("Amount Tolerance" = 0) THEN BEGIN
+                                                                  InvoiceMatchingSetup.GET;
+                                                                  VALIDATE("Amount % Tolerance",InvoiceMatchingSetup."Vendor Invoice % Tolerance");
+                                                                  VALIDATE("Amount Tolerance",InvoiceMatchingSetup."Vendor Amount Tolerance");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Vendor No.;
+                                                              ENG=Vendor No.] }
+    { 101 ;   ;Vendor Name         ;Text50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Vendor.Name WHERE (No.=FIELD(Vendor No. Filter)));
+                                                   CaptionML=[ENU=Vendor Name;
+                                                              ENG=Vendor Name];
+                                                   Editable=No }
+    { 102 ;   ;Cost Centre         ;Code20        ;CaptionML=[ENU=Cost Centre;
+                                                              ENG=Cost Centre] }
+    { 1010;   ;Currency Code       ;Code10        ;TableRelation=Currency;
+                                                   CaptionML=[ENU=Currency Code;
+                                                              ENG=Currency Code] }
+    { 1011;   ;NAV Invoice Amount (LCY);Decimal   ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Purchase Line"."Amount Including VAT" WHERE (Document Type=CONST(Invoice),
+                                                                                                                 Document No.=FIELD(Invoice No.)));
+                                                   OnLookup=BEGIN
+                                                              LookupInvoiceLineList();
+                                                            END;
+
+                                                   CaptionML=[ENU=NAV Invoice Amount (LCY);
+                                                              ENG=NAV Invoice Amount (LCY)];
+                                                   Editable=No }
+    { 1012;   ;Invoice Amount (LCY);Decimal       ;CaptionML=[ENU=Invoice Amount (LCY);
+                                                              ENG=Invoice Amount (LCY)] }
+    { 1013;   ;Identified Document ID;Integer     ;CaptionML=[ENU=Identified Document ID;
+                                                              ENG=Identified Document ID] }
+    { 1014;   ;Identified Document Path;Text250   ;CaptionML=[ENU=Identified Document Path;
+                                                              ENG=Identified Document Path] }
+    { 1015;   ;Alocated Invoice No.;Code20        ;OnValidate=VAR
+                                                                SystemBehaviour@1000000000 : Record 9062230;
+                                                              BEGIN
+                                                                VALIDATE("Approval Workflow",UPPERCASE(SystemBehaviour.GetText('INV_APPR_WF')));
+                                                              END;
+
+                                                   CaptionML=[ENU=Alocated Invoice No.;
+                                                              ENG=Alocated Invoice No.] }
+    { 1016;   ;Status              ;Option        ;CaptionML=[ENU=Status;
+                                                              ENG=Status];
+                                                   OptionCaptionML=[ENU=Incomplete,Partial Complete,Complete;
+                                                                    ENG=Incomplete,Partial Complete,Complete];
+                                                   OptionString=Incomplete,Partial Complete,Complete }
+    { 1017;   ;Invalid P.O         ;Boolean       ;CaptionML=[ENU=Invalid P.O;
+                                                              ENG=Invalid P.O] }
+    { 1018;   ;Invalid Del. Note. No.;Boolean     ;CaptionML=[ENU=Invalid Del. Note. No.;
+                                                              ENG=Invalid Del. Note. No.] }
+    { 1019;   ;MISC Invoice        ;Boolean       ;OnValidate=VAR
+                                                                VendorTemplate@1000000000 : Record 9062578;
+                                                                PurchasesPayablesSetup@1000000001 : Record 312;
+                                                                MiscInvoiceGLAccount@9062229 : Code[20];
+                                                                InvoiceMatchingSetup@9062230 : Record 9062762;
+                                                                SystemBehaviour@9062231 : Record 9062230;
+                                                                TexttoAccountMapping@9062232 : Record 1251;
+                                                              BEGIN
+                                                                InvoiceMatchingSetup.GET;
+
+                                                                IF InvoiceMatchingSetup."Use Incoming Documents" THEN BEGIN
+                                                                  TexttoAccountMapping.SETFILTER("Bal. Source Type",STRSUBSTNO('%1',TexttoAccountMapping."Bal. Source Type"::Vendor));
+                                                                  TexttoAccountMapping.SETFILTER("Bal. Source No.","Vendor No. Filter");
+                                                                  IF TexttoAccountMapping.FINDFIRST AND ("MISC G/L Account" = '') THEN
+                                                                    "MISC G/L Account" := TexttoAccountMapping."Debit Acc. No.";
+                                                                END;
+
+                                                                IF "MISC Invoice" = TRUE THEN
+                                                                BEGIN
+                                                                  VendorTemplate.SETRANGE("Template Type",VendorTemplate."Template Type"::Vendor);
+                                                                  VendorTemplate.SETRANGE("Vendor No.","Vendor No. Filter");
+                                                                  IF VendorTemplate.FINDSET(FALSE,FALSE) THEN
+                                                                    IF (VendorTemplate."MISC G/L Account No." <> '') AND ("MISC G/L Account" = '') THEN
+                                                                      "MISC G/L Account" := VendorTemplate."MISC G/L Account No.";
+                                                                END;
+
+                                                                MiscInvoiceGLAccount := InvoiceMatchingSetup."MISC Invoice G/L Account";
+                                                                IF ("MISC G/L Account" = '') THEN
+                                                                  "MISC G/L Account" := MiscInvoiceGLAccount;
+
+                                                                CreateInvoice(NOT(GUIALLOWED));
+                                                                VALIDATE("Approval Workflow",UPPERCASE(SystemBehaviour.GetText('INV_APPR_WF')));
+                                                              END;
+
+                                                   CaptionML=[ENU=MISC Invoice;
+                                                              ENG=MISC Invoice] }
+    { 1020;   ;MISC G/L Account    ;Code10        ;FieldClass=Normal;
+                                                   TableRelation="G/L Account";
+                                                   OnLookup=VAR
+                                                              TexttoAccountMapping@9062230 : Record 1251;
+                                                            BEGIN
+                                                            END;
+
+                                                   CaptionML=[ENU=MISC G/L Account;
+                                                              ENG=MISC G/L Account] }
+    { 1021;   ;Document Due Date   ;Date          ;CaptionML=[ENU=Document Due Date;
+                                                              ENG=Document Due Date] }
+    { 1022;   ;Complete            ;Boolean       ;CaptionML=[ENU=Complete;
+                                                              ENG=Complete] }
+    { 1023;   ;Incomplete          ;Boolean       ;CaptionML=[ENU=Incomplete;
+                                                              ENG=Incomplete] }
+    { 1024;   ;Invoice Amount When Matched;Decimal;CaptionML=[ENU=Invoice Amount When Matched;
+                                                              ENG=Invoice Amount When Matched];
+                                                   Description=NA2015.9 }
+    { 1025;   ;Approval Workflow   ;Code30        ;CaptionML=[ENU=Approval Workflow;
+                                                              ENG=Approval Workflow];
+                                                   Description=NA2015.9 }
+    { 1026;   ;Adjusted            ;Boolean       ;CaptionML=[ENU=Adjusted;
+                                                              ENG=Adjusted];
+                                                   Description=NA2015.9 }
+    { 1027;   ;Disputed            ;Boolean       ;CaptionML=[ENU=Disputed;
+                                                              ENG=Disputed];
+                                                   Description=NA2015.9 }
+    { 1029;   ;Incoming Document   ;Integer       ;TableRelation="Incoming Document";
+                                                   CaptionML=[ENU=Incoming Document;
+                                                              ENG=Incoming Document];
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Batch Code,Line No.                     ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      CurrExchRate@1000000000 : Record 330;
+
+    PROCEDURE SetAmounts@1000000000();
+    BEGIN
+      CALCFIELDS("Unposted Invoice Amount");
+      "Amount Difference" := "Invoice Amount" - "Unposted Invoice Amount";
+      IF ("Invoice Amount" > 0) AND ("Unposted Invoice Amount" > 0) THEN
+        "Amount % Difference" := (("Invoice Amount"-"Unposted Invoice Amount")/"Unposted Invoice Amount")*100;
+    END;
+
+    PROCEDURE CheckStatus@1000000002();
+    BEGIN
+      IF (("Vendor No. Filter" = '') AND ("Purch. Order No." = '')  AND ("Vendor Del. Note. No." = '') AND (FORMAT("Document Date") = '') AND ("Invoice Amount" = 0)) THEN
+       Status := Status::Incomplete
+      ELSE
+       Status := Status::"Partial Complete";
+
+      IF (("Vendor No. Filter" <> '') AND (("Purch. Order No." <> '')  OR ("Vendor Del. Note. No." <> '')) AND (FORMAT("Document Date") <> '') AND ("Invoice Amount" > 0)) THEN
+       Status := Status::Complete;
+
+      IF Status = Status::Complete THEN
+      BEGIN
+        Complete := TRUE;
+        Incomplete := FALSE;
+      END ELSE
+      BEGIN
+        Complete := FALSE;
+        Incomplete := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE LookupInvoiceLineList@1000000001();
+    VAR
+      PurchaseLine@1000000000 : Record 39;
+      PurchInvoiceLines@1000000001 : Page 9063051;
+      PurchaseInvoiceMatching@1000000002 : Codeunit 9062349;
+    BEGIN
+      PurchaseLine.SETRANGE("Document Type",PurchaseLine."Document Type"::Invoice);
+      PurchaseLine.SETRANGE("Document No.","Invoice No.");
+      IF PAGE.RUNMODAL(PAGE::"Purch. Invoice Lines",PurchaseLine) = ACTION::LookupOK THEN BEGIN
+          PurchaseInvoiceMatching.MatchLine(Rec,TRUE);
+          CALCFIELDS("NAV Invoice Amount (LCY)") ;
+          IF "NAV Invoice Amount (LCY)" <> "Invoice Amount When Matched" THEN
+            VALIDATE(Adjusted,TRUE);
+      END;
+    END;
+
+    PROCEDURE CreateInvoice@1000000003(SuppressDialog@1000000001 : Boolean);
+    VAR
+      PurchaseInvoiceMatching@1000000000 : Codeunit 9062349;
+      PHeader@1000000003 : Record 38;
+      PLine@1000000002 : Record 39;
+      tIncompleteLineError@1000000004 : TextConst 'ENU="Invoice Matching Line is incomplete, already matched or not set as MISC Invoice ";ENG="Invoice Matching Line is incomplete, already matched or not set as MISC Invoice "';
+      PurchasesPayablesSetup@9062230 : Record 312;
+    BEGIN
+      PurchasesPayablesSetup.GET;
+      IF NOT SuppressDialog THEN SuppressDialog := ( NOT GUIALLOWED);
+      IF (NOT "Invalid P.O") AND ( NOT "Invalid Del. Note. No.") AND ("Match Status" = "Match Status"::"Waiting to Match") THEN BEGIN
+        PurchaseInvoiceMatching.POMatch(Rec,SuppressDialog);
+        EXIT;
+      END ELSE BEGIN
+        IF ("MISC Invoice") AND (NOT PHeader.GET(PHeader."Document Type"::Invoice,"Alocated Invoice No.")) THEN BEGIN
+          PHeader.INIT;
+          PHeader.VALIDATE("Document Type",PHeader."Document Type"::Invoice);
+          PHeader.VALIDATE("No.","Alocated Invoice No.");
+          PHeader.VALIDATE("Buy-from Vendor No.","Vendor No. Filter");
+          PHeader.VALIDATE("Posting Date",WORKDATE);
+          PHeader.VALIDATE("Document Date",WORKDATE);
+          PHeader.VALIDATE("Vendor Invoice No.","Vendor Invoice No.");
+          PHeader.VALIDATE("Receiving No. Series", PurchasesPayablesSetup."Posted Receipt Nos.");
+          PHeader.INSERT;
+          PLine.INIT;
+          PLine.VALIDATE("Document Type",PHeader."Document Type");
+          PLine.VALIDATE("Document No.",PHeader."No.");
+          PLine."Line No." := 1000;
+          PLine.VALIDATE(Type,PLine.Type::"G/L Account");
+          PLine.VALIDATE("No.","MISC G/L Account");
+          PLine.VALIDATE(Quantity,1);
+          PLine.VALIDATE("Direct Unit Cost","Invoice Amount");
+          PLine.INSERT;
+          VALIDATE("Invoice No.","Alocated Invoice No.");
+          MODIFY;
+          COMMIT;
+        END;
+        LookupInvoiceLineList();
+      END;
+      IF (NOT "MISC Invoice") AND (NOT xRec."MISC Invoice") THEN
+        ERROR(tIncompleteLineError);
+    END;
+
+    LOCAL PROCEDURE RemoveAmountDifferenceFromDocument@1000000009();
+    VAR
+      PurchaseHeader@1000000000 : Record 38;
+      PurchaseLine@1000000001 : Record 39;
+      eDescription@1000000002 : TextConst 'ENU=Invoice Tolerance Adjustment;ENG=Invoice Tolerance Adjustment';
+    BEGIN
+      IF "Posting Status" = "Posting Status"::Posted THEN EXIT;
+      IF PurchaseHeader.GET(PurchaseHeader."Document Type"::Invoice,"Invoice No.") THEN BEGIN
+        PurchaseLine.SETRANGE("Document Type",PurchaseHeader."Document Type");
+        PurchaseLine.SETRANGE("Document No.",PurchaseHeader."No.");
+        PurchaseLine.SETRANGE(Description,eDescription);
+        IF PurchaseLine.FINDSET THEN PurchaseLine.DELETE(TRUE);
+        "Match Status"    := "Match Status"::"Waiting to Match";
+        "Posting Status"  := "Posting Status"::" ";
+        RemoveCreditMemoIfExists();
+      END;
+    END;
+
+    LOCAL PROCEDURE RemoveCreditMemoIfExists@1000000020();
+    VAR
+      PurchaseHeader@1000000000 : Record 38;
+    BEGIN
+      IF ("Purch. Credit No." <> '') THEN BEGIN
+        IF PurchaseHeader.GET(PurchaseHeader."Document Type"::"Credit Memo","Purch. Credit No." ) THEN
+          PurchaseHeader.DELETE(TRUE);
+        "Purch. Credit No." := '';
+      END;
+    END;
+
+    PROCEDURE GetTheApprovalWorkflowResponse@1000000004() Response : Code[10];
+    VAR
+      CreditMemoWorkflow@1000000000 : Code[30];
+      InvoiceApprovalWorkflowCode@1000000002 : Code[30];
+      SystemBehaviour@1000000001 : Record 9062230;
+      WorkflowResponse@1000000003 : Record 9062259;
+    BEGIN
+      IF "MISC Invoice" THEN BEGIN
+        WorkflowResponse.SETRANGE("Workflow No.",GetMISCInvoiceWorkflow());
+        WorkflowResponse.SETRANGE("Response Type",WorkflowResponse."Response Type"::Positive);
+        IF WorkflowResponse.FINDFIRST THEN EXIT(WorkflowResponse."Field Value");
+      END ELSE BEGIN
+        CASE "Next Action" OF
+          "Next Action"::"Allow Difference" : BEGIN
+            WorkflowResponse.SETRANGE("Workflow No.",GetAdjustedWorkflow());
+            WorkflowResponse.SETRANGE("Response Type",WorkflowResponse."Response Type"::Positive);
+            IF WorkflowResponse.FINDFIRST THEN EXIT(WorkflowResponse."Field Value");
+          END;
+          "Next Action"::"Dispute & Raise Debit" : BEGIN
+            WorkflowResponse.SETRANGE("Workflow No.",GetDisputedWorkflow());
+            WorkflowResponse.SETRANGE("Response Type",WorkflowResponse."Response Type"::Positive);
+            IF WorkflowResponse.FINDFIRST THEN EXIT(WorkflowResponse."Field Value");
+          END;
+        END;
+        WorkflowResponse.SETRANGE("Workflow No.",GetInvoiceWorkflow());
+        WorkflowResponse.SETRANGE("Response Type",WorkflowResponse."Response Type"::Positive);
+        IF WorkflowResponse.FINDFIRST THEN EXIT(WorkflowResponse."Field Value");
+      END;
+    END;
+
+    PROCEDURE AutoApproveMISCInvoice@1000000006() : Boolean;
+    VAR
+      SystemBehaviour@1000000000 : Record 9062230;
+    BEGIN
+      EXIT(SystemBehaviour.GetBoolean('MISC_INV_AUTO_APPR'));
+    END;
+
+    PROCEDURE AutoApproveInvoice@1000000007() : Boolean;
+    VAR
+      SystemBehaviour@1000000000 : Record 9062230;
+    BEGIN
+      EXIT(SystemBehaviour.GetBoolean('INVM_APPR_INV_IF_PO'));
+    END;
+
+    PROCEDURE AutoApproveAdjustedDocument@1000000015() : Boolean;
+    VAR
+      SystemBehaviour@1000000000 : Record 9062230;
+    BEGIN
+      EXIT(SystemBehaviour.GetBoolean('ENABLE_ADJUSTED_WF'));
+    END;
+
+    PROCEDURE AutoApproveDisputedDocument@1000000016() : Boolean;
+    VAR
+      SystemBehaviour@1000000000 : Record 9062230;
+    BEGIN
+      EXIT(SystemBehaviour.GetBoolean('ENABLE_DISPUT_WF'));
+    END;
+
+    PROCEDURE GetMISCInvoiceWorkflow@1000000010() Response : Code[30];
+    VAR
+      SystemBehaviour@1000000000 : Record 9062230;
+    BEGIN
+      EXIT(UPPERCASE(SystemBehaviour.GetText('MISC_INV_APPW_CODE')))
+    END;
+
+    PROCEDURE GetInvoiceWorkflow@1000000011() Response : Code[10];
+    VAR
+      SystemBehaviour@1000000001 : Record 9062230;
+    BEGIN
+      EXIT(UPPERCASE(SystemBehaviour.GetText('INV_APPR_WF')));
+    END;
+
+    PROCEDURE GetAdjustedWorkflow@1000000013() Response : Code[10];
+    VAR
+      SystemBehaviour@1000000001 : Record 9062230;
+    BEGIN
+      EXIT(UPPERCASE(SystemBehaviour.GetText('ADJS_DOC_WF')));
+    END;
+
+    PROCEDURE GetDisputedWorkflow@1000000014() Response : Code[10];
+    VAR
+      SystemBehaviour@1000000001 : Record 9062230;
+    BEGIN
+      EXIT(UPPERCASE(SystemBehaviour.GetText('DISPUTED_RETURDOC_WF')));
+    END;
+
+    LOCAL PROCEDURE GetApprovalWorkflow@1000000005() : Code[30];
+    BEGIN
+      IF "MISC Invoice" THEN
+        EXIT(GetMISCInvoiceWorkflow);
+
+      CASE "Next Action" OF
+        "Next Action"::" " : EXIT(GetInvoiceWorkflow);
+        "Next Action"::"Allow Difference" : EXIT(GetAdjustedWorkflow);
+        "Next Action"::"Dispute & Raise Debit" : EXIT(GetDisputedWorkflow);
+      END;
+
+      EXIT(GetInvoiceWorkflow);
+    END;
+
+    PROCEDURE MatchLine@9062230();
+    VAR
+      PurchaseInvoiceMatching@9062230 : Codeunit 9062349;
+      eLineNotReady@1000000000 : TextConst 'ENU=The line is not ready to be matched!;ENG=The line is not ready to be matched!';
+    BEGIN
+      IF (Status = Rec.Status::Complete) AND (NOT "Invalid P.O") AND (NOT "Invalid Del. Note. No.")
+      AND ("Match Status" = Rec."Match Status"::"Waiting to Match") THEN
+        PurchaseInvoiceMatching.POMatch(Rec,(NOT GUIALLOWED))
+      ELSE BEGIN
+        MESSAGE(eLineNotReady);
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NH2015.4  AP 01/04/2014 - Created
+      //DOC NH2015.8  AP 03/07/2015 - Changed the "NAV Invoice Amount" and "NAV Invoice Amount (LCY)" to flowfields
+      //DOC NH2015.8  AP 03/07/2015 - Renamed "Action" field to "Next Action"
+      //DOC NH2015.8  AP 03/07/2015 - Added lookup function for "NAV Invoice Amount" fields
+      //DOC NH2015.8  AP 03/07/2015 - Removed VAT Fields
+      //DOC NH2015.9  AP 27/07/2015 - Added "Return Order No.","Approval Workflow" and "Invoice Amount When Matched" fields
+      //DOC NH2015.9  AP 28/07/2015 - Added "Adjusted" and "Disputed" fields
+      //DOC NH2016.10 JH 01/10/2015 - Upgraded to 2016
+      //DOC NH2016.11 JH 17/11/2015 - New version
+      //DOC NH2016.15 JH 15/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

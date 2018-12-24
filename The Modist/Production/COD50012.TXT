@@ -1,0 +1,236 @@
+OBJECT Codeunit 50012 3PL ASN Export XML
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/03/17;
+    Time=10:31:58 AM;
+    Modified=Yes;
+    Version List=OP9031,DEL-114;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            ClearLastErrors;
+            IF NOT ExportXML(Filename) THEN
+              LogError(GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ExportXML'),GETLASTERRORCODE,Filename);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ERRLOCATION@1000000000 : TextConst 'ENU=%1\Codeunit 50012;ENG=%1\Codeunit 50012';
+      Filename@1000000001 : Text;
+
+    [TryFunction]
+    LOCAL PROCEDURE ExportXML@1000000001(pFilename@1000000012 : Text);
+    VAR
+      XMLDoc@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLWriter@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlWriter";
+      ModistSetup@1000000002 : Record 50000;
+      Item@1000000004 : Record 27;
+      WebIntegrationManagement@1000000005 : Codeunit 50100;
+      Vendor@1000000007 : Record 23;
+      IntegrationProcessStaging@1000000014 : Record 50004;
+      WarehouseReceiptHeader@1000000015 : Record 7316;
+      WarehouseReceiptLine@1000000017 : Record 7317;
+      PurchaseHeader@1000000003 : Record 38;
+      PurchaseLine@1000000006 : Record 39;
+      IntegrationProcessStagingToUpdate@1000000008 : Record 50004;
+      IntegrationProcessingGroup@1000000010 : Record 50007;
+      FileName@1000000009 : Text;
+      IntegrationFunctions@1000000011 : Codeunit 50008;
+      SalesReturn@1000000013 : Record 36;
+      SalesReturnLine@1000000016 : Record 37;
+    BEGIN
+      ModistSetup.GET;
+
+      //iterate through unprocessed documents in new process table
+      IntegrationProcessStaging.RESET;
+      IntegrationProcessStaging.SETCURRENTKEY("Integration Type","Group Code",Processed);
+      IntegrationProcessStaging.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+      IntegrationProcessStaging.SETRANGE("Group Code",ModistSetup."3PL ASN Group"); //denotes 3PL ASN
+      IntegrationProcessStaging.SETRANGE(Processed,FALSE);
+
+      IF IntegrationProcessStaging.FINDSET THEN BEGIN
+        IntegrationProcessingGroup.GET(ModistSetup."3PL Integration Type",ModistSetup."3PL ASN Group");
+
+        FileName := WebIntegrationManagement.Nav3PLASNFileName;
+        pFilename := FileName;
+
+        XMLWriter := XMLWriter.Create(WebIntegrationManagement.Nav3PLASNFileName);
+        XMLWriter.WriteStartElement('ASNs');
+        REPEAT
+          IF WarehouseReceiptHeader.GET(IntegrationProcessStaging."Document No.") THEN BEGIN
+            WarehouseReceiptHeader.CALCFIELDS("Source Document No.");
+            XMLWriter.WriteStartElement('ASN');
+              XMLWriter.WriteElementString('ASNType',IntegrationProcessStaging."Type Attribute");
+              XMLWriter.WriteElementString('ASNRef',WarehouseReceiptHeader."No.");
+              XMLWriter.WriteElementString('ASNNo',WarehouseReceiptHeader."Source Document No.");
+              IF IntegrationProcessStaging."Type Attribute" = ModistSetup."ASN Purchase Type" THEN BEGIN //PURCHASE
+                IF PurchaseHeader.GET(PurchaseHeader."Document Type"::Order,WarehouseReceiptHeader."Source Document No.") THEN BEGIN //Get the PO record
+                  XMLWriter.WriteElementString('PartyNo',PurchaseHeader."Buy-from Vendor No.");
+                  XMLWriter.WriteElementString('PartyName',AppendStrings(PurchaseHeader."Buy-from Vendor Name",PurchaseHeader."Buy-from Vendor Name 2",''));
+                  XMLWriter.WriteElementString('PartyAddress1',PurchaseHeader."Buy-from Address");
+                  XMLWriter.WriteElementString('PartyAddress2',PurchaseHeader."Buy-from Address 2");
+                  XMLWriter.WriteElementString('PartyCity',PurchaseHeader."Buy-from City");
+                  XMLWriter.WriteElementString('PartyCounty',PurchaseHeader."Buy-from County");
+                  XMLWriter.WriteElementString('PartyPostCode',PurchaseHeader."Buy-from Post Code");
+                  XMLWriter.WriteElementString('PartyCountryCode',PurchaseHeader."Buy-from Country/Region Code");
+                  XMLWriter.WriteElementString('PartyContact',PurchaseHeader."Buy-from Contact");
+                  XMLWriter.WriteElementString('TransactionDate',FORMAT(PurchaseHeader."Order Date"));
+                  XMLWriter.WriteElementString('ExpectedReceiptDate',FORMAT(PurchaseHeader."Expected Receipt Date"));
+                  XMLWriter.WriteElementString('TransactionNo',PurchaseHeader."Vendor Order No.");
+                  XMLWriter.WriteElementString('ShipmentNo',WarehouseReceiptHeader."Vendor Shipment No.");
+                  XMLWriter.WriteElementString('ShipmentMethod',PurchaseHeader."Shipment Method Code");
+                  XMLWriter.WriteElementString('Update','true');
+                END;
+              END;
+              IF IntegrationProcessStaging."Type Attribute" = ModistSetup."ASN Sales Return Type" THEN BEGIN //CUSTRETURN
+                IF SalesReturn.GET(SalesReturn."Document Type"::"Return Order",WarehouseReceiptHeader."Source Document No.") THEN BEGIN //Get the sales return record
+                  XMLWriter.WriteElementString('PartyNo',SalesReturn."Sell-to Customer No.");
+                  XMLWriter.WriteElementString('PartyName',AppendStrings(SalesReturn."Sell-to Customer Name",SalesReturn."Sell-to Customer Name 2",''));
+                  XMLWriter.WriteElementString('PartyAddress1',SalesReturn."Sell-to Address");
+                  XMLWriter.WriteElementString('PartyAddress2',SalesReturn."Sell-to Address 2");
+                  XMLWriter.WriteElementString('PartyCity',SalesReturn."Sell-to City");
+                  XMLWriter.WriteElementString('PartyCounty',SalesReturn."Sell-to County");
+                  XMLWriter.WriteElementString('PartyPostCode',SalesReturn."Sell-to Post Code");
+                  XMLWriter.WriteElementString('PartyCountryCode',SalesReturn."Sell-to Country/Region Code");
+                  XMLWriter.WriteElementString('PartyContact',SalesReturn."Sell-to Contact");
+                  XMLWriter.WriteElementString('TransactionDate',FORMAT(SalesReturn."Order Date"));
+                  XMLWriter.WriteElementString('ExpectedReceiptDate',FORMAT(WarehouseReceiptHeader."Expected Date"));
+                  XMLWriter.WriteElementString('TransactionNo',SalesReturn."External Document No.");
+                  XMLWriter.WriteElementString('ShipmentNo',WarehouseReceiptHeader."Vendor Shipment No.");
+                  XMLWriter.WriteElementString('ShipmentMethod',SalesReturn."Shipment Method Code");
+                  XMLWriter.WriteElementString('Update','true');
+                END;
+              END;
+              WarehouseReceiptLine.RESET;
+              WarehouseReceiptLine.SETRANGE("No.",WarehouseReceiptHeader."No.");
+              IF WarehouseReceiptLine.FINDSET THEN BEGIN
+                XMLWriter.WriteStartElement('ASNLines');
+                REPEAT
+                  XMLWriter.WriteStartElement('ASNLine');
+                    Item.RESET;
+                    Item.GET(WarehouseReceiptLine."Item No.");
+                    XMLWriter.WriteElementString('LineNo',FORMAT(WarehouseReceiptLine."Line No."));
+                    XMLWriter.WriteElementString('SKUNumber',WarehouseReceiptLine."Item No." + '-' + WarehouseReceiptLine."Variant Code");
+                    XMLWriter.WriteElementString('EAN',GetEANcode(WarehouseReceiptLine."Item No.",WarehouseReceiptLine."Variant Code"));
+                    XMLWriter.WriteElementString('Description',WarehouseReceiptLine.Description);
+                    XMLWriter.WriteElementString('Description',WarehouseReceiptLine."Location Code");
+                    XMLWriter.WriteElementString('Quantity',FORMAT(WarehouseReceiptLine.Quantity));
+                    IF IntegrationProcessStaging."Type Attribute" = ModistSetup."ASN Purchase Type" THEN BEGIN //PURCHASE
+                      IF PurchaseLine.GET(PurchaseLine."Document Type"::Order,WarehouseReceiptHeader."Source Document No.",WarehouseReceiptLine."Source Line No.") THEN BEGIN
+                        XMLWriter.WriteElementString('UnitCost',FORMAT(PurchaseLine."Unit Cost (LCY)"));
+                        XMLWriter.WriteElementString('Amount',FORMAT(PurchaseLine."Line Amount"));
+                      END;
+                    END;
+                    IF IntegrationProcessStaging."Type Attribute" = ModistSetup."ASN Sales Return Type" THEN BEGIN //CUSTRETURN
+                      IF SalesReturnLine.GET(SalesReturnLine."Document Type"::Order,WarehouseReceiptHeader."Source Document No.",WarehouseReceiptLine."Source Line No.") THEN BEGIN
+                        XMLWriter.WriteElementString('UnitCost',FORMAT(SalesReturnLine."Unit Cost (LCY)"));
+                        XMLWriter.WriteElementString('Amount',FORMAT(SalesReturnLine."Line Amount"));
+                      END;
+                    END;
+                    XMLWriter.WriteElementString('ExpectedReceiptDate',FORMAT(WarehouseReceiptLine."Due Date"));
+                    XMLWriter.WriteElementString('HScode',Item."Tariff No.");
+                  XMLWriter.WriteEndElement; // </ASNLine>
+                UNTIL WarehouseReceiptLine.NEXT = 0;
+                XMLWriter.WriteEndElement; // </ASNLines>
+              END;
+            XMLWriter.WriteEndElement; // </ASN>
+          END;
+          //Mark the staging record as processed
+          IntegrationProcessStagingToUpdate.GET(IntegrationProcessStaging."Entry No.");
+          IntegrationProcessStagingToUpdate.Processed := TRUE;
+          IntegrationProcessStagingToUpdate.MODIFY;
+        UNTIL IntegrationProcessStaging.NEXT = 0;
+
+        XMLWriter.WriteEndElement; // </ASNs>
+        XMLWriter.Flush;
+        XMLWriter.Close;
+
+        //upload to SFTP server
+        IF IntegrationProcessingGroup."Enable SFTP Connect" THEN BEGIN //if we are ready to connect to sftp
+          WebIntegrationManagement.TransferFTPfiles(IntegrationProcessingGroup."Working Location",IntegrationProcessingGroup."Archive Location",'.xml',ModistSetup."FTP temporary file extension",
+                                                  ModistSetup."Demandware Export SFTP Server",IntegrationProcessingGroup."FTP Folder",IntegrationProcessingGroup."FTP Archive Folder",TRUE);
+        END;
+
+        //Log integration
+        IntegrationFunctions.Log3PLASNUpload(FileName,'');
+      END ELSE BEGIN
+        IF GUIALLOWED THEN
+          MESSAGE('Nothing to process');
+      END;
+    END;
+
+    LOCAL PROCEDURE AppendStrings@1000000000(string1@1000000000 : Text;string2@1000000001 : Text;string3@1000000002 : Text) : Text;
+    VAR
+      tempString@1000000003 : Text;
+    BEGIN
+      IF string1 <> '' THEN
+        tempString := tempString + string1;
+
+      IF string2 <> '' THEN
+        tempString := tempString + ' ' + string2;
+
+      IF string3 <> '' THEN
+        tempString := tempString + ' ' + string3;
+
+      EXIT(tempString);
+    END;
+
+    LOCAL PROCEDURE GetEANcode@1000000014(ItemNo@1000000000 : Code[20];VariantCode@1000000001 : Code[10]) : Text;
+    VAR
+      ItemCrossReference@1000000002 : Record 5717;
+    BEGIN
+      //this function returns the EAN Barcode from the Item Cross reference table
+      ItemCrossReference.SETRANGE("Item No.",ItemNo);
+      ItemCrossReference.SETRANGE("Variant Code",VariantCode);
+      ItemCrossReference.SETRANGE("Cross-Reference Type",ItemCrossReference."Cross-Reference Type"::"Bar Code");
+      ItemCrossReference.SETRANGE("Cross-Reference Type No.",'EAN');
+      IF ItemCrossReference.FINDFIRST THEN
+        EXIT(ItemCrossReference."Cross-Reference No.");
+    END;
+
+    LOCAL PROCEDURE LogError@1000000015(ErrMessage@1000000002 : Text;ErrorLocation@1000000004 : Text;ErrCode@1000000005 : Text;Filename@1000000001 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+    BEGIN
+      //This function facilitates the logging of an error in the error log table by deriving the default values
+      //and applying the variable values
+      ModistSetup.GET;
+      ErrorHandler.LogError(ModistSetup."3PL Integration Type",
+                            ModistSetup."3PL ASN Group",
+                            '',
+                            0,
+                            '',
+                            0,
+                            ErrMessage,
+                            ErrorLocation,
+                            0,
+                            ErrCode,
+                            Filename);
+    END;
+
+    LOCAL PROCEDURE ClearLastErrors@1000000008();
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+      IntegrationErrorLog@1000000001 : Record 50011;
+    BEGIN
+      //This function deletes all previous errors for the integration type and group
+      ModistSetup.GET;
+      IntegrationErrorLog.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+      IntegrationErrorLog.SETRANGE("Integration Process Group",ModistSetup."3PL ASN Group");
+      IF IntegrationErrorLog.FINDSET THEN
+        IntegrationErrorLog.DELETEALL;
+
+      CLEARLASTERROR;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

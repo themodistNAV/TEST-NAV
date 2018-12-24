@@ -1,0 +1,130 @@
+OBJECT Codeunit 11102039 OM - Process New Modifications
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/10/13;
+    Time=12:00:00 PM;
+    Version List=OMA9.01;
+  }
+  PROPERTIES
+  {
+    SingleInstance=Yes;
+    OnRun=BEGIN
+            ProcessNewModifications;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      PingPongControlRegistered@1000 : Boolean;
+
+    PROCEDURE OnOpenPage2@3();
+    VAR
+      ClientAddin@1000 : Record 2000000069;
+    BEGIN
+      IF NOT PingPongControlRegistered THEN BEGIN
+        ClientAddin.INIT;
+        ClientAddin."Add-in Name" := 'Microsoft.Dynamics.Nav.Client.PingPong';
+        ClientAddin."Public Key Token" := '31bf3856ad364e35';
+        ClientAddin.Description := 'Microsoft Dynamics PingPong control add-in';
+        IF ClientAddin.INSERT THEN
+          ;
+        PingPongControlRegistered := TRUE;
+      END;
+
+      ProcessNewModifications;
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE ProcessNewModifications@1();
+    VAR
+      Setup@1000 : Record 11102035;
+      Project@1001 : Record 11102036;
+      Modification@1002 : Record 11102042;
+      Modification2@1003 : Record 11102042;
+      CALHistoryObject@1004 : Record 11102052;
+      Object@1005 : Record 2000000001;
+      Mgt@1006 : Codeunit 11102035;
+      AssignModificationsMgt@1007 : Codeunit 11102036;
+      Progressbar@1008 : Codeunit 11102044;
+      SourceControl@1009 : Codeunit 11102050;
+      ActiveProjectNo@1010 : Code[20];
+      NoOfModifications@1011 : Integer;
+      AssignType@1012 : 'Manual,,Active Project';
+      Assigned@1013 : Boolean;
+      ModificationAddedToPrevious@1014 : Boolean;
+      ctProcessingNewModifications@1015 : TextConst 'DEU=Processing new modifications...;ENU=Processing new modifications...;ESP=Processing new modifications...;FRA=Processing new modifications...;NLD=Nieuwe wijzigingen verwerken...;DEA=Processing new modifications...';
+    BEGIN
+      AssignModificationsMgt.GetSettings(AssignType, ActiveProjectNo);
+
+      Setup.CustomGet;
+
+      Modification.LOCKTABLE;
+      Modification.SETCURRENTKEY("SQL Status");
+      Modification.SETRANGE("SQL Status", Modification."SQL Status"::Inserted);
+      Modification.SETRANGE("Inserted By", Mgt.ShortUserId);
+
+      NoOfModifications := Modification.COUNT;
+
+      IF NoOfModifications > 1 THEN BEGIN
+        IF GUIALLOWED THEN
+          Progressbar.Open(ctProcessingNewModifications, 1);
+        Progressbar.BarSize := Modification.COUNT;
+      END;
+
+      IF Modification.FINDSET THEN
+        REPEAT
+
+          Progressbar.AddToBar(1);
+          IF Object.GET(Modification."Object Type", '', Modification."Object No.") THEN
+            Progressbar.Text1Object := Object;
+
+          Modification2 := Modification;
+          Modification2."SQL Status" := Modification2."SQL Status"::"Ready to Assign";
+
+          Assigned := FALSE;
+
+          CASE AssignType OF
+
+            AssignType::Manual :
+              Modification2."SQL Status" := Modification2."SQL Status"::Processed;
+
+            AssignType::"Active Project" :
+              IF ActiveProjectNo <> '' THEN
+                IF Project.GET(ActiveProjectNo) THEN
+                  IF Project."Status Type" = Project."Status Type"::Developing THEN BEGIN
+                    AssignModificationsMgt.AssignModificationToProject(Modification2, Project."No.");
+                    Assigned := TRUE;
+                    Modification2."SQL Status" := Modification2."SQL Status"::Processed;
+                  END;
+          END;
+
+          IF (Setup."Save C/AL at Modification" <> Setup."Save C/AL at Modification"::No) AND
+             NOT ((Setup."Save C/AL at Assigning" <> Setup."Save C/AL at Assigning"::No) AND Assigned)
+          THEN
+            IF Object.GET(Modification2."Object Type", '', Modification2."Object No.") THEN
+              SourceControl.AddObject(
+                Object,
+                CALHistoryObject."Action Type"::Modification,
+                Setup."Save C/AL at Modification" = Setup."Save C/AL at Modification"::"If Changed", TRUE, 2, FALSE);
+
+          ModificationAddedToPrevious := FALSE;
+          IF Setup."Group Mods. Period (sec.)" > 0 THEN
+            ModificationAddedToPrevious := AssignModificationsMgt.AddToPreviousModification(Modification2);
+
+          IF ModificationAddedToPrevious THEN
+            Modification2.DELETE
+          ELSE
+            Modification2.MODIFY;
+
+        UNTIL Modification.NEXT = 0;
+
+      Progressbar.Close;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

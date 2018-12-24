@@ -1,0 +1,178 @@
+OBJECT Codeunit 11102092 OM - Combine Files
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/11/13;
+    Time=12:00:00 PM;
+    Version List=OMA9.02;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            CommonDialog@1000 : Codeunit 11102059;
+            FileHandler@1001 : Codeunit 11102097;
+            DirectoryToCombine@1002 : Text;
+          BEGIN
+            FileHandler.ErrorIfWebClient;
+
+            CommonDialog.SelectDirectory(DirectoryToCombine);
+            IF DirectoryToCombine <> '' THEN
+              CombineFiles(DirectoryToCombine);
+          END;
+
+  }
+  CODE
+  {
+
+    LOCAL PROCEDURE CombineFiles@1(Directory@1000 : Text);
+    VAR
+      TmpLine@1001 : ARRAY [2] OF TEMPORARY Record 11102068;
+      TmpFileRec@1002 : TEMPORARY Record 11102094;
+      TmpFileSorting@1003 : TEMPORARY Record 11102094;
+      TmpObject@1004 : TEMPORARY Record 2000000001;
+      ImExportMgt@1005 : Codeunit 11102043;
+      Progressbar@1006 : Codeunit 11102044;
+      FileHandler@1007 : Codeunit 11102097;
+      oFileIn@1008 : File;
+      oFileOut@1009 : File;
+      InStr@1010 : InStream;
+      OutStr@1011 : OutStream;
+      Extension@1012 : Text;
+      FirstLine@1013 : Text[1024];
+      NewFileName@1014 : Text;
+      NewFullFileName@1015 : Text;
+      ObjectLine@1016 : ARRAY [50] OF Text[30];
+      ObjectServerFileName@1017 : Text;
+      OutServerFileName@1018 : Text;
+      ParentDirectory@1019 : Text;
+      CopyCounter@1020 : Integer;
+      i@1021 : Integer;
+      ctCombiningFiles@1022 : TextConst 'DEU=Combining files...;ENU=Combining files...;ESP=Combining files...;FRA=Combining files...;NLD=Bestanden combineren...;DEA=Combining files...';
+      ctFileCreated@1023 : TextConst 'DEU=File ''%1'' created.;ENU=File ''%1'' created.;ESP=File ''%1'' created.;FRA=File ''%1'' created.;NLD=Bestand ''%1'' aangemaakt.;DEA=File ''%1'' created.';
+      ctNoFilesFound@1024 : TextConst 'DEU=No object files found.;ENU=No object files found.;ESP=No object files found.;FRA=No object files found.;NLD=Geen object bestanden gevonden.;DEA=No object files found.';
+    BEGIN
+      IF Directory[STRLEN(Directory)] <> '\' THEN
+        Directory += '\';
+
+      FileHandler.GetClientDirectoryContent(TmpFileRec, Directory);
+      TmpFileRec.SETRANGE("Is a File", TRUE);
+      TmpFileRec.SETFILTER(Name, '*.txt|*.TXT|*.fld|*.FLD');
+      TmpFileRec.FINDSET;
+
+      FOR i := 1 TO STRLEN(Directory) - 1 DO
+        IF Directory[i] = '\' THEN BEGIN
+          ParentDirectory := DELSTR(Directory, i + 1);
+          NewFileName := DELCHR(COPYSTR(Directory, i + 1), '=', '\');
+        END;
+
+      IF ParentDirectory = '' THEN BEGIN
+        ParentDirectory := Directory;
+        NewFileName := 'combined';
+      END;
+
+      Extension := FileHandler.GetExtension(TmpFileRec.Name);
+      IF NOT FileHandler.ClientFileNameExists(ParentDirectory + NewFileName + '.' + Extension) THEN
+        NewFullFileName := NewFileName + '.' + Extension
+      ELSE BEGIN
+        CopyCounter := 1;
+        WHILE FileHandler.ClientFileNameExists(ParentDirectory + NewFileName + ' (' + FORMAT(CopyCounter) + ').' + Extension) DO
+          CopyCounter += 1;
+        NewFullFileName := NewFileName + ' (' + FORMAT(CopyCounter) + ').' + Extension;
+      END;
+
+      Progressbar.Open(ctCombiningFiles, 1);
+      Progressbar.Text1 := '';
+      Progressbar.BarSize := TmpFileRec.COUNT * 2;
+
+      REPEAT
+
+        Progressbar.AddToBar(1);
+
+        ObjectServerFileName := FileHandler.UploadToServer(Directory + TmpFileRec.Name, '');
+
+        oFileIn.TEXTMODE(TRUE);
+        oFileIn.OPEN(ObjectServerFileName);
+        IF oFileIn.READ(FirstLine) > 0 THEN BEGIN
+
+          CASE TRUE OF
+
+            DELSTR(FirstLine, 8) = 'OBJECT ' :
+              BEGIN
+                ImExportMgt.Split(FirstLine, ' ', ObjectLine);
+                TmpObject.Type := TmpObject.Type::TableData;
+                IF EVALUATE(TmpObject.Type, ObjectLine[2]) THEN
+                  ;
+                IF EVALUATE(TmpObject.ID, ObjectLine[3]) THEN
+                  ;
+              END;
+
+            EVALUATE(TmpObject.ID, DELCHR(COPYSTR(FirstLine, 1, 11))) :
+              BEGIN
+                TmpObject.Type := TmpObject.Type::Table;
+                TmpObject.Name := DELCHR(COPYSTR(FirstLine, 15, 30), '>');
+              END;
+
+            ELSE BEGIN
+              TmpLine[1].INIT;
+              TmpLine[1].ValidateTranslationFileLine(FirstLine, TmpLine[2]);
+              TmpObject.Type := TmpLine[1]."Object Type";
+              TmpObject.ID := TmpLine[1]."Object No.";
+              TmpObject.Name := TmpLine[1].Name;
+            END;
+          END;
+
+          Progressbar.Text1 := FORMAT(TmpObject.Type) + ' ' + COPYSTR(FirstLine, STRLEN(ObjectLine[1] + ObjectLine[2]) + 3);
+
+          IF TmpObject.Type <> TmpObject.Type::TableData THEN BEGIN
+            TmpFileSorting.Path := FORMAT(TmpObject.ID);
+            WHILE STRLEN(TmpFileSorting.Path) < 10 DO
+              TmpFileSorting.Path := '0' + TmpFileSorting.Path;
+            TmpFileSorting.Path := FORMAT(TmpObject.Type + 0) + TmpFileSorting.Path;
+            WHILE STRLEN(TmpFileSorting.Path) < 12 DO
+              TmpFileSorting.Path := '0' + TmpFileSorting.Path;
+
+            TmpFileSorting.Name := ObjectServerFileName;
+            TmpFileSorting.INSERT;
+
+          END;
+
+        END;
+        oFileIn.CLOSE;
+      UNTIL TmpFileRec.NEXT = 0;
+
+      IF TmpFileSorting.ISEMPTY THEN
+        ERROR(ctNoFilesFound);
+
+      OutServerFileName := FileHandler.CreateServerFileName(ParentDirectory + NewFullFileName, '');
+
+      oFileOut.CREATE(OutServerFileName);
+      oFileOut.CREATEOUTSTREAM(OutStr);
+
+      TmpFileSorting.FINDSET;
+      REPEAT
+        Progressbar.AddToBar(1);
+
+        Progressbar.Text1 := TmpFileSorting.Name;
+
+        oFileIn.OPEN(TmpFileSorting.Name);
+        oFileIn.CREATEINSTREAM(InStr);
+
+        COPYSTREAM(OutStr, InStr);
+
+        oFileIn.CLOSE;
+      UNTIL TmpFileSorting.NEXT = 0;
+
+      oFileOut.CLOSE;
+
+      Progressbar.Close;
+
+      FileHandler.DownloadToClient(OutServerFileName, ParentDirectory + NewFullFileName, '');
+
+      MESSAGE(ctFileCreated, ParentDirectory + NewFullFileName);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

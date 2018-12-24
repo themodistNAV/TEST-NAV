@@ -1,0 +1,1518 @@
+OBJECT Report 50003 Purchase Orders Recon.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/09/18;
+    Time=[ 5:13:23 PM];
+    Modified=Yes;
+    Version List=TM3021;
+  }
+  PROPERTIES
+  {
+    OnPreReport=BEGIN
+                  //PurchInvHeader.SETAUTOCALCFIELDS("Amount Including VAT","Remaining Amount"); //Remaining Amount not updated in system correctly (Vendor Ledger Entry No. is 0!)
+                  VendorLedgerEntry.RESET;
+                  VendorLedgerEntry.SETCURRENTKEY("Document No.");
+                  PurchInvHeader.SETAUTOCALCFIELDS("Amount Including VAT");
+                  PurchCrMemoHdr.SETAUTOCALCFIELDS("Amount Including VAT");
+                  AppliedVendorLedgerEntry.SETAUTOCALCFIELDS(Amount);
+
+                  PurchaseLine.RESET;
+                  PurchaseLine.SETRANGE("Document Type",PurchaseLine."Document Type"::Order);
+                  PurchaseLine.SETRANGE(Type,PurchaseLine.Type::Item);
+                END;
+
+  }
+  DATASET
+  {
+    { 1000000000;;DataItem;Purchase_Header   ;
+               DataItemTable=Table38;
+               DataItemTableView=SORTING(Document Type,No.)
+                                 WHERE(Document Type=CONST(Order));
+               OnAfterGetRecord=BEGIN
+                                  InvoicedAmount := 0;
+                                  PaidAmount := 0;
+                                  CMAmount := 0;
+                                  TotalQtyReceived := 0;
+                                  TotalAmntReceived := 0;
+                                  AppliedVendorLedgerEntry.RESET;
+                                  TmpAppliedVendorLedgerEntry.RESET;
+                                  TmpAppliedVendorLedgerEntry.DELETEALL;
+
+                                  PurchaseLine.SETRANGE("Document No.","No.");
+                                  IF PurchaseLine.FINDSET THEN BEGIN
+                                    REPEAT
+                                      TotalQtyReceived += PurchaseLine."Qty. Received (Base)";
+                                      TotalAmntReceived += PurchaseLine."Qty. Received (Base)" * PurchaseLine."Direct Unit Cost";
+                                    UNTIL PurchaseLine.NEXT=0;
+                                  END;
+
+                                  TotalAmntReceived := ROUND(TotalAmntReceived,0.01,'=');
+
+                                  PurchInvHeader.RESET;
+                                  PurchInvHeader.SETRANGE("Prepayment Order No.","No.");
+                                  IF PurchInvHeader.FINDSET THEN BEGIN
+                                    REPEAT
+                                      InvoicedAmount += PurchInvHeader."Amount Including VAT";
+                                      VendorLedgerEntry.SETRANGE("Document No.",PurchInvHeader."No.");
+                                      // VendorLedgerEntry.SETRANGE("Posting Date",PurchInvHeader."Posting Date");
+                                      IF VendorLedgerEntry.FINDFIRST THEN
+                                        FindApplnEntriesDtldtLedgEntry(VendorLedgerEntry,TRUE);
+                                    UNTIL PurchInvHeader.NEXT=0;
+                                  END;
+
+                                  AppliedVendorLedgerEntry.RESET;
+                                  PurchInvHeader.SETRANGE("Prepayment Order No.");
+                                  PurchInvHeader.SETRANGE("Order No.","No.");
+                                  IF PurchInvHeader.FINDSET THEN BEGIN
+                                    REPEAT
+                                      InvoicedAmount += PurchInvHeader."Amount Including VAT";
+                                      VendorLedgerEntry.SETRANGE("Document No.",PurchInvHeader."No.");
+                                      // VendorLedgerEntry.SETRANGE("Posting Date",PurchInvHeader."Posting Date");
+                                      IF VendorLedgerEntry.FINDFIRST THEN
+                                        FindApplnEntriesDtldtLedgEntry(VendorLedgerEntry,TRUE);
+                                    UNTIL PurchInvHeader.NEXT=0;
+                                  END;
+
+                                  //DOC TM3021 ST 26/08/2018 -
+                                  CLEAR(xDocNo);
+                                  PurchInvLine.SETCURRENTKEY("Receipt No.");
+
+                                  // PurchRcptLine.SETCURRENTKEY("Document No.", "Order No.");
+                                  // PurchRcptLine.SETRANGE("Order No.", "No.");
+                                  // IF PurchRcptLine.FINDSET THEN
+                                  //  REPEAT
+                                  //    IF PurchRcptLine."Document No." <> xDocNo THEN BEGIN
+                                  //      PurchInvLine.SETRANGE("Receipt No.", PurchRcptLine."Document No.");
+                                  //      PurchInvLine.CALCSUMS("Amount Including VAT");
+                                  //      IF PurchInvLine.FINDFIRST THEN;
+                                  //      InvoicedAmount += PurchInvLine."Amount Including VAT";
+                                  //      xDocNo := PurchRcptLine."Document No.";
+                                  //
+                                  //      VendorLedgerEntry.RESET;
+                                  //      VendorLedgerEntry.SETRANGE("Document No.", PurchInvLine."Document No.");
+                                  //      //VendorLedgerEntry.SETRANGE("Posting Date", PurchInvLine."Posting Date");
+                                  //      IF VendorLedgerEntry.FINDFIRST THEN
+                                  //        FindApplnEntriesDtldtLedgEntry(VendorLedgerEntry, TRUE);
+                                  //    END;
+                                  //  UNTIL PurchRcptLine.NEXT = 0;
+
+                                  TmpPurchInvHeader.RESET;
+                                  TmpPurchInvHeader.DELETEALL;
+
+                                  PurchRcptLine.SETCURRENTKEY("Document No.", "Order No.");
+                                  PurchRcptLine.SETRANGE("Order No.", "No.");
+                                  IF PurchRcptLine.FINDSET THEN
+                                    REPEAT
+                                      PurchInvLine.SETRANGE("Receipt No.",PurchRcptLine."Document No.");
+                                      PurchInvLine.SETRANGE("Receipt Line No.",PurchRcptLine."Line No.");
+                                      IF PurchInvLine.FINDSET THEN BEGIN
+                                        REPEAT
+                                          InvoicedAmount += PurchInvLine."Amount Including VAT";
+                                          TmpPurchInvHeader.INIT;
+                                          TmpPurchInvHeader."No." := PurchInvLine."Document No.";
+                                          IF TmpPurchInvHeader.INSERT THEN;
+                                        UNTIL PurchInvLine.NEXT=0;
+                                      END;
+                                    UNTIL PurchRcptLine.NEXT = 0;
+
+                                  TmpPurchInvHeader.RESET;
+                                  IF TmpPurchInvHeader.FINDSET THEN BEGIN
+                                    REPEAT
+                                      VendorLedgerEntry.RESET;
+                                      VendorLedgerEntry.SETRANGE("Document No.", TmpPurchInvHeader."No.");
+                                      IF VendorLedgerEntry.FINDFIRST THEN
+                                        FindApplnEntriesDtldtLedgEntry(VendorLedgerEntry, TRUE);
+                                    UNTIL TmpPurchInvHeader.NEXT=0;
+                                  END;
+
+                                  InvoicedAmount := ROUND(InvoicedAmount,0.01,'=');
+                                  //DOC TM3021 ST 26/08/2018 -
+
+
+                                  TmpAppliedVendorLedgerEntry.RESET;
+                                  IF TmpAppliedVendorLedgerEntry.FINDSET THEN BEGIN
+                                    REPEAT
+                                      PaidAmount += TmpAppliedVendorLedgerEntry."Closed by Amount";
+                                    UNTIL TmpAppliedVendorLedgerEntry.NEXT=0;
+                                  END;
+
+                                  TmpAppliedVendorLedgerEntry.RESET;
+                                  TmpAppliedVendorLedgerEntry.DELETEALL;
+                                  AppliedVendorLedgerEntry.RESET;
+
+                                  PurchCrMemoHdr.RESET;
+                                  PurchCrMemoHdr.SETRANGE("Prepayment Order No.","No.");
+                                  IF PurchCrMemoHdr.FINDSET THEN BEGIN
+                                    REPEAT
+                                      CMAmount += PurchCrMemoHdr."Amount Including VAT";
+                                      VendorLedgerEntry.SETRANGE("Document No.",PurchCrMemoHdr."No.");
+                                      // VendorLedgerEntry.SETRANGE("Posting Date",PurchCrMemoHdr."Posting Date");
+                                      IF VendorLedgerEntry.FINDFIRST THEN
+                                        FindApplnEntriesDtldtLedgEntry(VendorLedgerEntry,FALSE);
+                                    UNTIL PurchInvHeader.NEXT=0;
+                                  END;
+
+                                  TmpAppliedVendorLedgerEntry.RESET;
+                                  IF TmpAppliedVendorLedgerEntry.FINDSET THEN BEGIN
+                                    REPEAT
+                                      PaidAmount -= TmpAppliedVendorLedgerEntry."Closed by Amount";
+                                    UNTIL TmpAppliedVendorLedgerEntry.NEXT=0;
+                                  END;
+
+                                  InvoicedAmount -= CMAmount;
+                                END;
+
+               ReqFilterFields=No.;
+               CalcFields=Amount Including VAT,Total Quantity (Base) }
+
+    { 1000000001;1;Column;PurchaseHeader_VendorNo;
+               SourceExpr=Purchase_Header."Buy-from Vendor No." }
+
+    { 1000000002;1;Column;PurchaseHeader_No  ;
+               SourceExpr=Purchase_Header."No." }
+
+    { 1000000003;1;Column;PurchaseHeader_VendorName;
+               SourceExpr=Purchase_Header."Buy-from Vendor Name" }
+
+    { 1000000004;1;Column;PurchaseHeader_CurrencyCode;
+               SourceExpr=Purchase_Header."Currency Code" }
+
+    { 1000000006;1;Column;PurchaseHeader_SeasonCode;
+               SourceExpr=Purchase_Header."Season Code" }
+
+    { 1000000007;1;Column;PurchaseHeader_SubSeasonCode;
+               SourceExpr=Purchase_Header."Sub-Season Code" }
+
+    { 1000000008;1;Column;PurchaseHeader_TotalQty;
+               SourceExpr=Purchase_Header."Total Quantity (Base)" }
+
+    { 1000000009;1;Column;PurchaseHeader_CompletelyReceived;
+               SourceExpr=Purchase_Header."Completely Received" }
+
+    { 1000000005;1;Column;PurchaseHeader_POAmount;
+               SourceExpr=Purchase_Header."Amount Including VAT" }
+
+    { 1000000014;1;Column;PaymentTermsCode_PurchaseHeader;
+               SourceExpr=Purchase_Header."Payment Terms Code" }
+
+    { 1000000011;1;Column;PurchaseHeader_InvoicedAmount;
+               SourceExpr=InvoicedAmount }
+
+    { 1000000010;1;Column;PurchaseHeader_PaidAmount;
+               SourceExpr=PaidAmount }
+
+    { 1000000012;1;Column;PurchaseHeader_TotalQtyReceived;
+               SourceExpr=TotalQtyReceived }
+
+    { 1000000013;1;Column;PurchaseHeader_TotalAmntReceived;
+               SourceExpr=TotalAmntReceived }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      PurchInvHeader@1000000001 : Record 122;
+      PurchInvLine@1170000000 : Record 123;
+      PurchRcptLine@1170000001 : Record 121;
+      VendorLedgerEntry@1000000003 : Record 25;
+      AppliedVendorLedgerEntry@1000000006 : Record 25;
+      TmpAppliedVendorLedgerEntry@1000000007 : TEMPORARY Record 25;
+      PurchCrMemoHdr@1000000005 : Record 124;
+      PurchaseLine@1000000008 : Record 39;
+      TmpPurchInvHeader@1000000011 : TEMPORARY Record 122;
+      InvoicedAmount@1000000002 : Decimal;
+      PaidAmount@1000000000 : Decimal;
+      CMAmount@1000000004 : Decimal;
+      TotalQtyReceived@1000000009 : Decimal;
+      TotalAmntReceived@1000000010 : Decimal;
+      xDocNo@1170000002 : Code[20];
+
+    LOCAL PROCEDURE FindApplnEntriesDtldtLedgEntry@1(pVendorLedgerEntry@1000000000 : Record 25;pPayment@1000000001 : Boolean);
+    VAR
+      DtldVendLedgEntry1@1000 : Record 380;
+      DtldVendLedgEntry2@1001 : Record 380;
+    BEGIN
+      DtldVendLedgEntry1.SETCURRENTKEY("Vendor Ledger Entry No.");
+      DtldVendLedgEntry1.SETRANGE("Vendor Ledger Entry No.",pVendorLedgerEntry."Entry No.");
+      DtldVendLedgEntry1.SETRANGE(Unapplied,FALSE);
+      IF DtldVendLedgEntry1.FINDSET THEN
+        REPEAT
+          IF DtldVendLedgEntry1."Vendor Ledger Entry No." =
+             DtldVendLedgEntry1."Applied Vend. Ledger Entry No."
+          THEN BEGIN
+            DtldVendLedgEntry2.INIT;
+            DtldVendLedgEntry2.SETCURRENTKEY("Applied Vend. Ledger Entry No.","Entry Type");
+            DtldVendLedgEntry2.SETRANGE(
+              "Applied Vend. Ledger Entry No.",DtldVendLedgEntry1."Applied Vend. Ledger Entry No.");
+            DtldVendLedgEntry2.SETRANGE("Entry Type",DtldVendLedgEntry2."Entry Type"::Application);
+            DtldVendLedgEntry2.SETRANGE(Unapplied,FALSE);
+            IF DtldVendLedgEntry2.FINDSET THEN
+              REPEAT
+                IF DtldVendLedgEntry2."Vendor Ledger Entry No." <>
+                   DtldVendLedgEntry2."Applied Vend. Ledger Entry No."
+                THEN BEGIN
+                  AppliedVendorLedgerEntry.SETCURRENTKEY("Entry No.");
+                  AppliedVendorLedgerEntry.SETRANGE("Entry No.",DtldVendLedgEntry2."Vendor Ledger Entry No.");
+                  IF pPayment THEN
+                    AppliedVendorLedgerEntry.SETRANGE("Document Type",AppliedVendorLedgerEntry."Document Type"::Payment)
+                  ELSE
+                    AppliedVendorLedgerEntry.SETRANGE("Document Type",AppliedVendorLedgerEntry."Document Type"::Refund);
+                  IF AppliedVendorLedgerEntry.FIND('-') THEN BEGIN
+                    TmpAppliedVendorLedgerEntry.INIT;
+                    TmpAppliedVendorLedgerEntry := AppliedVendorLedgerEntry;
+                    TmpAppliedVendorLedgerEntry."Closed by Amount" := AppliedVendorLedgerEntry.Amount;
+                    IF TmpAppliedVendorLedgerEntry.INSERT THEN;
+                  END;
+                END;
+              UNTIL DtldVendLedgEntry2.NEXT = 0;
+          END ELSE BEGIN
+            AppliedVendorLedgerEntry.SETCURRENTKEY("Entry No.");
+            AppliedVendorLedgerEntry.SETRANGE("Entry No.",DtldVendLedgEntry1."Applied Vend. Ledger Entry No.");
+            IF pPayment THEN
+              AppliedVendorLedgerEntry.SETRANGE("Document Type",AppliedVendorLedgerEntry."Document Type"::Payment)
+            ELSE
+              AppliedVendorLedgerEntry.SETRANGE("Document Type",AppliedVendorLedgerEntry."Document Type"::Refund);
+            IF AppliedVendorLedgerEntry.FIND('-') THEN BEGIN
+              TmpAppliedVendorLedgerEntry.INIT;
+              TmpAppliedVendorLedgerEntry := AppliedVendorLedgerEntry;
+              TmpAppliedVendorLedgerEntry."Closed by Amount" := AppliedVendorLedgerEntry.Amount;
+              IF TmpAppliedVendorLedgerEntry.INSERT THEN;
+            END;
+          END;
+        UNTIL DtldVendLedgEntry1.NEXT = 0;
+    END;
+
+    BEGIN
+    {
+      //Use RecRef better
+      //DOC TM3021 ST 26/08/2018 - Code added to calculate indirect inv. amt.
+    }
+    END.
+  }
+  RDLDATA
+  {
+    <?xml version="1.0" encoding="utf-8"?>
+<Report xmlns:rd="http://schemas.microsoft.com/SQLServer/reporting/reportdesigner" xmlns:cl="http://schemas.microsoft.com/sqlserver/reporting/2010/01/componentdefinition" xmlns="http://schemas.microsoft.com/sqlserver/reporting/2010/01/reportdefinition">
+  <AutoRefresh>0</AutoRefresh>
+  <DataSources>
+    <DataSource Name="DataSource">
+      <ConnectionProperties>
+        <DataProvider>SQL</DataProvider>
+        <ConnectString />
+      </ConnectionProperties>
+      <rd:SecurityType>None</rd:SecurityType>
+      <rd:DataSourceID>4bed7f6e-413c-4e15-a87f-a23261d9ae6f</rd:DataSourceID>
+    </DataSource>
+  </DataSources>
+  <DataSets>
+    <DataSet Name="DataSet_Result">
+      <Query>
+        <DataSourceName>DataSource</DataSourceName>
+        <CommandText />
+      </Query>
+      <Fields>
+        <Field Name="PurchaseHeader_VendorNo">
+          <DataField>PurchaseHeader_VendorNo</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_No">
+          <DataField>PurchaseHeader_No</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_VendorName">
+          <DataField>PurchaseHeader_VendorName</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_CurrencyCode">
+          <DataField>PurchaseHeader_CurrencyCode</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_SeasonCode">
+          <DataField>PurchaseHeader_SeasonCode</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_SubSeasonCode">
+          <DataField>PurchaseHeader_SubSeasonCode</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_TotalQty">
+          <DataField>PurchaseHeader_TotalQty</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_TotalQtyFormat">
+          <DataField>PurchaseHeader_TotalQtyFormat</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_CompletelyReceived">
+          <DataField>PurchaseHeader_CompletelyReceived</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_POAmount">
+          <DataField>PurchaseHeader_POAmount</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_POAmountFormat">
+          <DataField>PurchaseHeader_POAmountFormat</DataField>
+        </Field>
+        <Field Name="PaymentTermsCode_PurchaseHeader">
+          <DataField>PaymentTermsCode_PurchaseHeader</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_InvoicedAmount">
+          <DataField>PurchaseHeader_InvoicedAmount</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_InvoicedAmountFormat">
+          <DataField>PurchaseHeader_InvoicedAmountFormat</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_PaidAmount">
+          <DataField>PurchaseHeader_PaidAmount</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_PaidAmountFormat">
+          <DataField>PurchaseHeader_PaidAmountFormat</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_TotalQtyReceived">
+          <DataField>PurchaseHeader_TotalQtyReceived</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_TotalQtyReceivedFormat">
+          <DataField>PurchaseHeader_TotalQtyReceivedFormat</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_TotalAmntReceived">
+          <DataField>PurchaseHeader_TotalAmntReceived</DataField>
+        </Field>
+        <Field Name="PurchaseHeader_TotalAmntReceivedFormat">
+          <DataField>PurchaseHeader_TotalAmntReceivedFormat</DataField>
+        </Field>
+      </Fields>
+      <rd:DataSetInfo>
+        <rd:DataSetName>DataSet</rd:DataSetName>
+        <rd:SchemaPath>Report.xsd</rd:SchemaPath>
+        <rd:TableName>Result</rd:TableName>
+      </rd:DataSetInfo>
+    </DataSet>
+  </DataSets>
+  <ReportSections>
+    <ReportSection>
+      <Body>
+        <ReportItems>
+          <Tablix Name="Tablix1">
+            <TablixBody>
+              <TablixColumns>
+                <TablixColumn>
+                  <Width>1in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.18333in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.98425in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.64167in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.65092in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.74258in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.75in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.71667in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.71667in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.7in</Width>
+                </TablixColumn>
+              </TablixColumns>
+              <TablixRows>
+                <TablixRow>
+                  <Height>0.39167in</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox25">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">PO No.</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <TextDecoration>None</TextDecoration>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox25</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox37">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">Vendor No.</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <TextDecoration>None</TextDecoration>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox37</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox38">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">Vendor Name</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <TextDecoration>None</TextDecoration>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox38</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox39">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">Currency Code</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <TextDecoration>None</TextDecoration>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox39</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox40">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">Season Code</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <TextDecoration>None</TextDecoration>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox40</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox41">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">Sub-Season Code</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <TextDecoration>None</TextDecoration>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox41</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox2">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">Payment Terms</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <TextDecoration>None</TextDecoration>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox2</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox42">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">Total Qty.</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <TextDecoration>None</TextDecoration>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox42</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">Qty. Received</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <TextDecoration>None</TextDecoration>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox3">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">Amount Received</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <TextDecoration>None</TextDecoration>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox3</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox43">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">Completely Received</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <TextDecoration>None</TextDecoration>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox43</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox44">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">PO Amount</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <TextDecoration>None</TextDecoration>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox44</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox45">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">Invoiced Amount</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <TextDecoration>None</TextDecoration>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox45</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox46">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">Paid Amount</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <TextDecoration>None</TextDecoration>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox46</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+                <TablixRow>
+                  <Height>0.25in</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="PurchaseHeader_No">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!PurchaseHeader_No.Value</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>PurchaseHeader_No</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="PurchaseHeader_VendorNo">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!PurchaseHeader_VendorNo.Value</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>PurchaseHeader_VendorNo</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="PurchaseHeader_VendorName">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!PurchaseHeader_VendorName.Value</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>PurchaseHeader_VendorName</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="PurchaseHeader_CurrencyCode">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!PurchaseHeader_CurrencyCode.Value</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>PurchaseHeader_CurrencyCode</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="PurchaseHeader_SeasonCode">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!PurchaseHeader_SeasonCode.Value</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>PurchaseHeader_SeasonCode</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="PurchaseHeader_SubSeasonCode">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!PurchaseHeader_SubSeasonCode.Value</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>PurchaseHeader_SubSeasonCode</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="PaymentTermsCode_PurchaseHeader">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!PaymentTermsCode_PurchaseHeader.Value</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>PaymentTermsCode_PurchaseHeader</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="PurchaseHeader_TotalQty">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!PurchaseHeader_TotalQty.Value</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>PurchaseHeader_TotalQty</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="PurchaseHeader_TotalQtyReceived">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!PurchaseHeader_TotalQtyReceived.Value</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>PurchaseHeader_TotalQtyReceived</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="PurchaseHeader_TotalAmntReceived">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!PurchaseHeader_TotalAmntReceived.Value</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <Format>#,0.00;(#,0.00)</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>PurchaseHeader_TotalAmntReceived</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="PurchaseHeader_CompletelyReceived">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!PurchaseHeader_CompletelyReceived.Value</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>PurchaseHeader_CompletelyReceived</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="PurchaseHeader_POAmount">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!PurchaseHeader_POAmount.Value</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <Format>#,0.00;(#,0.00)</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>PurchaseHeader_POAmount</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="PurchaseHeader_InvoicedAmount">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!PurchaseHeader_InvoicedAmount.Value</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <Format>#,0.00;(#,0.00)</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>PurchaseHeader_InvoicedAmount</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="PurchaseHeader_PaidAmount">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value EvaluationMode="Auto">=Fields!PurchaseHeader_PaidAmount.Value</Value>
+                                  <Style>
+                                    <FontFamily>Segoe UI</FontFamily>
+                                    <FontSize>9pt</FontSize>
+                                    <Format>#,0.00;(#,0.00)</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>PurchaseHeader_PaidAmount</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+              </TablixRows>
+            </TablixBody>
+            <TablixColumnHierarchy>
+              <TablixMembers>
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+              </TablixMembers>
+            </TablixColumnHierarchy>
+            <TablixRowHierarchy>
+              <TablixMembers>
+                <TablixMember>
+                  <KeepWithGroup>After</KeepWithGroup>
+                  <RepeatOnNewPage>true</RepeatOnNewPage>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+                <TablixMember>
+                  <Group Name="Details" />
+                </TablixMember>
+              </TablixMembers>
+            </TablixRowHierarchy>
+            <RepeatColumnHeaders>true</RepeatColumnHeaders>
+            <RepeatRowHeaders>true</RepeatRowHeaders>
+            <FixedColumnHeaders>true</FixedColumnHeaders>
+            <FixedRowHeaders>true</FixedRowHeaders>
+            <KeepTogether>true</KeepTogether>
+            <DataSetName>DataSet_Result</DataSetName>
+            <Height>0.64167in</Height>
+            <Width>13.08609in</Width>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+            </Style>
+          </Tablix>
+        </ReportItems>
+        <Height>1.62984cm</Height>
+        <Style />
+      </Body>
+      <Width>33.23867cm</Width>
+      <Page>
+        <PageHeight>21cm</PageHeight>
+        <PageWidth>29.7cm</PageWidth>
+        <LeftMargin>1cm</LeftMargin>
+        <RightMargin>1cm</RightMargin>
+        <TopMargin>1cm</TopMargin>
+        <BottomMargin>1cm</BottomMargin>
+        <ColumnSpacing>1.27cm</ColumnSpacing>
+        <Style />
+      </Page>
+    </ReportSection>
+  </ReportSections>
+  <Code>Public Function BlankZero(ByVal Value As Decimal)
+    if Value = 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankPos(ByVal Value As Decimal)
+    if Value &gt; 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankZeroAndPos(ByVal Value As Decimal)
+    if Value &gt;= 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankNeg(ByVal Value As Decimal)
+    if Value &lt; 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankNegAndZero(ByVal Value As Decimal)
+    if Value &lt;= 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+</Code>
+  <Language>=User!Language</Language>
+  <ConsumeContainerWhitespace>true</ConsumeContainerWhitespace>
+  <rd:ReportUnitType>Cm</rd:ReportUnitType>
+  <rd:ReportID>0eeb6585-38ae-40f1-885b-8d50088d51b4</rd:ReportID>
+</Report>
+    END_OF_RDLDATA
+  }
+}
+

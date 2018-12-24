@@ -1,0 +1,230 @@
+OBJECT Codeunit 11102071 OM - Repository TFS
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            TmpFileRec@1000 : TEMPORARY Record 11102094;
+            FileHandler@1001 : Codeunit 11102097;
+            ctConnectionFailed@1002 : TextConst 'DEU=The repository token cannot be found.;ENU=The repository token cannot be found.;ESP=The repository token cannot be found.;FRA=The repository token cannot be found.;NLD=Het repository token kan niet worden gevonden.;DEA=The repository token cannot be found.';
+            ctPathNotFound@1003 : TextConst 'DEU=Path ''%1'' not found.;ENU=Path ''%1'' not found.;ESP=Path ''%1'' not found.;FRA=Path ''%1'' not found.;NLD=Map ''%1'' niet gevonden.;DEA=Path ''%1'' not found.';
+            ctTokenInvalid@1004 : TextConst 'DEU=The token is invalid.;ENU=The token is invalid.;ESP=The token is invalid.;FRA=The token is invalid.;NLD=Het token is niet geldig.;DEA=The token is invalid.';
+          BEGIN
+            GetSetup;
+
+            LastTokenNo := -1;
+
+            GetRecursive;
+
+            IF NOT FileHandler.ClientDirectoryExists(RepositoryPath) THEN
+              ERROR(ctPathNotFound, RepositoryPath);
+
+            FileHandler.GetClientDirectoryContent(TmpFileRec, RepositoryPath);
+            TmpFileRec.SETFILTER(Name, 'TOKEN*');
+            IF NOT TmpFileRec.FINDFIRST THEN
+              ERROR(ctConnectionFailed);
+
+            IF NOT EVALUATE(LastTokenNo, COPYSTR(TmpFileRec.Name, 7)) THEN
+              ERROR(ctTokenInvalid);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      RepositorySetup@1000 : Record 11102085;
+      RepositoryPath@1001 : Text;
+      LastTokenNo@1002 : Integer;
+      Initialized@1003 : Boolean;
+      TFS@1004 : DotNet "'Microsoft.TeamFoundation.Client, Version=12.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.Microsoft.TeamFoundation.Client.TeamFoundationServer" RUNONCLIENT;
+      Workspace@1005 : DotNet "'Microsoft.TeamFoundation.VersionControl.Client, Version=12.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.Microsoft.TeamFoundation.VersionControl.Client.Workspace" RUNONCLIENT;
+      WorkspaceInfo@1006 : DotNet "'Microsoft.TeamFoundation.VersionControl.Client, Version=12.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.Microsoft.TeamFoundation.VersionControl.Client.WorkspaceInfo" RUNONCLIENT;
+      Workstation@1007 : DotNet "'Microsoft.TeamFoundation.VersionControl.Client, Version=12.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.Microsoft.TeamFoundation.VersionControl.Client.Workstation" RUNONCLIENT;
+
+    PROCEDURE FileSave@1(FromFileName@1000 : Text;ToPath@1001 : Text;ToFileName@1002 : Text);
+    VAR
+      FileHandler@1003 : Codeunit 11102097;
+      ToFile@1004 : Text;
+      FileExist@1005 : Boolean;
+    BEGIN
+      GetSetup;
+
+      ToFile := RepositoryPath + ToPath + ToFileName;
+
+      FileExist := FileHandler.ClientFileNameExists(ToFile);
+
+      IF FileExist THEN BEGIN
+        TFSCheckOut(ToFile);
+        TryErase(ToFile, 2, TRUE);
+      END;
+
+      FileHandler.RenameClientFile(FromFileName, ToFile);
+
+      IF NOT FileExist THEN
+        TFSAdd(ToFile);
+      TFSCheckIn(ToFile);
+    END;
+
+    PROCEDURE DeleteFile@2(Path@1000 : Text;FileName@1001 : Text);
+    VAR
+      FileHandler@1002 : Codeunit 11102097;
+      LocalFileName@1003 : Text;
+    BEGIN
+      GetSetup;
+
+      LocalFileName := RepositoryPath + Path + FileName;
+
+      TFSDelete(LocalFileName);
+      TFSCheckIn(LocalFileName);
+
+      IF FileHandler.ClientFileNameExists(LocalFileName) THEN
+        TryErase(LocalFileName, 2, TRUE);
+    END;
+
+    PROCEDURE FileUnlock@3(Path@1000 : Text;FileName@1001 : Text);
+    VAR
+      FileHandler@1002 : Codeunit 11102097;
+      LocalFileName@1003 : Text;
+    BEGIN
+      GetSetup;
+
+      LocalFileName := RepositoryPath + 'Locks\' + FileName;
+
+      TFSDelete(LocalFileName);
+      TFSCheckIn(LocalFileName);
+
+      IF FileHandler.ClientFileNameExists(LocalFileName) THEN
+        TryErase(LocalFileName, 2, TRUE);
+    END;
+
+    PROCEDURE RenameFile@4(FromPath@1000 : Text;FromFileName@1001 : Text;ToPath@1002 : Text;ToFileName@1003 : Text);
+    VAR
+      FileHandler@1004 : Codeunit 11102097;
+      FromFile@1005 : Text;
+      ToFile@1006 : Text;
+      ctTokenFailed@1007 : TextConst 'DEU=Failed to get a token.;ENU=Failed to get a token.;ESP=Failed to get a token.;FRA=Failed to get a token.;NLD=Verkrijgen van token mislukt.;DEA=Failed to get a token.';
+    BEGIN
+      GetSetup;
+
+      FromFile := RepositoryPath + FromPath + FromFileName;
+      ToFile := RepositoryPath + ToPath + ToFileName;
+
+      TFSCheckOut(FromFile);
+      TFSRename(FromFile, ToFile);
+      TFSCheckIn(ToFile);
+
+      IF NOT FileHandler.ClientFileNameExists(ToFile) THEN
+        ERROR(ctTokenFailed);
+    END;
+
+    PROCEDURE AddRecursive@5();
+    BEGIN
+      // skip?
+    END;
+
+    PROCEDURE CheckInRecursive@6();
+    VAR
+      Array2@1000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array" RUNONCLIENT;
+    BEGIN
+      Initialize;
+
+      Array2 := Workspace.GetPendingChanges;
+      IF Array2.Length > 0 THEN
+        Workspace.CheckIn(Workspace.GetPendingChanges, '');
+    END;
+
+    PROCEDURE GetRecursive@7();
+    BEGIN
+      Initialize;
+
+      Workspace.Get;
+    END;
+
+    PROCEDURE GetLastTokenNo@10() : Integer;
+    BEGIN
+      EXIT(LastTokenNo);
+    END;
+
+    LOCAL PROCEDURE GetSetup@12();
+    BEGIN
+      RepositorySetup.GET;
+
+      IF RepositorySetup.RepositoryPath = '' THEN
+        RepositorySetup.TESTFIELD("Repository Path");
+
+      RepositoryPath := RepositorySetup.RepositoryPath;
+
+      IF RepositoryPath[STRLEN(RepositoryPath)] <> '\' THEN
+        RepositoryPath += '\';
+    END;
+
+    LOCAL PROCEDURE TryErase@13(FileName@1000 : Text;NoOfTimes@1001 : Integer;RaiseError@1002 : Boolean);
+    VAR
+      FileHandler@1003 : Codeunit 11102097;
+    BEGIN
+      FileHandler.DeleteClientFile(FileName);
+    END;
+
+    LOCAL PROCEDURE TFSCheckOut@14(FileName@1000 : Text);
+    BEGIN
+      Initialize;
+
+      Workspace.PendEdit(FileName);
+    END;
+
+    LOCAL PROCEDURE TFSCheckIn@15(FileName@1000 : Text);
+    BEGIN
+      CheckInRecursive;
+    END;
+
+    LOCAL PROCEDURE TFSAdd@16(FileName@1000 : Text);
+    BEGIN
+      Initialize;
+
+      Workspace.PendAdd(FileName);
+    END;
+
+    LOCAL PROCEDURE TFSDelete@17(FileName@1000 : Text);
+    BEGIN
+      Initialize;
+
+      Workspace.PendDelete(FileName);
+    END;
+
+    LOCAL PROCEDURE TFSRename@18(FromFileName@1000 : Text;ToFileName@1001 : Text);
+    BEGIN
+      Initialize;
+      Workspace.PendRename(FromFileName, ToFileName);
+    END;
+
+    LOCAL PROCEDURE Initialize@19();
+    BEGIN
+      IF Initialized THEN
+        EXIT;
+
+      GetSetup;
+
+      WorkspaceInfo := Workstation.Current.GetLocalWorkspaceInfo(RepositoryPath);
+
+      TFS := TFS.TeamFoundationServer(FORMAT(WorkspaceInfo.ServerUri));
+      TFS.EnsureAuthenticated;
+
+      Workspace := WorkspaceInfo.GetWorkspace(TFS);
+
+      Initialized := TRUE;
+    END;
+
+    EVENT TFS@1004::CredentialsChanged@39(sender@1000 : Variant;e@1001 : DotNet "'Microsoft.TeamFoundation.Client, Version=12.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.Microsoft.TeamFoundation.Client.CredentialsChangedEventArgs");
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

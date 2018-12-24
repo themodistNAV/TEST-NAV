@@ -1,0 +1,289 @@
+OBJECT Codeunit 9062399 System Palette Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=29/09/15;
+    Time=12:58:37 PM;
+    Version List=NA2016.10;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SystemColour@1000000002 : Record 9062336;
+      SystemPalette@1000000004 : Record 9062430;
+      SystemPaletteColour@1000000000 : Record 9062431;
+      SystemPaletteColourTmp@9062229 : TEMPORARY Record 9062431;
+      Direction@1000000001 : ' ,Up,Down';
+      ColourOrder@1000000003 : Integer;
+
+    PROCEDURE "--- Colours Sequence ---"@1000000002();
+    BEGIN
+    END;
+
+    PROCEDURE MoveColourUp@1000000003(VAR pSystemPaletteColour@1000000000 : Record 9062431) : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Moving colour up (towards lower sequence)
+      //  <> pSystemPaletteColour: The colour
+      //  <- TRUE = Colour moved, FALSE = Not
+
+      EXIT(MoveColour(pSystemPaletteColour, Direction::Up));
+    END;
+
+    PROCEDURE MoveColourDown@1000000004(VAR pSystemPaletteColour@1000000000 : Record 9062431) : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Moving colour down (towards higher sequence)
+      //  <> pSystemPaletteColour: The colour
+      //  <- TRUE = Colour moved, FALSE = Not
+
+      EXIT(MoveColour(pSystemPaletteColour, Direction::Down));
+    END;
+
+    LOCAL PROCEDURE MoveColour@1000000008(VAR pSystemPaletteColour@1000000000 : Record 9062431;pDirection@1000000001 : Integer) : Boolean;
+    VAR
+      lFound@1000000002 : Boolean;
+      lSequenceBuffer@1000000003 : Integer;
+    BEGIN
+      //DOC NA2015.4 - Moving colour up / down
+      //  <> pSystemPaletteColour: The colour
+      //  -> pDirection: Direction (Up / Down)
+      //  <- TRUE = Colour moved, FALSE = Not
+
+      SystemPaletteColour.RESET();
+      SystemPaletteColour.SETCURRENTKEY("Palette Code", Sequence);
+      SystemPaletteColour.SETRANGE("Palette Code", pSystemPaletteColour."Palette Code");
+      SystemPaletteColour.SETFILTER(ID, '<>%1', pSystemPaletteColour.ID);
+      CASE (pDirection) OF
+        Direction::Up:
+          BEGIN
+            SystemPaletteColour.SETFILTER(Sequence, '<%1', pSystemPaletteColour.Sequence);
+            lFound := SystemPaletteColour.FINDLAST();
+          END;
+        Direction::Down:
+          BEGIN
+            SystemPaletteColour.SETFILTER(Sequence, '>%1', pSystemPaletteColour.Sequence);
+            lFound := SystemPaletteColour.FINDFIRST();
+          END;
+      END;
+
+      IF (lFound) THEN
+      BEGIN
+        lSequenceBuffer := SystemPaletteColour.Sequence;
+        SystemPaletteColour.Sequence := pSystemPaletteColour.Sequence;
+        SystemPaletteColour.MODIFY(TRUE);
+        pSystemPaletteColour.Sequence := lSequenceBuffer;
+      END;
+
+      EXIT(lFound);
+    END;
+
+    PROCEDURE "--- Bulk-Adding Colours ---"@1000000000();
+    BEGIN
+    END;
+
+    PROCEDURE AddColours@1000000001(pSystemPalette@1000000000 : Record 9062430) : Boolean;
+    VAR
+      lSystemColourList@1000000001 : Page 9062398;
+      lResult@1000000002 : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Adding colours to the palette passed
+      //  -> pSystemPalette: The palette
+      //  <- TRUE = Colours added, FALSE = Cancelled
+
+      lResult := FALSE;
+
+      SystemColour.RESET();
+      SystemColour.FILTERGROUP(2);
+      SystemColour.SETRANGE("Special Colour", SystemColour."Special Colour"::" ");
+      SystemColour.FILTERGROUP(0);
+
+      CLEAR(lSystemColourList);
+      lSystemColourList.SETTABLEVIEW(SystemColour);
+      lSystemColourList.LOOKUPMODE(TRUE);
+      IF (lSystemColourList.RUNMODAL() = ACTION::LookupOK) THEN
+      BEGIN
+        lSystemColourList.GetSelectionFilter(SystemColour);
+        IF (SystemColour.FINDSET()) THEN
+        REPEAT
+          SystemPaletteColour.RESET();
+          SystemPaletteColour.SETRANGE("Palette Code", pSystemPalette.Code);
+          SystemPaletteColour.SETRANGE("Colour Code", SystemColour.Code);
+          IF (SystemPaletteColour.ISEMPTY) THEN
+          BEGIN
+            CLEAR(SystemPaletteColour);
+            SystemPaletteColour.INIT();
+            SystemPaletteColour.VALIDATE("Palette Code", pSystemPalette.Code);
+            SystemPaletteColour.VALIDATE("Colour Code", SystemColour.Code);
+            SystemPaletteColour.INSERT(TRUE);
+            lResult := TRUE;
+          END;
+        UNTIL (SystemColour.NEXT() = 0);
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE "--- Colouring ---"@1000000005();
+    BEGIN
+    END;
+
+    PROCEDURE StartColouring@1000000006(pPaletteCode@1000000001 : Code[20];pColourOrder@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.4 - Starting colouring with the palette
+      //  -> pPaletteCode: Palette code
+      //  -> pColourOrder: Colour order to use
+
+      SystemPalette.GET(pPaletteCode);
+      ColourOrder := pColourOrder;
+
+      PrepareColouringBuffer();
+
+      SystemPaletteColourTmp.FINDSET();
+    END;
+
+    PROCEDURE NextColour@1000000007() : Code[20];
+    VAR
+      lColourCode@1000000000 : Code[20];
+    BEGIN
+      //DOC NA2015.4 - Returning next colour from the palette
+      //  <- The colour
+
+      lColourCode := SystemPaletteColourTmp."Colour Code";
+
+      IF (SystemPaletteColourTmp.NEXT() = 0) THEN
+        CASE (ColourOrder) OF
+          SystemPalette."Colour Order"::"Reversed Sequence":
+            BEGIN
+              ColourOrder := SystemPalette."Colour Order"::"In Sequence";
+              PrepareColouringBuffer();
+              SystemPaletteColourTmp.FINDSET();
+              SystemPaletteColourTmp.NEXT();
+            END;
+          SystemPalette."Colour Order"::Random:
+            BEGIN
+              PrepareColouringBuffer();
+              SystemPaletteColourTmp.FINDSET();
+            END;
+          SystemPalette."Colour Order"::First,
+          SystemPalette."Colour Order"::Last:
+            ;
+          ELSE
+            BEGIN
+              ColourOrder := SystemPalette."Colour Order"::"Reversed Sequence";
+              PrepareColouringBuffer();
+              SystemPaletteColourTmp.FINDSET();
+              SystemPaletteColourTmp.NEXT();
+            END;
+        END;
+
+      EXIT(lColourCode);
+    END;
+
+    PROCEDURE NewColour@9062229(pPaletteCode@9062231 : Code[20];pColourOrder@9062230 : Integer;pColourCode@9062229 : Code[20]) : Code[20];
+    VAR
+      lFound@9062232 : Boolean;
+    BEGIN
+      //DOC NF2016.10 - Returning new colour
+      //  -> pPaletteCode: Palette code
+      //  -> pColourOrder: Colour order to use
+      //  -> pColourCode: Current colour code
+      //  <- New colour code
+
+      StartColouring(pPaletteCode, pColourOrder);
+
+      IF (pColourCode <> '') THEN
+      BEGIN
+        SystemPaletteColourTmp.SETRANGE("Colour Code", pColourCode);
+        lFound := SystemPaletteColourTmp.FINDFIRST();
+        SystemPaletteColourTmp.SETRANGE("Colour Code");
+        IF ( NOT (lFound)) THEN
+          SystemPaletteColourTmp.FINDFIRST();
+      END;
+
+      NextColour();
+
+      EXIT(SystemPaletteColourTmp."Colour Code");
+    END;
+
+    LOCAL PROCEDURE PrepareColouringBuffer@1000000009();
+    VAR
+      lCount@1000000001 : Integer;
+      lId@1000000000 : Integer;
+      eNoColours@1000000002 : TextConst 'ENU=Palette "%1" has no colours.;ENG=Palette "%1" has no colours.';
+      lFound@9062229 : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Preparing colouring buffer
+
+      SystemPaletteColourTmp.RESET();
+      SystemPaletteColourTmp.DELETEALL();
+
+      SystemPaletteColour.RESET();
+      SystemPaletteColour.SETCURRENTKEY("Palette Code", Sequence);
+      SystemPaletteColour.SETRANGE("Palette Code", SystemPalette.Code);
+      SystemPaletteColour.SETFILTER("Colour Code", '<>''''');
+
+      IF (ColourOrder IN [SystemPalette."Colour Order"::First, SystemPalette."Colour Order"::Last]) THEN
+      BEGIN
+        CASE (ColourOrder) OF
+          SystemPalette."Colour Order"::First:
+            lFound := SystemPaletteColour.FINDFIRST();
+          SystemPalette."Colour Order"::Last:
+            lFound := SystemPaletteColour.FINDLAST();
+        END;
+        IF (lFound) THEN
+        BEGIN
+          SystemPaletteColourTmp := SystemPaletteColour;
+          SystemPaletteColourTmp.INSERT();
+        END;
+      END
+      ELSE
+      BEGIN
+        lCount := SystemPaletteColour.COUNT;
+        CASE (ColourOrder) OF
+          SystemPalette."Colour Order"::"Reversed Sequence":
+            lId := lCount;
+          SystemPalette."Colour Order"::Random:
+            BEGIN
+              RANDOMIZE();
+              lId := RANDOM(1000000);
+            END;
+          ELSE
+            lId := 1;
+        END;
+        IF (SystemPaletteColour.FINDSET()) THEN
+        REPEAT
+          SystemPaletteColourTmp := SystemPaletteColour;
+          SystemPaletteColourTmp.ID := lId;
+          SystemPaletteColourTmp.INSERT();
+          CASE (ColourOrder) OF
+            SystemPalette."Colour Order"::"Reversed Sequence":
+              lId -= 1;
+            SystemPalette."Colour Order"::Random:
+              REPEAT
+                lId := RANDOM(1000000);
+              UNTIL ( NOT (SystemPaletteColourTmp.GET(SystemPalette.Code, lId)));
+            ELSE
+              lId += 1;
+          END;
+        UNTIL (SystemPaletteColour.NEXT() = 0);
+      END;
+
+      SystemPaletteColourTmp.RESET();
+      IF (SystemPaletteColourTmp.ISEMPTY) THEN
+        ERROR(eNoColours, SystemPalette.Code);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.4  JH 30/01/2015 - Created
+      //DOC NA2016.10 JH 28/08/2015 - Upgraded to 2016
+    }
+    END.
+  }
+}
+

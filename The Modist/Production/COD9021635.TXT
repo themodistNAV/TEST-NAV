@@ -1,0 +1,186 @@
+OBJECT Codeunit 9021635 Label Stat
+{
+  OBJECT-PROPERTIES
+  {
+    Date=15/10/12;
+    Time=12:00:00 PM;
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            //Change this to false if you are running it automatically
+            StartMode := TRUE;
+
+            IF StartMode THEN BEGIN
+              RunDate := 081108D;
+              IF RunDate < TODAY THEN
+                REPEAT
+                  LabelLoop(RunDate);
+                  RunDate := CALCDATE('<1M>',RunDate);
+                UNTIL RunDate > TODAY;
+            END ELSE BEGIN
+              IF TIME > 070000T THEN
+                EXIT;
+              LabelLoop(TODAY);
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      LabelStats@1040000 : Record 9021621;
+      LabelStats1@1040008 : Record 9021621;
+      ExpandITOrderHead@1040016 : Record 9021666;
+      ExpandITOrderLine@1040017 : Record 9021667;
+      IntCust@1040004 : Record 9021642;
+      GLAccount@1040015 : Record 15;
+      Label@1040018 : Record 9021618;
+      Label1@1040019 : Record 9021618;
+      Y@1040001 : Integer;
+      M@1040002 : Integer;
+      PrevY@1040011 : Integer;
+      PrevM@1040012 : Integer;
+      NoNewCustOverLast3Months@1040010 : Integer;
+      StartDate@1040006 : Date;
+      EndDate@1040007 : Date;
+      RunDate@1040014 : Date;
+      StartMode@1040013 : Boolean;
+      SalesAccountStart@1040005 : Code[20];
+      SalesAccountEnd@1040009 : Code[20];
+
+    PROCEDURE LabelLoop@1040001(InputDate@1040000 : Date);
+    BEGIN
+      Label.RESET;
+      Label.SETRANGE("Used-in Company",COMPANYNAME);
+      Label.SETFILTER("Day of Month to Run Web Stats",'<>%1',0);
+      IF Label.FIND('-') THEN
+      REPEAT
+        StartDate := CALCDATE('<-1M+CM+1D-1M>',InputDate);
+        IF DATE2DMY(StartDate,2) = Label."Next Month to Run Web Stats" THEN BEGIN
+          IF DATE2DMY(InputDate,1) >= Label."Day of Month to Run Web Stats" THEN BEGIN
+            SalesAccountStart := Label."Sales Account Start";
+            SalesAccountEnd := Label."Sales Account End";
+            IF (SalesAccountStart <> '') AND (SalesAccountEnd <> '') THEN BEGIN
+              EndDate := CALCDATE('<-1M+CM>',InputDate);
+              Y :=  DATE2DMY(StartDate,3) - 2000;
+              M :=  DATE2DMY(StartDate,2);
+              Code;
+              Label1 := Label;
+              IF Label."Next Month to Run Web Stats" = 12 THEN
+                Label1."Next Month to Run Web Stats" := 1
+              ELSE
+                Label1."Next Month to Run Web Stats" := Label."Next Month to Run Web Stats" + 1;
+              Label1.MODIFY;
+            END;
+          END;
+        END;
+      UNTIL Label.NEXT = 0;
+    END;
+
+    PROCEDURE Code@1040000();
+    BEGIN
+      IF NOT LabelStats.GET(Label.Code,Y,M) THEN BEGIN
+        LabelStats.INIT;
+        LabelStats."Label Code" := Label.Code;
+        LabelStats.Y := Y;
+        LabelStats.M := M;
+
+        ExpandITOrderLine.RESET;
+        ExpandITOrderLine.SETCURRENTKEY("Order Guid","Line No.");
+        ExpandITOrderHead.RESET;
+        ExpandITOrderHead.SETCURRENTKEY("Order Date");
+        ExpandITOrderHead.SETRANGE("Order Date",StartDate,EndDate);
+        ExpandITOrderHead.SETRANGE("Label Code",Label.Code);
+        IF ExpandITOrderHead.FIND('-') THEN
+        REPEAT
+          IntCust.GET(ExpandITOrderHead."Bill-to Net Customer No.");
+          IF IntCust."Date First Ordered" <> 0D THEN
+            IF CALCDATE('<3M>',IntCust."Date First Ordered") > ExpandITOrderHead."Order Date" THEN
+              LabelStats."Sales from New Cust." := LabelStats."Sales from New Cust." + ExpandITOrderHead.Amount -
+                                                ExpandITOrderHead."Invoice Discount";
+          LabelStats."Internet Sales" := LabelStats."Internet Sales" + ExpandITOrderHead.Amount -
+                           ExpandITOrderHead."Invoice Discount";
+          LabelStats.Shipping := LabelStats.Shipping +ExpandITOrderHead."Shipping Amount";
+          IF ExpandITOrderHead."Shipping Amount" = 0 THEN
+            LabelStats."No. No Shipping" := LabelStats."No. No Shipping" +1;
+          LabelStats."No. Orders" := LabelStats."No. Orders" + 1;
+          ExpandITOrderLine.SETRANGE("Order Guid",ExpandITOrderHead."Order Guid");
+          IF ExpandITOrderLine.FIND('-') THEN
+          REPEAT
+            LabelStats."No. Items" := LabelStats."No. Items" + ExpandITOrderLine.Quantity;
+          UNTIL ExpandITOrderLine.NEXT = 0;
+          LabelStats."No. Lines" := LabelStats."No. Lines" + ExpandITOrderLine.COUNT;
+        UNTIL ExpandITOrderHead.NEXT = 0;
+
+        GLAccount.RESET;
+        GLAccount.SETFILTER("No.",'%1..%2',SalesAccountStart,SalesAccountEnd);
+        GLAccount.SETRANGE("Account Type",GLAccount."Account Type"::Posting);
+        IF GLAccount.FIND('-') THEN
+        REPEAT
+          GLAccount.SETRANGE("Date Filter",StartDate,EndDate);
+          GLAccount.CALCFIELDS("Net Change");
+          LabelStats."All Sales" := LabelStats."All Sales" - GLAccount."Net Change";
+        UNTIL GLAccount.NEXT = 0;
+
+        IF LabelStats."No. Orders" <> 0 THEN BEGIN
+          LabelStats."Av. Lines per order" := LabelStats."No. Lines" / LabelStats."No. Orders";
+          LabelStats."Av. Items per order" := LabelStats."No. Items" / LabelStats."No. Orders";
+          LabelStats."Percent No Shipping" := LabelStats."No. No Shipping" / LabelStats."No. Orders" * 100;
+        END;
+        IF  LabelStats."No. Items" <> 0 THEN
+          LabelStats."Av. Item Sell Price" := LabelStats."Internet Sales" / LabelStats."No. Items";
+        IF (LabelStats."No. Orders" - LabelStats."No. No Shipping") <> 0 THEN
+          LabelStats."Av. Shipping" := LabelStats.Shipping /
+                                    (LabelStats."No. Orders" - LabelStats."No. No Shipping");
+
+        IntCust.RESET;
+        IntCust.SETCURRENTKEY("Customer No.");
+        IntCust.SETFILTER("Customer No.",'<>%1','');
+        LabelStats."No. Custs" := IntCust.COUNT;
+        IntCust.SETRANGE("Date First Ordered",StartDate,EndDate);
+        LabelStats."No. New Custs This Month" := IntCust.COUNT;
+        LabelStats."No. New Custs 3 Months" := LabelStats."No. New Custs This Month";
+        IF M = 1 THEN BEGIN
+          PrevM := 12;
+          PrevY := Y - 1;
+        END ELSE BEGIN
+          PrevM := M -1;
+          PrevY := Y;
+        END;
+        IF LabelStats1.GET(Label.Code,PrevY,PrevM) THEN BEGIN
+          LabelStats."No. New Custs 3 Months" := LabelStats."No. New Custs 3 Months" + LabelStats1."No. New Custs This Month";
+          IF PrevM = 1 THEN BEGIN
+            PrevM := 12;
+            PrevY := PrevY - 1;
+          END ELSE BEGIN
+            PrevM := PrevM -1;
+            PrevY := PrevY;
+          END;
+          IF LabelStats1.GET(Label.Code,PrevY,PrevM) THEN
+            LabelStats."No. New Custs 3 Months" := LabelStats."No. New Custs 3 Months" + LabelStats1."No. New Custs This Month";
+          END;
+        IntCust.SETRANGE("Date First Ordered");
+        IntCust.SETFILTER("Date Last Ordered",'<%1&<>%2',CALCDATE('<-1D-1Y>',StartDate),0D);
+        LabelStats."No. Dead Custs" := IntCust.COUNT;
+        LabelStats."No. Active Custs" := LabelStats."No. Custs" - LabelStats."No. Dead Custs";
+        IF LabelStats."No. Active Custs" <> 0 THEN
+          LabelStats."Av. Sale per Active Cust." := LabelStats."Internet Sales" / LabelStats."No. Active Custs";
+        IF LabelStats."No. New Custs 3 Months" <> 0 THEN
+          LabelStats."Av. Sale from a New Cust." := LabelStats."Sales from New Cust." / LabelStats."No. New Custs 3 Months";
+        IF LabelStats."All Sales" <> 0 THEN
+          LabelStats."Percent of Sales from Internet" := LabelStats."Internet Sales" / LabelStats."All Sales" * 100;
+        LabelStats.INSERT;
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC EC2013.3.20 MQ 15/10/2012 - GW121015 Make CalcDate Multilanguage
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,571 @@
+OBJECT Codeunit 50004 Inventory Integration Mgmt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=17/12/18;
+    Time=[ 6:36:12 PM];
+    Modified=Yes;
+    Version List=TM6000;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Platform@1170000002 : Record 50003;
+      Location@1170000000 : Record 14;
+      Actions@1170000003 : Record 50025;
+      PlatformInventoryLocation@1170000005 : Record 50034;
+      ItemLedgerEntry@1170000008 : Record 32;
+      InternetOrderLine@1170000007 : Record 9021667;
+      SalesHeader@1170000014 : Record 36;
+      SalesLine@1170000006 : Record 37;
+      TmpSalesLine@1170000015 : TEMPORARY Record 37;
+      PurchaseLine@1170000010 : Record 39;
+      ItemDistribution@1170000009 : Record 50026;
+      TransferHeader@1170000013 : Record 5740;
+      TmpTransferHeader@1170000019 : TEMPORARY Record 5740;
+      TransferLine@1170000011 : Record 5741;
+      DataTypeManagement@1170000004 : Codeunit 701;
+      AvailabletoPromise@1170000012 : Codeunit 5790;
+      Text000@1170000017 : TextConst 'ENU=Sales Lines not set.';
+      Text001@1170000016 : TextConst 'ENU=Platform doesn''t have Inventory Locations. Please contact the system admin.';
+      TmpLineNo@1170000018 : Integer;
+      Text002@1170000020 : TextConst 'ENU=Order %1 Sent to WMS';
+      Text003@1170000021 : TextConst 'ENU=Order %1 is on hold as stock is available in other sealable locations. Transfer Orders are created automatically and sent to WMS.';
+      OnHoldText@1170000022 : TextConst 'ENU=ON HOLD';
+
+    PROCEDURE SendSalesOrderToWMS@1170000008(VAR pSalesHeader@1170000000 : Record 36) : Boolean;
+    VAR
+      lIntegrationProcessProcessor@1170000002 : Codeunit 50005;
+      lAvailableLocation@1170000003 : Code[10];
+      lTextMsg@1170000001 : Text;
+    BEGIN
+      WITH pSalesHeader DO BEGIN
+        IF "Document Type" <> "Document Type"::Order THEN
+          EXIT;
+        InitTmpVariables;
+
+        SalesLine.RESET;
+        SalesLine.SETRANGE("Document Type","Document Type");
+        SalesLine.SETRANGE("Document No.","No.");
+        SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+        IF SalesLine.FINDSET THEN BEGIN
+          GetSalesHeader(SalesLine);
+          REPEAT
+            IF NOT ItemAvailableForFullfillmentInLocation(SalesLine) THEN
+              ItemAvailableForFullfillmentInOtherLocations(SalesLine)
+          UNTIL SalesLine.NEXT=0;
+
+          TmpSalesLine.RESET;
+          IF TmpSalesLine.ISEMPTY THEN BEGIN
+            lIntegrationProcessProcessor.Add3PLOrder(pSalesHeader);
+            lTextMsg := STRSUBSTNO(Text002,"No.");
+          END ELSE BEGIN
+            CreateTransLine;
+            lTextMsg := STRSUBSTNO(Text003,"No.");
+            "Order Status" := OnHoldText;
+            MODIFY;
+          END;
+
+          IF GUIALLOWED THEN
+            MESSAGE(lTextMsg);
+        END;
+      END;
+    END;
+
+    PROCEDURE ItemAvailableForFullfillmentInLocation@1170000014(pSalesLine@1170000004 : Record 37) : Boolean;
+    VAR
+      lItem@1170000005 : Record 27;
+      lInventory@1170000000 : Decimal;
+      lGrossReq@1170000001 : Decimal;
+      lNetInventory@1170000002 : Decimal;
+    BEGIN
+      WITH pSalesLine DO BEGIN
+        lNetInventory := CalculateEcommInventory(pSalesLine) + Quantity;
+
+        EXIT((lNetInventory >= Quantity) AND (lNetInventory > 0));
+      END;
+    END;
+
+    PROCEDURE ItemPartiallyAvailableForFullfillmentInLocation@1170000024(VAR pSalesLine@1170000004 : Record 37;pFullfilmentLocation@1170000001 : Code[10];pPlatformInvLocation@1170000003 : Code[10]) : Boolean;
+    VAR
+      lNetLocationInventory@1170000002 : Decimal;
+      lSalesQty@1170000000 : Decimal;
+    BEGIN
+      WITH pSalesLine DO BEGIN
+        lSalesQty := 0;
+
+        "Location Code" := pPlatformInvLocation;
+        lNetLocationInventory := CalculateEcommInventory(pSalesLine);
+
+        IF lNetLocationInventory > 0 THEN BEGIN
+          IF Quantity >= lNetLocationInventory THEN BEGIN
+            lSalesQty := lNetLocationInventory;
+            Quantity -= lNetLocationInventory;
+          END ELSE BEGIN
+            lSalesQty := Quantity;
+            Quantity := 0;
+          END;
+
+          IF lSalesQty > 0 THEN BEGIN
+            TmpSalesLine.INIT;
+            TmpSalesLine := pSalesLine;
+            TmpSalesLine."Main Line No." := "Line No.";
+            TmpSalesLine."Line No." := TmpLineNo;
+            TmpSalesLine.Quantity := lSalesQty;
+            TmpSalesLine."Location Code" := pFullfilmentLocation;
+            TmpSalesLine."Store Allocation Code" := pPlatformInvLocation;
+            TmpSalesLine.INSERT;
+            TmpLineNo += 10000;
+          END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ItemAvailableForFullfillmentInOtherLocations@1170000015(VAR pSalesLine@1170000000 : Record 37);
+    BEGIN
+      WITH pSalesLine DO BEGIN
+        GetSalesHeader(pSalesLine);
+        GetSalesOrderPlatformInvLocations(SalesHeader);
+
+        PlatformInventoryLocation.FINDSET;
+        REPEAT
+          ItemPartiallyAvailableForFullfillmentInLocation(pSalesLine,pSalesLine."Location Code",PlatformInventoryLocation."Location Code");
+        UNTIL (PlatformInventoryLocation.NEXT=0) OR (Quantity <= 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE CalculateEcommInventory@1170000032(pSalesLine@1170000000 : Record 37) : Decimal;
+    VAR
+      lItem@1170000005 : Record 27;
+      lInventory@1170000004 : Decimal;
+      lNetInventory@1170000001 : Decimal;
+      lGrossReq@1170000003 : Decimal;
+    BEGIN
+      WITH pSalesLine DO BEGIN
+        lInventory := 0;
+        lGrossReq := 0;
+        lNetInventory := 0;
+
+        lItem.GET(pSalesLine."No.");
+        lItem.SETFILTER("Variant Filter","Variant Code");
+        lItem.SETFILTER("Location Filter","Location Code");
+
+        lNetInventory := AvailabletoPromise.QtyAvailabletoEcomm(lItem,lInventory,lGrossReq);
+
+        EXIT(lNetInventory);
+      END;
+    END;
+
+    PROCEDURE CreateTransHeaderFromSalesHeader@23();
+    BEGIN
+      WITH TmpSalesLine DO BEGIN
+        TmpTransferHeader.RESET;
+        TmpTransferHeader.SETRANGE("Transfer-from Code","Store Allocation Code");
+        TmpTransferHeader.SETRANGE("Transfer-to Code","Location Code");
+        IF TmpTransferHeader.FINDFIRST THEN
+          TransferHeader."No." := TmpTransferHeader."No."
+        ELSE BEGIN
+          TransferHeader.INIT;
+          TransferHeader."No." := '';
+          TransferHeader."Posting Date" := WORKDATE;
+          TransferHeader.INSERT(TRUE);
+          TransferHeader.VALIDATE("Transfer-from Code","Store Allocation Code");
+          TransferHeader.VALIDATE("Transfer-to Code","Location Code");
+          TransferHeader."Receipt Date" := TransferHeader."Posting Date";
+          TransferHeader."Shipment Date" := TransferHeader."Posting Date";
+          TransferHeader."Shortcut Dimension 1 Code" := "Shortcut Dimension 1 Code";
+          TransferHeader."Shortcut Dimension 2 Code" := "Shortcut Dimension 2 Code";
+          TransferHeader."Dimension Set ID" := "Dimension Set ID";
+          TransferHeader."External Document No." := "Document No.";
+          TransferHeader.MODIFY;
+          TmpTransferHeader := TransferHeader;
+          TmpTransferHeader.INSERT;
+        END;
+      END;
+    END;
+
+    PROCEDURE CreateTransLine@24();
+    VAR
+      TransLine@1002 : Record 5741;
+      NextLineNo@1003 : Integer;
+    BEGIN
+      WITH TmpSalesLine DO BEGIN
+        RESET;
+        FINDSET;
+        REPEAT
+          IF ("Store Allocation Code" <> TransferHeader."Transfer-from Code") OR
+             ("Location Code" <> TransferHeader."Transfer-to Code")
+          THEN
+            CreateTransHeaderFromSalesHeader;
+
+          TransLine.SETRANGE("Document No.",TransferHeader."No.");
+          IF TransLine.FINDLAST THEN
+            NextLineNo := TransLine."Line No." + 10000
+          ELSE
+            NextLineNo := 10000;
+
+          TransLine.INIT;
+          TransLine."Document No." := TransferHeader."No.";
+          TransLine."Line No." := NextLineNo;
+          TransLine.VALIDATE("Item No.","No.");
+          TransLine.Description := Description;
+          TransLine."Description 2" := "Description 2";
+          TransLine.VALIDATE("Variant Code","Variant Code");
+          TransLine.VALIDATE("Transfer-from Code","Store Allocation Code");
+          TransLine.VALIDATE("Transfer-to Code","Location Code");
+          TransLine.VALIDATE(Quantity,Quantity);
+          TransLine.VALIDATE("Unit of Measure Code","Unit of Measure Code");
+          TransLine."Shortcut Dimension 1 Code" := "Shortcut Dimension 1 Code";
+          TransLine."Shortcut Dimension 2 Code" := "Shortcut Dimension 2 Code";
+          TransLine."Dimension Set ID" := "Dimension Set ID";
+          TransLine."Receipt Date" := "Posting Date";
+          TransLine."Shipment Date" := "Posting Date";
+          TransLine.INSERT;
+        UNTIL NEXT=0;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetSalesOrderPlatformInvLocations@1170000038(pSalesHeader@1170000000 : Record 36);
+    BEGIN
+      WITH pSalesHeader DO BEGIN
+        //This function logic should be changed in the future, Platform information should be availabe with Order information
+        Platform.RESET;
+        IF "Farfetch Order" THEN
+          Platform.SETRANGE("Site Platform",Platform."Site Platform"::Farfetch)
+        ELSE
+          Platform.SETRANGE("Site Platform",Platform."Site Platform"::DemandWare);
+        Platform.FINDFIRST;
+
+        PlatformInventoryLocation.RESET;
+        PlatformInventoryLocation.SETRANGE("Platform Code",Platform.Code);
+        IF PlatformInventoryLocation.ISEMPTY THEN
+          ERROR(Text001);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetSalesHeader@1170000025(pSalesLine@1170000000 : Record 37);
+    BEGIN
+      WITH SalesLine DO BEGIN
+        IF SalesLine.ISEMPTY THEN
+          ERROR(Text000);
+        IF ("Document Type" <> SalesHeader."Document Type") OR ("Document No." <> SalesHeader."No.") THEN
+          SalesHeader.GET("Document Type","Document No.");
+      END;
+    END;
+
+    LOCAL PROCEDURE InitTmpVariables@1170000030();
+    BEGIN
+      TmpSalesLine.RESET;
+      TmpSalesLine.DELETEALL;
+      TmpLineNo := 10000;
+
+      TmpTransferHeader.RESET;
+      TmpTransferHeader.DELETEALL;
+    END;
+
+    PROCEDURE CreateStockSyncAction@1170000003(pVariant@1170000000 : Variant;pMode@1170000001 : Integer);
+    VAR
+      lItem@1170000009 : Record 27;
+      lItemVariant@1170000010 : Record 5401;
+      lRecRef@1170000002 : RecordRef;
+      lLocationCode@1170000005 : Code[10];
+      lItemNo@1170000006 : Code[20];
+      lVariantCode@1170000007 : Code[10];
+      lSkipThisSite@1170000008 : Boolean;
+    BEGIN
+      //pMode (0 = Insert, 1 = Modify, 2 = Delete)
+      DataTypeManagement.GetRecordRef(pVariant,lRecRef);
+
+      WITH lRecRef DO BEGIN
+        IF ISTEMPORARY THEN
+          EXIT;
+
+        IF NOT ValidateIntegrationSetups THEN
+          EXIT;
+
+        lItemNo := '';
+        lVariantCode := '';
+        lLocationCode := '';
+        IF NOT ValidateAndGetRecordForAction(lRecRef,lItemNo,lVariantCode,lLocationCode) THEN
+          EXIT;
+
+        Platform.FINDSET;
+        REPEAT
+          lSkipThisSite := FALSE;
+          IF PlatformInventoryLocation.GET(Platform.Code,lLocationCode) THEN BEGIN
+            CASE Platform."Distribution Type" OF
+              Platform."Distribution Type"::"All Items":
+                lSkipThisSite := FALSE;
+              Platform."Distribution Type"::"Distribution List":
+                BEGIN
+                  IF NOT ItemDistribution.GET(PlatformInventoryLocation."Platform Code",lItemNo,lVariantCode) THEN
+                    IF NOT ItemDistribution.GET(PlatformInventoryLocation."Platform Code",lItemNo,'') THEN
+                      lSkipThisSite := TRUE;
+                END;
+            END;
+          END ELSE
+            lSkipThisSite := TRUE;
+
+          IF NOT lSkipThisSite THEN BEGIN
+            CASE Platform."Item Action Type" OF
+              Platform."Item Action Type"::"Actioned Item":
+                BEGIN
+                  lItem.GET(lItemNo);
+                  CreateAction(lItem.RECORDID,lRecRef.RECORDID,Platform."Stock Synch. Process Code",pMode);
+                END;
+              Platform."Item Action Type"::"Actioned Item\Variant":
+                BEGIN
+                  IF lVariantCode <> '' THEN BEGIN
+                    lItemVariant.GET(lItemNo,lVariantCode);
+                    CreateAction(lItemVariant.RECORDID,lRecRef.RECORDID,Platform."Stock Synch. Process Code",pMode);
+                  END;
+                END;
+              Platform."Item Action Type"::"All Item Variants":
+                BEGIN
+                  lItemVariant.RESET;
+                  lItemVariant.SETRANGE("Item No.",lItemNo);
+                  lItemVariant.FINDSET;
+                  REPEAT
+                    CreateAction(lItemVariant.RECORDID,lRecRef.RECORDID,Platform."Stock Synch. Process Code",pMode);
+                  UNTIL lItemVariant.NEXT=0;
+                END;
+            END;
+          END;
+        UNTIL Platform.NEXT=0;
+      END;
+    END;
+
+    LOCAL PROCEDURE ValidateAndGetRecordForAction@1170000012(pRecRef@1170000000 : RecordRef;VAR pItemNo@1170000003 : Code[20];VAR pVariantCode@1170000004 : Code[10];VAR pLocationCode@1170000001 : Code[10]) : Boolean;
+    VAR
+      lInternetOrderHeader@1170000002 : Record 9021666;
+    BEGIN
+      WITH pRecRef DO BEGIN
+        ClearRecordSets;
+        CASE NUMBER OF
+          DATABASE::"Item Ledger Entry":
+            BEGIN
+              SETTABLE(ItemLedgerEntry);
+              pLocationCode := ItemLedgerEntry."Location Code";
+              pItemNo := ItemLedgerEntry."Item No.";
+              pVariantCode := ItemLedgerEntry."Variant Code"
+            END;
+          DATABASE::"Internet Order Line":
+            BEGIN
+              SETTABLE(InternetOrderLine);
+              IF NOT lInternetOrderHeader.GET(InternetOrderLine."Order Guid") THEN
+                EXIT;
+              IF (InternetOrderLine.Type <> InternetOrderLine.Type::Item) OR
+                 (lInternetOrderHeader."Inventory Location" = '')
+              THEN
+                EXIT(FALSE);
+              pLocationCode := lInternetOrderHeader."Inventory Location";
+              pItemNo := InternetOrderLine."No.";
+              pVariantCode := InternetOrderLine."Variant Code";
+            END;
+          DATABASE::"Sales Line":
+            BEGIN
+              SETTABLE(SalesLine);
+              IF ((SalesLine."Document Type" <> SalesLine."Document Type"::Order) AND
+                 (SalesLine."Document Type" <> SalesLine."Document Type"::Invoice)) OR
+                 (SalesLine.Type <> SalesLine.Type::Item) OR
+                 (SalesLine."No." = '') OR
+                 (SalesLine."Location Code" = '')
+              THEN
+                EXIT(FALSE);
+              pLocationCode := SalesLine."Location Code";
+              pItemNo := SalesLine."No.";
+              pVariantCode := SalesLine."Variant Code";
+            END;
+          DATABASE::"Purchase Line":
+            BEGIN
+              SETTABLE(PurchaseLine);
+              IF ((PurchaseLine."Document Type" <> PurchaseLine."Document Type"::"Return Order") AND
+                 (PurchaseLine."Document Type" <> PurchaseLine."Document Type"::"Credit Memo")) OR
+                 (PurchaseLine.Type <> PurchaseLine.Type::Item) OR
+                 (PurchaseLine."No." = '') OR
+                 (PurchaseLine."Location Code" = '')
+              THEN
+                EXIT(FALSE);
+              pLocationCode := PurchaseLine."Location Code";
+              pItemNo := PurchaseLine."No.";
+              pVariantCode := PurchaseLine."Variant Code";
+            END;
+          DATABASE::"Transfer Line":
+             BEGIN
+               SETTABLE(TransferLine);
+               IF (TransferLine."Item No." = '') OR
+                  (TransferLine."Transfer-from Code" = '')
+               THEN
+                 EXIT(FALSE);
+               pLocationCode := TransferLine."Transfer-from Code";
+               pItemNo := TransferLine."Item No.";
+               pVariantCode := TransferLine."Variant Code";
+             END;
+          ELSE
+            EXIT(FALSE);
+        END;
+        EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateAction@1170000009(pRecID@1170000000 : RecordID;pActionRecord@1170000003 : RecordID;pProcessCode@1170000001 : Code[20];pMode@1170000002 : Integer);
+    BEGIN
+      //pMode (0 = Insert, 1 = Modify, 2 = Delete)
+      WITH Actions DO BEGIN
+        RESET;
+        SETCURRENTKEY("Record ID","Process Code",Status);
+        SETRANGE("Record ID",pRecID);
+        SETRANGE("Process Code",pProcessCode);
+        SETRANGE(Status,Status::Pending);
+        IF NOT ISEMPTY THEN
+          EXIT;
+        RESET;
+
+        "Entry No." := 0;
+        "Record ID" := pRecID;
+        "Process Code" := pProcessCode;
+        CASE pMode OF
+          0: Action := Action::Insert;
+          1: Action := Action::Update;
+          2: Action := Action::Delete;
+        END;
+        "Action Record Location" := pActionRecord;
+        Status := Status::Pending;
+        "Entry Date" := TODAY;
+        "Entry Time" := TIME;
+        "Entry User ID" := USERID;
+        INSERT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE ClearRecordSets@1170000022();
+    BEGIN
+      CLEAR(ItemLedgerEntry);
+      CLEAR(SalesLine);
+      CLEAR(InternetOrderLine);
+      CLEAR(PurchaseLine);
+      CLEAR(TransferLine);
+    END;
+
+    LOCAL PROCEDURE ValidateIntegrationSetups@1170000028() : Boolean;
+    BEGIN
+      PlatformInventoryLocation.RESET;
+      IF PlatformInventoryLocation.ISEMPTY THEN
+        EXIT(FALSE);
+
+      Platform.RESET;
+      Platform.SETFILTER("Stock Synch. Process Code",'<>%1','');
+      IF Platform.ISEMPTY THEN
+        EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    [EventSubscriber(Table,32,OnAfterInsertEvent)]
+    LOCAL PROCEDURE CreateStockSyncAction_OnAfterInsertItemLedgerEntry@1170000000(VAR Rec@1170000000 : Record 32;RunTrigger@1170000001 : Boolean);
+    BEGIN
+      CreateStockSyncAction(Rec,0);
+    END;
+
+    [EventSubscriber(Table,9021667,OnAfterInsertEvent)]
+    LOCAL PROCEDURE CreateStockSyncAction_OnAfterInsertAfterInternetOrderLine@1170000001(VAR Rec@1170000000 : Record 9021667;RunTrigger@1170000001 : Boolean);
+    BEGIN
+      CreateStockSyncAction(Rec,0);
+    END;
+
+    [EventSubscriber(Table,37,OnAfterInsertEvent)]
+    LOCAL PROCEDURE CreateStockSyncAction_OnAfterInsertSalesLine@1170000002(VAR Rec@1170000000 : Record 37;RunTrigger@1170000001 : Boolean);
+    BEGIN
+      CreateStockSyncAction(Rec,0);
+    END;
+
+    [EventSubscriber(Table,5741,OnAfterInsertEvent)]
+    LOCAL PROCEDURE CreateStockSyncAction_OnAfterInsertTransferShipLine@1170000004(VAR Rec@1170000000 : Record 5741;RunTrigger@1170000001 : Boolean);
+    BEGIN
+      CreateStockSyncAction(Rec,0);
+    END;
+
+    [EventSubscriber(Table,39,OnAfterInsertEvent)]
+    LOCAL PROCEDURE CreateStockSyncAction_OnAfterInsertPurchaseLine@1170000005(VAR Rec@1170000000 : Record 39;RunTrigger@1170000001 : Boolean);
+    BEGIN
+      CreateStockSyncAction(Rec,0);
+    END;
+
+    [EventSubscriber(Table,37,OnAfterModifyEvent)]
+    LOCAL PROCEDURE CreateStockSyncAction_OnAfterModifySalesLine@1170000007(VAR Rec@1170000000 : Record 37;VAR xRec@1170000001 : Record 37;RunTrigger@1170000002 : Boolean);
+    BEGIN
+      IF ((xRec."No." <> Rec."No.") OR (xRec."Variant Code" <> Rec."Variant Code")) AND
+         ((xRec."No." <> '') AND (xRec."Variant Code" <> ''))
+      THEN
+        CreateStockSyncAction(xRec,2);
+      CreateStockSyncAction(Rec,1);
+    END;
+
+    [EventSubscriber(Table,9021667,OnAfterModifyEvent)]
+    LOCAL PROCEDURE CreateStockSyncAction_OnAfterModifyInternetrOrderLine@1170000010(VAR Rec@1170000000 : Record 9021667;VAR xRec@1170000001 : Record 9021667;RunTrigger@1170000002 : Boolean);
+    BEGIN
+      IF ((xRec."No." <> Rec."No.") OR (xRec."Variant Code" <> Rec."Variant Code")) AND
+         ((xRec."No." <> '') AND (xRec."Variant Code" <> ''))
+      THEN
+        CreateStockSyncAction(xRec,2);
+      CreateStockSyncAction(Rec,1);
+    END;
+
+    [EventSubscriber(Table,39,OnAfterModifyEvent)]
+    LOCAL PROCEDURE CreateStockSyncAction_OnAfterModifyPurchaseLine@1170000011(VAR Rec@1170000000 : Record 39;VAR xRec@1170000001 : Record 39;RunTrigger@1170000002 : Boolean);
+    BEGIN
+      IF ((xRec."No." <> Rec."No.") OR (xRec."Variant Code" <> Rec."Variant Code")) AND
+         ((xRec."No." <> '') AND (xRec."Variant Code" <> ''))
+      THEN
+        CreateStockSyncAction(xRec,2);
+      CreateStockSyncAction(Rec,1);
+    END;
+
+    [EventSubscriber(Table,5741,OnAfterModifyEvent)]
+    LOCAL PROCEDURE CreateStockSyncAction_OnAfterModifyTransferLine@1170000013(VAR Rec@1170000000 : Record 5741;VAR xRec@1170000001 : Record 5741;RunTrigger@1170000002 : Boolean);
+    BEGIN
+      IF ((xRec."Item No." <> Rec."Item No.") OR (xRec."Variant Code" <> Rec."Variant Code")) AND
+         ((xRec."Item No." <> '') AND (xRec."Variant Code" <> ''))
+      THEN
+        CreateStockSyncAction(xRec,2);
+      CreateStockSyncAction(Rec,1);
+    END;
+
+    [EventSubscriber(Table,37,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE CreateStockSyncAction_OnAfterDeleteSalesLine@1170000017(VAR Rec@1170000000 : Record 37;RunTrigger@1170000001 : Boolean);
+    BEGIN
+      CreateStockSyncAction(Rec,2);
+    END;
+
+    [EventSubscriber(Table,9021667,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE CreateStockSyncAction_OnAfterDeleteInternetOrderLine@1170000018(VAR Rec@1170000000 : Record 9021667;RunTrigger@1170000001 : Boolean);
+    BEGIN
+      CreateStockSyncAction(Rec,2);
+    END;
+
+    [EventSubscriber(Table,39,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE CreateStockSyncAction_OnAfterDeletePurchaseLine@1170000019(VAR Rec@1170000000 : Record 39;RunTrigger@1170000001 : Boolean);
+    BEGIN
+      CreateStockSyncAction(Rec,2);
+    END;
+
+    [EventSubscriber(Table,5741,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE CreateStockSyncAction_OnAfterDeleteTransferLine@1170000020(VAR Rec@1170000000 : Record 5741;RunTrigger@1170000001 : Boolean);
+    BEGIN
+      CreateStockSyncAction(Rec,2);
+    END;
+
+    BEGIN
+    {
+      //DOC TM6000 AW 05/10/2018
+    }
+    END.
+  }
+}
+

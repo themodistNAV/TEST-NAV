@@ -1,0 +1,915 @@
+OBJECT Codeunit 9062296 Excel Export/Import
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ExcelImportLog@1000000018 : Record 9062660;
+      ExcelImportLogLine@1000000017 : Record 9062661;
+      Tag@1000000020 : Record 9062492;
+      UploadedFile@1000000011 : Record 9062630;
+      DialogManagement@1000000010 : Codeunit 9062249;
+      FileSystem@1000000000 : Codeunit 9062264;
+      FileMgt@1000000007 : Codeunit 419;
+      ObjectFieldToolkit@1000000015 : Codeunit 9062343;
+      String@1000000002 : Codeunit 9062236;
+      TableManagement@1000000016 : Codeunit 9062585;
+      TagManagement@1000000019 : Codeunit 9062389;
+      TnpToolkit@1000000014 : Codeunit 9062230;
+      TnpUtils@1000000001 : Codeunit 9062229;
+      FilteredFields@1000000012 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.Dictionary`2";
+      Activity@1000000013 : ' ,Export,Import';
+      DialogIndex@1000000021 : ' ,Table,Progress';
+      DialogLastRowNo@1000000022 : Integer;
+
+    PROCEDURE "--- Exporting ---"@1000000006();
+    BEGIN
+    END;
+
+    PROCEDURE ExportEmptyExcel@1000000009(pTableId@1000000000 : Integer);
+    VAR
+      lFieldFilter@1000000001 : Record 2000000041;
+    BEGIN
+      //DOC NA2016.14 - Exporting empty Excel for given table ID
+      //  -> pTableId: Table ID
+
+      ExportEmptyExcelAdv(pTableId, lFieldFilter);
+    END;
+
+    PROCEDURE ExportEmptyExcelAdv@1000000015(pTableId@1000000000 : Integer;VAR pFieldFilter@1000000001 : Record 2000000041);
+    VAR
+      lExcelBuffer@1000000003 : TEMPORARY Record 9062715;
+      lField@1000000002 : Record 2000000041;
+      lObjectFieldToolkit@1000000004 : Codeunit 9062343;
+      lTableCaption@1000000005 : Text;
+    BEGIN
+      //DOC NA2016.14 - Exporting empty Excel for given table ID and field filter
+      //  -> pTableId: Table ID
+      //  <> pFieldFilter: Fiedl filter
+
+      lTableCaption := lObjectFieldToolkit.GetTableName(pTableId);
+
+      lExcelBuffer.AddColumn(lTableCaption, FALSE, '', TRUE, FALSE, TRUE, '', 0);
+      lExcelBuffer.NewRow();
+
+      lField.RESET();
+      lField.COPYFILTERS(pFieldFilter);
+      lField.SETRANGE(TableNo, pTableId);
+      IF (lField.FINDSET()) THEN
+      REPEAT
+        lExcelBuffer.AddColumn(lField."Field Caption", FALSE, '', TRUE, FALSE, FALSE, '', 0);
+      UNTIL (lField.NEXT() = 0);
+      lExcelBuffer.NewRow();
+
+      lExcelBuffer.CreateBookAndOpenExcel(lTableCaption, lTableCaption, COMPANYNAME(), USERID());
+    END;
+
+    PROCEDURE "--- Importing ---"@1000000054();
+    BEGIN
+    END;
+
+    PROCEDURE UploadFileToServer@6(FileName@1000000000 : Text[1024]) ServerFileName : Text[1024];
+    VAR
+      eNoFileSpedifiedToImport@1000000002 : TextConst 'ENU=No file specified to import;ENG=No file specified to import';
+    BEGIN
+      IF FileName = '' THEN ERROR(eNoFileSpedifiedToImport);
+      ServerFileName := FileMgt.UploadFileSilent(FileName)
+    END;
+
+    PROCEDURE UploadCurrExcelWkbkToServer@1000000049() ServerFileName : Text[1024];
+    VAR
+      XlApp@1000000001 : DotNet "'Microsoft.Office.Interop.Excel, Version=14.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c'.Microsoft.Office.Interop.Excel.ApplicationClass" RUNONCLIENT;
+      XlWrkBk@1000000000 : DotNet "'Microsoft.Office.Interop.Excel, Version=14.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c'.Microsoft.Office.Interop.Excel.Workbook" RUNONCLIENT;
+      eNoActiveWorkbook@1000000002 : TextConst 'ENU=Sorry, no Active Workbook was found in Excel;ENG=Sorry, no Active Workbook was found in Excel';
+      TempFileName@1000000003 : Text[1024];
+      ExcelApp@1000000005 : Automation "{00020813-0000-0000-C000-000000000046} 1.7:{00024500-0000-0000-C000-000000000046}:Unknown Automation Server.Application";
+      Workbook@1000000004 : Automation "{00020813-0000-0000-C000-000000000046} 1.7:{00020819-0000-0000-C000-000000000046}:Unknown Automation Server.Workbook";
+    BEGIN
+      //DOTNET - Can't get the current excel app, always creates new instance?
+      IF (FALSE) THEN
+      BEGIN
+        XlApp := XlApp.ApplicationClass;
+        XlWrkBk := XlApp.ActiveWorkbook;
+
+        IF ISNULL(XlWrkBk) THEN ERROR(eNoActiveWorkbook);
+        TempFileName := FileMgt.ClientTempFileName('.xlsx');
+        XlWrkBk.SaveCopyAs(TempFileName);
+
+        EXIT(UploadFileToServer(TempFileName));
+      END
+      //DOTNET <<
+
+      ELSE
+
+      //AUTOMATION >>
+      BEGIN
+        IF ISCLEAR(ExcelApp) THEN CREATE(ExcelApp,FALSE,TRUE);
+
+        Workbook := ExcelApp.ActiveWorkbook;
+        IF ISCLEAR(Workbook) THEN ERROR(eNoActiveWorkbook);
+
+        TempFileName := FileMgt.ClientTempFileName('.xlsx');
+        Workbook.SaveCopyAs(TempFileName);
+
+        ServerFileName := UploadFileToServer(TempFileName);
+
+        FileSystem.DeleteFile(TRUE,TempFileName);
+      END;
+      //AUTOMATION <<
+    END;
+
+    PROCEDURE ImportDataFromExcel@1000000016(SourceFilePath@1000000002 : Text;IsTempFile@1000000037 : Boolean;SheetName@1000000007 : Text[250];ValidateData@1000000001 : Boolean;StopOnError@1000000042 : Boolean;TestOnly@1000000088 : Boolean) NoErrors : Boolean;
+    VAR
+      ExcelBuf@1000000003 : TEMPORARY Record 9062715;
+      RecRef@1000000004 : RecordRef;
+      KeyRef@1000000100 : KeyRef;
+      FieldRef@1000000005 : FieldRef;
+      Fields@1000000012 : Record 2000000041;
+      TableName@1000000008 : Text[250];
+      eNoSheetSelected@1000000066 : TextConst 'ENU=No sheet selected;ENG=No sheet selected';
+      eConfirmation@1000000067 : TextConst 'ENU=This data will be imported into/modified in the Table %1, are you sure you want to continue?;ENG=This data will be imported into/modified in the Table %1, are you sure you want to continue?';
+      eNoTableName@1000000009 : TextConst 'ENU=The values in cell A1 or B1 can''t be matched to a Table Name in NAV;ENG=The values in cell A1 or B1 can''t be matched to a Table Name in NAV';
+      TableID@1000000010 : Integer;
+      eNoFieldNames@1000000011 : TextConst 'ENU=No field names for table "%1" were found in Row 3;ENG=No field names for table "%1" were found in Row 3';
+      FieldID@1000000013 : Integer;
+      RowNo@1000000016 : Integer;
+      ColNo@1000000017 : Integer;
+      eFieldNotMatched@1000000014 : TextConst 'ENU=The value "%1" in Row %2 Column %3 can''t be matched to a Field Name in the Table "%4";ENG=The value "%1" in Row %2 Column %3 can''t be matched to a Field Name in the Table "%4"';
+      eFieldNotEnabled@1000000015 : TextConst 'ENU=The Field "%1" in Table "%2" is Disabled and therefore cannot be used when importing data;ENG=The Field "%1" in Table "%2" is Disabled and therefore cannot be used when importing data';
+      ColumnHeadingsRowNo@1000000031 : Integer;
+      DataStartRowNo@1000000023 : Integer;
+      IsPrimKey@1000000033 : Boolean;
+      PrimKey_KeyFieldCount@1000000022 : Integer;
+      PrimKey_FieldIDs@1000000018 : ARRAY [10] OF Integer;
+      PrimKey_ColNum@1000000019 : ARRAY [10] OF Integer;
+      OtherField_ColNum@1000000030 : ARRAY [1000] OF Integer;
+      OtherField_FieldIDs@1000000032 : ARRAY [1000] OF Integer;
+      OtherField_EnhFieldIDs@1000000057 : ARRAY [1000] OF Integer;
+      i@1000000020 : Integer;
+      ePKNotFound@1000000021 : TextConst 'ENU=The Field "%1" wasn''t found in Row %2.\\This field is part of the Primary Key for Table "%3", we need it to identify the record;ENG=The Field "%1" wasn''t found in Row %2.\\This field is part of the Primary Key for Table "%3", we need it to identify the record';
+      j@1000000034 : Integer;
+      FoundRow@1000000024 : Boolean;
+      CurrRow_Insert@1000000025 : Boolean;
+      RecChangeUtil@1000000026 : Codeunit 9062240;
+      RowErrored@1000000027 : Boolean;
+      FieldErrored@1000000048 : Boolean;
+      RowChanged@1000000054 : Boolean;
+      RowErrorText@1000000028 : Text[1024];
+      FieldErrorText@1000000049 : Text[1024];
+      CellValue@1000000029 : Text[1024];
+      OldCellValue@1000000035 : Text[1024];
+      ImportHasErrors@1000000036 : Boolean;
+      OutputFile@1000000038 : File;
+      ErrorColNo@1000000040 : Integer;
+      ErrorSheetName@1000000039 : Text[30];
+      ErrorCounter@1000000041 : Integer;
+      ErrorInfoFilePath@1000000000 : Text[1024];
+      NumRowsToImport@1000000043 : Integer;
+      NumInserted@1000000044 : Integer;
+      NumInsertedWithErrors@1000000050 : Integer;
+      NumModified@1000000045 : Integer;
+      NumModifiedWithErrors@1000000051 : Integer;
+      NumSkipped@1000000046 : Integer;
+      NumUnchanged@1000000055 : Integer;
+      Object2@1000000052 : Record 2000000001;
+      eNotConfirmed@1000000053 : TextConst 'ENU=The import was cancelled;ENG=The import was cancelled';
+      EnhFieldDef@1000000056 : Record 9062327;
+      IsEnhField@1000000058 : Boolean;
+      EnhFieldMgmt@1000000059 : Codeunit 9062298;
+      PrevValue@1000000060 : Text;
+      NewValue@1000000061 : Text;
+      eNoFieldExists@1000000068 : TextConst 'ENU=No Field called %1 exists.\Would you like to add %1 as an Enhanced field?;ENG=No Field called %1 exists.\Would you like to add %1 as an Enhanced field?';
+      eEnhancedFieldAdded@1000000069 : TextConst 'ENU=Enhanced Field %1 added to Table %3;ENG=Enhanced Field %1 added to Table %3';
+      eImportStopped@1000000070 : TextConst 'ENU=Import stopped;ENG=Import stopped';
+      eErrorSettingWithValidation@1000000071 : TextConst 'ENU=Error setting a field (with validation);ENG=Error setting a field (with validation)';
+      eErrorSettingWithoutValidation@1000000072 : TextConst 'ENU=Error setting a field (without validation);ENG=Error setting a field (without validation)';
+      eRowErrorText@1000000073 : TextConst 'ENU=%1\\Field: %2\Value: %3\Record: %4\Error: %5;ENG=%1\\Field: %2\Value: %3\Record: %4\Error: %5';
+      eRowErrorText2@1000000074 : TextConst 'ENU=%1\\Record: %2\Error: %3;ENG=%1\\Record: %2\Error: %3';
+      eFinalMessageTitle@1000000075 : TextConst 'ENU=Import Results;ENG=Import Results';
+      eFinalMessageTotal@1000000076 : TextConst 'ENU=Total Number of Records in Sheet: %1;ENG=Total Number of Records in Sheet: %1';
+      eFinalMessageInserted@1000000077 : TextConst 'ENU=INSERTED;ENG=INSERTED';
+      eFinalMessageModified@1000000081 : TextConst 'ENU=MODIFIED;ENG=MODIFIED';
+      eFinalMessageSkipped@1000000082 : TextConst 'ENU=SKIPPED;ENG=SKIPPED';
+      eFinalMessageWithoutErrors@1000000078 : TextConst 'ENU=Without Errors: %1;ENG=Without Errors: %1';
+      eFinalMessageWithErrors@1000000079 : TextConst 'ENU=With Errors: %1;ENG=With Errors: %1';
+      MessageSeparator@1000000080 : Text[50];
+      eFinalMessageSkippedNoCh@1000000083 : TextConst 'ENU=Records Skipped Due to No Changes: %1;ENG=Records Skipped Due to No Changes: %1';
+      eFinalMessageSkippedErr@1000000084 : TextConst 'ENU=Records Skipped Due to Errors: %1;ENG=Records Skipped Due to Errors: %1';
+      eDownloadTitle@1000000085 : TextConst 'ENU=Save Import Error Information File;ENG=Save Import Error Information File';
+      eDownloadFilter@1000000086 : TextConst 'ENU=Excel Files (*.xlsx)|*.xlsx;ENG=Excel Files (*.xlsx)|*.xlsx';
+      Path@1000000091 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Path";
+      FieldValue@1000000099 : Variant;
+      eEnhFieldInTestOnlyMode@1000000006 : TextConst 'ENU="Sorry - enhanced fields cannot be added when running in ""Test Only"" mode; please add the field ""%1"" manually and retry";ENG="Sorry - enhanced fields cannot be added when running in ""Test Only"" mode; please add the field ""%1"" manually and retry"';
+      eTestOnlyMode@1000000047 : TextConst 'ENU=Data not imported as process was run in "Test Only" mode, but process has been completed;ENG=Data not imported as process was run in "Test Only" mode, but process has been completed';
+    BEGIN
+      IF SheetName = '' THEN ERROR(eNoSheetSelected);
+
+      ExcelBuf.OpenBook(SourceFilePath,SheetName);
+      ExcelBuf.ReadSheet;
+      ExcelBuf.CloseBook;
+
+      InitialiseLog(SheetName, SourceFilePath);
+      TableID := DetectImportTableId(ExcelBuf, RowNo);
+      UpdateLogTableId(TableID);
+
+      IF NOT CONFIRM(STRSUBSTNO(eConfirmation, ObjectFieldToolkit.GetTableName(TableID))) THEN
+        LogError(ExcelBuf, eNotConfirmed, TRUE);
+
+      DetectFirstLineFilters(ExcelBuf, TableID);
+
+      RecRef.OPEN(TableID);
+
+      InitialiseTag(TableID);
+
+      //Work out what the Primary Key Fields are >>
+      CLEAR(PrimKey_KeyFieldCount);
+      CLEAR(PrimKey_FieldIDs);
+      KeyRef := RecRef.KEYINDEX(1);
+      FOR i := 1 TO KeyRef.FIELDCOUNT DO
+      BEGIN
+        FieldRef := KeyRef.FIELDINDEX(i);
+        PrimKey_FieldIDs[i] := FieldRef.NUMBER;
+        PrimKey_KeyFieldCount := i;
+      END;
+      //Work out what the Primary Key Fields are <<
+
+      //Try to find line with field headers >>
+      RowNo += 1;
+      ExcelBuf.SETRANGE("Row No.",RowNo);
+      IF NOT ExcelBuf.FINDSET THEN BEGIN
+        RowNo += 1;
+        ExcelBuf.SETRANGE("Row No.",RowNo);
+        IF NOT ExcelBuf.FINDSET THEN ERROR(eNoFieldNames);
+      END;
+      //Try to find line with field headers <<
+
+      //Check if first field found is actually a field >>
+      Fields.SETRANGE(TableNo,TableID);
+      Fields.SETRANGE(FieldName,COPYSTR(ExcelBuf."Cell Value as Text",1,MAXSTRLEN(Fields.FieldName)));
+      IF NOT Fields.FINDFIRST THEN BEGIN
+        RowNo += 1;
+        ExcelBuf.SETRANGE("Row No.",RowNo);
+        IF NOT ExcelBuf.FINDSET THEN ERROR(eNoFieldNames,TableID);
+
+        Fields.SETRANGE(FieldName,COPYSTR(ExcelBuf."Cell Value as Text",1,MAXSTRLEN(Fields.FieldName)));
+        IF NOT Fields.FINDFIRST THEN ERROR(eNoFieldNames,TableID);
+      END;
+      //Check if first field found is actually a field <<
+
+      ExcelBuf.RESET();
+      ExcelBuf.SETRANGE("Row No.",RowNo);
+      Fields.SETRANGE(TableNo,TableID);
+      j := 0;
+      REPEAT
+        IsPrimKey := FALSE;
+        IsEnhField := FALSE;
+        Fields.SETRANGE(FieldName,ExcelBuf."Cell Value as Text");
+        IF Fields.FINDFIRST THEN BEGIN
+          IF NOT Fields.Enabled THEN
+            LogError(ExcelBuf, STRSUBSTNO(eFieldNotEnabled,Fields.FieldName,RecRef.NAME), TRUE);
+          IsEnhField := FALSE;
+        END ELSE BEGIN
+          EnhFieldDef.SETRANGE("Table No.",TableID);
+          EnhFieldDef.SETRANGE(Name,ExcelBuf."Cell Value as Text");
+          IF NOT EnhFieldDef.FINDFIRST THEN BEGIN
+            IF CONFIRM(STRSUBSTNO(eNoFieldExists,ExcelBuf."Cell Value as Text")) THEN BEGIN
+              CLEAR(EnhFieldDef);
+              EnhFieldDef.INIT;
+              EnhFieldDef.VALIDATE("Table No.",TableID);
+              EnhFieldDef.VALIDATE(Name,ExcelBuf."Cell Value as Text");
+              EnhFieldDef.INSERT(TRUE);
+              IsEnhField := TRUE;
+              IF TestOnly THEN BEGIN
+                ERROR(eEnhFieldInTestOnlyMode, EnhFieldDef.Name);
+              END ELSE COMMIT;
+              MESSAGE(eEnhancedFieldAdded,EnhFieldDef."Enhanced Field No.",EnhFieldDef.Name,EnhFieldDef."Table Name");
+            END ELSE
+              LogError(ExcelBuf, eImportStopped, TRUE);
+          END ELSE BEGIN
+            IsEnhField := TRUE;
+          END;
+        END;
+
+        //is field a primary key? >>
+        IF NOT IsEnhField THEN
+          FOR i := 1 TO PrimKey_KeyFieldCount DO
+            IF PrimKey_FieldIDs[i] = Fields."No." THEN
+            BEGIN
+              PrimKey_ColNum[i] := ExcelBuf."Column No.";
+              IsPrimKey := TRUE;
+              i := PrimKey_KeyFieldCount;
+            END;
+        //is field a primary key? <<
+
+        //If it's not a primary key >>
+        IF NOT IsPrimKey THEN BEGIN
+          j += 1;
+          OtherField_ColNum[j] := ExcelBuf."Column No.";
+          IF NOT IsEnhField THEN
+            OtherField_FieldIDs[j] := Fields."No."
+          ELSE BEGIN
+            OtherField_FieldIDs[j] := -1;
+            OtherField_EnhFieldIDs[j] := EnhFieldDef."Enhanced Field No.";
+          END;
+
+        END;
+        //If it's not a primary key <<
+      UNTIL ExcelBuf.NEXT = 0;
+      //Validate Field Headings in Row 3 <<
+
+      //Did we find all Primary Keys? >>
+      FOR i := 1 TO PrimKey_KeyFieldCount DO
+        IF ((PrimKey_ColNum[i] = 0) AND ( NOT (FieldHasBeenFiltered(PrimKey_FieldIDs[i])))) THEN
+        BEGIN
+          FieldRef := RecRef.FIELD(PrimKey_FieldIDs[i]);
+          ERROR(ePKNotFound,FieldRef.NAME,RowNo,RecRef.NAME);
+        END;
+      //Did we find all Primary Keys? <<
+
+      ColumnHeadingsRowNo := RowNo;
+      DataStartRowNo := RowNo+1;
+
+      ExcelBuf.SETFILTER("Row No.",'>%1',ColumnHeadingsRowNo);
+      ExcelBuf.FINDLAST;
+      NumRowsToImport := ExcelBuf."Row No." - ColumnHeadingsRowNo;
+
+      //Match the records >>
+      RowNo := DataStartRowNo;
+
+      InitialiseProgressWindow(Activity::Import, TableID, ExcelBuf."Row No.");
+
+      ExcelBuf.RESET;
+      REPEAT
+        UpdateProgressWindow(RowNo);
+
+        RowChanged := FALSE;
+
+        ExcelBuf.SETRANGE("Row No.",RowNo);
+        FoundRow := ExcelBuf.FINDSET;
+        IF FoundRow THEN BEGIN
+          RowErrored := FALSE;
+          FieldErrored := FALSE;
+
+          //Check the primary keys of this row >>
+          FOR i := 1 TO PrimKey_KeyFieldCount DO
+          BEGIN
+            ColNo := PrimKey_ColNum[i];
+            FieldRef := RecRef.FIELD(PrimKey_FieldIDs[i]);
+            FieldValue := GetExcelFieldValue(PrimKey_FieldIDs[i], ExcelBuf, RowNo, ColNo);
+            FieldRef.SETFILTER(FieldValue);
+          END;
+          CurrRow_Insert := NOT RecRef.FINDFIRST;
+          //Check the primary keys of this row <<
+
+          //Start with Primary Keys >>
+          IF CurrRow_Insert THEN BEGIN
+            CLEAR(RecRef);
+            CLEAR(FieldRef);
+            RecRef.OPEN(TableID);
+            RecRef.INIT;
+
+            TriggerAfterInit(RecRef, UploadedFile);
+
+            FOR i := 1 TO PrimKey_KeyFieldCount DO
+            BEGIN
+              ColNo := PrimKey_ColNum[i];
+              FieldRef := RecRef.FIELD(PrimKey_FieldIDs[i]);
+              RecChangeUtil.SetIsEnhancedField(FALSE);
+              RecChangeUtil.SetFieldRef(FieldRef);
+              FieldValue := GetExcelFieldValue(PrimKey_FieldIDs[i], ExcelBuf, RowNo, ColNo);
+              RecChangeUtil.SetNewFieldValue(FieldValue);
+              RecChangeUtil.SetAction(TnpToolkit.IIFText(ValidateData, 'FIELDREF_VALIDATE', 'FIELDREF_NOVALIDATE'));
+              IF NOT RecChangeUtil.RUN THEN BEGIN
+                RowErrorText := TnpToolkit.IIFText(ValidateData, eErrorSettingWithValidation, eErrorSettingWithoutValidation);
+                RowErrorText := COPYSTR(STRSUBSTNO(eRowErrorText2,RowErrorText,RecRef.GETPOSITION,GETLASTERRORTEXT),1,MAXSTRLEN(RowErrorText));
+                RowErrored := TRUE;
+                LogError(ExcelBuf, RowErrorText, StopOnError);
+                RowChanged := TRUE;
+              END;
+           END;
+          END;
+          //Start with Primary Keys <<
+
+          IF NOT RowErrored THEN BEGIN
+            //Insert the record if it's new >>
+            IF CurrRow_Insert THEN BEGIN
+              RecChangeUtil.SetRecRef(RecRef);
+              IF ValidateData THEN
+                RecChangeUtil.SetAction('RECREF_INSERT_TRUE')
+              ELSE
+                RecChangeUtil.SetAction('RECREF_INSERT_FALSE');
+              IF NOT RecChangeUtil.RUN THEN BEGIN
+                IF ValidateData THEN
+                  RowErrorText := eErrorSettingWithValidation
+                ELSE
+                  RowErrorText := eErrorSettingWithoutValidation;
+                RowErrorText := COPYSTR(STRSUBSTNO(eRowErrorText2,RowErrorText,RecRef.GETPOSITION,GETLASTERRORTEXT),
+                                        1,MAXSTRLEN(RowErrorText));
+                RowErrored := TRUE;
+                LogError(ExcelBuf, RowErrorText, StopOnError);
+                ImportHasErrors := TRUE;
+              END;
+            END;
+            //Insert the record if it's new <<
+            //1
+            //Now the other fields >>
+            j := 0;
+            REPEAT
+              j += 1;
+              FieldID := OtherField_FieldIDs[j];
+              IF FieldID <> 0 THEN BEGIN
+                CellValue := GetExcelFieldValue(OtherField_FieldIDs[j], ExcelBuf, RowNo, OtherField_ColNum[j]);
+                IF FieldID <> -1 THEN BEGIN
+                  //It is a real field >>
+                  RecChangeUtil.SetIsEnhancedField(FALSE);
+                  FieldRef := RecRef.FIELD(FieldID);
+                  RecChangeUtil.SetFieldRef(FieldRef);
+                  //It is a real field <<
+                END ELSE BEGIN
+                  //It is an Enhanced Field >>
+                  RecChangeUtil.SetRecRef(RecRef);
+                  RecChangeUtil.SetIsEnhancedField(TRUE);
+                  RecChangeUtil.SetEnhField(OtherField_EnhFieldIDs[j]);
+                  //It is an Enhanced Field <<
+                END;
+                RecChangeUtil.SetNewFieldValue(CellValue);
+                IF ValidateData THEN
+                  RecChangeUtil.SetAction('FIELDREF_VALIDATE')
+                ELSE
+                  RecChangeUtil.SetAction('FIELDREF_NOVALIDATE');
+
+                IF NOT RecChangeUtil.RUN THEN BEGIN
+                  IF ValidateData THEN
+                    FieldErrorText:= eErrorSettingWithValidation
+                  ELSE
+                    FieldErrorText := eErrorSettingWithoutValidation;
+                  FieldErrorText := COPYSTR(STRSUBSTNO(eRowErrorText,
+                                    FieldErrorText,FieldRef.NAME,CellValue,RecRef.GETPOSITION,GETLASTERRORTEXT),1,MAXSTRLEN(FieldErrorText));
+                  FieldErrored := TRUE;
+                  LogError(ExcelBuf, FieldErrorText, StopOnError);
+                  ImportHasErrors := TRUE;
+                END;
+                IF NOT RowChanged THEN BEGIN
+                  RowChanged := RecChangeUtil.WasFieldModified;
+                END;
+              END;
+            UNTIL FieldID = 0;
+            //Now the other fields <<
+          END;
+          //Validate the Fields <<
+
+          //Finally, modify the record for this row >>
+          IF NOT RowErrored THEN BEGIN
+            IF RowChanged THEN BEGIN
+              RecChangeUtil.SetRecRef(RecRef);
+              IF ValidateData THEN
+                RecChangeUtil.SetAction('RECREF_MODIFY_TRUE')
+              ELSE
+                RecChangeUtil.SetAction('RECREF_MODIFY_FALSE');
+              IF NOT RecChangeUtil.RUN THEN BEGIN
+                IF ValidateData THEN
+                  RowErrorText := eErrorSettingWithValidation
+                ELSE
+                  RowErrorText := eErrorSettingWithoutValidation;
+                RowErrorText := COPYSTR(STRSUBSTNO(eRowErrorText2,RowErrorText,RecRef.GETPOSITION,GETLASTERRORTEXT),
+                                        1,MAXSTRLEN(RowErrorText));
+                RowErrored := TRUE;
+                LogError(ExcelBuf, RowErrorText, StopOnError);
+                ImportHasErrors := TRUE;
+              END;
+            END;
+          END;
+
+          TagRecord(RecRef);
+
+          //Finally, modify the record for this row <<
+          IF NOT RowChanged THEN BEGIN
+            NumUnchanged += 1;
+          END ELSE BEGIN
+            IF RowErrored THEN
+              NumSkipped += 1
+            ELSE BEGIN
+              IF CurrRow_Insert THEN BEGIN
+                IF FieldErrored THEN
+                  NumInsertedWithErrors += 1
+                ELSE
+                  NumInserted +=1;
+              END ELSE BEGIN
+                IF FieldErrored THEN
+                  NumModifiedWithErrors += 1
+                ELSE
+                  NumModified += 1;
+              END;
+            END;
+          END;
+        END;
+          RowChanged := FALSE;
+        RowNo += 1;
+      UNTIL NOT FoundRow;
+      //Match the records <<
+
+      //Results >>
+      FinaliseProgressWindow();
+
+      UpdateLog(NumRowsToImport, NumInserted, NumModified, NumUnchanged);
+      ShowLog();
+
+      IF IsTempFile THEN
+        FileSystem.DeleteFileIfExists(FALSE, SourceFilePath);
+
+      IF TestOnly THEN BEGIN
+        ERROR(eTestOnlyMode);
+      END ELSE
+        EXIT(NOT ImportHasErrors);
+    END;
+
+    PROCEDURE ImportDataFromExcelAdv@1000000011(pSourceFilePath@1000000002 : Text;pIsTempFile@1000000037 : Boolean;pSheetName@1000000007 : Text[250];pValidateData@1000000001 : Boolean;pStopOnError@1000000042 : Boolean;pTestOnly@1000000088 : Boolean;VAR pUploadedFile@1000000000 : Record 9062630) NoErrors : Boolean;
+    VAR
+      eNoSheetSelected@1000000066 : TextConst 'ENU=No sheet selected;ENG=No sheet selected';
+      eConfirmation@1000000067 : TextConst 'ENU=This data will be imported into/modified in the Table %1, are you sure you want to continue?;ENG=This data will be imported into/modified in the Table %1, are you sure you want to continue?';
+      eNoTableName@1000000009 : TextConst 'ENU=The values in cell A1 or B1 can''t be matched to a Table Name in NAV;ENG=The values in cell A1 or B1 can''t be matched to a Table Name in NAV';
+      eNoFieldNames@1000000011 : TextConst 'ENU=No field names for table "%1" were found in Row 3;ENG=No field names for table "%1" were found in Row 3';
+      eFieldNotMatched@1000000014 : TextConst 'ENU=The value "%1" in Row %2 Column %3 can''t be matched to a Field Name in the Table "%4";ENG=The value "%1" in Row %2 Column %3 can''t be matched to a Field Name in the Table "%4"';
+      eFieldNotEnabled@1000000015 : TextConst 'ENU=The Field "%1" in Table "%2" is Disabled and therefore cannot be used when importing data;ENG=The Field "%1" in Table "%2" is Disabled and therefore cannot be used when importing data';
+      ePKNotFound@1000000021 : TextConst 'ENU=The Field "%1" wasn''t found in Row %2.\\This field is part of the Primary Key for Table "%3", we need it to identify the record;ENG=The Field "%1" wasn''t found in Row %2.\\This field is part of the Primary Key for Table "%3", we need it to identify the record';
+      eNotConfirmed@1000000053 : TextConst 'ENU=The import was cancelled;ENG=The import was cancelled';
+      eNoFieldExists@1000000068 : TextConst 'ENU=No Field called %1 exists.\Would you like to add %1 as an Enhanced field?;ENG=No Field called %1 exists.\Would you like to add %1 as an Enhanced field?';
+      eEnhancedFieldAdded@1000000069 : TextConst 'ENU=Enhanced Field %1 added to Table %3;ENG=Enhanced Field %1 added to Table %3';
+      eImportStopped@1000000070 : TextConst 'ENU=Import stopped;ENG=Import stopped';
+      eErrorSettingWithValidation@1000000071 : TextConst 'ENU=Error setting a field (with validation);ENG=Error setting a field (with validation)';
+      eErrorSettingWithoutValidation@1000000072 : TextConst 'ENU=Error setting a field (without validation);ENG=Error setting a field (without validation)';
+      eRowErrorText@1000000073 : TextConst 'ENU=%1\\Field: %2\Value: %3\Record: %4\Error: %5;ENG=%1\\Field: %2\Value: %3\Record: %4\Error: %5';
+      eRowErrorText2@1000000074 : TextConst 'ENU=%1\\Record: %2\Error: %3;ENG=%1\\Record: %2\Error: %3';
+      eFinalMessageTitle@1000000075 : TextConst 'ENU=Import Results;ENG=Import Results';
+      eFinalMessageTotal@1000000076 : TextConst 'ENU=Total Number of Records in Sheet: %1;ENG=Total Number of Records in Sheet: %1';
+      eFinalMessageInserted@1000000077 : TextConst 'ENU=INSERTED;ENG=INSERTED';
+      eFinalMessageModified@1000000081 : TextConst 'ENU=MODIFIED;ENG=MODIFIED';
+      eFinalMessageSkipped@1000000082 : TextConst 'ENU=SKIPPED;ENG=SKIPPED';
+      eFinalMessageWithoutErrors@1000000078 : TextConst 'ENU=Without Errors: %1;ENG=Without Errors: %1';
+      eFinalMessageWithErrors@1000000079 : TextConst 'ENU=With Errors: %1;ENG=With Errors: %1';
+      eFinalMessageSkippedNoCh@1000000083 : TextConst 'ENU=Records Skipped Due to No Changes: %1;ENG=Records Skipped Due to No Changes: %1';
+      eFinalMessageSkippedErr@1000000084 : TextConst 'ENU=Records Skipped Due to Errors: %1;ENG=Records Skipped Due to Errors: %1';
+      eDownloadTitle@1000000085 : TextConst 'ENU=Save Import Error Information File;ENG=Save Import Error Information File';
+      eDownloadFilter@1000000086 : TextConst 'ENU=Excel Files (*.xlsx)|*.xlsx;ENG=Excel Files (*.xlsx)|*.xlsx';
+      lFilteredFieldIds@1000000004 : ARRAY [6] OF Integer;
+      lFilteredFieldValues@1000000003 : ARRAY [6] OF Text;
+      lIdx@1000000005 : Integer;
+    BEGIN
+      UploadedFile := pUploadedFile;
+      UploadedFile.COPYFILTERS(pUploadedFile);
+      UploadedFile.GetFilters(lFilteredFieldIds, lFilteredFieldValues);
+
+      FilteredFields := FilteredFields.Dictionary();
+      FOR lIdx := 1 TO ARRAYLEN(lFilteredFieldIds) DO
+        IF (lFilteredFieldIds[lIdx] <> 0) THEN
+        BEGIN
+          IF ( NOT (FilteredFields.ContainsKey(lFilteredFieldIds[lIdx]))) THEN
+            FilteredFields.Add(lFilteredFieldIds[lIdx], lFilteredFieldValues[lIdx])
+          ELSE
+            FilteredFields.Item(lFilteredFieldIds[lIdx], lFilteredFieldValues[lIdx]);
+        END;
+
+      EXIT(ImportDataFromExcel(pSourceFilePath, pIsTempFile, pSheetName, pValidateData, pStopOnError, pTestOnly));
+    END;
+
+    LOCAL PROCEDURE GetExcelFieldValue@1000000014(pFieldId@1000000000 : Integer;VAR pExcelBuffer@1000000003 : Record 9062715;pRowNo@1000000001 : Integer;pColumnNo@1000000002 : Integer) : Text;
+    BEGIN
+      IF (FieldHasBeenFiltered(pFieldId)) THEN
+        EXIT(FilterValueForId(pFieldId))
+      ELSE IF (pExcelBuffer.GET(pRowNo, pColumnNo)) THEN
+        EXIT(pExcelBuffer."Cell Value as Text")
+      ELSE
+        EXIT('');
+    END;
+
+    LOCAL PROCEDURE DetectImportTableId@1000000017(VAR pExcelBuffer@1000000002 : Record 9062715;VAR pTableRowNo@1000000006 : Integer) : Integer;
+    VAR
+      lColumnNo@1000000000 : Integer;
+      lTableId@1000000001 : Integer;
+      lTableName@1000000003 : Text;
+      lPageId@1000000004 : Integer;
+      lPageName@1000000005 : Text;
+      eTableCantBeIdentified@1000000007 : TextConst 'ENU=Table can''t be identified. The spreadsheet being imported should have it specified in its A1 or B1 cells (or - as page ID - in A2 cell).;ENG=Table can''t be identified. The spreadsheet being imported should have it specified in its A1 or B1 cells (or - as page ID - in A2 cell).';
+    BEGIN
+      //DOC NH2016.14 - Detecting import table ID
+      //  <> pExcelBuffer: Excel buffer to read from
+      //  <> pTableRowNo: Target table row no.
+      //  <- The table ID (or zero if not detected)
+
+      lTableId := 0;
+      pTableRowNo := 0;
+
+      // Table ID in A1 or B1
+      FOR lColumnNo := 1 TO 2 DO
+        IF (pExcelBuffer.GET(1, lColumnNo)) THEN
+        BEGIN
+          lTableName := pExcelBuffer."Cell Value as Text";
+          IF (ObjectFieldToolkit.TryToValidateTableName(lTableId, lTableName, TRUE)) THEN
+          BEGIN
+            lColumnNo := 2;
+            pTableRowNo := 1;
+          END
+          ELSE
+            lTableId := 0;
+        END;
+
+      // If not found - page ID in A2
+      IF (lTableId = 0) THEN
+        IF (pExcelBuffer.GET(2, 1)) THEN
+        BEGIN
+          lPageName := pExcelBuffer."Cell Value as Text";
+          IF (ObjectFieldToolkit.TryToValidatePageName(lPageId, lPageName, TRUE)) THEN
+          BEGIN
+            lTableId := TableManagement.FindTableForPage(lPageId);
+            pTableRowNo := 2;
+          END;
+        END;
+
+      // If not found - error
+      IF (lTableId = 0) THEN
+        LogError(pExcelBuffer, eTableCantBeIdentified, TRUE);
+
+      EXIT(lTableId);
+    END;
+
+    PROCEDURE "--- Utils ---"@1000000004();
+    BEGIN
+    END;
+
+    PROCEDURE BooleanToXml@1000000059(pBoolean@1000000000 : Boolean) : Text[50];
+    BEGIN
+      EXIT(FORMAT(pBoolean, 0, 9));
+    END;
+
+    PROCEDURE OptionToXml@1000000012(pOption@1000000000 : Integer) : Text[50];
+    BEGIN
+      EXIT(FORMAT(pOption, 0, 9));
+    END;
+
+    LOCAL PROCEDURE "--- Filtering ---"@1000000003();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE FieldHasBeenFiltered@1000000007(pFieldId@1000000000 : Integer) : Boolean;
+    VAR
+      lFieldIdx@1000000001 : Integer;
+    BEGIN
+      IF (pFieldId = 0) THEN
+        EXIT(FALSE);
+      IF (ISNULL(FilteredFields)) THEN
+        EXIT(FALSE);
+      EXIT(FilteredFields.ContainsKey(pFieldId));
+    END;
+
+    LOCAL PROCEDURE FilterValueForId@1000000013(pFieldId@1000000000 : Integer) : Text;
+    VAR
+      lFieldIdx@1000000001 : Integer;
+    BEGIN
+      IF (FieldHasBeenFiltered(pFieldId)) THEN
+        EXIT(FilteredFields.Item(pFieldId))
+      ELSE
+        EXIT('');
+    END;
+
+    LOCAL PROCEDURE DetectFirstLineFilters@1000000019(VAR pExcelBuffer@1000000000 : Record 9062715;pTableId@1000000005 : Integer);
+    VAR
+      lBuffer@1000000001 : Record 9062730;
+      lFieldId@1000000004 : Integer;
+      lFieldName@1000000002 : Text;
+      lFieldValue@1000000003 : Text;
+    BEGIN
+      pExcelBuffer.RESET();
+      pExcelBuffer.SETRANGE("Row No.", 1);
+      pExcelBuffer.SETFILTER("Column No.", '>1');
+      IF (pExcelBuffer.FINDSET()) THEN
+      REPEAT
+        lBuffer.RESET();
+        lBuffer.DELETEALL();
+        String.Split(pExcelBuffer."Cell Value as Text", '=', lBuffer);
+        IF (lBuffer.COUNT() = 2) THEN
+        BEGIN
+          lBuffer.FINDFIRST();
+          lFieldName := DELCHR(lBuffer.Value, '<>', ' ');
+          IF (ObjectFieldToolkit.TryToValidateFieldId(pTableId, lFieldId)) THEN
+          BEGIN
+            IF (ISNULL(FilteredFields)) THEN
+              FilteredFields := FilteredFields.Dictionary();
+            lBuffer.NEXT();
+            lFieldValue := DELCHR(lBuffer.Value, '<>', ' ');
+            IF ( NOT (FilteredFields.ContainsKey(lFieldId))) THEN
+              FilteredFields.Add(lFieldId, lFieldValue)
+            ELSE
+              FilteredFields.Item(lFieldId, lFieldValue);
+          END;
+        END;
+      UNTIL (pExcelBuffer.NEXT() = 0);
+      pExcelBuffer.RESET();
+    END;
+
+    LOCAL PROCEDURE "--- Import Log ---"@1000000005();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE InitialiseLog@1000000018(pSheetName@1000000000 : Text;pSourceFilePath@1000000001 : Text);
+    BEGIN
+      CLEAR(ExcelImportLog);
+      ExcelImportLog.INIT();
+      ExcelImportLog.VALIDATE("File Name", FileSystem.GetFileName(FALSE, pSourceFilePath));
+      ExcelImportLog.VALIDATE("Sheet Name", pSheetName);
+      ExcelImportLog.INSERT(TRUE);
+      CreateFileAttachment(ExcelImportLog, pSourceFilePath);
+
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE UpdateLogTableId@1000000020(pTableId@1000000000 : Integer);
+    BEGIN
+      ExcelImportLog.VALIDATE("Table ID", pTableId);
+      ExcelImportLog.MODIFY(TRUE);
+
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE UpdateLog@1000000027(pTotalSheetRecords@1000000000 : Integer;pRecordsInserted@1000000001 : Integer;pRecordsModified@1000000002 : Integer;pRecordsSkipped@1000000003 : Integer);
+    BEGIN
+      ExcelImportLog.VALIDATE("Total Sheet Records", pTotalSheetRecords);
+      ExcelImportLog.VALIDATE("Records Inserted", pRecordsInserted);
+      ExcelImportLog.VALIDATE("Records Modified", pRecordsModified);
+      ExcelImportLog.VALIDATE("Records Skipped", pRecordsSkipped);
+      ExcelImportLog.MODIFY(TRUE);
+
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE LogError@1000000036(pExcelBuffer@1000000002 : Record 9062715;pErrorText@1000000004 : Text;pStopOnError@1000000000 : Boolean);
+    VAR
+      SessionID@1000000006 : Integer;
+    BEGIN
+      ExcelImportLog.VALIDATE("Import Errored", TRUE);
+      ExcelImportLog.MODIFY(TRUE);
+
+      CLEAR(ExcelImportLogLine);
+      ExcelImportLogLine.INIT();
+      ExcelImportLogLine.VALIDATE("Import ID", ExcelImportLog."Import ID");
+      ExcelImportLogLine.VALIDATE("Row No.", pExcelBuffer."Row No.");
+      ExcelImportLogLine.VALIDATE("Column No.", pExcelBuffer."Column No.");
+      ExcelImportLogLine.VALIDATE("Error Text", COPYSTR(pErrorText, 1, MAXSTRLEN(ExcelImportLogLine."Error Text")));
+      ExcelImportLogLine.INSERT(TRUE);
+
+      COMMIT;
+
+      IF (pStopOnError) THEN
+        ERROR(pErrorText);
+    END;
+
+    LOCAL PROCEDURE CreateFileAttachment@1000000028(ExcelImportLog@1000000000 : Record 9062660;pFilePath@1000000002 : Text);
+    VAR
+      FileAttachment@1000000004 : Record 9062272;
+      Path@1000000005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Path";
+      File@1000000003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+      AttachedFileName@1000000001 : Text;
+      AttachedFileExt@1000000006 : Text;
+    BEGIN
+      AttachedFileExt := '.xlsx';
+      AttachedFileName := ExcelImportLog."Sheet Name" + AttachedFileExt;
+
+      FileAttachment.INIT;
+      FileAttachment.VALIDATE("Table ID",DATABASE::"Excel Import Log");
+      FileAttachment.VALIDATE("Primary Key Value 1",FORMAT(ExcelImportLog."Import ID"));
+      FileAttachment.VALIDATE(Description,AttachedFileName);
+      FileAttachment.VALIDATE(FileName,AttachedFileName);
+      FileAttachment.VALIDATE("Stored FilePath",AttachedFileName);
+      FileAttachment.VALIDATE("Current Version",TRUE);
+      FileAttachment.VALIDATE(Extension,String.Replace(AttachedFileExt,'.',''));
+      FileAttachment.VALIDATE(Type,'UNIDENTIFIED');
+      FileAttachment.VALIDATE("Storage Type",FileAttachment."Storage Type"::BLOB);
+      FileAttachment.Attachment.IMPORT(pFilePath);
+      FileAttachment.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ShowLog@1000000031();
+    VAR
+      lExcelImportLog@1000000000 : Record 9062660;
+    BEGIN
+      lExcelImportLog := ExcelImportLog;
+      lExcelImportLog.FILTERGROUP(2);
+      lExcelImportLog.SETRECFILTER();
+      lExcelImportLog.FILTERGROUP(0);
+      PAGE.RUN(PAGE::"Excel Import Log Card", ExcelImportLog);
+    END;
+
+    LOCAL PROCEDURE "--- Tagging ---"@1000000022();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE InitialiseTag@1000000024(pTableId@1000000002 : Integer);
+    VAR
+      lTableName@1000000004 : Text;
+      eTagCode@1000000001 : TextConst 'ENU=IMPORT-%1-%2;ENG=IMPORT-%1-%2';
+      eTagDescription@1000000003 : TextConst 'ENU=Records imported from Excel to "%1" table (import ID %2);ENG=Records imported from Excel to "%1" table (import ID %2)';
+    BEGIN
+      lTableName := ObjectFieldToolkit.GetTableName(pTableId);
+
+      CLEAR(Tag);
+      Tag.INIT();
+      Tag.VALIDATE(Code, STRSUBSTNO(eTagCode, lTableName, ExcelImportLog."Import ID"));
+      Tag.VALIDATE(Description, STRSUBSTNO(eTagDescription, lTableName, ExcelImportLog."Import ID"));
+      Tag.VALIDATE("Table No.", pTableId);
+      Tag.VALIDATE("Created By User ID", USERID());
+      Tag.VALIDATE(Visibility, Tag.Visibility::Public);
+      Tag.INSERT(TRUE);
+
+      ExcelImportLog.VALIDATE("Tag Entry No", Tag."Entry No");
+      ExcelImportLog.MODIFY(TRUE);
+
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE TagRecord@1000000025(pRecordRef@1000000000 : RecordRef);
+    BEGIN
+      TagManagement.TagRecordRefEntry(Tag, pRecordRef, FALSE);
+
+      COMMIT;
+    END;
+
+    PROCEDURE "--- Progress Window ---"@1000000000();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE InitialiseProgressWindow@1000000029(pActivity@1000000000 : Integer;pTableId@1000000008 : Integer;pLastRowNo@1000000009 : Integer);
+    VAR
+      lCaptionLength@1000000005 : Integer;
+      lValueLength@1000000006 : Integer;
+      lDialogTitle@1000000001 : Text;
+      eTableCaption@1000000004 : TextConst 'ENU=Table;ENG=Table';
+      eProgressCaption@1000000007 : TextConst 'ENU=Progress;ENG=Progress';
+      eImportingRecords@1000000003 : TextConst 'ENU=Importing records;ENG=Importing records';
+      eExportingRecords@1000000002 : TextConst 'ENU=Exporting records;ENG=Exporting records';
+    BEGIN
+      lCaptionLength := 20;
+      lValueLength := 30;
+      lDialogTitle := STRSUBSTNO('%1..', TnpToolkit.IIFText(pActivity = Activity::Export, eExportingRecords, eImportingRecords));
+      CLEAR(DialogManagement);
+      DialogManagement.Add(eTableCaption, lCaptionLength, DialogIndex::Table, lValueLength, FALSE, FALSE);
+      DialogManagement.Add(eProgressCaption, lCaptionLength, DialogIndex::Progress, lValueLength, TRUE, TRUE);
+      DialogManagement.Open(lDialogTitle);
+      DialogManagement.SetCounterTextValue(DialogIndex::Table, ObjectFieldToolkit.GetTableName(pTableId));
+      DialogManagement.SetCounterCount(DialogIndex::Progress, pLastRowNo);
+    END;
+
+    LOCAL PROCEDURE UpdateProgressWindow@1000000030(pRowNo@1000000000 : Integer);
+    VAR
+      lRowDelta@1000000001 : Integer;
+    BEGIN
+      lRowDelta := ABS(pRowNo - DialogLastRowNo);
+      DialogManagement.MoveCounter(DialogIndex::Progress, lRowDelta);
+      DialogLastRowNo := pRowNo;
+    END;
+
+    LOCAL PROCEDURE FinaliseProgressWindow@1000000033();
+    BEGIN
+      DialogManagement.Close();
+    END;
+
+    LOCAL PROCEDURE "--- Events ---"@1000000001();
+    BEGIN
+    END;
+
+    [Business]
+    LOCAL PROCEDURE TriggerAfterInit@1000000002(VAR pRecordRef@1000000000 : RecordRef;VAR pUploadedFile@1000000001 : Record 9062630);
+    BEGIN
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  PC 01/01/2013 - Created
+      //DOC NA2015.1  PC 24/07/2013 - Changes to accomodate "Type" in Dataset Primary Key
+      //DOC NA2015.4  PC 23/10/2014 - Added "Test Only" mode
+      //DOC NA2015.4  AP 02/03/2015 - Added COPYSTR on ErrorHandling
+      //DOC NA2015.5  AP 08/03/2015 - Added Excel Import Log
+      //DOC NA2015.5  JH 27/03/2015 - Excel import log fixes
+      //DOC NA2016.10 JH 01/09/2015 - Upgraded to 2016
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit used
+      //DOC NA2016.14 JH 07/03/2016 - Events added
+      //DOC NA2016.14 AZ 08/03/2016 - Do not create copy of file in CreateFileAttachment function
+      //DOC NA2016.14 JH 08/03/2016 - "ExportEmptyExcel..." added
+      //DOC NA2016.14 JH 14/03/2016 - Bugfixes
+      //DOC NA2016.14 JH 23/03/2016 - Bugfixes
+      //DOC NA2016.14 JH 06/04/2016 - First line filters implemented
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

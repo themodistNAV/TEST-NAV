@@ -1,0 +1,177 @@
+OBJECT Report 9062350 Sales Budget to Prod. Forecast
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.15;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Sales Budget to Prod. Forecast;
+               ENG=Sales Budget to Prod. Forecast];
+    ProcessingOnly=Yes;
+    OnPreReport=VAR
+                  eDestForecastEmpty@1000000000 : TextConst 'ENU=Please select a Production Forecast;ENG=Please select a Production Forecast';
+                BEGIN
+                  IF DestForecast = '' THEN ERROR(eDestForecastEmpty);
+                END;
+
+    OnPostReport=VAR
+                   ProductionForecast@1000000000 : Page 99000919;
+                 BEGIN
+                   ProductionForecast.SetProductionForecastName(DestForecast);
+                   ProductionForecast.RUN;
+                 END;
+
+  }
+  DATASET
+  {
+    { 1000000000;;DataItem;                  ;
+               DataItemTable=Table7134;
+               OnAfterGetRecord=VAR
+                                  ProductionForecastEntry@1000000000 : Record 99000852;
+                                  Item@1000000001 : Record 27;
+                                  BOMComponent@1100710000 : Record 90;
+                                BEGIN
+                                  IF NOT Item.GET("Item Budget Entry"."Item No.") THEN EXIT;
+                                  AddProdForecastEntry("Item Budget Entry"."Item No.",
+                                                       "Item Budget Entry".Date,
+                                                       Item."Sales Unit of Measure",
+                                                       "Item Budget Entry".Quantity,
+                                                       "Item Budget Entry".Description);
+
+                                  {
+                                  IF NOT Item.GET("Item Budget Entry"."Item No.") THEN EXIT;
+                                  case ForecastType of
+                                    ForecastType::sal :
+                                      begin
+                                        ProductionForecastEntry.INIT;
+                                        ProductionForecastEntry.VALIDATE("Production Forecast Name",DestForecast);
+                                        ProductionForecastEntry.VALIDATE("Item No.","Item Budget Entry"."Item No.");
+                                        ProductionForecastEntry.VALIDATE("Forecast Date","Item Budget Entry".Date);
+                                        ProductionForecastEntry.VALIDATE("Unit of Measure Code",Item."Sales Unit of Measure");
+                                        ProductionForecastEntry.VALIDATE("Forecast Quantity","Item Budget Entry".Quantity);
+                                        ProductionForecastEntry.VALIDATE(Description,"Item Budget Entry".Description);
+                                        ProductionForecastEntry.INSERT(TRUE);
+                                      end;
+                                    ForecastType::com :
+                                      begin
+                                        item.calcfields("Assembly BOM");
+                                        if not item."Assembly BOM" then begin
+                                          ProductionForecastEntry.INIT;
+                                          ProductionForecastEntry.VALIDATE("Production Forecast Name",DestForecast);
+                                          ProductionForecastEntry.VALIDATE("Item No.","Item Budget Entry"."Item No.");
+                                          ProductionForecastEntry.VALIDATE("Forecast Date","Item Budget Entry".Date);
+                                          ProductionForecastEntry.VALIDATE("Unit of Measure Code",Item."Sales Unit of Measure");
+                                          ProductionForecastEntry.VALIDATE("Forecast Quantity","Item Budget Entry".Quantity);
+                                          ProductionForecastEntry.VALIDATE(Description,"Item Budget Entry".Description);
+                                          ProductionForecastEntry.INSERT(TRUE);
+                                        end else begin
+
+                                        end;
+                                      end;
+                                  end;
+                                  }
+                                END;
+                                 }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+      { 1000000000;;Container;
+                  ContainerType=ContentArea }
+
+      { 1000000002;1;Group  ;
+                  CaptionML=ENU=Output;
+                  GroupType=Group }
+
+      { 1000000001;2;Field  ;
+                  CaptionML=ENU=Production Forecast;
+                  SourceExpr=DestForecast;
+                  TableRelation="Production Forecast Name" }
+
+      { 1100710000;2;Field  ;
+                  CaptionML=ENU=Forecast Type;
+                  SourceExpr=ForecastType }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      DestForecast@1000000000 : Code[10];
+      ForecastType@1100710000 : 'Sales Item,Component,Both';
+
+    PROCEDURE AddProdForecastEntry@1100710001(pItem@1100710000 : Code[20];pDate@1100710001 : Date;pUOM@1100710002 : Code[20];pQuantity@1100710003 : Decimal;pDescription@1100710004 : Text);
+    VAR
+      ProductionForecastEntry@1100710007 : Record 99000852;
+      Item@1100710006 : Record 27;
+      BOMComponent@1100710005 : Record 90;
+    BEGIN
+      IF NOT Item.GET(pItem) THEN EXIT;
+
+      IF (ForecastType = ForecastType::"Sales Item") OR (ForecastType = ForecastType::Both) THEN BEGIN
+        CLEAR(ProductionForecastEntry);
+        ProductionForecastEntry.INIT;
+        ProductionForecastEntry.VALIDATE("Production Forecast Name",DestForecast);
+        ProductionForecastEntry.VALIDATE("Item No.",pItem);
+        ProductionForecastEntry.VALIDATE("Forecast Date",pDate);
+        ProductionForecastEntry.VALIDATE("Unit of Measure Code",pUOM);
+        ProductionForecastEntry.VALIDATE("Forecast Quantity",pQuantity);
+        ProductionForecastEntry.VALIDATE(Description,pDescription);
+        ProductionForecastEntry.VALIDATE("Component Forecast",FALSE);
+        ProductionForecastEntry.INSERT(TRUE);
+      END;
+
+      IF (ForecastType = ForecastType::Component) OR (ForecastType = ForecastType::Both) THEN BEGIN
+        CLEAR(ProductionForecastEntry);
+        Item.CALCFIELDS("Assembly BOM");
+        IF Item."Assembly BOM" THEN BEGIN
+          BOMComponent.SETRANGE("Parent Item No.",Item."No.");
+          BOMComponent.SETRANGE(Type,BOMComponent.Type::Item);
+          BOMComponent.SETFILTER("Quantity per",'>0');
+          IF BOMComponent.FINDSET THEN BEGIN
+            REPEAT
+              AddProdForecastEntry(BOMComponent."No.",
+                                  pDate,
+                                  BOMComponent."Unit of Measure Code",
+                                  pQuantity * BOMComponent."Quantity per",
+                                  pDescription);
+            UNTIL BOMComponent.NEXT = 0;
+          END;
+          EXIT;
+        END ELSE BEGIN
+          ProductionForecastEntry.INIT;
+          ProductionForecastEntry.VALIDATE("Production Forecast Name",DestForecast);
+          ProductionForecastEntry.VALIDATE("Item No.",pItem);
+          ProductionForecastEntry.VALIDATE("Forecast Date",pDate);
+          ProductionForecastEntry.VALIDATE("Unit of Measure Code",pUOM);
+          ProductionForecastEntry.VALIDATE("Forecast Quantity",pQuantity);
+          ProductionForecastEntry.VALIDATE(Description,pDescription);
+          ProductionForecastEntry.VALIDATE("Component Forecast",TRUE);
+          ProductionForecastEntry.INSERT(TRUE);
+          EXIT;
+        END;
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NH2016.15 JH 25/04/2016 - CfMD amendments
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

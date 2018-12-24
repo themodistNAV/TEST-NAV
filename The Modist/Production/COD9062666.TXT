@@ -1,0 +1,190 @@
+OBJECT Codeunit 9062666 Record Browser Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=24/05/16;
+    Time=11:46:46 AM;
+    Version List=NH2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      errRecRefIsNotTemp@1000000000 : TextConst 'ENU=RecordRef variable passed to %1 function must be temporary.;ENG=RecordRef variable passed to %1 function must be temporary.';
+
+    LOCAL PROCEDURE "--- Record Browser Editor ---"@1000000002();
+    BEGIN
+    END;
+
+    PROCEDURE MoveLineUp@1000000006(VAR BrowserLine@1000000000 : Record 9062796);
+    VAR
+      SecBrowserLine@1000000001 : Record 9062796;
+    BEGIN
+      SecBrowserLine.RESET();
+      SecBrowserLine.SETCURRENTKEY("Record Browser Code", Sequence);
+      SecBrowserLine.SETRANGE("Record Browser Code", BrowserLine."Record Browser Code");
+      SecBrowserLine.SETFILTER(Sequence, '<%1', BrowserLine.Sequence);
+      IF (SecBrowserLine.FINDLAST()) THEN
+        SwapLines(BrowserLine, SecBrowserLine);
+    END;
+
+    PROCEDURE MoveLineDown@1000000007(VAR BrowserLine@1000000001 : Record 9062796);
+    VAR
+      SecBrowserLine@1000000000 : Record 9062796;
+    BEGIN
+      SecBrowserLine.RESET();
+      SecBrowserLine.SETCURRENTKEY("Record Browser Code", Sequence);
+      SecBrowserLine.SETRANGE("Record Browser Code", BrowserLine."Record Browser Code");
+      SecBrowserLine.SETFILTER(Sequence, '>%1', BrowserLine.Sequence);
+      IF (SecBrowserLine.FINDFIRST()) THEN
+        SwapLines(BrowserLine, SecBrowserLine);
+    END;
+
+    LOCAL PROCEDURE SwapLines@1000000009(VAR FirstBrowserLine@1000000000 : Record 9062796;VAR SecBrowserLine@1000000001 : Record 9062796);
+    VAR
+      CurrSequence@1000000002 : Integer;
+    BEGIN
+      CurrSequence := FirstBrowserLine.Sequence;
+      FirstBrowserLine.Sequence := SecBrowserLine.Sequence;
+      FirstBrowserLine.MODIFY();
+      SecBrowserLine.Sequence := CurrSequence;
+      SecBrowserLine.MODIFY();
+    END;
+
+    PROCEDURE IncIndent@1000000005(VAR BrowserLine@1000000000 : Record 9062796);
+    VAR
+      SecBrowserLine@1000000001 : Record 9062796;
+    BEGIN
+      SecBrowserLine.RESET();
+      SecBrowserLine.SETCURRENTKEY("Record Browser Code", Sequence);
+      SecBrowserLine.SETRANGE("Record Browser Code", BrowserLine."Record Browser Code");
+      SecBrowserLine.SETFILTER(Sequence, '<%1', BrowserLine.Sequence);
+      IF (SecBrowserLine.FINDLAST()) THEN
+        IF (SecBrowserLine.Level >= BrowserLine.Level) THEN BEGIN
+          BrowserLine.Level += 1;
+          BrowserLine.MODIFY();
+        END;
+    END;
+
+    PROCEDURE DecIndent@1000000008(VAR BrowserLine@1000000000 : Record 9062796);
+    BEGIN
+      IF (BrowserLine.Level > 0) THEN BEGIN
+        BrowserLine.Level -= 1;
+        BrowserLine.MODIFY();
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Record Browser ---"@1000000004();
+    BEGIN
+    END;
+
+    PROCEDURE SelectRecords@1000000001(BrowserTableNo@1000000000 : Integer;RecordBrowserCode@1000000002 : Code[50];VAR SelectedRecords@1000000001 : Record 9062797) : Boolean;
+    VAR
+      BrowserHeader@1000000005 : Record 9062795;
+      RecordBrowser@1000000003 : Page 9063202;
+      Selected@1000000004 : Boolean;
+    BEGIN
+      CLEAR(RecordBrowser);
+
+      IF (RecordBrowserCode = '') THEN BEGIN
+        BrowserHeader.RESET();
+        BrowserHeader.SETRANGE("Table No.", BrowserTableNo);
+        BrowserHeader.FINDFIRST();
+        RecordBrowserCode := BrowserHeader.Code;
+      END;
+
+      RecordBrowser.InitBrowser(RecordBrowserCode);
+      RecordBrowser.LOOKUPMODE := TRUE;
+
+      //RecordBrowser.RUN();
+      //EXIT(FALSE);
+
+      Selected := (RecordBrowser.RUNMODAL() = ACTION::LookupOK);
+      IF (Selected) THEN BEGIN
+        RecordBrowser.GetSelectedRecords(SelectedRecords);
+      END;
+      EXIT(Selected);
+    END;
+
+    PROCEDURE SelectRecordRefs@1000000000(VAR SelectedRecordRef@1000000002 : RecordRef;RecordBrowserCode@1000000001 : Code[50]) : Boolean;
+    VAR
+      SelectedRecords@1000000000 : TEMPORARY Record 9062797;
+      SrcRecRef@1000000003 : RecordRef;
+      SrcFld@1000000005 : FieldRef;
+      DestFld@1000000006 : FieldRef;
+      i@1000000004 : Integer;
+    BEGIN
+      IF (NOT(SelectedRecordRef.ISTEMPORARY)) THEN
+        ERROR(errRecRefIsNotTemp, 'SelectRecordRefs');
+
+      IF (SelectRecords(SelectedRecordRef.NUMBER, RecordBrowserCode, SelectedRecords)) THEN BEGIN
+        SelectedRecordRef.RESET();
+        SelectedRecordRef.DELETEALL();
+        IF (SelectedRecords.FINDSET()) THEN BEGIN
+          SrcRecRef.OPEN(SelectedRecordRef.NUMBER);
+          REPEAT
+            SrcRecRef.SETPOSITION(SelectedRecords."Source Position");
+            IF (SrcRecRef.FIND('=')) THEN BEGIN
+              SelectedRecordRef.INIT();
+              FOR i:=1 TO SelectedRecordRef.FIELDCOUNT DO BEGIN
+                DestFld := SelectedRecordRef.FIELDINDEX(i);
+                SrcFld := SrcRecRef.FIELDINDEX(i);
+                DestFld.VALUE := SrcFld.VALUE;
+              END;
+              SelectedRecordRef.INSERT();
+            END;
+          UNTIL (SelectedRecords.NEXT() = 0);
+          SrcRecRef.CLOSE();
+        END;
+        EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE SelectItems@1000000003(VAR Item@1000000000 : Record 27) : Boolean;
+    VAR
+      SelectedRecords@1000000001 : TEMPORARY Record 9062797;
+      DbItem@1000000002 : Record 27;
+    BEGIN
+      Item.RESET();
+      IF (Item.ISTEMPORARY) THEN
+        Item.DELETEALL();
+      DbItem.RESET();
+
+      IF (SelectRecords(DATABASE::Item, '', SelectedRecords)) THEN BEGIN
+        IF (SelectedRecords.FINDSET()) THEN BEGIN
+          REPEAT
+            IF (Item.ISTEMPORARY) THEN BEGIN
+              DbItem.SETPOSITION(SelectedRecords."Source Position");
+              IF (DbItem.FIND('=')) THEN BEGIN
+                Item.TRANSFERFIELDS(DbItem);
+                Item.INSERT();
+              END;
+            END ELSE BEGIN
+              Item.SETPOSITION(SelectedRecords."Source Position");
+              IF (Item.FIND('=')) THEN
+                Item.MARK(TRUE);
+            END;
+          UNTIL (SelectedRecords.NEXT() = 0);
+        END;
+        IF (NOT(Item.ISTEMPORARY)) THEN
+          Item.MARKEDONLY := TRUE;
+        EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.15 JH 09/05/2016 - CfMD modifications
+      //DOC NA2016.16 AZ 24/05/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

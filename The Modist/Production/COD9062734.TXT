@@ -1,0 +1,99 @@
+OBJECT Codeunit 9062734 Customer Item Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=17/05/16;
+    Time=10:44:01 AM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            IF (CONFIRM(cnfCreateAllCustomerItems)) THEN BEGIN
+              CreateAllCustomerItems();
+              MESSAGE(txtDone);
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      cnfCreateAllCustomerItems@1000000000 : TextConst 'ENU=Do you want to create all missing customer items?;ENG=Do you want to create all missing customer items?';
+      txtDone@1000000001 : TextConst 'ENU=Processing finished.;ENG=Processing finished.';
+
+    PROCEDURE CreateAllCustomerItems@1000000002();
+    VAR
+      ValueEntry@1000000001 : Record 5802;
+      SalesLine@1000000000 : Record 37;
+    BEGIN
+      ValueEntry.RESET();
+      ValueEntry.SETRANGE("Source Type", ValueEntry."Source Type"::Customer);
+      IF (ValueEntry.FINDSET()) THEN BEGIN
+        REPEAT
+          CreateCustomerItem(ValueEntry."Source No.", ValueEntry."Item No.");
+        UNTIL (ValueEntry.NEXT() = 0);
+      END;
+
+      SalesLine.RESET();
+      SalesLine.SETRANGE(Type, SalesLine.Type::Item);
+      SalesLine.SETFILTER("No.", '<>%1', '');
+      SalesLine.SETFILTER("Sell-to Customer No.", '<>%1', '');
+      IF (SalesLine.FINDSET()) THEN BEGIN
+        REPEAT
+          CreateCustomerItem(SalesLine."Sell-to Customer No.", SalesLine."No.");
+        UNTIL (SalesLine.NEXT() = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateCustomerItem@1000000001(CustomerNo@1000000000 : Code[20];ItemNo@1000000001 : Code[20]);
+    VAR
+      CustomerItem@1000000002 : Record 9062865;
+    BEGIN
+      IF (CustomerNo = '') OR (ItemNo = '') THEN
+        EXIT;
+
+      IF (NOT(CustomerItem.GET(CustomerNo, ItemNo))) THEN BEGIN
+        CustomerItem.INIT();
+        CustomerItem."Customer No." := CustomerNo;
+        CustomerItem."Item No." := ItemNo;
+        CustomerItem.INSERT();
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateCustItemFromSalesLine@1000000008(VAR SalesLine@1000000000 : Record 37);
+    BEGIN
+      IF (SalesLine.Type = SalesLine.Type::Item) AND (SalesLine."No." <> '') AND (SalesLine."Sell-to Customer No." <> '') THEN
+        CreateCustomerItem(SalesLine."Sell-to Customer No.", SalesLine."No.");
+    END;
+
+    LOCAL PROCEDURE "--- Event Subscribers ---"@1000000003();
+    BEGIN
+    END;
+
+    [EventSubscriber(Table,5802,OnAfterInsertEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE OnValueEntryCreated@1000000004(VAR Rec@1000000000 : Record 5802;RunTrigger@1000000001 : Boolean);
+    BEGIN
+      IF (Rec."Source Type" = Rec."Source Type"::Customer) AND (Rec."Source No." <> '') AND (Rec."Item No." <> '') THEN
+        CreateCustomerItem(Rec."Source No.", Rec."Item No.");
+    END;
+
+    [EventSubscriber(Table,37,OnAfterInsertEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE OnSalesLineCreated@1000000005(VAR Rec@1000000000 : Record 37;RunTrigger@1000000001 : Boolean);
+    BEGIN
+      IF NOT Rec.ISTEMPORARY THEN
+        CreateCustItemFromSalesLine(Rec);
+    END;
+
+    [EventSubscriber(Table,37,OnAfterModifyEvent)]
+    LOCAL PROCEDURE OnSalesLineModified@1000000007(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;RunTrigger@1000000002 : Boolean);
+    BEGIN
+      IF NOT Rec.ISTEMPORARY THEN
+        CreateCustItemFromSalesLine(Rec);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,260 @@
+OBJECT Page 9062894 File Upload CardPart
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=File Upload CardPart;
+               ENG=File Upload CardPart];
+    SourceTable=Table9062841;
+    PageType=CardPart;
+  }
+  CONTROLS
+  {
+    { 1000000000;;Container;
+                ContainerType=ContentArea }
+
+    { 1000000001;1;Field  ;
+                Name=FileUploadElement;
+                CaptionML=[ENU=FileUploadElement;
+                           ENG=FileUploadElement];
+                SourceExpr=fileUploadField;
+                ControlAddIn=[TheNavPeople.HtmlPanelBlack;PublicKeyToken=01497f3fa397f2cf] }
+
+  }
+  CODE
+  {
+    VAR
+      UploadedFile@1000000005 : TEMPORARY Record 9062630;
+      fileUploadField@1000000000 : Text;
+      convert@1000000002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Convert";
+      byteArray@1000000004 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      dataStream@1000000001 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileStream";
+      fileMode@1000000003 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileMode";
+      errFilePartCommandError@1000000006 : TextConst 'ENU=Incorrect file upload command message ''%1'';ENG=Incorrect file upload command message ''%1''';
+      fileOpened@1000000007 : Boolean;
+      errPartError@1000000008 : TextConst 'ENU=File part error;ENG=File part error';
+      SaveToBLOB@1000000009 : Boolean;
+      BLOBRecordId@1000000010 : RecordID;
+      BLOBFieldId@1000000011 : Integer;
+
+    PROCEDURE ProcessEvent@1000000001(source@1000000002 : Text;name@1000000001 : Text;parameters@1000000000 : Text);
+    VAR
+      wholeFile@1000000003 : Boolean;
+      fileStart@1000000004 : Boolean;
+      fileEnd@1000000005 : Boolean;
+      filePart@1000000006 : Boolean;
+      lastFile@1000000010 : Boolean;
+      messageText@1000000007 : Text;
+      commaPos@1000000008 : Integer;
+      clientFileName@1000000009 : Text;
+      fileIndexText@1000000011 : Text;
+      fileIndex@1000000012 : Integer;
+    BEGIN
+      IF (name = '') THEN
+        EXIT;
+
+      IF (name = 'cancel') THEN BEGIN
+        UploadCancelled();
+      END ELSE BEGIN
+        wholeFile := TextStartsWith(name, 'file:');
+        fileStart := TextStartsWith(name, 'fileStart:');
+        fileEnd := TextStartsWith(name, 'fileEnd:');
+        filePart := TextStartsWith(name, 'filePart:');
+
+        IF (wholeFile OR fileStart OR fileEnd OR filePart) THEN BEGIN
+          messageText := name;
+
+          //get message type and fileIndex
+          commaPos := STRPOS(messageText, ',');
+          IF (commaPos = 0) THEN
+            TransferError(STRSUBSTNO(errFilePartCommandError, name));
+
+          IF (fileStart OR wholeFile) THEN BEGIN
+            fileIndexText := COPYSTR(COPYSTR(messageText, 1, commaPos - 1), STRPOS(messageText, ':') + 1);
+            IF (EVALUATE(fileIndex, fileIndexText)) THEN BEGIN
+              IF (fileIndex = 0) THEN BEGIN
+                UploadedFile.RESET();
+                UploadedFile.DELETEALL();
+              END;
+            END;
+          END;
+
+          //get file position
+          messageText := COPYSTR(messageText, commaPos + 1);
+          commaPos := STRPOS(messageText, ',');
+          IF (commaPos = 0) THEN
+            TransferError(STRSUBSTNO(errFilePartCommandError, name));
+
+          //last file?
+          messageText := COPYSTR(messageText, commaPos + 1);
+          commaPos := STRPOS(messageText, ',');
+          IF (commaPos = 0) THEN
+            TransferError(STRSUBSTNO(errFilePartCommandError, name));
+          lastFile := (COPYSTR(messageText, 1, commaPos - 1) = 'last:1');
+
+          //get file name
+          messageText := COPYSTR(messageText, commaPos + 1);
+          IF (NOT(TextStartsWith(messageText, 'name:'))) THEN
+            TransferError(STRSUBSTNO(errFilePartCommandError, name));
+
+          clientFileName := COPYSTR(messageText, STRLEN('name:') + 1);
+
+          SaveFilePart(source, wholeFile OR fileStart, wholeFile OR fileEnd, clientFileName, parameters);
+
+          UploadNextPart();
+
+          IF (wholeFile OR fileEnd) AND (lastFile) THEN
+            UploadFinished();
+        END;
+      END;
+    END;
+
+    PROCEDURE UploadNextPart@1000000002();
+    BEGIN
+      CurrPage.FileUploadElement.RunCommand('nextpart', '', '');
+    END;
+
+    PROCEDURE SaveFilePart@1000000000(source@1000000007 : Text;createNewFile@1000000002 : Boolean;closeFile@1000000003 : Boolean;clientFileName@1000000000 : Text;fileData@1000000001 : Text);
+    VAR
+      file@1000000006 : File;
+      serverFileName@1000000005 : Text;
+      binaryDataPos@1000000004 : Integer;
+    BEGIN
+      IF (createNewFile) THEN BEGIN
+        file.CREATETEMPFILE();
+        serverFileName := file.NAME;
+        file.CLOSE();
+        fileOpened := TRUE;
+
+        UploadedFile.INIT();
+        UploadedFile."Entry No." := UploadedFile.COUNT + 1;
+        UploadedFile."Temp File Name" := serverFileName;
+        UploadedFile."Source File Name" := COPYSTR(clientFileName, 1, MAXSTRLEN(UploadedFile."Source File Name"));
+        UploadedFile.Command := source;
+        UploadedFile.INSERT();
+      END ELSE BEGIN
+        IF (NOT(fileOpened)) THEN
+          TransferError(errPartError);
+        serverFileName := UploadedFile."Temp File Name";
+      END;
+
+      binaryDataPos := STRPOS(fileData, ',');
+      fileData := COPYSTR(fileData, binaryDataPos + 1);
+      byteArray := convert.FromBase64String(fileData);
+      dataStream := dataStream.FileStream(serverFileName, fileMode.Append);
+      dataStream.Write(byteArray, 0, byteArray.Length);
+      dataStream.Close();
+      dataStream.Dispose();
+
+      IF (closeFile) THEN
+        fileOpened := FALSE;
+    END;
+
+    PROCEDURE CancelUpload@1000000008();
+    BEGIN
+      CurrPage.FileUploadElement.RunCommand('cancel', '', '');
+    END;
+
+    PROCEDURE UploadCancelled@1000000004();
+    BEGIN
+      UploadedFile.RESET();
+      IF (UploadedFile.FINDSET()) THEN BEGIN
+        REPEAT
+          IF (EXISTS(UploadedFile."Temp File Name")) THEN
+            ERASE(UploadedFile."Temp File Name");
+        UNTIL (UploadedFile.NEXT() = 0);
+      END;
+      UploadedFile.DELETEALL();
+    END;
+
+    PROCEDURE UploadFinished@1000000006();
+    VAR
+      ProcessFile@1000000000 : Codeunit 9062464;
+      FirstFile@1000000001 : Boolean;
+      RecRef@1000000002 : RecordRef;
+      FldRef@1000000003 : FieldRef;
+      TempBlob@1000000004 : TEMPORARY Record 99008535;
+      ErrorMessage@1000000005 : Text;
+    BEGIN
+      COMMIT;
+      UploadedFile.RESET();
+      IF (UploadedFile.FINDSET()) THEN BEGIN
+        FirstFile := TRUE;
+        REPEAT
+          CLEAR(ProcessFile);
+
+          IF (SaveToBLOB) THEN BEGIN
+            IF (FirstFile) THEN BEGIN
+              TempBlob.Blob.IMPORT(UploadedFile."Temp File Name");
+
+              RecRef.GET(BLOBRecordId);
+              FldRef := RecRef.FIELD(BLOBFieldId);
+              FldRef.VALUE := TempBlob.Blob;
+              RecRef.MODIFY();
+              RecRef.CLOSE();
+
+              FirstFile := FALSE;
+            END;
+          END ELSE BEGIN
+            UploadedFile.CopyFiltersFromFileUploadContext(Rec);
+            IF ( NOT (ProcessFile.RUN(UploadedFile))) THEN
+            BEGIN
+              ErrorMessage := GETLASTERRORTEXT();
+              IF (ErrorMessage <> '') THEN
+                MESSAGE(ErrorMessage);
+            END;
+          END;
+
+          COMMIT;
+          IF (EXISTS(UploadedFile."Temp File Name")) THEN
+            ERASE(UploadedFile."Temp File Name");
+        UNTIL (UploadedFile.NEXT() = 0);
+      END;
+      UploadedFile.DELETEALL();
+    END;
+
+    PROCEDURE TransferError@1000000009(errorMessageText@1000000000 : Text);
+    BEGIN
+      CancelUpload();
+      UploadCancelled();
+      ERROR(errorMessageText);
+    END;
+
+    PROCEDURE TextStartsWith@1000000007(string@1000000000 : Text;subString@1000000001 : Text) : Boolean;
+    BEGIN
+      EXIT(COPYSTR(string, 1, STRLEN(subString)) = subString);
+    END;
+
+    PROCEDURE SetDestBLOB@1000000003(DestRecordId@1000000000 : RecordID;DestFieldId@1000000001 : Integer);
+    BEGIN
+      SaveToBLOB := TRUE;
+      BLOBRecordId := DestRecordId;
+      BLOBFieldId := DestFieldId;
+    END;
+
+    EVENT FileUploadElement@-1000000001::ControlAddInReady@3();
+    BEGIN
+    END;
+
+    EVENT FileUploadElement@-1000000001::ControlEvent@4(source@1000000002 : Text;name@1000000001 : Text;parameters@1000000000 : Text);
+    BEGIN
+      ProcessEvent(source, name, parameters);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.4  JH 23/09/2015 - Upgraded to 2016
+      //DOC NA2016.14 AZ 03/02/2016 - SetDestBLOB function added
+      //DOC NA2016.14 JH 07/03/2016 - Table used as a context
+      //DOC NA2016.14 JH 17/03/2016 - Bugfixes
+      //DOC NA2016.15 JH 25/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,345 @@
+OBJECT Codeunit 50015 Pricebook Export XML
+{
+  OBJECT-PROPERTIES
+  {
+    Date=22/11/17;
+    Time=[ 3:54:05 PM];
+    Modified=Yes;
+    Version List=OP9031,TM0022;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            ModistSetup.GET;
+            GLSetup.GET;
+            GLSetup.TESTFIELD("LCY Code");
+            {ModistSetup.TESTFIELD("Pricebook Export Directory");
+            ModistSetup.TESTFIELD("Pricebook Archive Directory");
+            ModistSetup.TESTFIELD("Demandware Export SFTP Server");
+            ModistSetup.TESTFIELD("DW Pricebook ftp folder");}
+
+            ClearLastErrors;
+            //IF NOT ExportXML() THEN //Comment by //DOC TM0022 AW 11/21/2017
+            IF NOT ExportXML2 THEN //DOC TM0022 AW 11/21/2017
+              LogError(GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ExportXML'),GETLASTERRORCODE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      GLSetup@1000000002 : Record 98;
+      ModistSetup@1000000001 : Record 50000;
+      CustomerPriceGrouup@1000000000 : Record 6;
+      ERRLOCATION@1000000003 : TextConst 'ENU=%1\Codeunit 50015;ENG=%1\Codeunit 50015';
+
+    [TryFunction]
+    PROCEDURE ExportXML2@1000000002();
+    VAR
+      TmpSalesPrice@1000000000 : TEMPORARY Record 7002;
+      SalesPrice@1000000001 : Record 7002;
+      CustomerPriceGroup@1000000004 : Record 6;
+      ParentCustomerPriceGroup@1000000008 : Record 6;
+      Currency@1000000002 : Record 4;
+      TmpCurrency@1000000003 : TEMPORARY Record 4;
+      Item@1000000009 : Record 27;
+      WebIntegrationManagement@1000000005 : Codeunit 50100;
+      XMLDoc@1000000007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLWriter@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlTextWriter";
+      XMLFormatting@1000000010 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.Formatting";
+      lIntegrationProcessingGroup@1000000012 : Record 50007;
+      lFilesCreated@1000000011 : Boolean;
+      lWindow@1000000013 : Dialog;
+    BEGIN
+      //DOC TM0022 AW 11/21/2017
+      IF GUIALLOWED THEN
+        lWindow.OPEN('Exporting Price Books...');
+      TmpSalesPrice.RESET;
+      TmpSalesPrice.DELETEALL;
+      lFilesCreated := FALSE;
+
+      ModistSetup.GET;
+      lIntegrationProcessingGroup.GET(ModistSetup."Demandware Integration Type",ModistSetup."Demandware PriceBook Group");
+
+      CustomerPriceGroup.RESET;
+      CustomerPriceGroup.SETRANGE("Include in Pricebook",TRUE);
+      IF CustomerPriceGroup.FINDSET THEN BEGIN
+        SalesPrice.RESET;
+        SalesPrice.SETCURRENTKEY("Sales Type","Sales Code","Currency Code","Item No.","Variant Code","Unit of Measure Code","Starting Date");
+        SalesPrice.SETRANGE("Sales Type",SalesPrice."Sales Type"::"Customer Price Group");
+        SalesPrice.SETRANGE("Starting Date",0D,TODAY);
+        SalesPrice.SETFILTER("Ending Date",'%1|>=%2',0D,TODAY);
+
+        Currency.RESET;
+        Currency.SETRANGE("Enable for Internet",TRUE);
+        REPEAT
+          SalesPrice.SETRANGE("Sales Code",CustomerPriceGroup.Code);
+          IF Currency.FINDSET THEN BEGIN
+            REPEAT
+              SalesPrice.SETRANGE("Currency Code",Currency.Code);
+              IF SalesPrice.FINDSET THEN BEGIN
+                XMLWriter := XMLWriter.Create(WebIntegrationManagement.PricebookFileName(Currency.Code,CustomerPriceGroup.Code));
+                XMLWriter.WriteStartElement('ns6','pricebooks','http://www.demandware.com/xml/impex/pricebook/2006-10-31');
+                XMLWriter.WriteStartElement('pricebook','http://www.demandware.com/xml/impex/pricebook/2006-10-31');
+                XMLWriter.WriteStartElement('header','http://www.demandware.com/xml/impex/pricebook/2006-10-31');
+                XMLWriter.WriteAttributeString('pricebook-id',LOWERCASE(Currency.Code + '-' + CustomerPriceGroup."Pricebook ID"));
+                XMLWriter.WriteElementString('currency','http://www.demandware.com/xml/impex/pricebook/2006-10-31',Currency.Code);
+                XMLWriter.WriteStartElement('display-name','http://www.demandware.com/xml/impex/pricebook/2006-10-31');
+                XMLWriter.WriteAttributeString('xml','lang','','x-default');
+                XMLWriter.WriteString(CustomerPriceGroup.Description + ' in ' + Currency.Code);
+                XMLWriter.WriteEndElement;  //display-name
+
+                IF CustomerPriceGroup."Parent ID" <> '' THEN BEGIN
+                  ParentCustomerPriceGroup.GET(CustomerPriceGroup."Parent ID");
+                  XMLWriter.WriteElementString('parent','http://www.demandware.com/xml/impex/pricebook/2006-10-31',LOWERCASE(Currency.Code + '-' + ParentCustomerPriceGroup."Pricebook ID"));
+                END;
+
+                XMLWriter.WriteEndElement; //header
+                XMLWriter.WriteStartElement('price-tables','http://www.demandware.com/xml/impex/pricebook/2006-10-31');
+
+                REPEAT
+                  SalesPrice.SETRANGE("Item No.",SalesPrice."Item No.");
+                  IF SalesPrice.FINDLAST THEN BEGIN
+                    XMLWriter.WriteStartElement('price-table','http://www.demandware.com/xml/impex/pricebook/2006-10-31');
+                    XMLWriter.WriteAttributeString('product-id',SalesPrice."Item No." + SalesPrice."Variant Code");
+                    //IF SalesPrice."Starting Date" <> 0D THEN
+                      //XMLWriter.WriteElementString('online-from',FORMAT(SalesPrice."Starting Date",0,9) +'T00:00:00+00:00');
+                    XMLWriter.WriteStartElement('amount','http://www.demandware.com/xml/impex/pricebook/2006-10-31');
+                    XMLWriter.WriteAttributeString('quantity','1');
+                    XMLWriter.WriteString(FORMAT(SalesPrice."Unit Price",0,1));
+                    XMLWriter.WriteEndElement; //amount
+                    XMLWriter.WriteEndElement; //price-table
+                  END;
+                  SalesPrice.SETRANGE("Item No.");
+                UNTIL SalesPrice.NEXT=0;
+                IF NOT lFilesCreated THEN
+                  lFilesCreated := TRUE;
+                XMLWriter.WriteEndElement; //price-tables
+                XMLWriter.WriteEndElement; //pricebook
+                XMLWriter.WriteEndElement; //pricebooks
+                XMLWriter.Flush;
+                XMLWriter.Close;
+              END;
+            UNTIL Currency.NEXT=0;
+          END;
+        UNTIL CustomerPriceGroup.NEXT=0;
+      END;
+      IF lFilesCreated THEN BEGIN
+        IF lIntegrationProcessingGroup."Enable SFTP Connect" THEN BEGIN //if we are ready to connect to sftp
+          WebIntegrationManagement.TransferFTPfiles(lIntegrationProcessingGroup."Working Location",lIntegrationProcessingGroup."Archive Location",'.xml',ModistSetup."FTP temporary file extension",
+                                                  ModistSetup."Demandware Export SFTP Server",lIntegrationProcessingGroup."FTP Folder",lIntegrationProcessingGroup."FTP Archive Folder",TRUE);
+        END;
+      END;
+      IF GUIALLOWED THEN BEGIN
+        lWindow.CLOSE;
+        MESSAGE('Files Exported');
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ExportXML@1000000001();
+    VAR
+      SalesPrice@1000000013 : Record 7002;
+      TempSalesPrice@1000000004 : TEMPORARY Record 7002;
+      ParentGroup@1000000008 : Record 6;
+      ItemUOM@1000000007 : Record 5404;
+      XMLDoc@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLWriter@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlWriter";
+      WebIntegrationManagement@1000000005 : Codeunit 50100;
+      ItemVariant@1000000011 : Record 5401;
+      ExportDateTime@1000000012 : DateTime;
+      GroupCode@1000000014 : Code[10];
+      CurrCode@1000000015 : Code[10];
+      FileCreated@1000000002 : Boolean;
+      FirstBlock@1000000003 : Boolean;
+      UOMQty@1000000006 : Decimal;
+      IntegrationProcessingGroup@1000000009 : Record 50007;
+      ModistSetup@1000000010 : Record 50000;
+    BEGIN
+
+      ModistSetup.GET;
+      IntegrationProcessingGroup.GET(ModistSetup."Demandware Integration Type",ModistSetup."Demandware PriceBook Group");
+
+      TempSalesPrice.DELETEALL;
+      ExportDateTime := CURRENTDATETIME();
+      SalesPrice.SETCURRENTKEY("Sales Type","Sales Code","Currency Code","Item No.","Variant Code","Unit of Measure Code","Starting Date");
+      GroupCode := '';
+      SalesPrice.SETRANGE("Sales Type",SalesPrice."Sales Type"::"Customer Price Group");
+      SalesPrice.SETFILTER("Sales Code",'<>%1','');
+      SalesPrice.SETFILTER("Item No.",'<>%1','');
+      FileCreated := FALSE;
+      CurrCode := 'ZZZ';
+      FirstBlock := TRUE;
+      IF SalesPrice.FINDFIRST THEN BEGIN
+        REPEAT
+          GetCustomerGroup(SalesPrice."Sales Code");
+          IF CustomerPriceGrouup."Include in Pricebook" THEN BEGIN
+            IF FileCreated = FALSE THEN BEGIN
+              FileCreated := TRUE;
+              IF SalesPrice."Currency Code" <> '' THEN
+                XMLWriter := XMLWriter.Create(WebIntegrationManagement.PricebookFileName(SalesPrice."Currency Code",SalesPrice."Sales Code"))
+              ELSE
+                XMLWriter := XMLWriter.Create(WebIntegrationManagement.PricebookFileName(GLSetup."LCY Code",SalesPrice."Sales Code"));
+              XMLWriter.WriteStartElement('ns6','pricebooks','http://www.demandware.com/xml/impex/pricebook/2006-10-31');
+            END;
+            IF (GroupCode <> SalesPrice."Sales Code") OR (CurrCode <> SalesPrice."Currency Code") THEN BEGIN
+              IF FirstBlock = TRUE THEN
+                FirstBlock := FALSE
+              ELSE BEGIN
+                IF FileCreated = TRUE THEN BEGIN
+                  //XMLWriter.WriteEndElement; //price-tables
+                  //XMLWriter.WriteEndElement; //pricebook
+                  XMLWriter.WriteEndElement; //price-tables
+                  XMLWriter.WriteEndElement; //pricebook
+                  XMLWriter.WriteEndElement; //pricebooks
+                  XMLWriter.Flush;
+                  IF SalesPrice."Currency Code" <> '' THEN
+                    XMLWriter := XMLWriter.Create(WebIntegrationManagement.PricebookFileName(SalesPrice."Currency Code",SalesPrice."Sales Code"))
+                  ELSE
+                    XMLWriter := XMLWriter.Create(WebIntegrationManagement.PricebookFileName(GLSetup."LCY Code",SalesPrice."Sales Code"));
+                  XMLWriter.WriteStartElement('ns6','pricebooks','http://www.demandware.com/xml/impex/pricebook/2006-10-31');
+                END;
+              END;
+              XMLWriter.WriteStartElement('pricebook','http://www.demandware.com/xml/impex/pricebook/2006-10-31');
+                XMLWriter.WriteStartElement('header','http://www.demandware.com/xml/impex/pricebook/2006-10-31');
+                  //XMLWriter.WriteAttributeString('pricebook-id',SalesPrice."Sales Code");
+                  IF SalesPrice."Currency Code" = '' THEN BEGIN
+                    XMLWriter.WriteAttributeString('pricebook-id',LOWERCASE(GLSetup."LCY Code" + '-' + CustomerPriceGrouup."Pricebook ID"));
+                    XMLWriter.WriteElementString('currency','http://www.demandware.com/xml/impex/pricebook/2006-10-31',GLSetup."LCY Code");
+                  END ELSE BEGIN
+                    XMLWriter.WriteAttributeString('pricebook-id',LOWERCASE(SalesPrice."Currency Code" + '-' + CustomerPriceGrouup."Pricebook ID"));
+                    XMLWriter.WriteElementString('currency','http://www.demandware.com/xml/impex/pricebook/2006-10-31',SalesPrice."Currency Code");
+                  END;
+                  //XMLWriter.WriteElementString('display-name','http://www.demandware.com/xml/impex/pricebook/2006-10-31',CustomerPriceGrouup.Description);
+                  XMLWriter.WriteStartElement('display-name','http://www.demandware.com/xml/impex/pricebook/2006-10-31');
+                    XMLWriter.WriteAttributeString('xml','lang','','x-default');
+                    IF SalesPrice."Currency Code" = '' THEN
+                      XMLWriter.WriteString(CustomerPriceGrouup.Description + ' in ' + GLSetup."LCY Code")
+                    ELSE
+                      XMLWriter.WriteString(CustomerPriceGrouup.Description + ' in ' + SalesPrice."Currency Code");
+                  XMLWriter.WriteEndElement;  //display-name
+                  IF CustomerPriceGrouup."Parent ID" <> '' THEN BEGIN
+                    ParentGroup.GET(CustomerPriceGrouup."Parent ID");
+                    IF SalesPrice."Currency Code" = '' THEN
+                      XMLWriter.WriteElementString('parent','http://www.demandware.com/xml/impex/pricebook/2006-10-31',LOWERCASE(GLSetup."LCY Code" + '-' + ParentGroup."Pricebook ID"))
+                    ELSE
+                      XMLWriter.WriteElementString('parent','http://www.demandware.com/xml/impex/pricebook/2006-10-31',LOWERCASE(SalesPrice."Currency Code" + '-' + ParentGroup."Pricebook ID"));
+                  END;
+                XMLWriter.WriteEndElement; //header
+                XMLWriter.WriteStartElement('price-tables','http://www.demandware.com/xml/impex/pricebook/2006-10-31');
+              GroupCode := SalesPrice."Sales Code";
+              CurrCode := SalesPrice."Currency Code";
+            END;
+            IF SalesPrice."Unit of Measure Code" = '' THEN
+              UOMQty := 1
+            ELSE BEGIN
+              ItemUOM.GET(SalesPrice."Item No.",SalesPrice."Unit of Measure Code");
+              UOMQty := ItemUOM."Qty. per Unit of Measure";
+            END;
+            TempSalesPrice.SETRANGE("Item No.",SalesPrice."Item No.");
+            TempSalesPrice.SETRANGE("Sales Type",SalesPrice."Sales Type");
+            TempSalesPrice.SETRANGE("Sales Code",SalesPrice."Sales Code");
+            TempSalesPrice.SETRANGE("Starting Date",SalesPrice."Starting Date");
+            TempSalesPrice.SETRANGE("Currency Code",SalesPrice."Currency Code");
+            TempSalesPrice.SETRANGE("Variant Code",SalesPrice."Variant Code");
+            TempSalesPrice.SETRANGE("Minimum Quantity",UOMQty);
+            IF NOT TempSalesPrice.FINDFIRST THEN BEGIN
+              TempSalesPrice.INIT;
+              TempSalesPrice."Item No." := SalesPrice."Item No.";
+              TempSalesPrice."Sales Type" := SalesPrice."Sales Type";
+              TempSalesPrice."Starting Date" := SalesPrice."Starting Date";
+              TempSalesPrice."Sales Code" := SalesPrice."Sales Code";
+              TempSalesPrice."Currency Code" := SalesPrice."Currency Code";
+              TempSalesPrice."Variant Code" := SalesPrice."Variant Code";
+              TempSalesPrice."Minimum Quantity" := UOMQty;
+              TempSalesPrice.INSERT;
+              XMLWriter.WriteStartElement('price-table','http://www.demandware.com/xml/impex/pricebook/2006-10-31');
+                XMLWriter.WriteAttributeString('product-id',SalesPrice."Item No." + SalesPrice."Variant Code");
+                IF SalesPrice."Starting Date" <> 0D THEN BEGIN
+                  XMLWriter.WriteElementString('online-from','http://www.demandware.com/xml/impex/pricebook/2006-10-31',FORMAT(SalesPrice."Starting Date",0,9) +'T00:00:00+00:00');
+                END;
+                XMLWriter.WriteStartElement('amount','http://www.demandware.com/xml/impex/pricebook/2006-10-31');
+                XMLWriter.WriteAttributeString('quantity','1');
+                XMLWriter.WriteString(FORMAT(SalesPrice."Unit Price",0,1));
+                XMLWriter.WriteEndElement; //amount
+              XMLWriter.WriteEndElement; //price-table
+            END;
+          END;
+        UNTIL SalesPrice.NEXT = 0;
+      END;
+      IF FileCreated THEN BEGIN
+        XMLWriter.WriteEndElement; //price-tables
+        XMLWriter.WriteEndElement; //pricebook
+        XMLWriter.WriteEndElement; //pricebooks
+        XMLWriter.Flush;
+        XMLWriter.Close;
+
+        IF IntegrationProcessingGroup."Enable SFTP Connect" THEN BEGIN //if we are ready to connect to sftp
+          WebIntegrationManagement.TransferFTPfiles(IntegrationProcessingGroup."Working Location",IntegrationProcessingGroup."Archive Location",'.xml',ModistSetup."FTP temporary file extension",
+                                                  ModistSetup."Demandware Export SFTP Server",IntegrationProcessingGroup."FTP Folder",IntegrationProcessingGroup."FTP Archive Folder",TRUE);
+        END;
+
+        {
+        IF ModistSetup."FTP temporary file extension" <> '' THEN BEGIN
+          WebIntegrationManagement.RenameFiles(ModistSetup."Pricebook Export Directory",'.xml',ModistSetup."FTP temporary file extension");
+          WebIntegrationManagement.UploadftpFiles(ModistSetup."Pricebook Export Directory",ModistSetup."Pricebook Archive Directory",ModistSetup."FTP temporary file extension",'.xml',
+                                                    ModistSetup."Demandware Export SFTP Server",ModistSetup."DW Pricebook ftp folder",TRUE);
+        END ELSE BEGIN
+          WebIntegrationManagement.RenameFiles(ModistSetup."Pricebook Export Directory",'.xml','.tmp');
+          WebIntegrationManagement.UploadftpFiles(ModistSetup."Pricebook Export Directory",ModistSetup."Pricebook Archive Directory",'.tmp','.xml',
+                                                    ModistSetup."Demandware Export SFTP Server",ModistSetup."DW Pricebook ftp folder",TRUE);
+        END;
+        }
+      END;
+    END;
+
+    LOCAL PROCEDURE GetCustomerGroup@1000000000(GroupCode@1000000000 : Code[10]);
+    BEGIN
+      IF CustomerPriceGrouup.Code <> GroupCode THEN
+        CustomerPriceGrouup.GET(GroupCode);
+    END;
+
+    LOCAL PROCEDURE LogError@1000000015(ErrMessage@1000000002 : Text;ErrorLocation@1000000004 : Text;ErrCode@1000000005 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+    BEGIN
+      //This function facilitates the logging of an error in the error log table by deriving the default values
+      //and applying the variable values
+      ModistSetup.GET;
+      ErrorHandler.LogError(ModistSetup."Demandware Integration Type",
+                            ModistSetup."Demandware PriceBook Group",
+                            '',
+                            0,
+                            '',
+                            0,
+                            ErrMessage,
+                            ErrorLocation,
+                            0,
+                            ErrCode,'');
+    END;
+
+    LOCAL PROCEDURE ClearLastErrors@1000000008();
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+      IntegrationErrorLog@1000000001 : Record 50011;
+    BEGIN
+      //This function deletes all previous errors for the integration type and group
+      ModistSetup.GET;
+      IntegrationErrorLog.SETRANGE("Integration Type",ModistSetup."Demandware Integration Type");
+      IntegrationErrorLog.SETRANGE("Integration Process Group",ModistSetup."Demandware PriceBook Group");
+      IF IntegrationErrorLog.FINDSET THEN
+        IntegrationErrorLog.DELETEALL;
+
+      CLEARLASTERROR;
+    END;
+
+    BEGIN
+    {
+      //DOC TM0022 AW 11/21/2017 - Enhanced Pricebook Export.
+    }
+    END.
+  }
+}
+

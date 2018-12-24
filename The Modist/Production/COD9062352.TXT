@@ -1,0 +1,452 @@
+OBJECT Codeunit 9062352 Copy Panel
+{
+  OBJECT-PROPERTIES
+  {
+    Date=28/01/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.12;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            CopySelected(0, '', 0, 0);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      tToEmpty@1000000002 : TextConst 'ENU=You must specify target "%1" attributes.;ENG=You must specify target "%1" attributes.';
+      tCantCopyToItself@1000000000 : TextConst 'ENU=Can''t copy "%1" ''%2'' to itself.;ENG=Can''t copy "%1" ''%2'' to itself.';
+      tExistsAlready@1000000001 : TextConst 'ENU="""%1"" ''%2'' exists elready; can''t create it.";ENG="""%1"" ''%2'' exists elready; can''t create it."';
+      mPanel@1000000003 : Record 9062363;
+      mTileGroup@1000000008 : Record 9062366;
+      mTile@1000000005 : Record 9062367;
+      mTileFrame@1000000009 : Record 9062368;
+      mPanelLink@1000000004 : Record 9062364;
+      mBlobManagement@1000000007 : Codeunit 9062242;
+      mNameValueToolkit@1000000010 : Codeunit 9062587;
+      mObjectFieldToolkit@1000000011 : Codeunit 9062343;
+      String@1000000013 : Codeunit 9062236;
+      mTableFilterManagement@1000000006 : Codeunit 9062238;
+      mTnpToolkit@1000000012 : Codeunit 9062230;
+
+    PROCEDURE "--- General ---"@1000000013();
+    BEGIN
+    END;
+
+    PROCEDURE SelectWhatToCopy@1000000011() : Integer;
+    VAR
+      lNameValueBufferTmp@1000000002 : TEMPORARY Record 9062730;
+      lPanel@1000000007 : Record 9062363;
+      lTableRef@1000000004 : RecordRef;
+      lFieldRef@1000000003 : FieldRef;
+      lCopy@1000000000 : Integer;
+    BEGIN
+      //DOC NC2015.1 - Selecting what to copy (panel / panel control / panel tile grooup / panel tile)
+      //  <- Result
+
+      lCopy := lPanel."Copy Panel"::" ";
+
+      lTableRef.OPEN(DATABASE::Panel);
+      lFieldRef := lTableRef.FIELD(lPanel.FIELDNO("Copy Panel"));
+      String.SplitAdvanced(lFieldRef.OPTIONCAPTION, ',', TRUE, TRUE, lNameValueBufferTmp);
+      IF (lNameValueBufferTmp.GET(0)) THEN
+        lNameValueBufferTmp.DELETE();
+      IF (lNameValueBufferTmp.FINDFIRST()) THEN;
+      IF (mNameValueToolkit.NameValueLookup(lNameValueBufferTmp, FALSE)) THEN
+        lCopy := lNameValueBufferTmp.ID;
+      lTableRef.CLOSE();
+
+      EXIT(lCopy);
+    END;
+
+    PROCEDURE CopySelected@1000000042(pTableId@1000000005 : Integer;pParentCode@1000000006 : Code[20];pParentId@1000000007 : Integer;pParentId2@1000000008 : Integer);
+    VAR
+      lCopyPanel@1000000000 : Report 9062242;
+      lCopyTileGroup@1000000001 : Report 9062244;
+      lCopyTile@1000000003 : Report 9062245;
+      eFromTo@1000000009 : TextConst 'ENU=From the current %1,To the current %1;ENG=From the current %1,To the current %1';
+      lCopyPanelLink@1000000002 : Report 9062243;
+    BEGIN
+      //DOC NC2015.1 - Copying selected part of the panel
+      //  -> pTableId: Table ID ("Panel" / "Tile Group" / "Tile" / "Panel Link")
+      //  -> pParentCode: Parent code (panel code)
+      //  -> pParentId: Parent ID (tile group ID / tile ID / panel link ID)
+
+      CASE (SelectWhatToCopy()) OF
+        mPanel."Copy Panel"::"Copy Panel":
+          BEGIN
+            lCopyPanel.SetFrom(pParentCode);
+            lCopyPanel.RUNMODAL();
+          END;
+        mPanel."Copy Panel"::"Copy Tile Group":
+          BEGIN
+            lCopyTileGroup.SetFrom(pParentCode, pParentId);
+            lCopyTileGroup.RUNMODAL();
+          END;
+        mPanel."Copy Panel"::"Copy Tile":
+          BEGIN
+            lCopyTile.SetFrom(pParentCode, pParentId);
+            lCopyTile.RUNMODAL();
+          END;
+        mPanel."Copy Panel"::"Copy Panel Link":
+          BEGIN
+            lCopyPanelLink.SetFrom(pParentCode, pParentId);
+            lCopyPanelLink.RUNMODAL();
+          END;
+      END;
+    END;
+
+    PROCEDURE "--- Copying ---"@1000000016();
+    BEGIN
+    END;
+
+    PROCEDURE CopyPanel@1000000021(pFromPanelCode@1000000002 : Code[20];pToPanelCode@1000000000 : Code[20];pOverwrite@1000000001 : Boolean;pCopyTileGroups@1000000005 : Boolean;pCopyTiles@1000000010 : Boolean;pCopyLinks@1000000003 : Boolean);
+    VAR
+      lFromPanel@1000000006 : Record 9062363;
+      lToPanel@1000000007 : Record 9062363;
+      lFromTileGroup@1000000004 : Record 9062366;
+      lFromTile@1000000009 : Record 9062367;
+      lFromPanelLink@1000000008 : Record 9062364;
+    BEGIN
+      //DOC NA2015.1 - Copying panel to another
+      //  -> pFromPanelCode: Source panel code
+      //  -> pToPanelCode: Destination panel code
+      //  -> pOverwrite: Overwrite if target record exists (otherwise - error)
+      //  -> pCopyTileGroups: Flag to copy tile groups
+      //  -> pCopyTileItems: Flag to copy tiles
+      //  -> pCopyLinks: Flag to copy links
+
+      IF (pCopyTiles) THEN
+        pCopyTileGroups := TRUE;
+
+      lFromPanel.GET(pFromPanelCode);
+
+      IF (pFromPanelCode = pToPanelCode) THEN
+        ERROR(tCantCopyToItself, lFromPanel.TABLECAPTION, lFromPanel.GETPOSITION(TRUE));
+      IF (lToPanel.GET(pToPanelCode)) THEN
+        IF (pOverwrite) THEN
+          lToPanel.DELETE(TRUE)
+        ELSE
+          ERROR(tExistsAlready, lToPanel.TABLECAPTION, lToPanel.GETPOSITION(TRUE));
+
+      lToPanel.INIT();
+      lToPanel.VALIDATE(Code, pToPanelCode);
+      lToPanel.TRANSFERFIELDS(lFromPanel, FALSE);
+      lToPanel.INSERT(TRUE);
+
+      IF (pCopyTileGroups) THEN
+      BEGIN
+        lFromTileGroup.RESET();
+        lFromTileGroup.SETRANGE("Panel Code", pFromPanelCode);
+        IF (lFromTileGroup.FINDSET()) THEN
+        REPEAT
+          CopyTileGroup(pFromPanelCode, lFromTileGroup.ID, pToPanelCode, lFromTileGroup.ID, FALSE, FALSE);
+        UNTIL (lFromTileGroup.NEXT() = 0);
+      END;
+
+      IF (pCopyTiles) THEN
+      BEGIN
+        lFromTile.RESET();
+        lFromTile.SETRANGE("Panel Code", pFromPanelCode);
+        IF (lFromTile.FINDSET()) THEN
+        REPEAT
+          CopyTile(pFromPanelCode, lFromTile.ID, pToPanelCode, lFromTile.ID, lFromTile."Tile Group ID", FALSE);
+        UNTIL (lFromTile.NEXT() = 0);
+      END;
+
+      IF (pCopyLinks) THEN
+      BEGIN
+        lFromPanelLink.RESET();
+        lFromPanelLink.SETRANGE("Panel Code", pFromPanelCode);
+        IF (lFromPanelLink.FINDSET()) THEN
+        REPEAT
+          CopyPanelLink(pFromPanelCode, lFromPanelLink.ID, pToPanelCode, lFromPanelLink.ID, FALSE);
+        UNTIL (lFromPanelLink.NEXT() = 0);
+      END;
+    END;
+
+    PROCEDURE CopyTileGroup@1000000047(pFromPanelCode@1000000021 : Code[20];pFromTileGroupId@1000000015 : Integer;pToPanelCode@1000000002 : Code[20];VAR pToTlieGroupId@1000000000 : Integer;pOverwrite@1000000003 : Boolean;pCopyTiles@1000000004 : Boolean);
+    VAR
+      lFromTileGroup@1000000017 : Record 9062366;
+      lToTileGroup@1000000018 : Record 9062366;
+      lFromTile@1000000020 : Record 9062367;
+    BEGIN
+      //DOC NA2015.1 - Copying tile group to another
+      //  -> pFromPanelCode: Source panel code
+      //  -> pFromTileGroupId: Source tile group ID
+      //  -> pToPanelCode: Destination panel code
+      //  <> pToTlieGroupId: Destination tile group ID
+      //  -> pOverwrite: Overwrite if target record exists (otherwise - error)
+      //  -> pCopyTiles: Flag to copy tiles
+
+      lFromTileGroup.GET(pFromPanelCode, pFromTileGroupId);
+
+      IF ((pFromPanelCode = pToPanelCode) AND (pFromTileGroupId = pToTlieGroupId)) THEN
+        ERROR(tCantCopyToItself, lFromTileGroup.TABLECAPTION, lFromTileGroup.GETPOSITION(TRUE));
+
+      VerifyTileGroupId(pToPanelCode, pToTlieGroupId, pOverwrite);
+
+      lToTileGroup.INIT();
+      lToTileGroup.VALIDATE("Panel Code", pToPanelCode);
+      lToTileGroup.VALIDATE(ID, pToTlieGroupId);
+      lToTileGroup.TRANSFERFIELDS(lFromTileGroup, FALSE);
+      lToTileGroup.INSERT(TRUE);
+
+      pToTlieGroupId := lToTileGroup.ID;
+
+      IF (pCopyTiles) THEN
+      BEGIN
+        lFromTile.RESET();
+        lFromTile.SETCURRENTKEY("Panel Code", "Tile Group ID");
+        lFromTile.SETRANGE("Panel Code", pFromPanelCode);
+        lFromTile.SETRANGE("Tile Group ID", pFromTileGroupId);
+        IF (lFromTile.FINDSET()) THEN
+        REPEAT
+          CopyTile(pFromPanelCode, lFromTile.ID, pToPanelCode, lFromTile.ID, lFromTile."Tile Group ID", pOverwrite);
+        UNTIL (lFromTile.NEXT() = 0);
+      END;
+    END;
+
+    PROCEDURE CopyTile@1000000046(pFromPanelCode@1000000021 : Code[20];pFromTileId@1000000015 : Integer;pToPanelCode@1000000002 : Code[20];VAR pToTileId@1000000000 : Integer;pToTileGroupId@1000000001 : Integer;pOverwrite@1000000004 : Boolean);
+    VAR
+      lFromTile@1000000020 : Record 9062367;
+      lToTile@1000000019 : Record 9062367;
+      lFromTileFrame@1000000003 : Record 9062368;
+    BEGIN
+      //DOC NA2015.1 - Copying tile to another
+      //  -> pFromPanelCode: Source panel code
+      //  -> pFromTileId: Source tile ID
+      //  -> pToPanelCode: Destination panel code
+      //  <> pToTileId: Destination tile ID
+      //  -> pToTileGroupId: Destination tile group ID
+      //  -> pOverwrite: Overwrite if target record exists (otherwise - error)
+
+      lFromTile.GET(pFromPanelCode, pFromTileId);
+      lFromTile.CALCFIELDS(Image, "Background Colour Bitmap");
+
+      IF ((pFromPanelCode = pToPanelCode) AND (pFromTileId = pToTileId)) THEN
+        ERROR(tCantCopyToItself, lFromTile.TABLECAPTION, lFromTile.GETPOSITION(TRUE));
+
+      VerifyTileId(pToPanelCode, pToTileId, pOverwrite);
+
+      lToTile.INIT();
+      lToTile.VALIDATE("Panel Code", pToPanelCode);
+      lToTile.VALIDATE(ID, pToTileId);
+      lToTile.TRANSFERFIELDS(lFromTile, FALSE);
+      lToTile.VALIDATE("Tile Group ID", pToTileGroupId);
+      lToTile.INSERT(TRUE);
+
+      pToTileId := lToTile.ID;
+
+      lFromTileFrame.RESET();
+      lFromTileFrame.SETRANGE("Panel Code", pFromPanelCode);
+      lFromTileFrame.SETRANGE("Tile ID", pFromTileId);
+      IF (lFromTileFrame.FINDSET()) THEN
+      REPEAT
+        CopyTileFrame(pFromPanelCode, pFromTileId, lFromTileFrame.ID, pToPanelCode, pToTileId, lFromTileFrame.ID, pOverwrite);
+      UNTIL (lFromTileFrame.NEXT() = 0);
+
+      CopyPanelEvents(DATABASE::Tile, pFromPanelCode, pFromTileId, DATABASE::Tile, pToPanelCode, pToTileId);
+      CopyPanelProperties(DATABASE::Tile, pFromPanelCode, pFromTileId, 0, DATABASE::Tile, pToPanelCode, pToTileId, 0);
+    END;
+
+    PROCEDURE CopyTileFrame@1000000048(pFromPanelCode@1000000002 : Code[20];pFromTileId@1000000016 : Integer;pFromTileFrameId@1000000022 : Integer;pToPanelCode@1000000000 : Code[20];pToTileId@1000000001 : Integer;VAR pToTileFrameId@1000000023 : Integer;pOverwrite@1000000003 : Boolean);
+    VAR
+      lFromTileFrame@1000000013 : Record 9062368;
+      lToTileFrame@1000000012 : Record 9062368;
+    BEGIN
+      //DOC NA2015.1 - Copying tile frame to another
+      //  -> pFromPanelCode: Source panel code
+      //  -> pFromTileId: Source tile ID
+      //  -> pFromTileFrameId: Source tile frame ID
+      //  -> pToPanelCode: Destination panel code
+      //  -> pToTileId: Destination tile ID
+      //  <> pToTileFrameId: Destination tile frame ID
+      //  -> pOverwrite: Overwrite if target record exists (otherwise - error)
+
+      lFromTileFrame.GET(pFromPanelCode, pFromTileId, pFromTileFrameId);
+      lFromTileFrame.CALCFIELDS(Image);
+
+      IF ((pFromPanelCode = pToPanelCode) AND (pFromTileId = pToTileId) AND (pFromTileFrameId = pToTileFrameId)) THEN
+        ERROR(tCantCopyToItself, lFromTileFrame.TABLECAPTION, lFromTileFrame.GETPOSITION(TRUE));
+
+      VerifyTileFrameId(pToPanelCode, pToTileId, pToTileFrameId, pOverwrite);
+
+      lToTileFrame.INIT();
+      lToTileFrame.VALIDATE("Panel Code", pToPanelCode);
+      lToTileFrame.VALIDATE("Tile ID", pToTileId);
+      lToTileFrame.VALIDATE(ID, pToTileFrameId);
+      lToTileFrame.TRANSFERFIELDS(lFromTileFrame, FALSE);
+      lToTileFrame.INSERT(TRUE);
+
+      pToTileFrameId := lToTileFrame.ID;
+
+      CopyPanelProperties(DATABASE::"Tile Frame", pFromPanelCode, pFromTileId, pFromTileFrameId, DATABASE::"Tile Frame",
+        pToPanelCode, pToTileId, pToTileFrameId);
+    END;
+
+    PROCEDURE CopyPanelLink@1000000017(pFromPanelCode@1000000005 : Code[20];pFromPanelLinkId@1000000004 : Integer;pToPanelCode@1000000002 : Code[20];VAR pToPanelLinkId@1000000001 : Integer;pOverwrite@1000000000 : Boolean);
+    VAR
+      lFromPanelLink@1000000003 : Record 9062364;
+      lToPanelLink@1000000006 : Record 9062364;
+    BEGIN
+      //DOC NC2015.1 - Copying panel link
+      //  -> pFromPanelCode: Source panel code
+      //  -> pFromPanelLinkId: Source panel linkID
+      //  -> pToPanelCode: Destination panel code
+      //  <> pToPanelLinkId: Destination panel link ID
+      //  -> pOverwrite: Overwrite if target record exists (otherwise - error)
+
+      lFromPanelLink.GET(pFromPanelCode, pFromPanelLinkId);
+      IF ((pFromPanelCode = pToPanelCode) AND (pFromPanelLinkId = pToPanelLinkId)) THEN
+        ERROR(tCantCopyToItself, lFromPanelLink.TABLECAPTION, lFromPanelLink.GETPOSITION(TRUE));
+
+      VerifyPanelLinkId(pToPanelCode, pToPanelLinkId, pOverwrite);
+
+      lToPanelLink.INIT();
+      lToPanelLink.VALIDATE("Panel Code", pToPanelCode);
+      lToPanelLink.VALIDATE(ID, pToPanelLinkId);
+      lToPanelLink.TRANSFERFIELDS(lFromPanelLink, FALSE);
+      lToPanelLink.INSERT(TRUE);
+
+      pToPanelLinkId := lToPanelLink.ID;
+    END;
+
+    PROCEDURE CopyPanelEvents@1000000028(pFromParentTableId@1000000003 : Integer;pFromParentCode@1000000000 : Code[20];pFromParentId@1000000001 : Integer;pToParentTableId@1000000008 : Integer;pToParentCode@1000000007 : Code[20];pToParentId@1000000006 : Integer);
+    VAR
+      lFromPanelEvent@1000000002 : Record 9062369;
+      lToPanelEvent@1000000009 : Record 9062369;
+    BEGIN
+      //DOC NA2015.1 - Copying panel events
+      //  -> pFromParentTableId: Source parent table ID
+      //  -> pFromParentCode: Source parent code
+      //  -> pFromParentId: Source parent ID
+      //  -> pToParentTableId: Destination parent table ID
+      //  -> pToParentCode: Destination parent code
+      //  -> pToParentId: Destination parent ID
+
+      lFromPanelEvent.RESET();
+      lFromPanelEvent.SETRANGE("Parent Table ID", pFromParentTableId);
+      lFromPanelEvent.SETRANGE("Parent Code", pFromParentCode);
+      lFromPanelEvent.SETRANGE("Parent ID", pFromParentId);
+      IF (lFromPanelEvent.FINDSET()) THEN
+      REPEAT
+        lToPanelEvent := lFromPanelEvent;
+        lToPanelEvent.VALIDATE("Parent Table ID", pToParentTableId);
+        lToPanelEvent.VALIDATE("Parent Code", pToParentCode);
+        lToPanelEvent.VALIDATE("Parent ID", pToParentId);
+        lToPanelEvent.INSERT(TRUE);
+      UNTIL (lFromPanelEvent.NEXT() = 0);
+    END;
+
+    PROCEDURE CopyPanelProperties@1000000031(pFromParentTableId@1000000007 : Integer;pFromParentCode@1000000006 : Code[20];pFromParentId@1000000005 : Integer;pFromParentId2@1000000000 : Integer;pToParentTableId@1000000003 : Integer;pToParentCode@1000000002 : Code[20];pToParentId@1000000001 : Integer;pToParentId2@1000000004 : Integer);
+    VAR
+      lFromPanelProperty@1000000009 : Record 9062433;
+      lToPanelProperty@1000000008 : Record 9062433;
+    BEGIN
+      //DOC NA2015.1 - Copying panel properties
+      //  -> pFromParentTableId: Source parent table ID
+      //  -> pFromParentCode: Source parent code
+      //  -> pFromParentId: Source parent ID
+      //  -> pFromParentId2: Source parent ID 2
+      //  -> pToParentTableId: Destination parent table ID
+      //  -> pToParentCode: Destination parent code
+      //  -> pToParentId: Destination parent ID
+      //  -> pToParentId2: Destination parent ID 2
+
+      lFromPanelProperty.RESET();
+      lFromPanelProperty.SETRANGE("Parent Table ID", pFromParentTableId);
+      lFromPanelProperty.SETRANGE("Parent Code", pFromParentCode);
+      lFromPanelProperty.SETRANGE("Parent ID", pFromParentId);
+      lFromPanelProperty.SETRANGE("Parent ID 2", pFromParentId2);
+      IF (lFromPanelProperty.FINDSET()) THEN
+      REPEAT
+        lToPanelProperty := lFromPanelProperty;
+        lToPanelProperty.VALIDATE("Parent Table ID", pToParentTableId);
+        lToPanelProperty.VALIDATE("Parent Code", pToParentCode);
+        lToPanelProperty.VALIDATE("Parent ID", pToParentId);
+        lToPanelProperty.VALIDATE("Parent ID 2", pToParentId2);
+        lToPanelProperty.INSERT(TRUE);
+
+        mTableFilterManagement.MoveTableFilterFields(
+          DATABASE::"Panel Property", lFromPanelProperty.GETPOSITION(FALSE),
+          DATABASE::"Panel Property", lToPanelProperty.GETPOSITION(FALSE));
+      UNTIL (lFromPanelProperty.NEXT() = 0);
+    END;
+
+    PROCEDURE "--- Tools ---"@1000000002();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE VerifyTileGroupId@1000000012(pPanelCode@1000000002 : Code[20];VAR pTileGroupId@1000000000 : Integer;pOverwrite@1000000003 : Boolean);
+    BEGIN
+      //DOC NC2015.1 - Verifying tile group ID and - if such record exists - changing it to a new ID
+      //  -> pPanelCode: Panel code
+      //  <> pTileGroupId: Tile group ID
+      //  -> pOverwrite: Overwrite if target record exists (otherwise - error)
+
+      IF (mTileGroup.GET(pPanelCode, pTileGroupId)) THEN
+        IF (pOverwrite) THEN
+          mTileGroup.DELETE(TRUE)
+        ELSE
+          pTileGroupId := mTileGroup.NewId();
+    END;
+
+    LOCAL PROCEDURE VerifyTileId@1000000015(pPanelCode@1000000002 : Code[20];VAR pTileId@1000000000 : Integer;pOverwrite@1000000003 : Boolean);
+    BEGIN
+      //DOC NC2015.1 - Verifying tile ID and - if such record exists - changing it to a new ID
+      //  -> pPanelCode: Panel code
+      //  <> pTileId: Tile ID
+      //  -> pOverwrite: Overwrite if target record exists (otherwise - error)
+
+      IF (mTile.GET(pPanelCode, pTileId)) THEN
+        IF (pOverwrite) THEN
+          mTile.DELETE(TRUE)
+        ELSE
+          pTileId := mTile.NewId();
+    END;
+
+    LOCAL PROCEDURE VerifyTileFrameId@1000000018(pPanelCode@1000000002 : Code[20];pTileId@1000000004 : Integer;VAR pTileFrameId@1000000000 : Integer;pOverwrite@1000000003 : Boolean);
+    BEGIN
+      //DOC NC2015.1 - Verifying tile frame ID and - if such record exists - changing it to a new ID
+      //  -> pPanelCode: Panel code
+      //  -> pTileId: Tile ID
+      //  <> pTileFrameId: Tile frame ID
+      //  -> pOverwrite: Overwrite if target record exists (otherwise - error)
+
+      IF (mTileFrame.GET(pPanelCode, pTileId, pTileFrameId)) THEN
+        IF (pOverwrite) THEN
+          mTileFrame.DELETE(TRUE)
+        ELSE
+          pTileFrameId := mTileFrame.NewId();
+    END;
+
+    LOCAL PROCEDURE VerifyPanelLinkId@1000000078(pPanelCode@1000000002 : Code[20];VAR pPanelLinkId@1000000004 : Integer;pOverwrite@1000000003 : Boolean);
+    BEGIN
+      //DOC NC2015.1 - Verifying panel link ID and - if such record exists - changing it to a new ID
+      //  -> pPanelCode: Panel code
+      //  <> pPanelLinkId: Panel link ID
+      //  -> pOverwrite: Overwrite if target record exists (otherwise - error)
+
+      IF (mPanelLink.GET(pPanelCode, pPanelLinkId)) THEN
+        IF (pOverwrite) THEN
+          mPanelLink.DELETE(TRUE)
+        ELSE
+          pPanelLinkId := mPanelLink.NewId();
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  JH 29/10/2013 - Created
+      //DOC NA2015.1  JH 26/02/2014 - Amendments
+      //DOC NA2015.1  JH 23/04/2014 - Panels 3
+      //DOC NA2015.4  JH 09/02/2015 - Fixes
+      //DOC NA2016.10 JH 27/08/2015 - Upgraded to 2016
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit used
+    }
+    END.
+  }
+}
+

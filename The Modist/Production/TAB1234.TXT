@@ -1,0 +1,300 @@
+OBJECT Table 1234 CSV Buffer
+{
+  OBJECT-PROPERTIES
+  {
+    Date=23/10/15;
+    Time=12:00:00 PM;
+    Modified=Yes;
+    Version List=NAVW19.00.00.43402,TM0200;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=CSV Buffer;
+               ENG=CSV Buffer];
+  }
+  FIELDS
+  {
+    { 1   ;   ;Line No.            ;Integer       ;CaptionML=[ENU=Line No.;
+                                                              ENG=Line No.] }
+    { 2   ;   ;Field No.           ;Integer       ;CaptionML=[ENU=Field No.;
+                                                              ENG=Field No.] }
+    { 3   ;   ;Value               ;Text250       ;CaptionML=[ENU=Value;
+                                                              ENG=Value] }
+    { 50000;  ;Value2              ;Text250       ;Description=TM0200 }
+    { 50001;  ;Value3              ;Text250       ;Description=TM0200 }
+    { 50002;  ;Value4              ;Text250       ;Description=TM0200 }
+  }
+  KEYS
+  {
+    {    ;Line No.,Field No.                      ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      IndexDoesNotExistErr@1000 : TextConst '@@@="%1 = line no, %2 = index of the field";ENU=The field in line %1 with index %2 does not exist. The data could not be retrieved.;ENG=The field in line %1 with index %2 does not exist. The data could not be retrieved.';
+      LengthExceededErr@1001 : TextConst 'ENU=The maximum length of a value in the CSV file was exceeded. The maximum supported length is 250.;ENG=The maximum length of a value in the CSV file was exceeded. The maximum supported length is 250.';
+      CSVFile@1002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+      StreamReader@1003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader";
+      Separator@1004 : Text[1];
+
+    PROCEDURE LoadData@1(CSVFileName@1000 : Text;CSVFieldSeparator@1001 : Text[1]);
+    BEGIN
+      InitializeReader(CSVFileName,CSVFieldSeparator);
+      ReadLines(0);
+    END;
+
+    PROCEDURE InitializeReader@2(CSVFileName@1000 : Text;CSVFieldSeparator@1001 : Text[1]);
+    VAR
+      Encoding@1003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+    BEGIN
+      StreamReader := StreamReader.StreamReader(CSVFile.OpenRead(CSVFileName),Encoding.Default);
+      Separator := CSVFieldSeparator;
+    END;
+
+    PROCEDURE ReadLines@3(NumberOfLines@1000 : Integer) : Boolean;
+    VAR
+      Line@1001 : Text;
+      CurrentLineNo@1002 : Integer;
+      CurrentFieldNo@1003 : Integer;
+    BEGIN
+      IF StreamReader.EndOfStream THEN
+        EXIT(FALSE);
+      REPEAT
+        Line := StreamReader.ReadLine;
+        CurrentLineNo += 1;
+        REPEAT
+          CurrentFieldNo += 1;
+          INIT;
+          "Line No." := CurrentLineNo;
+          "Field No." := CurrentFieldNo;
+          Value := CutUntilSeparator(Line,Separator);
+          INSERT;
+        UNTIL Line = '';
+        CurrentFieldNo := 0;
+      UNTIL StreamReader.EndOfStream OR (CurrentLineNo = NumberOfLines);
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CutUntilSeparator@4(VAR Text@1000 : Text;Separator@1001 : Text[1]) CutValue : Text[250];
+    VAR
+      Position@1002 : Integer;
+    BEGIN
+      Position := STRPOS(Text,Separator);
+      IF Position > 0 THEN BEGIN
+        CutValue := COPYSTR(Text,1,Position - 1);
+        IF STRLEN(CutValue) > 250 THEN
+          ERROR(LengthExceededErr);
+        Text := COPYSTR(Text,Position + 1);
+      END ELSE BEGIN
+        IF STRLEN(Text) > 250 THEN
+          ERROR(LengthExceededErr);
+        CutValue := COPYSTR(Text,1,250);
+        Text := '';
+      END;
+    END;
+
+    PROCEDURE ResetFilters@5();
+    BEGIN
+      SETRANGE("Line No.");
+      SETRANGE("Field No.");
+      SETRANGE(Value);
+    END;
+
+    PROCEDURE GetValue@6(LineNo@1000 : Integer;FieldNo@1001 : Integer) : Text;
+    VAR
+      TempCSVBuffer@1002 : TEMPORARY Record 1234;
+    BEGIN
+      TempCSVBuffer.COPY(Rec,TRUE);
+      IF NOT TempCSVBuffer.GET(LineNo,FieldNo) THEN
+        ERROR(IndexDoesNotExistErr,LineNo,FieldNo);
+      EXIT(TempCSVBuffer.Value);
+    END;
+
+    PROCEDURE GetCSVLinesWhere@7(FilterFieldNo@1000 : Integer;FilterValue@1001 : Text;VAR TempResultCSVBuffer@1002 : TEMPORARY Record 1234);
+    VAR
+      TempCSVBuffer@1004 : TEMPORARY Record 1234;
+    BEGIN
+      TempResultCSVBuffer.RESET;
+      TempResultCSVBuffer.DELETEALL;
+      TempCSVBuffer.COPY(Rec,TRUE);
+      SETRANGE("Field No.",FilterFieldNo);
+      SETRANGE(Value,FilterValue);
+      IF FINDSET THEN
+        REPEAT
+          TempCSVBuffer.SETRANGE("Line No.","Line No.");
+          TempCSVBuffer.FINDSET;
+          REPEAT
+            TempResultCSVBuffer := TempCSVBuffer;
+            TempResultCSVBuffer.INSERT;
+          UNTIL TempCSVBuffer.NEXT = 0;
+        UNTIL NEXT = 0;
+      TempResultCSVBuffer.SETRANGE("Field No.",1);
+    END;
+
+    PROCEDURE GetValueOfLineAt@8(FieldNo@1000 : Integer) : Text;
+    VAR
+      TempCSVBuffer@1001 : TEMPORARY Record 1234;
+    BEGIN
+      TempCSVBuffer.COPY(Rec,TRUE);
+      IF NOT TempCSVBuffer.GET("Line No.",FieldNo) THEN
+        ERROR(IndexDoesNotExistErr,"Line No.",FieldNo);
+      EXIT(TempCSVBuffer.Value);
+    END;
+
+    LOCAL PROCEDURE "--TMFunctions--"@1000000004();
+    BEGIN
+    END;
+
+    PROCEDURE LoadData2@1000000011(CSVFileName@1000 : Text;CSVFieldSeparator@1001 : Text[1]);
+    BEGIN
+      //DOC TM0200 AW 25/06/2018
+      InitializeReader(CSVFileName,CSVFieldSeparator);
+      ReadLines2(0);
+    END;
+
+    PROCEDURE ReadLines2@1000000005(NumberOfLines@1000 : Integer) : Boolean;
+    VAR
+      Line@1001 : Text;
+      CurrentLineNo@1002 : Integer;
+      CurrentFieldNo@1003 : Integer;
+    BEGIN
+      //DOC TM0200 AW 25/06/2018
+      IF StreamReader.EndOfStream THEN
+        EXIT(FALSE);
+      REPEAT
+        Line := StreamReader.ReadLine;
+        CurrentLineNo += 1;
+        REPEAT
+          CurrentFieldNo += 1;
+          INIT;
+          "Line No." := CurrentLineNo;
+          "Field No." := CurrentFieldNo;
+          CutUntilSeparator2(Line,Separator);
+          INSERT;
+        UNTIL Line = '';
+        CurrentFieldNo := 0;
+      UNTIL StreamReader.EndOfStream OR (CurrentLineNo = NumberOfLines);
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CutUntilSeparator2@1000000000(VAR pText@1000 : Text;pSeparator@1001 : Text[1]);
+    VAR
+      Position@1002 : Integer;
+      lCutValue@1000000000 : Text;
+    BEGIN
+      //DOC TM0200 AW 25/06/2018
+      Position := STRPOS(pText,pSeparator);
+      IF Position > 0 THEN BEGIN
+        lCutValue := COPYSTR(pText,1,Position - 1);
+        pText := COPYSTR(pText,Position + 1);
+        IF STRLEN(lCutValue) > 250 THEN
+          FillValues(lCutValue)
+        ELSE
+          Value := lCutValue;
+      END ELSE BEGIN
+        IF STRLEN(pText) > 250 THEN BEGIN
+          FillValues(pText);
+        END ELSE BEGIN
+          lCutValue := COPYSTR(pText,1,250);
+          Value := lCutValue;
+        END;
+        pText := '';
+      END;
+    END;
+
+    LOCAL PROCEDURE FillValues@1000000018(VAR pLine@1000000000 : Text);
+    BEGIN
+      //DOC TM0200 AW 25/06/2018
+      IF STRLEN(pLine) <= MAXSTRLEN(Value) THEN
+        EXIT;
+
+      ClearValues;
+      Value := COPYSTR(pLine,1,MAXSTRLEN(Value));
+      IF STRLEN(pLine) > MAXSTRLEN(Value) THEN BEGIN
+        Value2 := COPYSTR(pLine,MAXSTRLEN(Value) + 1,MAXSTRLEN(Value2));
+        pLine := Value2;
+      END;
+      IF STRLEN(pLine) > MAXSTRLEN(Value) + MAXSTRLEN(Value2) THEN BEGIN
+        Value3 := COPYSTR(pLine,MAXSTRLEN(Value) + MAXSTRLEN(Value2) + 1,MAXSTRLEN(Value3));
+        pLine := Value3;
+      END;
+      IF STRLEN(pLine) > MAXSTRLEN(Value) + MAXSTRLEN(Value2) + MAXSTRLEN(Value3) THEN BEGIN
+        Value4 := COPYSTR(pLine,MAXSTRLEN(Value) + MAXSTRLEN(Value2) + MAXSTRLEN(Value3) + 1,MAXSTRLEN(Value4));
+        pLine := Value4;
+      END;
+    END;
+
+    LOCAL PROCEDURE ClearValues@1000000006();
+    BEGIN
+      //DOC TM0200 AW 25/06/2018
+      Value := '';
+      Value2 := '';
+      Value3 := '';
+      Value4 := '';
+    END;
+
+    PROCEDURE InsertEntry@12(LineNo@1001 : Integer;FieldNo@1002 : Integer;FieldValue@1003 : Text[250]);
+    BEGIN
+      //DOC TM0200 AW 25/06/2018
+      INIT;
+      "Line No." := LineNo;
+      "Field No." := FieldNo;
+      Value := FieldValue;
+      INSERT;
+    END;
+
+    PROCEDURE SaveData@10(CSVFileName@1000 : Text;CSVFieldSeparator@1001 : Text[1]);
+    VAR
+      FileMode@1002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileMode";
+      StreamWriter@1004 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamWriter";
+      NumberOfColumns@1003 : Integer;
+    BEGIN
+      //DOC TM0200 AW 25/06/2018
+      StreamWriter := StreamWriter.StreamWriter(CSVFile.Open(CSVFileName,FileMode.Create));
+      NumberOfColumns := GetNumberOfColumns;
+      IF FINDSET THEN
+        REPEAT
+          StreamWriter.Write(Value);
+          IF "Field No." < NumberOfColumns THEN
+            StreamWriter.Write(CSVFieldSeparator)
+          ELSE
+            StreamWriter.WriteLine;
+        UNTIL NEXT = 0;
+      StreamWriter.Close;
+    END;
+
+    PROCEDURE GetNumberOfColumns@1170000000() : Integer;
+    VAR
+      TempCSVBuffer@1000 : TEMPORARY Record 1234;
+    BEGIN
+      //DOC TM0200 AW 25/06/2018
+      TempCSVBuffer.COPY(Rec,TRUE);
+      TempCSVBuffer.ResetFilters;
+      TempCSVBuffer.SETRANGE("Line No.","Line No.");
+      IF TempCSVBuffer.FINDLAST THEN
+        EXIT(TempCSVBuffer."Field No.");
+
+      EXIT(0);
+    END;
+
+    PROCEDURE GetNumberOfLines@9() : Integer;
+    BEGIN
+      //DOC TM0200 AW 25/06/2018
+      IF FINDLAST THEN
+        EXIT("Line No.");
+
+      EXIT(0);
+    END;
+
+    BEGIN
+    {
+      //DOC TM0200 AW 25/06/2018 - Adding Value2, Value3, Value4 fields to handle CSV text greater than 250 characters - now supports up to 1000 characters.
+      //DOC TM0200 AW 25/06/2018 - New functions
+    }
+    END.
+  }
+}
+

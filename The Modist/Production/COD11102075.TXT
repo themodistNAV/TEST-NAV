@@ -1,0 +1,796 @@
+OBJECT Codeunit 11102075 OM - SQL Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            ReadTriggerStatus;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AskSQLTriggerStatus@1000 : 'Unknown,Not Installed,Outdated,Installed';
+      DbConvTriggerStatus@1001 : 'Unknown,Not Installed,Outdated,Installed';
+      TraceTriggerStatus@1002 : 'Unknown,Not Installed,Outdated,Installed';
+
+    LOCAL PROCEDURE ReadTriggerStatus@1();
+    VAR
+      Setup@1000 : Record 11102035;
+    BEGIN
+      CASE TRUE OF
+        TriggerPresent('Object_TraceModifications_' + Setup.LastTraceTrigger) :
+          TraceTriggerStatus := TraceTriggerStatus::Installed;
+
+        TriggerPresent('Object_TraceModifications%') :
+          TraceTriggerStatus := TraceTriggerStatus::Outdated;
+
+        ELSE
+          TraceTriggerStatus := TraceTriggerStatus::"Not Installed";
+
+      END;
+
+      CASE TRUE OF
+        TriggerPresent('OM_Ask_SQL_' + Setup.LastAskSqlTrigger) :
+          AskSQLTriggerStatus := AskSQLTriggerStatus::Installed;
+
+        TriggerPresent('OM_Ask_SQL%') :
+          AskSQLTriggerStatus := AskSQLTriggerStatus::Outdated;
+
+        ELSE
+          AskSQLTriggerStatus := AskSQLTriggerStatus::"Not Installed";
+      END;
+
+      CASE TRUE OF
+        TriggerPresent('OM_Block_DB_Conversion_' + Setup.LastDbConvTrigger) :
+          DbConvTriggerStatus := DbConvTriggerStatus::Installed;
+
+        TriggerPresent('OM_Block_DB_Conversion%') :
+          DbConvTriggerStatus := DbConvTriggerStatus::Outdated;
+
+        ELSE
+          DbConvTriggerStatus := DbConvTriggerStatus::"Not Installed";
+      END;
+    END;
+
+    PROCEDURE AddTraceTrigger@2(DoMessage@1000 : Boolean);
+    VAR
+      ctAddTriggerFailed@1001 : TextConst 'DEU=Failed to add the trace trigger.;ENU=Failed to add the trace trigger.;ESP=Failed to add the trace trigger.;FRA=Failed to add the trace trigger.;NLD=Niet gelukt om de traceer-trigger toe te voegen.;DEA=Failed to add the trace trigger.';
+      ctTriggerAdded@1002 : TextConst 'DEU=The trace trigger is added.;ENU=The trace trigger is added.;ESP=The trace trigger is added.;FRA=The trace trigger is added.;NLD=De traceer-trigger is toegevoegd.;DEA=The trace trigger is added.';
+    BEGIN
+      DropTrigger('Object_TraceModifications%');
+      ExecuteNonQuery(TraceTriggerString);
+      ReadTriggerStatus;
+
+      IF DoMessage THEN
+        IF TraceTriggerStatus = TraceTriggerStatus::Installed THEN
+          MESSAGE(ctTriggerAdded)
+        ELSE
+          MESSAGE(ctAddTriggerFailed);
+    END;
+
+    PROCEDURE RemoveTraceTrigger@3(DoMessage@1000 : Boolean);
+    VAR
+      ctDeleteTriggerFailed@1001 : TextConst 'DEU=Failed to remove the trace trigger.;ENU=Failed to remove the trace trigger.;ESP=Failed to remove the trace trigger.;FRA=Failed to remove the trace trigger.;NLD=Het is niet gelukt om de traceer-trigger te verwijderen.;DEA=Failed to remove the trace trigger.';
+      ctTriggerDeleted@1002 : TextConst 'DEU=The trace trigger is removed.;ENU=The trace trigger is removed.;ESP=The trace trigger is removed.;FRA=The trace trigger is removed.;NLD=De traceer-trigger is verwijderd.;DEA=The trace trigger is removed.';
+    BEGIN
+      DropTrigger('Object_TraceModifications%');
+      ReadTriggerStatus;
+
+      IF DoMessage THEN
+        IF TraceTriggerStatus = TraceTriggerStatus::"Not Installed" THEN
+          MESSAGE(ctTriggerDeleted)
+        ELSE
+          MESSAGE(ctDeleteTriggerFailed);
+    END;
+
+    LOCAL PROCEDURE TraceTriggerString@4() SC : Text;
+    VAR
+      Setup@1000 : Record 11102035;
+    BEGIN
+      A(SC, 'CREATE TRIGGER [dbo].[Object_TraceModifications_' + Setup.LastTraceTrigger + ']');
+      A(SC, '   ON  [dbo].[Object] ');
+      A(SC, '   AFTER INSERT,DELETE,UPDATE');
+      A(SC, 'AS ');
+      A(SC, 'BEGIN');
+      A(SC, '  SET NOCOUNT ON');
+      A(SC, '');
+      A(SC, '  DECLARE @SetupPresent INTEGER;');
+      A(SC, '  DECLARE @SetupSQLCheckObjectLockType INTEGER;');
+      A(SC, '  DECLARE @SkipSQLTrigger INTEGER;');
+      A(SC, '  DECLARE @CheckObjectValid INTEGER = 0;');
+      A(SC, '  DECLARE @DatabaseLocked INTEGER;');
+      A(SC, '  DECLARE @TraceModifications INTEGER;');
+      A(SC, '  DECLARE @LockedBy NVARCHAR(100);');
+      A(SC, '  DECLARE @IsLocked INTEGER;');
+      A(SC, '  DECLARE @IsModification INTEGER;');
+      A(SC, '  DECLARE @CheckIsLocked INTEGER;');
+      A(SC, '  DECLARE @CalledFromRepository INTEGER;');
+      A(SC, '  DECLARE @ObjectType INTEGER = 0;');
+      A(SC, '  DECLARE @ObjectId INTEGER = 0;');
+      A(SC, '  DECLARE @ObjectName NVARCHAR(100);');
+      A(SC, '  DECLARE @ObjectDate DATETIME');
+      A(SC, '  DECLARE @ObjectTime DATETIME');
+      A(SC, '  DECLARE @ObjectTypeText NVARCHAR(100);');
+      A(SC, '  DECLARE @ObjectIdText NVARCHAR(100);');
+      A(SC, '  DECLARE @ObjectVersionList NVARCHAR(100);');
+      A(SC, '  DECLARE @Message NVARCHAR(100);');
+      A(SC, '  DECLARE @NoOfInserts INTEGER;');
+      A(SC, '  DECLARE @NoOfDeletes INTEGER;');
+      A(SC, '  DECLARE @NoOfModifies INTEGER;');
+      A(SC, '  DECLARE @Action INTEGER;');
+      A(SC, '  DECLARE @TokenNo INTEGER;');
+      A(SC, '  DECLARE @LockObjectAtSaving INTEGER;');
+      A(SC, '  DECLARE @Username NVARCHAR(100);');
+      A(SC, '  DECLARE @ShortUsername NVARCHAR(100);');
+      A(SC, '  DECLARE @LockedAdded INTEGER = 0;');
+      A(SC, '');
+      A(SC, '  SET @Username = SYSTEM_USER;');
+      A(SC, '  SET @ShortUsername = UPPER(SYSTEM_USER);');
+      A(SC, '');
+      A(SC, '  SELECT @Username = em.[User Id], @ShortUsername = UPPER(em.[User Id])');
+      A(SC, '  FROM');
+      A(SC, '    [OM - Expected Modification] em,');
+      A(SC, '    (');
+      A(SC, '      SELECT [Type], [ID]');
+      A(SC, '      FROM inserted');
+      A(SC, '      UNION');
+      A(SC, '      SELECT [Type], [ID]');
+      A(SC, '      FROM deleted');
+      A(SC, '    ) s');
+      A(SC, '  WHERE (em.[Object Type] = s.[Type] OR em.[Object Type] = 0)');
+      A(SC, '  AND (em.[Object No_] = s.[ID] OR em.[Object No_] = 0);');
+      A(SC, '');
+      A(SC, '  IF (CHARINDEX(''\'', @ShortUsername) > 0)');
+      A(SC, '    SET @ShortUsername = SUBSTRING(@ShortUsername, CHARINDEX(''\'', @ShortUsername) + 1, 100);');
+      A(SC, '');
+      A(SC, '  SELECT TOP 1');
+      A(SC, '    @SetupPresent = 1,');
+      A(SC, '    @SetupSQLCheckObjectLockType = [SQL Check Object Lock Type],');
+      A(SC, '    @SkipSQLTrigger = [Skip SQL Trigger],');
+      A(SC, '    @LockObjectAtSaving = [Lock Object at Saving],');
+      A(SC, '    @DatabaseLocked = [Database Locked],');
+      A(SC, '    @TraceModifications = [Trace Modifications]');
+      A(SC, '  FROM [OM - Setup] ');
+      A(SC, '  WHERE [Primary Key] = '''';');
+      A(SC, '');
+      A(SC, '  SELECT TOP 1');
+      A(SC, '    @SetupSQLCheckObjectLockType = [SQL Check Object Lock Type],');
+      A(SC, '    @LockObjectAtSaving = [Lock Object at Saving],');
+      A(SC, '    @DatabaseLocked = [Database Locked],');
+      A(SC, '    @TraceModifications = [Trace Modifications]');
+      A(SC, '  FROM [OM - Setup]');
+      A(SC, '  WHERE [Primary Key] = @ShortUsername;');
+      A(SC, '');
+      A(SC, '  IF @SetupPresent = 1');
+      A(SC, '  BEGIN');
+      A(SC, '');
+      A(SC, '    IF @SkipSQLTrigger = 0');
+      A(SC, '    BEGIN');
+      A(SC, '');
+      A(SC, '      IF @DatabaseLocked = 1');
+      A(SC, '      BEGIN');
+      A(SC, '        RAISERROR(''Database is locked.'', 16, 1);');
+      A(SC, '        ROLLBACK TRANSACTION;');
+      A(SC, '      END;');
+      A(SC, '');
+      A(SC, '      SELECT');
+      A(SC, '        @ObjectType = d.[Type],');
+      A(SC, '        @ObjectId = d.[ID],');
+      A(SC, '        @ObjectName = d.[Name],');
+      A(SC, '        @ObjectDate = d.[Date],');
+      A(SC, '        @ObjectTime = d.[Time],');
+      A(SC, '        @ObjectVersionList = d.[Version List]');
+      A(SC, '      FROM Deleted d');
+      A(SC, '      WHERE d.[Type] > 0;');
+      A(SC, '');
+      A(SC, '      IF @ObjectVersionList = ''! CHECK OBJECT VALID !''');
+      A(SC, '        SET @CheckObjectValid = 1;');
+      A(SC, '');
+      A(SC, '      SELECT');
+      A(SC, '        @ObjectType = i.[Type],');
+      A(SC, '        @ObjectId = i.[ID],');
+      A(SC, '        @ObjectName = i.[Name],');
+      A(SC, '        @ObjectDate = i.[Date],');
+      A(SC, '        @ObjectTime = i.[Time],');
+      A(SC, '        @ObjectVersionList = i.[Version List]');
+      A(SC, '      FROM Inserted i');
+      A(SC, '      WHERE i.[Type] > 0;');
+      A(SC, '');
+      A(SC, '      IF @ObjectVersionList = ''! CHECK OBJECT VALID !''');
+      A(SC, '        SET @CheckObjectValid = 1;');
+      A(SC, '');
+      A(SC, '      SET @CalledFromRepository = 0;');
+      A(SC, '      SELECT @CalledFromRepository = 1');
+      A(SC, '      FROM [OM - Repository Log] rl');
+      A(SC, '      WHERE rl.[Object Type] = @ObjectType');
+      A(SC, '      AND rl.[Object No_] = @ObjectId');
+      A(SC, '      AND rl.Status = 1;');
+      A(SC, '');
+      A(SC, '      IF @ObjectType > 0 AND (@ObjectId < 1000000000 OR @ObjectId >= 2000000000) AND @CalledFromRepository = 0 AND @CheckObjectValid = 0');
+      A(SC, '      BEGIN');
+      A(SC, '        SET @LockedBy = '''';');
+      A(SC, '        SET @TokenNo = 0;');
+      A(SC, '        SET @IsLocked = 0;');
+      A(SC, '');
+      A(SC, '        SELECT');
+      A(SC, '          @LockedBy = ol.[Locked By],');
+      A(SC, '          @TokenNo = ol.[Token No_],');
+      A(SC, '          @IsLocked = 1');
+      A(SC, '        FROM [OM - Object Lock] ol');
+      A(SC, '        WHERE ol.[Object Type] = @ObjectType');
+      A(SC, '        AND ol.[Object No_] = @ObjectId;');
+      A(SC, '');
+      A(SC, '        SELECT @NoOfInserts = COUNT([Type]) FROM Inserted;');
+      A(SC, '        SELECT @NoOfDeletes = COUNT([Type]) FROM Deleted;');
+      A(SC, '        SELECT @NoOfModifies = COUNT(i.[Type])');
+      A(SC, '        FROM Inserted i ');
+      A(SC, '          INNER JOIN Deleted d ');
+      A(SC, '            ON i.[Type] = d.[Type] AND i.[ID] = d.[ID];');
+      A(SC, '');
+      A(SC, '        SET @IsModification = 0;');
+      A(SC, '        SET @CheckIsLocked = 0;');
+      A(SC, '');
+      A(SC, '        -- INSERT');
+      A(SC, '        IF @NoOfModifies = 0 AND @NoOfInserts > 0 ');
+      A(SC, '        BEGIN');
+      A(SC, '          SET @Action = 1;');
+      A(SC, '          SET @IsModification = 1;');
+      A(SC, '        END;');
+      A(SC, '');
+      A(SC, '        -- MODIFY');
+      A(SC, '        IF @NoOfModifies > 0');
+      A(SC, '          SET @Action = 2;');
+      A(SC, '');
+      A(SC, '        -- DELETE');
+      A(SC, '        IF @NoOfDeletes > 0 AND @NoOfInserts = 0 ');
+      A(SC, '        BEGIN');
+      A(SC, '          SET @Action = 3;');
+      A(SC, '          SET @IsModification = 1;');
+      A(SC, '          SET @CheckIsLocked = 1;');
+      A(SC, '        END;');
+      A(SC, '');
+      A(SC, '        -- RENAME');
+      A(SC, '        IF @NoOfModifies = 0 AND @NoOfDeletes > 0 AND @NoOfInserts > 0 ');
+      A(SC, '        BEGIN');
+      A(SC, '          SET @Action = 4');
+      A(SC, '          SET @IsModification = 1;');
+      A(SC, '        END;');
+      A(SC, '');
+      A(SC, '        -- MODIFY');
+      A(SC, '        IF @Action = 2');
+      A(SC, '          SELECT ');
+      A(SC, '            @IsModification = 1,');
+      A(SC, '            @CheckIsLocked = 1');
+      A(SC, '          FROM Inserted i');
+      A(SC, '            INNER JOIN Deleted d');
+      A(SC, '              ON i.[Type] = d.[Type]');
+      A(SC, '              AND i.[ID] = d.[ID]');
+      A(SC, '          WHERE ');
+      A(SC, '          (');
+      A(SC, '            i.[Date] <> d.[Date]');
+      A(SC, '            OR CONVERT(VARCHAR(20), i.[Time], 108) <> CONVERT(VARCHAR(20), d.[Time], 108)');
+      A(SC, '            OR i.[Name] <> d.[Name]');
+      A(SC, '            OR REPLACE(REPLACE(i.[Version List], '','', ''''), ''#'', '''') <>');
+      A(SC, '               REPLACE(REPLACE(d.[Version List], '','', ''''), ''#'', '''')');
+      A(SC, '          );');
+      A(SC, '');
+      A(SC, '        IF @SetupSQLCheckObjectLockType <> 0 AND @CheckIsLocked = 1 AND ');
+      A(SC, '           @LockedBy <> @Username AND @LockedBy <> ''''');
+      A(SC, '        BEGIN');
+      A(SC, '          SELECT ');
+      A(SC, '            @ObjectTypeText = ');
+      A(SC, '              CASE @ObjectType');
+      A(SC, '                WHEN 1 THEN ''Table''');
+      A(SC, '                WHEN 2 THEN ''Form''');
+      A(SC, '                WHEN 3 THEN ''Report''');
+      A(SC, '                WHEN 4 THEN ''Dataport''');
+      A(SC, '                WHEN 5 THEN ''Codeunit''');
+      A(SC, '                WHEN 6 THEN ''XMLport''');
+      A(SC, '                WHEN 7 THEN ''MenuSuite''');
+      A(SC, '                WHEN 8 THEN ''Page''');
+      A(SC, '                WHEN 9 THEN ''Query''');
+      A(SC, '                ELSE ''''');
+      A(SC, '              END,');
+      A(SC, '            @ObjectIdText = @ObjectId;');
+      A(SC, '');
+      A(SC, '          SET @Message = ');
+      A(SC, '            CHAR(13) + CHAR(10) + CHAR(13) + CHAR(10) + ');
+      A(SC, '            ''OBJECT MANAGER ERROR:'' + CHAR(13) + CHAR(10) +');
+      A(SC, '            ''Object %s %s - %s is locked by %s'' + CHAR(13) + CHAR(10);');
+      A(SC, '          RAISERROR(@Message, 16, 1, @ObjectTypeText, @ObjectIdText, @ObjectName, @LockedBy);');
+      A(SC, '          ROLLBACK TRANSACTION;');
+      A(SC, '        END;');
+      A(SC, '');
+      A(SC, '        IF @LockObjectAtSaving = 1 AND @IsModification = 1 AND @LockedBy = '''' AND @Action <> 4');
+      A(SC, '        BEGIN');
+      A(SC, '');
+      A(SC, '          IF EXISTS(');
+      A(SC, '            SELECT 1 ');
+      A(SC, '            FROM [OM - Repository Setup]');
+      A(SC, '            WHERE [Use Repository] = 1)');
+      A(SC, '          BEGIN');
+      A(SC, '            SET @Message = ');
+      A(SC, '              CHAR(13) + CHAR(10) + CHAR(13) + CHAR(10) + ');
+      A(SC, '              ''OBJECT MANAGER ERROR:'' + CHAR(13) + CHAR(10) +');
+      A(SC, '              ''The option ''''Lock Object at Saving'''' cannot be '' + ');
+      A(SC, '              ''used in combination with repository'' + CHAR(13) + CHAR(10);');
+      A(SC, '            RAISERROR(@Message, 16, 1);');
+      A(SC, '            ROLLBACK TRANSACTION;');
+      A(SC, '          END;');
+      A(SC, '');
+      A(SC, '          DELETE FROM [OM - Object Lock]');
+      A(SC, '          WHERE [Object Type] = @ObjectType');
+      A(SC, '          AND [Object No_] = @ObjectId;');
+      A(SC, '');
+      A(SC, '          INSERT INTO [OM - Object Lock]');
+      A(SC, '            (');
+      A(SC, '              [Object Type], [Object No_], [Locked By], ');
+      A(SC, '              [Lock Date], ');
+      A(SC, '              [Lock Time], ');
+      A(SC, '              [Deleted], [Token No_], [Branch No_]');
+      A(SC, '            )');
+      A(SC, '          SELECT ');
+      A(SC, '            @ObjectType, @ObjectId, @Username, ');
+      A(SC, '            CAST(CONVERT(VARCHAR(20), GETDATE(), 112) + '' 00:00:00'' AS DATETIME), ');
+      A(SC, '            CAST(''17540101 '' + CONVERT(VARCHAR(20), GETDATE(), 108) AS DATETIME),');
+      A(SC, '            0, 0, '''';');
+      A(SC, '');
+      A(SC, '          UPDATE [Object]');
+      A(SC, '          SET [Locked] = 1,');
+      A(SC, '              [Locked By] = @Username');
+      A(SC, '          WHERE [Type] = @ObjectType');
+      A(SC, '          AND [ID] = @ObjectId');
+      A(SC, '          AND [Locked] = 0;');
+      A(SC, '');
+      A(SC, '          SET @IsLocked = 1;');
+      A(SC, '          SET @LockedAdded = 1;');
+      A(SC, '          SET @LockedBy = @Username;');
+      A(SC, '');
+      A(SC, '        END;');
+      A(SC, '');
+      A(SC, '        IF @SetupSQLCheckObjectLockType = 2 AND @CheckIsLocked = 1 AND @IsLocked = 0');
+      A(SC, '        BEGIN');
+      A(SC, '          SELECT ');
+      A(SC, '            @ObjectTypeText = ');
+      A(SC, '              CASE @ObjectType');
+      A(SC, '                WHEN 1 THEN ''Table''');
+      A(SC, '                WHEN 2 THEN ''Form''');
+      A(SC, '                WHEN 3 THEN ''Report''');
+      A(SC, '                WHEN 4 THEN ''Dataport''');
+      A(SC, '                WHEN 5 THEN ''Codeunit''');
+      A(SC, '                WHEN 6 THEN ''XMLport''');
+      A(SC, '                WHEN 7 THEN ''MenuSuite''');
+      A(SC, '                WHEN 8 THEN ''Page''');
+      A(SC, '                WHEN 9 THEN ''Query''');
+      A(SC, '                ELSE ''''');
+      A(SC, '              END,');
+      A(SC, '            @ObjectIdText = @ObjectId;');
+      A(SC, '');
+      A(SC, '          SET @Message = ');
+      A(SC, '            CHAR(13) + CHAR(10) + CHAR(13) + CHAR(10) + ');
+      A(SC, '            ''OBJECT MANAGER ERROR:'' + CHAR(13) + CHAR(10) +');
+      A(SC, '            ''Object %s %s - %s is not locked'' + CHAR(13) + CHAR(10);');
+      A(SC, '          RAISERROR(@Message, 16, 1, @ObjectTypeText, @ObjectIdText, @ObjectName);');
+      A(SC, '          ROLLBACK TRANSACTION;');
+      A(SC, '        END; ');
+      A(SC, '');
+      A(SC, '        IF @IsModification = 1 AND @TraceModifications = 1 ');
+      A(SC, '          INSERT INTO [OM - Modification] ');
+      A(SC, '            (');
+      A(SC, '              [Object Type], [Object No_], [Object Name], ');
+      A(SC, '              [Object Date], [Object Time], ');
+      A(SC, '              [Status], [Inserted By], ');
+      A(SC, '              [Insert Date], ');
+      A(SC, '              [Insert Time],');
+      A(SC, '              [Assigned to Project No_], [Assigned By],');
+      A(SC, '              [Assign Date], [Assign Time], [Auto Assigned], ');
+      A(SC, '              [Transport No_], [Object Date Time],');
+      A(SC, '              [Locked By], [Token No_], [Traced By SQL], [SQL Trigger], [SQL Status], ');
+      A(SC, '              [System User], [Host Name]');
+      A(SC, '            )');
+      A(SC, '          SELECT ');
+      A(SC, '            @ObjectType, @ObjectId, @ObjectName, ');
+      A(SC, '            @ObjectDate, CAST(''17540101 '' + CONVERT(VARCHAR(20), @ObjectTime, 108) AS DATETIME),');
+      A(SC, '            0, @ShortUsername, ');
+      A(SC, '            CAST(CONVERT(VARCHAR(20), GETDATE(), 112) + '' 00:00:00'' AS DATETIME), ');
+      A(SC, '            CAST(''17540101 '' + CONVERT(VARCHAR(20), GETDATE(), 108) AS DATETIME),');
+      A(SC, '            '''', '''', ');
+      A(SC, '            CAST(''17530101 00:00:00'' AS DATETIME), CAST(''17530101 00:00:00'' AS DATETIME), 0,');
+      A(SC, '            '''', CAST(CONVERT(VARCHAR(20), @ObjectDate, 112) + '' '' + ');
+      A(SC, '            CONVERT(VARCHAR(20), @ObjectTime, 108) AS DATETIME),');
+      A(SC, '            @LockedBy, @TokenNo, 1, @Action, 1, ');
+      A(SC, '            SUBSTRING(@ShortUsername, 1, 50), SUBSTRING(HOST_NAME(), 1, 50);');
+      A(SC, '');
+      A(SC, '        IF @Action = 1 OR @Action = 2');
+      A(SC, '        BEGIN');
+      A(SC, '          INSERT INTO [OM - Object Lock]');
+      A(SC, '            (');
+      A(SC, '              [Object Type], [Object No_], [Locked By], ');
+      A(SC, '              [Lock Date], ');
+      A(SC, '              [Lock Time], ');
+      A(SC, '              [Deleted], [Token No_], [Branch No_]');
+      A(SC, '            )');
+      A(SC, '          SELECT ');
+      A(SC, '            ob.[Type], ob.ID, ob.[Locked By], ');
+      A(SC, '            CAST(CONVERT(VARCHAR(20), GETDATE(), 112) + '' 00:00:00'' AS DATETIME), ');
+      A(SC, '            CAST(''17540101 '' + CONVERT(VARCHAR(20), GETDATE(), 108) AS DATETIME),');
+      A(SC, '            0, 0, ''''');
+      A(SC, '          FROM Inserted ob');
+      A(SC, '            LEFT OUTER JOIN [OM - Object Lock] ol');
+      A(SC, '              ON ob.[Type] = ol.[Object Type]');
+      A(SC, '              AND ob.ID = ol.[Object No_]');
+      A(SC, '          WHERE (ob.Locked = 1 OR @LockedAdded = 1)');
+      A(SC, '          AND ol.[Object Type] IS NULL');
+      A(SC, '          AND ob.[Locked By] <> ''CheckSettings''');
+      A(SC, '          AND ob.[Type] > 0');
+      A(SC, '          GROUP BY ob.[Type], ob.ID, ob.[Locked By];');
+      A(SC, '');
+      A(SC, '          DELETE ol ');
+      A(SC, '          FROM [OM - Object Lock] ol ');
+      A(SC, '            INNER JOIN Inserted ob ');
+      A(SC, '              ON ol.[Object Type] = ob.[Type]');
+      A(SC, '              AND ol.[Object No_] = ob.ID');
+      A(SC, '          WHERE (ob.Locked = 0 AND NOT @LockedAdded = 1)');
+      A(SC, '          AND ol.Deleted = 0;');
+      A(SC, '        END;');
+      A(SC, '');
+      A(SC, '        IF @Action = 3');
+      A(SC, '          DELETE ol ');
+      A(SC, '          FROM [OM - Object Lock] ol ');
+      A(SC, '            INNER JOIN Deleted ob ');
+      A(SC, '              ON ol.[Object Type] = ob.[Type]');
+      A(SC, '              AND ol.[Object No_] = ob.ID');
+      A(SC, '              AND ol.Deleted = 0;');
+      A(SC, '');
+      A(SC, '      END;  ');
+      A(SC, '');
+      A(SC, '    END;');
+      A(SC, '');
+      A(SC, '  END;');
+      A(SC, '');
+      A(SC, 'END;');
+
+      EXIT(SC);
+    END;
+
+    PROCEDURE GetTraceTriggerStatus@5() : Integer;
+    BEGIN
+      EXIT(TraceTriggerStatus);
+    END;
+
+    PROCEDURE AddAskSqlTrigger@6(DoMessage@1000 : Boolean);
+    VAR
+      ctAddTriggerFailed@1001 : TextConst 'DEU=Failed to add the ask SQL trigger.;ENU=Failed to add the ask SQL trigger.;ESP=Failed to add the ask SQL trigger.;FRA=Failed to add the ask SQL trigger.;NLD=Niet gelukt om de traceer-trigger toe te voegen.;DEA=Failed to add the ask SQL trigger.';
+      ctTriggerAdded@1002 : TextConst 'DEU=The ask SQL trigger is added.;ENU=The ask SQL trigger is added.;ESP=The ask SQL trigger is added.;FRA=The ask SQL trigger is added.;NLD=De ask SQL-trigger is toegevoegd.;DEA=The ask SQL trigger is added.';
+    BEGIN
+      DropTrigger('OM_Ask_SQL%');
+      ExecuteNonQuery(AskSqlTriggerString);
+      ReadTriggerStatus;
+
+      IF DoMessage THEN
+        IF AskSQLTriggerStatus = AskSQLTriggerStatus::Installed THEN
+          MESSAGE(ctTriggerAdded)
+        ELSE
+          MESSAGE(ctAddTriggerFailed);
+    END;
+
+    PROCEDURE RemoveAskSqlTrigger@7(DoMessage@1000 : Boolean);
+    VAR
+      ctDeleteTriggerFailed@1001 : TextConst 'DEU=Failed to remove the ask SQL trigger.;ENU=Failed to remove the ask SQL trigger.;ESP=Failed to remove the ask SQL trigger.;FRA=Failed to remove the ask SQL trigger.;NLD=Het is niet gelukt om de ask SQL trigger te verwijderen.;DEA=Failed to remove the ask SQL trigger.';
+      ctTriggerDeleted@1002 : TextConst 'DEU=The ask SQL trigger is removed.;ENU=The ask SQL trigger is removed.;ESP=The ask SQL trigger is removed.;FRA=The ask SQL trigger is removed.;NLD=De ask SQL is verwijderd.;DEA=The ask SQL trigger is removed.';
+    BEGIN
+      DropTrigger('OM_Ask_SQL%');
+      ReadTriggerStatus;
+
+      IF DoMessage THEN
+        IF AskSQLTriggerStatus = AskSQLTriggerStatus::"Not Installed" THEN
+          MESSAGE(ctTriggerDeleted)
+        ELSE
+          MESSAGE(ctDeleteTriggerFailed);
+    END;
+
+    LOCAL PROCEDURE AskSqlTriggerString@8() SC : Text;
+    VAR
+      Setup@1000 : Record 11102035;
+    BEGIN
+      A(SC, 'CREATE TRIGGER [dbo].[OM_Ask_SQL_' + Setup.LastAskSqlTrigger + ']');
+      A(SC, '   ON  [dbo].[OM - Ask SQL]');
+      A(SC, '   AFTER INSERT');
+      A(SC, 'AS');
+      A(SC, 'BEGIN');
+      A(SC, '  SET NOCOUNT ON');
+      A(SC, '');
+      A(SC, '  DECLARE @Question INTEGER;');
+      A(SC, '  DECLARE @Answer NVARCHAR(100);');
+      A(SC, '');
+      A(SC, '  SELECT @Question = Question');
+      A(SC, '  FROM inserted;');
+      A(SC, '');
+      A(SC, '  SET @Answer = '''';');
+      A(SC, '');
+      A(SC, '  IF @Question = 1');
+      A(SC, '  BEGIN');
+      A(SC, '    SET @Answer = ''001'';');
+      A(SC, '  END;');
+      A(SC, '');
+      A(SC, '  IF @Question = 2');
+      A(SC, '  BEGIN');
+      A(SC, '');
+      A(SC, '    SET @Answer = ''1'';');
+      A(SC, '');
+      A(SC, '    DELETE FROM [OM - Where Used Status];');
+      A(SC, '');
+      A(SC, '    INSERT INTO [OM - Where Used Status] ([Object Type], [Object No_])');
+      A(SC, '    SELECT ob.[Type], ob.ID');
+      A(SC, '    FROM [Object] ob');
+      A(SC, '      LEFT OUTER JOIN [OM - Known Object Export Error] ee');
+      A(SC, '        ON ob.[Type] = ee.[Object Type]');
+      A(SC, '        AND ob.ID = ee.[Object No_]');
+      A(SC, '      LEFT OUTER JOIN [OM - Where Used Object] wu');
+      A(SC, '        ON ob.[Type] = wu.[Object Type]');
+      A(SC, '        AND ob.ID = wu.[Object No_]');
+      A(SC, '      LEFT OUTER JOIN');
+      A(SC, '      (');
+      A(SC, '        SELECT ho2.[Object Type], ho2.[Object No_], MAX(ho2.[Entry No_]) [Entry No_]');
+      A(SC, '        FROM [OM - C_AL History Object] ho2');
+      A(SC, '        GROUP BY ho2.[Object Type], ho2.[Object No_]');
+      A(SC, '      ) sho');
+      A(SC, '        ON ob.[Type] = sho.[Object Type]');
+      A(SC, '        AND ob.ID = sho.[Object No_]');
+      A(SC, '      LEFT OUTER JOIN [OM - C_AL History Object] ho');
+      A(SC, '        ON sho.[Entry No_] = ho.[Entry No_]');
+      A(SC, '        AND ob.[Type] = ho.[Object Type]');
+      A(SC, '        AND ob.ID = ho.[Object No_]');
+      A(SC, '    WHERE ob.[Type] <> 0');
+      A(SC, '    AND ob.[BLOB Size] > 0');
+      A(SC, '    AND ee.[Object Type] IS NULL');
+      A(SC, '    AND');
+      A(SC, '    (');
+      A(SC, '      wu.[Object Type] IS NULL OR');
+      A(SC, '      wu.[C_AL Changed] = 1 OR');
+      A(SC, '      wu.[Status] < 2 OR');
+      A(SC, '      wu.[Version No_] < 701 OR');
+      A(SC, '      ho.[Entry No_] IS NULL OR');
+      A(SC, '      REPLACE(REPLACE(REPLACE(ho.[Version List], '','', ''''), ''#'', ''''), ''LOCKED'', '''') <>');
+      A(SC, '      REPLACE(REPLACE(REPLACE(ob.[Version List], '','', ''''), ''#'', ''''), ''LOCKED'', '''') OR');
+      A(SC, '      ho.Modified <> ob.Modified OR');
+      A(SC, '      ho.[Object Name] <> ob.Name OR');
+      A(SC, '      ho.[Object Date] <> ob.Date OR');
+      A(SC, '      ABS(CAST(ho.[Object Time] AS FLOAT) - CAST(ob.[Time] AS FLOAT)) * 60 * 60 * 24 > 1 OR');
+      A(SC, '      wu.[Object Date] <> ob.Date OR');
+      A(SC, '      wu.[Object Time] <> ob.Time OR');
+      A(SC, '      wu.[Object Modified] <> ob.Modified');
+      A(SC, '    );');
+      A(SC, '');
+      A(SC, '    INSERT INTO [OM - Where Used Status] ([Object Type], [Object No_])');
+      A(SC, '    SELECT wu.[Object Type], wu.[Object No_]');
+      A(SC, '    FROM [OM - Where Used Object] wu');
+      A(SC, '      LEFT OUTER JOIN [Object] ob');
+      A(SC, '        ON wu.[Object Type] = ob.[Type]');
+      A(SC, '        AND wu.[Object No_] = ob.ID');
+      A(SC, '    WHERE wu.[Object No_] < 2000000000');
+      A(SC, '    AND ob.[Type] IS NULL;');
+      A(SC, '');
+      A(SC, '    SELECT TOP 1 @Answer = ''0''');
+      A(SC, '    FROM [OM - Where Used Status];');
+      A(SC, '');
+      A(SC, '  END;');
+      A(SC, '');
+      A(SC, '  UPDATE [OM - Ask SQL] SET Answer = @Answer');
+      A(SC, '  FROM inserted i, [OM - Ask SQL] ASql');
+      A(SC, '  WHERE i.Question = ASql.Question;');
+      A(SC, '');
+      A(SC, 'END');
+    END;
+
+    PROCEDURE GetAskSqlTriggerStatus@9() : Integer;
+    BEGIN
+      EXIT(AskSQLTriggerStatus);
+    END;
+
+    PROCEDURE AddDbConvTrigger@22(DoMessage@1000 : Boolean);
+    VAR
+      ctAddTriggerFailed@1001 : TextConst 'DEU=Failed to add the block database conversion trigger.;ENU=Failed to add the block database conversion trigger.;ESP=Failed to add the block database conversion trigger.;FRA=Failed to add the block database conversion trigger.;NLD=Niet gelukt om de blokkeer-database-conversie-trigger toe te voegen.;DEA=Failed to add the block database conversion trigger.';
+      ctTriggerAdded@1002 : TextConst 'DEU=The block database conversion trigger is added.;ENU=The block database conversion trigger is added.;ESP=The block database conversion trigger is added.;FRA=The block database conversion trigger is added.;NLD=De blokkeer-database-conversie-trigger is toegevoegd.;DEA=The block database conversion trigger is added.';
+    BEGIN
+      DropTrigger('OM_Block_DB_Conversion%');
+      ExecuteNonQuery(DbConvTriggerString);
+      ReadTriggerStatus;
+
+      IF DoMessage THEN
+        IF DbConvTriggerStatus = DbConvTriggerStatus::Installed THEN
+          MESSAGE(ctTriggerAdded)
+        ELSE
+          MESSAGE(ctAddTriggerFailed);
+    END;
+
+    PROCEDURE RemoveDbConvTrigger@21(DoMessage@1000 : Boolean);
+    VAR
+      ctDeleteTriggerFailed@1001 : TextConst 'DEU=Failed to remove the block database conversion trigger.;ENU=Failed to remove the block database conversion trigger.;ESP=Failed to remove the block database conversion trigger.;FRA=Failed to remove the block database conversion trigger.;NLD=Het is niet gelukt om de blokkeer-database-conversie-trigger te verwijderen.;DEA=Failed to remove the block database conversion trigger.';
+      ctTriggerDeleted@1002 : TextConst 'DEU=The block database conversion trigger is removed.;ENU=The block database conversion trigger is removed.;ESP=The block database conversion trigger is removed.;FRA=The block database conversion trigger is removed.;NLD=De blokkeer-database-conversie-trigger is verwijderd.;DEA=The block database conversion trigger is removed.';
+    BEGIN
+      DropTrigger('OM_Block_DB_Conversion%');
+      ReadTriggerStatus;
+
+      IF DoMessage THEN
+        IF DbConvTriggerStatus = DbConvTriggerStatus::"Not Installed" THEN
+          MESSAGE(ctTriggerDeleted)
+        ELSE
+          MESSAGE(ctDeleteTriggerFailed);
+    END;
+
+    LOCAL PROCEDURE DbConvTriggerString@20() SC : Text;
+    VAR
+      Setup@1000 : Record 11102035;
+    BEGIN
+      A(SC, 'CREATE TRIGGER [dbo].[OM_Block_DB_Conversion_' + Setup.LastDbConvTrigger + ']');
+      A(SC, '   ON  [dbo].[$ndo$dbproperty]');
+      A(SC, '   AFTER UPDATE');
+      A(SC, 'AS');
+      A(SC, 'BEGIN');
+      A(SC, '  SET NOCOUNT ON;');
+      A(SC, '');
+      A(SC, '  DECLARE @OtherDatabaseVersionNo INTEGER = 0;');
+      A(SC, '  DECLARE @Message NVARCHAR(100);');
+      A(SC, '');
+      A(SC, '  SELECT @OtherDatabaseVersionNo = 1');
+      A(SC, '  FROM Inserted i');
+      A(SC, '    INNER JOIN Deleted d');
+      A(SC, '      ON i.programid = d.programid');
+      A(SC, '  WHERE i.databaseversionno <> d.databaseversionno;');
+      A(SC, '  IF @OtherDatabaseVersionNo = 1');
+      A(SC, '  BEGIN');
+      A(SC, '    SET @Message =');
+      A(SC, '      CHAR(13) + CHAR(10) + CHAR(13) + CHAR(10) +');
+      A(SC, '      ''OBJECT MANAGER ERROR:'' + CHAR(13) + CHAR(10) +');
+      A(SC, '      ''Database cannot be converterd.'' + CHAR(13) + CHAR(10) +');
+      A(SC, '      ''Please first remove the Block Database Conversion trigger.'' + CHAR(13) + CHAR(10);');
+      A(SC, '');
+      A(SC, '    RAISERROR(@Message, 16, 1);');
+      A(SC, '    ROLLBACK TRANSACTION;');
+      A(SC, '  END;');
+      A(SC, '');
+      A(SC, 'END');
+    END;
+
+    PROCEDURE GetDbConvTriggerStatus@19() : Integer;
+    BEGIN
+      EXIT(DbConvTriggerStatus);
+    END;
+
+    PROCEDURE ExecuteNonQuery@10(SqlString@1000 : Text);
+    VAR
+      SqlCommand@1001 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlConnection@1002 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+    BEGIN
+      SqlConnection := SqlConnection.SqlConnection(ConnectionString);
+      SqlConnection.Open;
+      SqlCommand := SqlConnection.CreateCommand;
+
+      SqlCommand.CommandText(SqlString);
+      SqlCommand.ExecuteNonQuery;
+    END;
+
+    LOCAL PROCEDURE DropTrigger@11(TriggerName@1000 : Text);
+    VAR
+      DataReader@1001 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      SqlCommand@1002 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlConnection@1003 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+    BEGIN
+      SqlConnection := SqlConnection.SqlConnection(ConnectionString);
+      SqlConnection.Open;
+      SqlCommand := SqlConnection.CreateCommand;
+
+      SqlCommand.CommandText('SELECT name FROM sys.triggers WHERE name LIKE ''' + TriggerName + '''');
+      DataReader := SqlCommand.ExecuteReader;
+
+      WHILE DataReader.Read DO
+        ExecuteNonQuery('DROP TRIGGER ' + FORMAT(DataReader.Item('name')));
+    END;
+
+    LOCAL PROCEDURE TriggerPresent@12(TriggerName@1000 : Text) : Boolean;
+    VAR
+      DataReader@1001 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      SqlCommand@1002 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlConnection@1003 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+    BEGIN
+      SqlConnection := SqlConnection.SqlConnection(ConnectionString);
+      SqlConnection.Open;
+      SqlCommand := SqlConnection.CreateCommand;
+
+      SqlCommand.CommandText('SELECT name FROM sys.triggers WHERE name LIKE ''' + TriggerName + '''');
+      DataReader := SqlCommand.ExecuteReader;
+
+      EXIT(DataReader.HasRows);
+    END;
+
+    LOCAL PROCEDURE ConnectionString@13() : Text;
+    VAR
+      Setup@1000 : Record 11102035;
+      NAVDatabase@1001 : Record 11102099;
+      ApplicationSettings@1002 : Codeunit 11102101;
+      DatabaseName@1003 : Text;
+      ServerName@1004 : Text;
+      ctNoSqlDatabase@1005 : TextConst 'DEU=This is not an SQL database.;ENU=This is not an SQL database.;ESP=This is not an SQL database.;FRA=This is not an SQL database.;NLD=Dit is geen SQL database.;DEA=This is not an SQL database.';
+    BEGIN
+      Setup.CustomGet;
+      IF Setup."Database Code" <> '' THEN
+        IF NAVDatabase.GET(Setup."Database Code") THEN
+          EXIT(NAVDatabase.ConnectionString);
+
+      ServerName := ApplicationSettings.ServerInstanceName;
+      DatabaseName := ApplicationSettings.DatabaseName;
+
+      IF ServerName = '' THEN
+        ERROR(ctNoSqlDatabase);
+
+      EXIT('Server=' + ServerName + ';Database=' + DatabaseName + ';Trusted_Connection=True;');
+    END;
+
+    LOCAL PROCEDURE A@14(VAR SC@1000 : Text;Line@1001 : Text);
+    VAR
+      CrLf@1002 : Text;
+    BEGIN
+      CrLf[1] := 13;
+      CrLf[2] := 10;
+      SC := SC + Line + CrLf;
+    END;
+
+    PROCEDURE SQLTinyInt@15(BooleanValue@1000 : Boolean) : Text;
+    BEGIN
+      IF BooleanValue THEN
+        EXIT('1')
+      ELSE
+        EXIT('0');
+    END;
+
+    PROCEDURE SQLTxt@16(TextValue@1000 : Text) ExitValue : Text;
+    VAR
+      i@1001 : Integer;
+    BEGIN
+      FOR i := 1 TO STRLEN(TextValue) DO
+        IF TextValue[i] = '''' THEN
+          ExitValue := ExitValue + ''''''
+        ELSE
+          ExitValue := ExitValue + FORMAT(TextValue[i]);
+    END;
+
+    PROCEDURE SQLDate@17(DateValue@1000 : Date) : Text[1024];
+    BEGIN
+      EXIT(STRSUBSTNO('CONVERT(DATETIME, ''%1 00:00:00'', 120)', FORMAT(DateValue, 0, 9)));
+    END;
+
+    PROCEDURE SQLTime@18(TimeValue@1000 : Time) : Text;
+    BEGIN
+      EXIT(STRSUBSTNO('CONVERT(DATETIME, ''1754-01-01 %1'', 121)', FORMAT(TimeValue, 0, '<Hours24>:<Minutes,2>:<Seconds,2><Second dec.><Comma,.>')));
+    END;
+
+    PROCEDURE UidOffset@23() : Integer;
+    VAR
+      DataReader@1000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      SqlCommand@1001 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlConnection@1002 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+    BEGIN
+      SqlConnection := SqlConnection.SqlConnection(ConnectionString);
+      SqlConnection.Open;
+      SqlCommand := SqlConnection.CreateCommand;
+
+      SqlCommand.CommandText('SELECT uidoffset FROM [$ndo$dbproperty]');
+      DataReader := SqlCommand.ExecuteReader;
+
+      IF DataReader.Read THEN
+        EXIT(DataReader.GetInt32(0));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

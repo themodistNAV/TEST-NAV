@@ -1,0 +1,166 @@
+OBJECT Codeunit 9062514 Ask nOra - Dev. API
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ConvMgt@1000000000 : Codeunit 9062400;
+
+    PROCEDURE FindRecord@1000000000(VAR AsknOraConversation@1000000002 : Record 9062522;VAR Result@1000000001 : 'Success,Failure,QuestionAsked';TableNoFilter@1000000000 : Text) ActionSuccess : Boolean;
+    BEGIN
+      EXIT(FindRecord_Advanced(AsknOraConversation,Result,TableNoFilter,''));
+    END;
+
+    PROCEDURE FindRecord_Advanced@1000000004(VAR AsknOraConversation@1000000000 : Record 9062522;VAR Result@1000000002 : 'Success,Failure,QuestionAsked';TableNoFilter@1000000006 : Text;WordTypeFilter@1000000009 : Text) ActionSuccess : Boolean;
+    VAR
+      QuestionChoice@1000000001 : Record 9062513;
+      SearchMgt@1000000005 : Codeunit 9062405;
+      NumResults@1000000004 : Integer;
+      SearchResultsSummary@1000000003 : Record 9062523;
+      TempObject@1000000007 : TEMPORARY Record 2000000001;
+      PrevRecordInTableNoFilter@1000000008 : Boolean;
+      eLookingForRecord@1000000010 : TextConst 'ENU=Looking for records with the following params: Table: "%1", WordType: "%2";ENG=Looking for records with the following params: Table: "%1", WordType: "%2"';
+      eIsQuestionAnswered@1000000011 : TextConst 'ENU=You have just answered a question for me, maybe that''s the record;ENG=You have just answered a question for me, maybe that''s the record';
+      eQuestionAnswered@1000000012 : TextConst 'ENU=It is, so I''m going to show you the record that you picked when I asked you that question;ENG=It is, so I''m going to show you the record that you picked when I asked you that question';
+      eIsRecord@1000000013 : TextConst 'ENU=I wonder if you just told me what record to use;ENG=I wonder if you just told me what record to use';
+      eOneRecordFound@1000000014 : TextConst 'ENU=I managed to find 1 NAV Record from what you just said, so I''ll use that;ENG=I managed to find 1 NAV Record from what you just said, so I''ll use that';
+      eMultipleRecordsFound@1000000015 : TextConst 'ENU=I found multiple records from what you said, so you''ll need to choose;ENG=I found multiple records from what you said, so you''ll need to choose';
+      eUsingPreviousRecord@1000000017 : TextConst 'ENU=I couldn''t find anything in what you said that relates to a NAV Record, but you have previously talking about another record, so I''ll use that;ENG=I couldn''t find anything in what you said that relates to a NAV Record, but you have previously talking about another record, so I''ll use that';
+      eNoRecordFound@1000000016 : TextConst 'ENU=I couldn''t find anything in what you said that relates to a NAV Record and I''m out of other options :(;ENG=I couldn''t find anything in what you said that relates to a NAV Record and I''m out of other options :(';
+    BEGIN
+      //Sequence :
+      // 1: Check if user has just answered a question choosing the record
+      // 2: Search the sentence for mention of a record
+      // 3: If 1 match is found, use that result
+      // 4: if multiple matches, respond with question asking user to choose
+      // 5: If there are no matches, try to us last record (if it matched the TableNoFilter)
+      // 6: No results found
+
+      //On Success the Conversation is updated with the found Record info in "Curr. Table" and "Curr. Rec. Position"
+
+      WITH AsknOraConversation DO BEGIN
+        ConvMgt.nOraResponse_Debug(STRSUBSTNO(eLookingForRecord,TableNoFilter,WordTypeFilter));
+
+        // 1: Check if user has just answered a question choosing the record
+        IF ("Question Answered" <> 0) AND ("Question Choice Answer" <> 0)AND ("Before Question Action" = "Curr. Action") THEN BEGIN
+          ConvMgt.nOraResponse_Debug(eIsQuestionAnswered);
+          QuestionChoice.GET("Question Answered","Question Choice Answer");
+
+          ConvMgt.nOraResponse_Debug(eQuestionAnswered);
+          VALIDATE("Curr. Table",QuestionChoice."Related Table No.");
+          VALIDATE("Curr. Rec. Position",QuestionChoice."Related Position Text");
+
+          //Clear the chosen option >>
+          VALIDATE("Question Answered",0);
+          VALIDATE("Question Choice Answer",0);
+          //Clear the chosen option <<
+
+          MODIFY(TRUE);
+          Result := Result::Success;
+          EXIT(TRUE);
+        END;
+
+        // 2: Search the sentence for mention of a record
+        ConvMgt.nOraResponse_Debug(eIsRecord);
+        NumResults :=
+          SearchMgt.QuickSearch("Curr. Sentence ID",TableNoFilter,WordTypeFilter,FALSE,FALSE,FALSE,FALSE,FALSE,FALSE,'RECORD',1,SearchResultsSummary);
+
+        // 3: If 1 match is found, use that result
+        IF NumResults = 1 THEN BEGIN
+          ConvMgt.nOraResponse_Debug(eOneRecordFound);
+          VALIDATE("Curr. Table",SearchResultsSummary."Table No.");
+          VALIDATE("Curr. Rec. Position",SearchResultsSummary."Position Text");
+          MODIFY(TRUE);
+          SearchMgt.UseSearchResult(SearchResultsSummary);
+          Result := Result::Success;
+          EXIT(TRUE);
+        END;
+
+        // 4: if multiple matches, respond with question asking user to choose
+        IF NumResults > 1 THEN BEGIN
+          ConvMgt.nOraResponse_Debug(eMultipleRecordsFound);
+          ConvMgt.CreateQuestion_FromSearchResSum(AsknOraConversation,SearchResultsSummary,'',TRUE);
+          SearchMgt.UseSearchResult(SearchResultsSummary);
+          Result := Result::QuestionAsked;
+          EXIT(TRUE);
+        END;
+
+        // 5: If there are no matches, try to us last record (context)
+        IF ("Prev. Table" <> 0) AND ("Prev. Rec. Position" <> '') THEN BEGIN
+          //Does it match the TableNoFilter?
+          IF TableNoFilter <> '' THEN BEGIN
+            TempObject.INIT;
+            TempObject.ID := "Prev. Table";
+            TempObject.INSERT;
+
+            TempObject.SETFILTER(ID,TableNoFilter);
+            PrevRecordInTableNoFilter := TempObject.FINDFIRST;
+          END ELSE PrevRecordInTableNoFilter := TRUE;
+
+          IF PrevRecordInTableNoFilter THEN BEGIN
+            ConvMgt.nOraResponse_Debug(eUsingPreviousRecord);
+            VALIDATE("Curr. Table","Prev. Table");
+            VALIDATE("Curr. Rec. Position","Prev. Rec. Position");
+            MODIFY(TRUE);
+            Result := Result::Success;
+            EXIT(TRUE);
+          END;
+        END;
+
+        // 6: No results found
+        ConvMgt.nOraResponse_Debug(eNoRecordFound);
+        Result := Result::Failure;
+        EXIT(FALSE);
+
+      END;
+    END;
+
+    PROCEDURE GetNextWord@1000000005(VAR AsknOraConversation@1000000001 : Record 9062522;VAR NextSentenceWord@1000000000 : Record 9062518) Found : Boolean;
+    BEGIN
+      EXIT(GetNextWord_Advanced(AsknOraConversation,NextSentenceWord,FALSE,FALSE,'',''));
+    END;
+
+    PROCEDURE GetNextWord_Advanced@1000000001(VAR AsknOraConversation@1000000002 : Record 9062522;VAR NextSentenceWord@1000000006 : Record 9062518;ReuseWords@1000000000 : Boolean;UseIgnoredWords@1000000005 : Boolean;WordTypeFilter@1000000004 : Text;UsedForCode@1000000001 : Text) Found : Boolean;
+    VAR
+      SentenceWord@1000000003 : Record 9062518;
+    BEGIN
+      IF UsedForCode = '' THEN UsedForCode := 'GETNEXTWORD';
+
+      WITH AsknOraConversation DO BEGIN
+        SentenceWord.SETRANGE("Sentence ID","Curr. Sentence ID");
+        IF NOT ReuseWords THEN SentenceWord.SETRANGE(Used,FALSE);
+        IF NOT UseIgnoredWords THEN SentenceWord.SETRANGE(Ignore,FALSE);
+        SentenceWord.SETFILTER(Type,WordTypeFilter);
+
+        IF SentenceWord.FINDFIRST THEN BEGIN
+          NextSentenceWord.GET(SentenceWord."Sentence ID",SentenceWord."Word ID");
+          NextSentenceWord.VALIDATE(Used,TRUE);
+          NextSentenceWord.VALIDATE("Used For",UsedForCode);
+          NextSentenceWord.MODIFY(TRUE);
+          EXIT(TRUE);
+        END ELSE BEGIN
+          EXIT(FALSE);
+        END;
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.6  JH 28/08/2015 - Upgraded to 2016
+      //DOC NA2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,450 @@
+OBJECT Codeunit 9062614 Enhanced Workflow Std. Utils
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    SingleInstance=Yes;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      tApprovalRequired@9062229 : TextConst 'ENU=The Workflow "%1" must be completed to Release the Record "%2";ENG=The Workflow "%1" must be completed to Release the Record "%2"';
+      PurchHeaderTypeCondnTxt@9062235 : TextConst '@@@={Locked};ENU="<?xml version=""1.0"" encoding=""utf-8"" standalone=""yes""?><ReportParameters><DataItems><DataItem name=""Purchase Header"">%1</DataItem><DataItem name=""Purchase Line"">%2</DataItem></DataItems></ReportParameters>";ENG="<?xml version=""1.0"" encoding=""utf-8"" standalone=""yes""?><ReportParameters><DataItems><DataItem name=""Purchase Header"">%1</DataItem><DataItem name=""Purchase Line"">%2</DataItem></DataItems></ReportParameters>"';
+      SalesHeaderTypeCondnTxt@9062234 : TextConst '@@@={Locked};ENU="<?xml version=""1.0"" encoding=""utf-8"" standalone=""yes""?><ReportParameters><DataItems><DataItem name=""Sales Header"">%1</DataItem><DataItem name=""Sales Line"">%2</DataItem></DataItems></ReportParameters>";ENG="<?xml version=""1.0"" encoding=""utf-8"" standalone=""yes""?><ReportParameters><DataItems><DataItem name=""Sales Header"">%1</DataItem><DataItem name=""Sales Line"">%2</DataItem></DataItems></ReportParameters>"';
+      IncomingDocumentTypeCondnTxt@9062233 : TextConst '@@@={Locked};ENU="<?xml version=""1.0"" encoding=""utf-8"" standalone=""yes""?><ReportParameters><DataItems><DataItem name=""Incoming Document"">%1</DataItem><DataItem name=""Incoming Document Attachment"">%2</DataItem></DataItems></ReportParameters>";ENG="<?xml version=""1.0"" encoding=""utf-8"" standalone=""yes""?><ReportParameters><DataItems><DataItem name=""Incoming Document"">%1</DataItem><DataItem name=""Incoming Document Attachment"">%2</DataItem></DataItems></ReportParameters>"';
+      CustomerTypeCondnTxt@9062232 : TextConst '@@@={Locked};ENU="<?xml version=""1.0"" encoding=""utf-8"" standalone=""yes""?><ReportParameters><DataItems><DataItem name=""Customer"">%1</DataItem></DataItems></ReportParameters>";ENG="<?xml version=""1.0"" encoding=""utf-8"" standalone=""yes""?><ReportParameters><DataItems><DataItem name=""Customer"">%1</DataItem></DataItems></ReportParameters>"';
+      GeneralJournalBatchTypeCondnTxt@9062231 : TextConst '@@@={Locked};ENU="<?xml version=""1.0"" encoding=""utf-8"" standalone=""yes""?><ReportParameters><DataItems><DataItem name=""Gen. Journal Batch"">%1</DataItem></DataItems></ReportParameters>";ENG="<?xml version=""1.0"" encoding=""utf-8"" standalone=""yes""?><ReportParameters><DataItems><DataItem name=""Gen. Journal Batch"">%1</DataItem></DataItems></ReportParameters>"';
+      GeneralJournalLineTypeCondnTxt@9062230 : TextConst '@@@={Locked};ENU="<?xml version=""1.0"" encoding=""utf-8"" standalone=""yes""?><ReportParameters><DataItems><DataItem name=""Gen. Journal Line"">%1</DataItem></DataItems></ReportParameters>";ENG="<?xml version=""1.0"" encoding=""utf-8"" standalone=""yes""?><ReportParameters><DataItems><DataItem name=""Gen. Journal Line"">%1</DataItem></DataItems></ReportParameters>"';
+      gRecordType@9062236 : 'PurchaseDoc,SalesDoc,GenJnlBatch,GenJnlLine,Customer,IncomingDoc,Vendor';
+      tError_NoDelete@9062237 : TextConst 'ENU=The Workflow "%1" cannot be deleted as it is related to Enhanced Workflow "%2". Changes must be made from the Enhanced Workflow Card.;ENG=The Workflow "%1" cannot be deleted as it is related to Enhanced Workflow "%2". Changes must be made from the Enhanced Workflow Card.';
+      tError_NoModify@9062238 : TextConst 'ENU=The Workflow "%1" cannot be modified as it is related to Enhanced Workflow "%2". Changes must be made from the Enhanced Workflow Card.;ENG=The Workflow "%1" cannot be modified as it is related to Enhanced Workflow "%2". Changes must be made from the Enhanced Workflow Card.';
+      AllowStdWorkflowChanges@9062239 : Boolean;
+      tError_NoRename@9062240 : TextConst 'ENU=The Workflow "%1" cannot be renamed as it is related to Enhanced Workflow "%2". Changes must be made from the Enhanced Workflow Card.;ENG=The Workflow "%1" cannot be renamed as it is related to Enhanced Workflow "%2". Changes must be made from the Enhanced Workflow Card.';
+      tConfirmOverwrite@9062241 : TextConst 'ENU=The Workflow "%1" already exists, are you sure you want to overwrite it?;ENG=The Workflow "%1" already exists, are you sure you want to overwrite it?';
+      tError_CreateStopped@9062242 : TextConst 'ENU=The creation of the Standard Workflow was stopped;ENG=The creation of the Standard Workflow was stopped';
+      tWorkflowResponse_StartEnhancedWorkflow@1000000000 : TextConst 'ENU=STARTENHWORKFLOW;ENG=STARTENHWORKFLOW';
+      tWorkflowExtensionNotInstalled@1000000001 : TextConst 'ENU=Cannot create Standard Workflow as the TNP Workflow Extension is not installed;ENG=Cannot create Standard Workflow as the TNP Workflow Extension is not installed';
+      VendorTypeCondnTxt@1000000002 : TextConst 'ENU="<?xml version=""1.0"" encoding=""utf-8"" standalone=""yes""?><ReportParameters><DataItems><DataItem name=""Vendor"">%1</DataItem></DataItems></ReportParameters>";ENG="<?xml version=""1.0"" encoding=""utf-8"" standalone=""yes""?><ReportParameters><DataItems><DataItem name=""Vendor"">%1</DataItem></DataItems></ReportParameters>"';
+
+    LOCAL PROCEDURE "--- Creating Standard Workflow ---"@9062242();
+    BEGIN
+    END;
+
+    PROCEDURE CreateStandardWorkflowForEnhancedWorkflow@9062240(VAR EnhancedWorkflow@9062230 : Record 9062258);
+    VAR
+      RecordType@9062232 : Integer;
+      DocumentType@9062231 : Integer;
+      RecordFilters@9062237 : Text;
+      Criteria@9062233 : Record 9062626;
+    BEGIN
+      IF NOT EnhWorkflowExtensionInstalled THEN BEGIN
+        MESSAGE(tWorkflowExtensionNotInstalled);
+        EXIT;
+      END;
+
+      AllowStdWorkflowChanges := TRUE;
+
+      //Work out Record Type
+      RecordType := CalculateRecordType(EnhancedWorkflow."Table ID");
+
+      //Work out Record Filters
+      IF Criteria.GET(EnhancedWorkflow."Record Criteria ID") THEN
+        CalculateRecordFilters(Criteria.View,RecordType,RecordFilters);
+
+      //Create Workflow
+      CreateStandardWorkflow(EnhancedWorkflow."No.",EnhancedWorkflow.Description,EnhancedWorkflow."No.",RecordType,RecordFilters,EnhancedWorkflow.Enabled);
+
+      //Set Standard Workflow Code on Enhanced Workflow
+      EnhancedWorkflow.VALIDATE("Standard Workflow Code",EnhancedWorkflow."No.");
+      EnhancedWorkflow.MODIFY(TRUE);
+
+      AllowStdWorkflowChanges := FALSE;
+    END;
+
+    LOCAL PROCEDURE CalculateRecordType@9062241(TableID@9062230 : Integer) RecordType : Integer;
+    BEGIN
+      CASE TableID OF
+        DATABASE::"Purchase Header" : RecordType := gRecordType::PurchaseDoc;
+        DATABASE::"Sales Header" : RecordType := gRecordType::SalesDoc;
+        DATABASE::"Gen. Journal Batch" : RecordType := gRecordType::GenJnlBatch;
+        DATABASE::"Gen. Journal Line" : RecordType := gRecordType::GenJnlLine;
+        DATABASE::Customer : RecordType := gRecordType::Customer;
+        DATABASE::"Incoming Document" : RecordType := gRecordType::IncomingDoc;
+        DATABASE::Vendor : RecordType := gRecordType::Vendor;  //AIWFL JN 27/04/16
+        ELSE EXIT(-1);
+      END;
+    END;
+
+    LOCAL PROCEDURE CalculateRecordFilters@9062231(CriteriaView@9062234 : Text;RecordType@9062235 : Integer;VAR RecordFilters@9062236 : Text) FiltersCreated : Boolean;
+    VAR
+      Criteria@9062233 : Record 9062626;
+      CriteriaManagement@9062232 : Codeunit 9062462;
+      RecRefLine@9062230 : RecordRef;
+    BEGIN
+      IF RecordType < 0 THEN EXIT(FALSE);
+
+      CASE RecordType OF
+        gRecordType::PurchaseDoc :
+          BEGIN
+            RecRefLine.OPEN(DATABASE::"Purchase Line");
+            IF NOT RecRefLine.FINDFIRST THEN;
+            RecordFilters := STRSUBSTNO(PurchHeaderTypeCondnTxt,Encode(CriteriaView),Encode(RecRefLine.GETVIEW(FALSE)));
+            EXIT(TRUE);
+          END;
+
+        gRecordType::SalesDoc :
+          BEGIN
+            RecRefLine.OPEN(DATABASE::"Sales Line");
+            IF NOT RecRefLine.FINDFIRST THEN;
+            RecordFilters := STRSUBSTNO(SalesHeaderTypeCondnTxt,Encode(CriteriaView),Encode(RecRefLine.GETVIEW(FALSE)));
+            EXIT(TRUE);
+          END;
+
+        gRecordType::GenJnlBatch :
+          BEGIN
+            RecordFilters := STRSUBSTNO(GeneralJournalBatchTypeCondnTxt,Encode(CriteriaView));
+            EXIT(TRUE);
+          END;
+
+        gRecordType::GenJnlLine :
+          BEGIN
+            RecordFilters := STRSUBSTNO(GeneralJournalLineTypeCondnTxt,Encode(CriteriaView));
+            EXIT(TRUE);
+          END;
+
+        gRecordType::Customer :
+          BEGIN
+            RecordFilters := STRSUBSTNO(CustomerTypeCondnTxt,Encode(CriteriaView));
+            EXIT(TRUE);
+          END;
+          gRecordType::Vendor :
+          BEGIN
+            RecordFilters := STRSUBSTNO(VendorTypeCondnTxt,Encode(CriteriaView));
+            EXIT(TRUE);
+          END;
+        gRecordType::IncomingDoc :
+          BEGIN
+            RecRefLine.OPEN(DATABASE::"Incoming Document Attachment");
+            IF NOT RecRefLine.FINDFIRST THEN;
+            RecordFilters := STRSUBSTNO(IncomingDocumentTypeCondnTxt,Encode(CriteriaView),Encode(RecRefLine.GETVIEW(FALSE)));
+            EXIT(TRUE);
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE SetStandardWorkflowFilters@9062237(WorkflowCode@9062232 : Code[20];RecordFilters@9062233 : Text);
+    VAR
+      WorkflowStep@9062231 : Record 1502;
+      WorkflowStepArgument@9062230 : Record 1523;
+    BEGIN
+      WorkflowStep.SETRANGE("Workflow Code",WorkflowCode);
+      WorkflowStep.SETRANGE("Entry Point",TRUE);
+      WorkflowStep.SETRANGE(Type,WorkflowStep.Type::"Event");
+      WorkflowStep.SETRANGE("Sequence No.",0);
+      IF WorkflowStep.FINDFIRST THEN BEGIN
+        IF WorkflowStepArgument.GET(WorkflowStep.Argument) THEN BEGIN
+          WorkflowStepArgument.SetEventFilters(RecordFilters);
+          WorkflowStepArgument.MODIFY(TRUE);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateStandardWorkflow@9062233(WorkflowCode@9062236 : Code[20];WorkflowDescription@9062237 : Text[100];EnhancedWorkflowCode@9062238 : Code[20];RecordType@9062239 : Integer;RecordFilters@9062240 : Text;Enabled@9062242 : Boolean);
+    VAR
+      Workflow@9062234 : Record 1501;
+      WorkflowStep@9062233 : Record 1502;
+      WorkflowStepArgument@9062232 : Record 1523;
+      WorkflowStep2@9062231 : Record 1502;
+      WorkflowStepArgument2@9062230 : Record 1523;
+      WorkflowSetup@9062235 : Codeunit 1502;
+      EventName@9062241 : Code[128];
+      WorkflowCategory@9062243 : Code[20];
+      EnhancedWorkflow@9062244 : Record 9062258;
+      RecRef@1000000000 : RecordRef;
+      FieldRef@1000000001 : FieldRef;
+    BEGIN
+      CASE RecordType OF
+        gRecordType::PurchaseDoc :
+          BEGIN
+            WorkflowCategory := 'PURCHDOC';
+            EventName := 'RUNWORKFLOWONSENDPURCHASEDOCFORAPPROVAL';
+          END;
+
+        gRecordType::SalesDoc :
+          BEGIN
+            WorkflowCategory := 'SALESDOC';
+            EventName := 'RUNWORKFLOWONSENDSALESDOCFORAPPROVAL';
+          END;
+
+        gRecordType::GenJnlBatch :
+          BEGIN
+            WorkflowCategory := 'FIN';
+            EventName := 'RUNWORKFLOWONSENDGENERALJOURNALBATCHFORAPPROVAL';
+          END;
+
+        gRecordType::GenJnlLine :
+          BEGIN
+            WorkflowCategory := 'FIN';
+            EventName := 'RUNWORKFLOWONSENDGENERALJOURNALLINEFORAPPROVAL';
+          END;
+
+        gRecordType::Customer :
+          BEGIN
+            WorkflowCategory := 'SALES';
+            EventName := 'RUNWORKFLOWONSENDCUSTOMERFORAPPROVAL';
+          END;
+        gRecordType::Customer :
+          BEGIN
+            WorkflowCategory := 'INT';
+            EventName := 'RUNWORKFLOWONSENDINCOMINGDOCFORAPPROVAL';
+          END;
+
+          gRecordType::Vendor :
+          BEGIN
+            WorkflowCategory := 'PURCH';
+            EventName := 'RUNWORKFLOWONSENDVENDORFORAPPROVAL';
+          END;
+
+      END;
+
+      IF Workflow.GET(WorkflowCode) THEN BEGIN
+        EnhancedWorkflow.GET(EnhancedWorkflowCode);
+        IF Workflow.Code <> EnhancedWorkflow."Standard Workflow Code" THEN
+          IF NOT CONFIRM(STRSUBSTNO(tConfirmOverwrite,Workflow.Code)) THEN
+            ERROR(tError_CreateStopped);
+
+        Workflow.VALIDATE(Enabled,FALSE);
+        Workflow.MODIFY(TRUE);
+        Workflow.DELETE(TRUE);
+      END;
+
+      Workflow.INIT;
+      Workflow.VALIDATE(Code,WorkflowCode);
+      Workflow.VALIDATE(Description,WorkflowDescription);
+      Workflow.VALIDATE(Category,WorkflowCategory);
+      Workflow.INSERT(TRUE);
+
+      WorkflowStep.INIT;
+      WorkflowStep.VALIDATE("Workflow Code",Workflow.Code);
+      WorkflowStep.INSERT(TRUE);
+      WorkflowStep.VALIDATE("Entry Point",TRUE);
+      WorkflowStep.VALIDATE(Type,WorkflowStep.Type::"Event");
+      WorkflowStep.VALIDATE("Function Name",EventName);
+      WorkflowStep.VALIDATE("Sequence No.",0);
+      WorkflowStep.MODIFY(TRUE);
+
+      WorkflowStepArgument.INIT;
+      WorkflowStepArgument.Type := WorkflowStepArgument.Type::"Event";
+      WorkflowStepArgument.INSERT(TRUE);
+
+      WorkflowStep.Argument := WorkflowStepArgument.ID;
+      WorkflowStep.MODIFY(TRUE);
+
+      SetStandardWorkflowFilters(Workflow.Code,RecordFilters);
+
+      WorkflowStep2.INIT;
+      WorkflowStep2.VALIDATE("Workflow Code",Workflow.Code);
+      WorkflowStep2.INSERT(TRUE);
+      WorkflowStep2.VALIDATE("Previous Workflow Step ID",WorkflowStep.ID);
+      WorkflowStep2.VALIDATE(Type,WorkflowStep2.Type::Response);
+      WorkflowStep2.VALIDATE("Function Name",tWorkflowResponse_StartEnhancedWorkflow);
+      WorkflowStep2.VALIDATE("Sequence No.",1);
+      WorkflowStep2.MODIFY(TRUE);
+
+      WorkflowStepArgument2.INIT;
+      WorkflowStepArgument2.Type := WorkflowStepArgument2.Type::Response;
+      WorkflowStepArgument2.INSERT(TRUE);
+
+      WorkflowStepArgument2.VALIDATE("Response Function Name",tWorkflowResponse_StartEnhancedWorkflow);
+      //WorkflowStepArgument2.VALIDATE("Workflow No.",EnhancedWorkflowCode);
+      WorkflowStepArgument2.MODIFY(TRUE);
+
+      //Use RecRef to set "Workflow No." field as added by Extension
+      RecRef.OPEN(DATABASE::"Workflow Step Argument");
+      RecRef.SETPOSITION(WorkflowStepArgument2.GETPOSITION);
+      RecRef.SETRECFILTER;
+      RecRef.FINDFIRST;
+
+      FieldRef := RecRef.FIELD(9062229);
+      FieldRef.VALIDATE(EnhancedWorkflowCode);
+      RecRef.MODIFY(TRUE);
+
+      WorkflowStep2.Argument := WorkflowStepArgument2.ID;
+      WorkflowStep2.MODIFY(TRUE);
+
+      IF Enabled THEN BEGIN
+        Workflow.VALIDATE(Enabled,TRUE);
+        Workflow.MODIFY(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Delete/Modify/Rename Standard Workflow ---"@9062243();
+    BEGIN
+    END;
+
+    PROCEDURE DeleteStandardWorkflow@9062244(VAR StandardWorkflow@9062230 : Record 1501);
+    BEGIN
+      IF NOT EnhWorkflowExtensionInstalled THEN
+        EXIT;
+
+      AllowStdWorkflowChanges := TRUE;
+
+      StandardWorkflow.DELETE(TRUE);
+
+      AllowStdWorkflowChanges := FALSE;
+    END;
+
+    PROCEDURE ModifyStandardWorkflow@9062246(VAR StandardWorkflow@9062230 : Record 1501);
+    BEGIN
+      IF NOT EnhWorkflowExtensionInstalled THEN
+        EXIT;
+
+      AllowStdWorkflowChanges := TRUE;
+
+      StandardWorkflow.MODIFY(TRUE);
+
+      AllowStdWorkflowChanges := FALSE;
+    END;
+
+    PROCEDURE RenameStandardWorkflow@9062248(VAR StandardWorkflow@9062230 : Record 1501;NewCode@9062231 : Code[20]);
+    BEGIN
+      IF NOT EnhWorkflowExtensionInstalled THEN
+        EXIT;
+
+      AllowStdWorkflowChanges := TRUE;
+
+      StandardWorkflow.RENAME(NewCode);
+
+      AllowStdWorkflowChanges := FALSE;
+    END;
+
+    LOCAL PROCEDURE "--- Criteria Subscribers ---"@9062239();
+    BEGIN
+    END;
+
+    [EventSubscriber(Table,9062626,OnAfterValidateEvent,View)]
+    LOCAL PROCEDURE UpdateStdWorkflowCriteriaOnEnhWorkflowCriteriaChange@9062230(VAR Rec@9062230 : Record 9062626;VAR xRec@9062231 : Record 9062626;CurrFieldNo@9062232 : Integer);
+    VAR
+      EnhancedWorkflow@9062233 : Record 9062258;
+      RecordFilters@9062234 : Text;
+    BEGIN
+      //EventPublisherObjectTable Criteria
+      //EventFunctionOnAfterValidateEvent
+      //EventPublisherElementView
+      IF NOT EnhWorkflowExtensionInstalled THEN
+        EXIT;
+
+      AllowStdWorkflowChanges := TRUE;
+
+      IF Rec."Attached-to Table ID" <> DATABASE::"Enhanced Workflow" THEN EXIT;
+
+      EnhancedWorkflow.SETRANGE("Record Criteria ID",Rec.ID);
+      IF EnhancedWorkflow.FINDSET THEN
+        REPEAT
+          IF EnhancedWorkflow."Standard Workflow Code" <> '' THEN BEGIN
+            IF CalculateRecordFilters(Rec.View,CalculateRecordType(EnhancedWorkflow."Table ID"),RecordFilters) THEN BEGIN
+              SetStandardWorkflowFilters(EnhancedWorkflow."Standard Workflow Code",RecordFilters);
+            END;
+          END;
+        UNTIL EnhancedWorkflow.NEXT = 0;
+
+      AllowStdWorkflowChanges := FALSE;
+    END;
+
+    LOCAL PROCEDURE "--- Standard Workflow Event Subscribers ---"@9062234();
+    BEGIN
+    END;
+
+    [EventSubscriber(Table,1501,OnBeforeDeleteEvent)]
+    LOCAL PROCEDURE PreventDeleteOfStandardWorkflow@9062232(VAR Rec@9062230 : Record 1501;RunTrigger@9062231 : Boolean);
+    VAR
+      EnhancedWorkflow@9062232 : Record 9062258;
+    BEGIN
+      //EventPublisherObjectTable Workflow
+      //EventFunctionOnBeforeDeleteEvent
+      IF NOT EnhWorkflowExtensionInstalled THEN
+        EXIT;
+
+      IF AllowStdWorkflowChanges THEN EXIT;
+
+      EnhancedWorkflow.SETCURRENTKEY("Standard Workflow Code");
+      EnhancedWorkflow.SETRANGE("Standard Workflow Code",Rec.Code);
+      IF EnhancedWorkflow.FINDFIRST THEN
+        ERROR(tError_NoDelete,Rec.Code,EnhancedWorkflow."No.");
+    END;
+
+    [EventSubscriber(Table,1501,OnBeforeModifyEvent)]
+    LOCAL PROCEDURE PreventModifyOfStandardWorkflow@9062236(VAR Rec@9062230 : Record 1501;VAR xRec@9062231 : Record 1501;RunTrigger@9062233 : Boolean);
+    VAR
+      EnhancedWorkflow@9062232 : Record 9062258;
+    BEGIN
+      //EventPublisherObjectTable Workflow
+      //EventFunctionOnBeforeModifyEvent
+      IF NOT EnhWorkflowExtensionInstalled THEN
+        EXIT;
+
+      IF AllowStdWorkflowChanges THEN EXIT;
+
+      EnhancedWorkflow.SETCURRENTKEY("Standard Workflow Code");
+      EnhancedWorkflow.SETRANGE("Standard Workflow Code",Rec.Code);
+      IF EnhancedWorkflow.FINDFIRST THEN
+        ERROR(tError_NoModify,Rec.Code,EnhancedWorkflow."No.");
+    END;
+
+    [EventSubscriber(Table,1501,OnBeforeRenameEvent)]
+    LOCAL PROCEDURE PreventRenameOfStandardWorkflow@9062245(VAR Rec@9062230 : Record 1501;VAR xRec@9062231 : Record 1501;RunTrigger@9062233 : Boolean);
+    VAR
+      EnhancedWorkflow@9062232 : Record 9062258;
+    BEGIN
+      //EventPublisherObjectTable Workflow
+      //EventFunctionOnBeforeRenameEvent
+      IF NOT EnhWorkflowExtensionInstalled THEN
+        EXIT;
+
+      IF AllowStdWorkflowChanges THEN EXIT;
+
+      EnhancedWorkflow.SETCURRENTKEY("Standard Workflow Code");
+      EnhancedWorkflow.SETRANGE("Standard Workflow Code",Rec.Code);
+      IF EnhancedWorkflow.FINDFIRST THEN
+        ERROR(tError_NoRename,Rec.Code,EnhancedWorkflow."No.");
+    END;
+
+    LOCAL PROCEDURE "--- Utilities ---"@9062235();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE Encode@93(Text@1001 : Text) : Text;
+    VAR
+      XMLDOMManagement@1000 : Codeunit 6224;
+    BEGIN
+      EXIT(XMLDOMManagement.XMLEscape(Text));
+    END;
+
+    PROCEDURE EnhWorkflowExtensionInstalled@1000000001() : Boolean;
+    VAR
+      WorkflowResponse@1000000000 : Record 1521;
+    BEGIN
+      EXIT(WorkflowResponse.GET(tWorkflowResponse_StartEnhancedWorkflow));
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.10 PC 25/09/2015 - Created
+      //DOC NA2016.11 PC 06/11/2015 - Renamed to "Enhanced Workflow Std. Utils" and taken from Extension to part of NA Objects
+      //DOC NA2016.11 PC 06/11/2015 - Existing Subscriber functions removed
+      //DOC NA2016.11 PC 12/11/2015 - Added funcionality to support integration between Standard and Enhanced Workflow
+      //DOC NA2016.15 JN 27/04/2016 - Extended the CreateStandardWorkflow function to work with Vendor Table
+      //DOC NA2016.15 JH 09/05/2016 - CfMD modifications
+    }
+    END.
+  }
+}
+

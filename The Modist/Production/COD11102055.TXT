@@ -1,0 +1,624 @@
+OBJECT Codeunit 11102055 OM - Backup and Restore
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            CommonDialog@1000 : Codeunit 11102059;
+            FileName@1001 : Text;
+            ServerFileName@1002 : Text;
+          BEGIN
+            CommonDialog.AddKnownExtension('dbk');
+            IF NOT CommonDialog.OpenFile(FileName, ServerFileName) THEN
+              EXIT;
+
+            ImportBackupFile(ServerFileName);
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE CreateBackupFile@1(FileName@1000 : Text;VAR Object@1001 : Record 2000000001);
+    VAR
+      Setup@1002 : Record 11102035;
+    BEGIN
+      Setup.CustomGet;
+      IF Setup."Split Backup Files" THEN
+        CreateSplitBackupFile(FileName, Object)
+      ELSE
+        CreateNormalBackupFile(FileName, Object);
+    END;
+
+    LOCAL PROCEDURE CreateNormalBackupFile@4(FileName@1000 : Text;VAR Object@1001 : Record 2000000001);
+    VAR
+      Setup@1002 : Record 11102035;
+      TmpActions@1003 : TEMPORARY Record 11102048;
+      TmpActionField@1004 : TEMPORARY Record 11102049;
+      CALHistoryObject@1005 : Record 11102052;
+      Object2@1006 : Record 2000000001;
+      ActionMgt@1007 : Codeunit 11102038;
+      ImExportMgt@1008 : Codeunit 11102043;
+      Progressbar@1009 : Codeunit 11102044;
+      SourceControl@1010 : Codeunit 11102050;
+      FileHandler@1011 : Codeunit 11102097;
+      oFile@1012 : File;
+      TmpFile@1013 : File;
+      FileOutStr@1014 : OutStream;
+      OutStr@1015 : OutStream;
+      TmpFileName@1016 : Text;
+      NoOfBars@1017 : Integer;
+      ExportCALHistoryLines@1018 : Boolean;
+      ExportCALHistoryObjects@1019 : Boolean;
+      ctBackup@1020 : TextConst 'DEU=Backup...;ENU=Backup...;ESP=Backup...;FRA=Backup...;NLD=Backup....;DEA=Backup...';
+      ctExportingLines@1021 : TextConst 'DEU=Exporting C/AL History Lines...;ENU=Exporting C/AL History Lines...;ESP=Exporting C/AL History Lines...;FRA=Exporting C/AL History Lines...;NLD=C/AL Historieregel exporteren...;DEA=Exporting C/AL History Lines...';
+      ctWriting@1022 : TextConst 'DEU=Writing...;ENU=Writing...;ESP=Writing...;FRA=Writing...;NLD=Schrijven...;DEA=Writing...';
+    BEGIN
+      Setup.CustomGet;
+
+      NoOfBars := 4;
+
+      IF Object.FINDSET THEN
+        REPEAT
+          TmpActions."Line No." += 10000;
+          CASE Object.ID OF
+
+            DATABASE::"OM - C/AL History Compiled" :
+              ExportCALHistoryObjects := TRUE;
+
+            DATABASE::"OM - C/AL History Line" :
+              BEGIN
+                ExportCALHistoryLines := TRUE;
+                NoOfBars += 1;
+              END;
+
+            ELSE BEGIN
+              TmpActions."Action Type" := TmpActions."Action Type"::"Transfer Data";
+              TmpActions."Object No." := Object.ID;
+              Object2 := Object;
+              Object2.Type := Object2.Type::Table;
+              Object2.FIND('=');
+              TmpActions."Object Name" := Object2.Name;
+              TmpActions."DELETEALL;" := TRUE;
+              TmpActions.INSERT;
+            END;
+          END;
+        UNTIL Object.NEXT = 0;
+
+      Progressbar.NoOfBars := 2;
+      Progressbar.Open(ctBackup, 1);
+
+      Progressbar.BarSize := NoOfBars;
+
+      // Create FAB
+      Progressbar.AddToBar(1);
+
+      FileHandler.QueryReplace(FileName);
+
+      oFile.WRITEMODE(TRUE);
+      oFile.CREATE(FileName);
+      oFile.CREATEOUTSTREAM(FileOutStr);
+      ImExportMgt.WriteObjectManagerVersion(FileOutStr, 'DBK');
+
+      ImExportMgt.CreateTempFile(TmpFile, TmpFileName);
+      TmpFile.CREATEOUTSTREAM(OutStr);
+
+      Progressbar.NextBar;
+      ActionMgt.FillExportOutStream(TmpActions, TmpActionField, OutStr, Progressbar);
+
+      // Writing FAB
+      Progressbar.PreviousBar;
+      Progressbar.AddToBar(1);
+      Progressbar.NextBar;
+
+      Progressbar.BarSize := 1;
+      Progressbar.AddToBar(1);
+      Progressbar.Text1 := ctWriting;
+      Progressbar.Text2 := '';
+      Progressbar.UpdateBar;
+
+      ImExportMgt.AddFileSection(TmpFile, FileOutStr, 'BACKUP');
+
+      // Creating FAB
+      Progressbar.PreviousBar;
+      Progressbar.AddToBar(1);
+      Progressbar.NextBar;
+
+      TmpFile.CLOSE;
+      ERASE(TmpFileName);
+
+      ImExportMgt.CreateTempFile(TmpFile, TmpFileName);
+      TmpFile.CREATEOUTSTREAM(OutStr);
+
+      TmpActions.DELETEALL;
+
+      IF ExportCALHistoryObjects THEN BEGIN
+        TmpActions."Action Type" := TmpActions."Action Type"::"Transfer Data";
+        TmpActions."Object No." := DATABASE::"OM - C/AL History Compiled";
+        Object2.GET(Object2.Type::Table, '', DATABASE::"OM - C/AL History Compiled");
+        Object2.FIND('=');
+        TmpActions."Object Name" := Object2.Name;
+        TmpActions."DELETEALL;" := TRUE;
+        TmpActions.INSERT;
+      END;
+
+      ActionMgt.FillExportOutStream(TmpActions, TmpActionField, OutStr, Progressbar);
+
+      // Writing FAB
+      Progressbar.PreviousBar;
+      Progressbar.AddToBar(1);
+      Progressbar.NextBar;
+
+      Progressbar.BarSize := 1;
+      Progressbar.AddToBar(1);
+      Progressbar.Text1 := ctWriting;
+      Progressbar.Text2 := '';
+      Progressbar.UpdateBar;
+
+      ImExportMgt.AddFileSection(TmpFile, FileOutStr, 'BACKUP');
+      Progressbar.PreviousBar;
+
+      TmpFile.CLOSE;
+      ERASE(TmpFileName);
+
+      IF ExportCALHistoryLines THEN BEGIN
+        Progressbar.AddToBar(1);
+        Progressbar.Text1 := ctExportingLines;
+        Progressbar.Text2 := '';
+
+        Progressbar.NextBar;
+        Progressbar.BarSize := CALHistoryObject.COUNT;
+        IF CALHistoryObject.FINDSET THEN
+          REPEAT
+            FileOutStr.WRITETEXT('ENTRY' + FORMAT(CALHistoryObject."Entry No."));
+            SourceControl.AppendObjectToStream(FileOutStr, CALHistoryObject."Entry No.");
+            Progressbar.AddToBar(1);
+          UNTIL CALHistoryObject.NEXT = 0;
+      END;
+
+      oFile.CLOSE;
+    END;
+
+    LOCAL PROCEDURE CreateSplitBackupFile@5(ServerFileName@1000 : Text[1024];VAR Object@1001 : Record 2000000001);
+    VAR
+      Setup@1002 : Record 11102035;
+      TmpActions@1003 : TEMPORARY Record 11102048;
+      TmpActionField@1004 : TEMPORARY Record 11102049;
+      Object2@1005 : Record 2000000001;
+      ActionMgt@1006 : Codeunit 11102038;
+      Progressbar@1007 : Codeunit 11102044;
+      FileHandler@1008 : Codeunit 11102097;
+      NoOfBars@1009 : Integer;
+      ctBackup@1010 : TextConst 'DEU=Backup...;ENU=Backup...;ESP=Backup...;FRA=Backup...;NLD=Backup....;DEA=Backup...';
+    BEGIN
+      Setup.CustomGet;
+
+      NoOfBars := 4;
+
+      IF Object.FINDSET THEN
+        REPEAT
+          TmpActions."Line No." += 10000;
+
+          TmpActions."Action Type" := TmpActions."Action Type"::"Transfer Data";
+          TmpActions."Object No." := Object.ID;
+          Object2 := Object;
+          Object2.Type := Object2.Type::Table;
+          Object2.FIND('=');
+          TmpActions."Object Name" := Object2.Name;
+          TmpActions."DELETEALL;" := TRUE;
+          TmpActions.INSERT;
+
+        UNTIL Object.NEXT = 0;
+
+      Progressbar.Open(ctBackup, 1);
+
+      FileHandler.QueryReplace(ServerFileName);
+
+      ActionMgt.ExportSplitFiles(ServerFileName, 1000, TmpActions, TmpActionField, Progressbar);
+
+      Progressbar.Close;
+    END;
+
+    PROCEDURE ImportBackupFile@2(ServerFileName@1000 : Text);
+    VAR
+      ImExportMgt@1001 : Codeunit 11102043;
+      oFile@1002 : File;
+      InStr@1003 : InStream;
+      SplitBackup@1004 : Boolean;
+      ctConfirmRestore@1005 : TextConst 'DEU=All Object Manager data will be lost.\Are you sure?;ENU=All Object Manager data will be lost.\Are you sure?;ESP=All Object Manager data will be lost.\Are you sure?;FRA=All Object Manager data will be lost.\Are you sure?;NLD=Alle Object Manager data wordt verwijderd.\Weet u het zeker?;DEA=All Object Manager data will be lost.\Are you sure?';
+      ctConfirmRestore2@1006 : TextConst 'DEU=Absolutely sure?;ENU=Absolutely sure?;ESP=Absolutely sure?;FRA=Absolutely sure?;NLD=Echt zeker weten?;DEA=Absolutely sure?';
+    BEGIN
+      IF NOT CONFIRM(ctConfirmRestore) THEN
+        EXIT;
+
+      IF NOT CONFIRM(ctConfirmRestore2) THEN
+        EXIT;
+
+      oFile.OPEN(ServerFileName);
+      oFile.CREATEINSTREAM(InStr);
+      SplitBackup := ImExportMgt.IsSplitFile(InStr);
+      oFile.CLOSE;
+
+      IF SplitBackup THEN
+        ImportSplitBackupFile(ServerFileName)
+      ELSE
+        ImportNormalBackupFile(ServerFileName);
+    END;
+
+    LOCAL PROCEDURE ImportNormalBackupFile@6(ServerFileName@1000 : Text);
+    VAR
+      CALHistoryLine@1001 : Record 11102053;
+      ActionMgt@1002 : Codeunit 11102038;
+      ImExportMgt@1003 : Codeunit 11102043;
+      Progressbar@1004 : Codeunit 11102044;
+      oFile@1005 : File;
+      TmpFile@1006 : File;
+      InStr@1007 : InStream;
+      InStr2@1008 : InStream;
+      OutStr@1009 : OutStream;
+      Dummy@1010 : Text;
+      Line@1011 : ARRAY [10] OF Text[250];
+      SectionHeader@1012 : Text;
+      SectionName@1013 : Text;
+      TmpFileName@1014 : Text;
+      ReadChar@1015 : Char;
+      CharacterCounter@1016 : Integer;
+      CodeLineCounter@1017 : Integer;
+      EntryNo@1018 : Integer;
+      i@1019 : Integer;
+      LineCharacterCounter@1020 : Integer;
+      SectionSize@1021 : Integer;
+      SubLineCounter@1022 : Integer;
+      FirstCALLine@1023 : Boolean;
+      ctImportingBackup@1024 : TextConst 'DEU=Restoring...;ENU=Restoring...;ESP=Restoring...;FRA=Restoring...;NLD=Restore...;DEA=Restoring...';
+      ctImportingLines@1025 : TextConst 'DEU=Importing C/AL History Lines...;ENU=Importing C/AL History Lines...;ESP=Importing C/AL History Lines...;FRA=Importing C/AL History Lines...;NLD=C/AL Historieregel importeren...;DEA=Importing C/AL History Lines...';
+    BEGIN
+      oFile.OPEN(ServerFileName);
+
+      Progressbar.NoOfBars := 2;
+      Progressbar.Open(ctImportingBackup, 1);
+      Progressbar.BarSize := 5;
+
+      Progressbar.AddToBar(1);
+
+      oFile.CREATEINSTREAM(InStr);
+      ImExportMgt.CheckObjectManagerVersion(InStr, 'DBK');
+
+      InStr.READTEXT(SectionHeader, 42);
+      SectionName := DELCHR(DELSTR(SectionHeader, 21), '>');
+      EVALUATE(SectionSize, COPYSTR(SectionHeader, 21, 20));
+
+      ImExportMgt.CreateTempFile(TmpFile, TmpFileName);
+      TmpFile.CREATEOUTSTREAM(OutStr);
+
+      Progressbar.NextBar;
+      ImExportMgt.InOutStream(InStr, OutStr, SectionSize);
+
+      Progressbar.PreviousBar;
+      Progressbar.AddToBar(1);
+      Progressbar.NextBar;
+
+      TmpFile.CREATEINSTREAM(InStr2);
+
+      ActionMgt.ImportInstream(InStr2, FALSE, Progressbar, SectionSize);
+      TmpFile.CLOSE;
+
+      Progressbar.PreviousBar;
+      Progressbar.AddToBar(1);
+      Progressbar.NextBar;
+
+      InStr.READTEXT(Dummy, 1);
+      InStr.READTEXT(SectionHeader, 42);
+      SectionName := DELCHR(DELSTR(SectionHeader, 21), '>');
+      EVALUATE(SectionSize, COPYSTR(SectionHeader, 21, 20));
+
+      ImExportMgt.CreateTempFile(TmpFile, TmpFileName);
+      TmpFile.CREATEOUTSTREAM(OutStr);
+
+      ImExportMgt.InOutStream(InStr, OutStr, SectionSize);
+
+      Progressbar.PreviousBar;
+      Progressbar.AddToBar(1);
+      Progressbar.NextBar;
+
+      TmpFile.CREATEINSTREAM(InStr2);
+
+      ActionMgt.ImportInstream(InStr2, FALSE, Progressbar, SectionSize);
+      TmpFile.CLOSE;
+      ERASE(TmpFileName);
+
+      Progressbar.PreviousBar;
+      Progressbar.AddToBar(1);
+      Progressbar.NextBar;
+      Progressbar.BarSize := oFile.LEN - SectionSize;
+
+      Progressbar.Text1 := ctImportingLines;
+
+      FirstCALLine := TRUE;
+
+      SubLineCounter := 1;
+
+      WHILE oFile.READ(ReadChar) > 0 DO BEGIN
+
+        CharacterCounter += 1;
+
+        CASE ReadChar OF
+          10 :
+            ;
+          13 :
+            BEGIN
+              Progressbar.AddToBar(CharacterCounter);
+              CharacterCounter := 0;
+
+              CASE TRUE OF
+
+                DELSTR(Line[1], 6) = 'ENTRY' :
+                  BEGIN
+                    IF FirstCALLine THEN BEGIN
+                      FirstCALLine := FALSE;
+                      CALHistoryLine.DELETEALL;
+                    END;
+                    EVALUATE(EntryNo, COPYSTR(Line[1], 6));
+                    CodeLineCounter := 0;
+                    COMMIT;
+                  END;
+
+                ELSE BEGIN
+                  CodeLineCounter += 1;
+
+                  FOR i := 1 TO SubLineCounter DO BEGIN
+                    CALHistoryLine."Entry No." := EntryNo;
+                    CALHistoryLine."Line No." := CodeLineCounter;
+                    CALHistoryLine."Sub Line No." := i;
+                    CALHistoryLine.Code := Line[i];
+                    CALHistoryLine.INSERT;
+                  END;
+                END;
+              END;
+
+              CLEAR(Line);
+              oFile.READ(ReadChar);
+              CharacterCounter += 1;
+              LineCharacterCounter := 0;
+              SubLineCounter := 1;
+            END;
+
+          ELSE BEGIN
+            LineCharacterCounter += 1;
+            IF LineCharacterCounter MOD 250 = 0 THEN
+              SubLineCounter += 1;
+            Line[SubLineCounter] += FORMAT(ReadChar);
+          END;
+        END;
+      END;
+
+      Progressbar.Close;
+
+      oFile.CLOSE;
+    END;
+
+    LOCAL PROCEDURE ImportSplitBackupFile@7(FileName@1000 : Text[1024]);
+    VAR
+      ActionMgt@1001 : Codeunit 11102038;
+    BEGIN
+      ActionMgt.ImportSplitFiles(FileName, FALSE);
+    END;
+
+    PROCEDURE TableBelongTo@3(TableNo@1000 : Integer) : Integer;
+    VAR
+      Mgt@1001 : Codeunit 11102035;
+      BackupGroup@1002 : ' ,Setup,Modification,Projects,Source Control,Where-Used,Check Guidelines,Object Update Tools,Buffers';
+    BEGIN
+      CASE TableNo OF
+
+        DATABASE::"OM - Setup" :
+          EXIT(BackupGroup::Setup);
+
+        DATABASE::"OM - Project" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - Project Object" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - Status History" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - Status" :
+          EXIT(BackupGroup::Setup);
+
+        DATABASE::"OM - Flow" :
+          EXIT(BackupGroup::Setup);
+
+        DATABASE::"OM - Flow Status" :
+          EXIT(BackupGroup::Setup);
+
+        DATABASE::"OM - Modification" :
+          EXIT(BackupGroup::Modification);
+
+        DATABASE::"OM - Transport" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - Comment Type" :
+          EXIT(BackupGroup::Setup);
+
+        DATABASE::"OM - Expected Modification" :
+          EXIT(BackupGroup::Buffers);
+
+        DATABASE::"OM - Document Line" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - Action Group" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - Action" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - Action Field" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - Project Permissions" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - C/AL History Import" :
+          EXIT(BackupGroup::"Source Control");
+
+        DATABASE::"OM - C/AL History Object" :
+          EXIT(BackupGroup::"Source Control");
+
+        DATABASE::"OM - C/AL History Line" :
+          EXIT(BackupGroup::"Source Control");
+
+        DATABASE::"OM - Object Lock" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - Role" :
+          EXIT(BackupGroup::Setup);
+
+        DATABASE::"OM - User" :
+          EXIT(BackupGroup::Setup);
+
+        DATABASE::"OM - Where Used Object" :
+          EXIT(BackupGroup::"Where-Used");
+
+        DATABASE::"OM - Where Used Object Line" :
+          EXIT(BackupGroup::"Where-Used");
+
+        DATABASE::"OM - Where Used In" :
+          EXIT(BackupGroup::"Where-Used");
+
+        DATABASE::"OM - Where Used Cross Table" :
+          EXIT(BackupGroup::"Where-Used");
+
+        DATABASE::"OM - Variable Buffer" :
+          EXIT(BackupGroup::"Where-Used");
+
+        DATABASE::"OM - Object to Renumber" :
+          EXIT(BackupGroup::"Object Update Tools");
+
+        DATABASE::"OM - Object to Update Vars" :
+          EXIT(BackupGroup::"Object Update Tools");
+
+        DATABASE::"OM - Sort Variable Buffer" :
+          EXIT(BackupGroup::Buffers);
+
+        DATABASE::"OM - Transport Project History" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - Object Import Line" :
+          EXIT(BackupGroup::Buffers);
+
+        DATABASE::"OM - Field Compare Line" :
+          EXIT(BackupGroup::Buffers);
+
+        DATABASE::"OM - Translation Tool Line" :
+          EXIT(BackupGroup::"Object Update Tools");
+
+        DATABASE::"OM - Translation Tool Rule" :
+          EXIT(BackupGroup::"Object Update Tools");
+
+        DATABASE::"OM - Known Object Export Error" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - Field to Renumber" :
+          EXIT(BackupGroup::"Object Update Tools");
+
+        DATABASE::"OM - Ask SQL" :
+          EXIT(BackupGroup::"Object Update Tools");
+
+        DATABASE::"OM - Element to Renumber" :
+          EXIT(BackupGroup::"Object Update Tools");
+
+        DATABASE::"OM - C/AL History Compiled" :
+          EXIT(BackupGroup::"Source Control");
+
+        DATABASE::"OM - Relation" :
+          EXIT(BackupGroup::"Where-Used");
+
+        DATABASE::"OM - Object Import Line" :
+          EXIT(BackupGroup::Setup);
+
+        DATABASE::"OM - Check Guidelines Object" :
+          EXIT(BackupGroup::"Check Guidelines");
+
+        DATABASE::"OM - Check Guidelines Comment" :
+          EXIT(BackupGroup::"Check Guidelines");
+
+        DATABASE::"OM - Check Guidelines Buffer" :
+          EXIT(BackupGroup::"Check Guidelines");
+
+        DATABASE::"OM - Check Transferfields Obj." :
+          EXIT(BackupGroup::"Object Update Tools");
+
+        DATABASE::"OM - Check Transferfields Fld." :
+          EXIT(BackupGroup::"Object Update Tools");
+
+        DATABASE::"OM - Repository Setup" :
+          EXIT(BackupGroup::"Source Control");
+
+        DATABASE::"OM - Repository Log" :
+          EXIT(BackupGroup::"Source Control");
+
+        DATABASE::"OM - Modification Buffer" :
+          EXIT(BackupGroup::"Source Control");
+
+        DATABASE::"OM - Test Group" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - Test" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - Test Parameter" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - Test Log" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - MenuSuite Node" :
+          EXIT(BackupGroup::Buffers);
+
+        DATABASE::"OM - Branch" :
+          EXIT(BackupGroup::"Source Control");
+
+        DATABASE::"OM - Where Used Status" :
+          EXIT(BackupGroup::Buffers);
+
+        DATABASE::"OM - Comment" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - Comment Line" :
+          EXIT(BackupGroup::Projects);
+
+        DATABASE::"OM - Project Type" :
+          EXIT(BackupGroup::Setup);
+
+        DATABASE::"OM - Transport Type" :
+          EXIT(BackupGroup::Setup);
+
+        DATABASE::"OM - NAV Database" :
+          EXIT(BackupGroup::Setup);
+
+        DATABASE::"OM - Developer Cue" :
+          EXIT(BackupGroup::Buffers);
+
+        DATABASE::"OM - File" :
+          EXIT(BackupGroup::Buffers);
+
+        ELSE
+          IF Mgt.ShortUserId = 'REIJER' THEN
+            ERROR(FORMAT(TableNo))
+          ELSE
+            EXIT(BackupGroup::Buffers);
+
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

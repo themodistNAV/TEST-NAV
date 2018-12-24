@@ -1,0 +1,149 @@
+OBJECT Codeunit 10551 BACS Entry Set Recon.-No.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/09/12;
+    Time=12:00:00 PM;
+    Version List=NAVGB7.00;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 271=rm,
+                TableData 272=rm,
+                TableData 10550=rm;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      BankAccLedgEntry@1040000 : Record 271;
+      Text1040001@1040001 : TextConst 'ENU=cannot be %1;ENG=cannot be %1';
+
+    PROCEDURE ToggleReconNo@5(VAR BACSLedgEntry@1040000 : Record 10550;VAR BankAccReconLine@1040001 : Record 274;ChangeAmount@1040002 : Boolean);
+    BEGIN
+      BankAccLedgEntry.LOCKTABLE;
+      BACSLedgEntry.LOCKTABLE;
+      BankAccReconLine.LOCKTABLE;
+      BankAccReconLine.FIND;
+      IF BACSLedgEntry."Statement No." = '' THEN BEGIN
+        SetReconNo(BACSLedgEntry,BankAccReconLine);
+        BankAccReconLine."Applied Amount" := BankAccReconLine."Applied Amount" - BACSLedgEntry.Amount;
+        BankAccReconLine."Applied Entries" := BankAccReconLine."Applied Entries" + 1;
+      END ELSE BEGIN
+        RemoveReconNo(BACSLedgEntry,BankAccReconLine,TRUE);
+        BankAccReconLine."Applied Amount" := BankAccReconLine."Applied Amount" + BACSLedgEntry.Amount;
+        BankAccReconLine."Applied Entries" := BankAccReconLine."Applied Entries" - 1;
+      END;
+      IF ChangeAmount THEN
+        BankAccReconLine.VALIDATE("Statement Amount",BankAccReconLine."Applied Amount")
+      ELSE
+        BankAccReconLine.VALIDATE("Statement Amount");
+      BankAccReconLine.MODIFY;
+    END;
+
+    PROCEDURE SetReconNo@2(VAR BACSLedgEntry@1040000 : Record 10550;VAR BankAccReconLine@1040001 : Record 274);
+    BEGIN
+      BACSLedgEntry.TESTFIELD(Open,TRUE);
+      IF (BACSLedgEntry."Statement Status" <> BACSLedgEntry."Statement Status"::Open) AND
+         (BACSLedgEntry."Statement Status" <>
+          BACSLedgEntry."Statement Status"::"BACS Entry Applied")
+      THEN
+        BACSLedgEntry.FIELDERROR(
+          "Statement Status",STRSUBSTNO('cannot be %1',BACSLedgEntry."Statement Status"));
+      BACSLedgEntry.TESTFIELD("Statement No.",'');
+      BACSLedgEntry.TESTFIELD("Statement Line No.",0);
+      IF NOT (BACSLedgEntry."Entry Status" IN
+              [BACSLedgEntry."Entry Status"::Posted,BACSLedgEntry."Entry Status"::"Financially Voided"])
+      THEN
+        BACSLedgEntry.FIELDERROR(
+          "Entry Status",STRSUBSTNO(Text1040001,BACSLedgEntry."Entry Status"));
+      BACSLedgEntry.TESTFIELD("Bal. Account No.",BankAccReconLine."Bank Account No.");
+      BACSLedgEntry."Statement Status" := BACSLedgEntry."Statement Status"::"BACS Entry Applied";
+      BACSLedgEntry."Statement No." := BankAccReconLine."Statement No.";
+      BACSLedgEntry."Statement Line No." := BankAccReconLine."Statement Line No.";
+      BACSLedgEntry.MODIFY;
+
+      BankAccLedgEntry.GET(BACSLedgEntry."Bank Account Ledger Entry No.");
+      BankAccLedgEntry.TESTFIELD(Open,TRUE);
+      IF (BankAccLedgEntry."Statement Status" <> BankAccLedgEntry."Statement Status"::Open) AND
+         (BankAccLedgEntry."Statement Status" <>
+          BankAccLedgEntry."Statement Status"::"BACS Entry Applied")
+      THEN
+        BankAccLedgEntry.FIELDERROR(
+          "Statement Status",STRSUBSTNO('cannot be %1',BankAccLedgEntry."Statement Status"));
+      BankAccLedgEntry.TESTFIELD("Statement No.",'');
+      BankAccLedgEntry.TESTFIELD("Statement Line No.",0);
+      BankAccLedgEntry."Statement Status" :=
+        BankAccLedgEntry."Statement Status"::"BACS Entry Applied";
+      BankAccLedgEntry."Statement No." := '';
+      BankAccLedgEntry."Statement Line No." := 0;
+      BankAccLedgEntry.MODIFY;
+    END;
+
+    PROCEDURE GroupReconNo@1040000(VAR BACSLedgEntry@1040001 : Record 10550;VAR BankAccReconLine@1040000 : Record 274) : Boolean;
+    VAR
+      BacsLedgEntry2@1040002 : Record 10550;
+    BEGIN
+      BacsLedgEntry2.SETCURRENTKEY("Register No.","Bal. Account No.","Statement Status","Statement No.");
+      BacsLedgEntry2.SETRANGE("Register No.",BACSLedgEntry."Register No.");
+      BacsLedgEntry2.SETRANGE("Bal. Account No.",BankAccReconLine."Bank Account No.");
+      BacsLedgEntry2.SETRANGE("Statement Status",BacsLedgEntry2."Statement Status"::"BACS Entry Applied");
+      BacsLedgEntry2.SETRANGE("Statement No.",BankAccReconLine."Statement No.");
+      IF NOT BacsLedgEntry2.FINDFIRST THEN
+        EXIT(FALSE);
+
+      BankAccReconLine."Statement Line No." := BacsLedgEntry2."Statement Line No.";
+      BankAccReconLine.FIND;
+      SetReconNo(BACSLedgEntry,BankAccReconLine);
+      BacsLedgEntry2.CALCSUMS(Amount);
+      BankAccReconLine."Statement Amount" := -BacsLedgEntry2.Amount;
+      BankAccReconLine."Applied Entries" := BacsLedgEntry2.COUNT;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE RemoveReconNo@3(VAR BACSLedgEntry@1040000 : Record 10550;VAR BankAccReconLine@1040001 : Record 274;Test@1040002 : Boolean);
+    VAR
+      BACSLedgEntry2@1040003 : Record 10550;
+    BEGIN
+      BACSLedgEntry.TESTFIELD(Open,TRUE);
+      IF Test THEN BEGIN
+        BACSLedgEntry.TESTFIELD(
+          "Statement Status",BACSLedgEntry."Statement Status"::"BACS Entry Applied");
+        BACSLedgEntry.TESTFIELD("Statement No.",BankAccReconLine."Statement No.");
+        BACSLedgEntry.TESTFIELD("Statement Line No.",BankAccReconLine."Statement Line No.");
+      END;
+      BACSLedgEntry.TESTFIELD("Bal. Account No.",BankAccReconLine."Bank Account No.");
+      BACSLedgEntry."Statement Status" := BACSLedgEntry."Statement Status"::Open;
+      BACSLedgEntry."Statement No." := '';
+      BACSLedgEntry."Statement Line No." := 0;
+      BACSLedgEntry.MODIFY;
+
+      BACSLedgEntry2.RESET;
+      BACSLedgEntry2.SETCURRENTKEY("Bank Account Ledger Entry No.");
+      BACSLedgEntry2.SETRANGE(
+        "Bank Account Ledger Entry No.",BACSLedgEntry."Bank Account Ledger Entry No.");
+      BACSLedgEntry2.SETRANGE(
+        "Statement Status",BACSLedgEntry."Statement Status"::"BACS Entry Applied");
+      IF NOT BACSLedgEntry2.FINDFIRST THEN BEGIN
+        BankAccLedgEntry.GET(BACSLedgEntry."Bank Account Ledger Entry No.");
+        BankAccLedgEntry.TESTFIELD(Open,TRUE);
+        IF Test THEN BEGIN
+          BankAccLedgEntry.TESTFIELD(
+            "Statement Status",BankAccLedgEntry."Statement Status"::"BACS Entry Applied");
+          BankAccLedgEntry.TESTFIELD("Statement No.",'');
+          BankAccLedgEntry.TESTFIELD("Statement Line No.",0);
+        END;
+        BankAccLedgEntry."Statement Status" := BankAccLedgEntry."Statement Status"::Open;
+        BankAccLedgEntry."Statement No." := '';
+        BankAccLedgEntry."Statement Line No." := 0;
+        BankAccLedgEntry.MODIFY;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

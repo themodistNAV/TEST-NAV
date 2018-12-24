@@ -1,0 +1,310 @@
+OBJECT Codeunit 50040 DW Return Order Import
+{
+  OBJECT-PROPERTIES
+  {
+    Date=15/03/18;
+    Time=[ 5:13:37 PM];
+    Modified=Yes;
+    Version List=TM0020;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            ModistSetup.GET;
+            ModistSetup.TESTFIELD("Demandware Ret. Order Imp. Grp");
+            ModistSetup.TESTFIELD("Demandware Default Location");
+            IntegrationProcessingGroup.GET(ModistSetup."Demandware Integration Type",ModistSetup."Demandware Ret. Order Imp. Grp");
+            IntegrationProcessingGroup.TESTFIELD("Working Location");
+            IntegrationProcessingGroup.TESTFIELD("Archive Location");
+            IntegrationProcessingGroup.TESTFIELD("Error Location");
+
+            IF IntegrationProcessingGroup."Enable SFTP Connect" THEN
+              DownloadftpFiles;
+            ProcessFTPFiles;
+            MoveSuccessFileToArchLocation;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ModistSetup@1000000000 : Record 50000;
+      IntegrationProcessingGroup@1000000001 : Record 50007;
+      AutoNAVTask@1000000003 : Record 9062734;
+      TmpInternetOrderHeader@1000000008 : TEMPORARY Record 9021666;
+      TmpInternetOrderLine@1000000009 : TEMPORARY Record 9021667;
+      InternetOrderHeader@1000000004 : Record 9021666;
+      InternetOrderLine@1000000005 : Record 9021667;
+      SalesShipmentHeader@1000000007 : Record 110;
+      IntegrationErrorLog@1000000013 : Record 50011;
+      SuccessList@1000000011 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      SuccessFile@1000000010 : Text;
+      AutoNAVToolkit@1000000002 : Codeunit 9062602;
+      FileManagement@1000000012 : Codeunit 419;
+      FileSystem@1000000014 : Codeunit 9062264;
+      HasError@1000000006 : Boolean;
+
+    LOCAL PROCEDURE ProcessFTPFiles@1000000003();
+    VAR
+      lFile@1000000000 : Record 2000000022;
+    BEGIN
+      CLEARLASTERROR;
+      SuccessList := SuccessList.List;
+      lFile.SETRANGE(Path,IntegrationProcessingGroup."Working Location");
+      lFile.SETRANGE("Is a file",TRUE);
+      lFile.SETFILTER(Name,'%1','*.xml');
+      IF lFile.FINDSET THEN BEGIN
+        ClearErrorLogs;
+        REPEAT
+          IF ImportReturnOrders(IntegrationProcessingGroup."Working Location" + lFile.Name,lFile.Name) THEN
+            SuccessList.Add(IntegrationProcessingGroup."Working Location" + lFile.Name)
+          ELSE
+            LogError('',0,GETLASTERRORTEXT,'Import XML File',GETLASTERRORCODE,lFile.Name);
+        UNTIL lFile.NEXT=0;
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ImportReturnOrders@1000000000(pFilePath@1000000004 : Text;pFileName@1000000000 : Text);
+    VAR
+      lItem@1000000003 : Record 27;
+      lCustomer@1000000006 : Record 18;
+      lReader@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlTextReader";
+      lReaderName@1000000002 : Text;
+      lReaderValue@1000000009 : Text;
+      lNodeTypeTxt@1000000008 : Text;
+      lLineNo@1000000007 : Integer;
+      HasError@1000000010 : Boolean;
+    BEGIN
+      SalesShipmentHeader.RESET;
+      SalesShipmentHeader.SETCURRENTKEY("Order No.");
+      lLineNo := 10000;
+
+      TmpInternetOrderHeader.RESET;
+      TmpInternetOrderHeader.DELETEALL;
+      TmpInternetOrderLine.RESET;
+      TmpInternetOrderLine.DELETEALL;
+
+      lReader := lReader.Create(pFilePath);
+      WHILE lReader.Read DO BEGIN
+        lNodeTypeTxt := FORMAT(lReader.NodeType);
+        CASE lNodeTypeTxt OF
+          'Element':
+            BEGIN
+              lReaderName := lReader.Name;
+              CASE lReaderName OF
+                'return':
+                  BEGIN
+                    TmpInternetOrderHeader.INIT;
+                    TmpInternetOrderHeader."Order Guid" := CREATEGUID;
+                    TmpInternetOrderHeader."Document Type" := 'Return';
+                    TmpInternetOrderHeader."File Name" := pFileName;
+                    TmpInternetOrderHeader."Inventory Location" := ModistSetup."Demandware Default Location";
+                    TmpInternetOrderHeader."Order Type" := TmpInternetOrderHeader."Order Type"::Return;
+                  END;
+              END;
+            END;
+          'Text':
+            BEGIN
+              lReaderValue := lReader.Value;
+              CASE lReaderName OF
+                'return-number'        : TmpInternetOrderHeader."Internet Order Reference" := lReaderValue;
+                'return-date'          : EVALUATE(TmpInternetOrderHeader."Order Date",COPYSTR(DELCHR(lReaderValue),1,10),9);
+                //'return-date'          : TmpInternetOrderHeader."Order Date" := TODAY;
+                'customer-number'      :
+                  BEGIN
+                    TmpInternetOrderHeader."Bill-to Net Customer No." := lReaderValue;
+                    TmpInternetOrderHeader."Sell-to Customer No." := lReaderValue;
+                    IF lCustomer.GET(lReaderValue) THEN BEGIN
+                      TmpInternetOrderHeader."Bill-to Name" := lCustomer.Name;
+                      TmpInternetOrderHeader."Bill-to Address" := lCustomer.Address;
+                      TmpInternetOrderHeader."Bill-to Address 2" := lCustomer."Address 2";
+                      TmpInternetOrderHeader."Bill-to City" := lCustomer.City;
+                      TmpInternetOrderHeader."Sell-to Customer Name" := lCustomer.Name;
+                      TmpInternetOrderHeader."Sell-to Address" := lCustomer.Address;
+                      TmpInternetOrderHeader."Sell-to Address 2" := lCustomer."Address 2";
+                      TmpInternetOrderHeader."Sell-to City" := lCustomer.City;
+                    END;
+                  END;
+                'original-order-number':
+                  BEGIN
+                    SalesShipmentHeader.SETRANGE("Order No.",lReaderValue);
+                    IF SalesShipmentHeader.FINDFIRST THEN
+                      TmpInternetOrderHeader."Original Order GUID" := SalesShipmentHeader."Order GuID";
+                    TmpInternetOrderHeader."Original Order No." := lReaderValue;
+                  END;
+                'product-id':
+                  BEGIN
+                    TmpInternetOrderLine."Line Type" := TmpInternetOrderLine."Line Type"::Item;
+                    TmpInternetOrderLine."Line ID" := lReaderValue;
+                    GetItemVariantFromSKU(lReaderValue,TmpInternetOrderLine."No.",TmpInternetOrderLine."Variant Code");
+                    IF lItem.GET(TmpInternetOrderLine."No.") THEN
+                      TmpInternetOrderLine.Description := lItem.Description;
+                  END;
+                'qty':
+                  BEGIN
+                    EVALUATE(TmpInternetOrderLine.Quantity,lReaderValue);
+                    TmpInternetOrderLine."Qty. Per UOM" := 1;
+                  END;
+                'return-reason':
+                  BEGIN
+                    TmpInternetOrderLine.Comment := COPYSTR(lReaderValue,1,9);
+                    TmpInternetOrderHeader.Comment := COPYSTR(lReaderValue,1,9);
+                  END;
+              END;
+            END;
+          'EndElement':
+            BEGIN
+              lReaderName := lReader.Name;
+              CASE lReaderName OF
+                'product-lineitem':
+                  BEGIN
+                    TmpInternetOrderLine."Order Line Guid" := CREATEGUID;
+                    TmpInternetOrderLine."Order Guid" := TmpInternetOrderHeader."Order Guid";
+                    TmpInternetOrderLine."Internet Order Reference" := TmpInternetOrderHeader."Internet Order Reference";
+                    TmpInternetOrderLine."Parent Line No." := lLineNo;
+                    TmpInternetOrderLine."Line No." := lLineNo;
+                    TmpInternetOrderLine.INSERT;
+                    TmpInternetOrderLine.INIT;
+                    lLineNo += 10000;
+                  END;
+                'return':
+                  BEGIN
+                    TmpInternetOrderHeader."DateTime Created" := CURRENTDATETIME;
+                    TmpInternetOrderHeader.INSERT;
+                    TmpInternetOrderHeader.INIT;
+                  END;
+              END;
+            END;
+        END;
+      END;
+      lReader.Close;
+      lReader.Dispose;
+      ProcessTmpInternetOrders;
+    END;
+
+    LOCAL PROCEDURE ProcessTmpInternetOrders@1000000002();
+    BEGIN
+      TmpInternetOrderHeader.RESET;
+      IF TmpInternetOrderHeader.FINDSET THEN BEGIN
+        REPEAT
+          //ValidateReturnOrderHeader(TmpInternetOrderHeader); //Validation errors will be checked by the time of converting to SRO.
+          InternetOrderHeader.INIT;
+          InternetOrderHeader := TmpInternetOrderHeader;
+          InternetOrderHeader.INSERT;
+        UNTIL TmpInternetOrderHeader.NEXT=0;
+      END;
+
+      TmpInternetOrderLine.RESET;
+      IF TmpInternetOrderLine.FINDSET THEN BEGIN
+        REPEAT
+          //ValidateReturnOrderLine(TmpInternetOrderLine);
+          InternetOrderLine.INIT;
+          InternetOrderLine := TmpInternetOrderLine;
+          InternetOrderLine.INSERT;
+        UNTIL TmpInternetOrderLine.NEXT=0;
+      END;
+    END;
+
+    LOCAL PROCEDURE ValidateReturnOrderHeader@1000000012(pInternetOrderHeader@1000000000 : Record 9021666);
+    VAR
+      lCustomer@1000000001 : Record 18;
+      lSalesHeader@1000000002 : Record 36;
+      lText000@1000000003 : TextConst 'ENU=Sales Return Order Already Exist';
+    BEGIN
+      WITH pInternetOrderHeader DO BEGIN
+        CLEARLASTERROR;
+        lCustomer.GET("Sell-to Customer No.");
+        lCustomer.GET("Bill-to Net Customer No.");
+        SalesShipmentHeader.SETRANGE("Order No.","Original Order No.");
+        SalesShipmentHeader.FINDFIRST;
+      END;
+    END;
+
+    LOCAL PROCEDURE ValidateReturnOrderLine@1000000008(pInternetOrderLine@1000000000 : Record 9021667);
+    VAR
+      lItem@1000000001 : Record 27;
+      lItemVariant@1000000002 : Record 5401;
+    BEGIN
+      WITH pInternetOrderLine DO BEGIN
+        CLEARLASTERROR;
+        lItem.GET("No.");
+        IF "Variant Code" <> '' THEN
+          lItemVariant.GET("No.","Variant Code");
+      END;
+    END;
+
+    LOCAL PROCEDURE LogError@1000000015(OrderRef@1000000001 : Code[20];LineNo@1000000006 : Integer;ErrMessage@1000000002 : Text;ErrorLocation@1000000004 : Text;ErrCode@1000000005 : Text;pFileName@1000000007 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+    BEGIN
+      ErrorHandler.LogError(ModistSetup."Demandware Integration Type",
+                            ModistSetup."Demandware Ret. Order Imp. Grp",
+                            '',
+                            DATABASE::"Internet Order Line",
+                            OrderRef,
+                            LineNo,
+                            ErrMessage,
+                            ErrorLocation,
+                            0,
+                            ErrCode,
+                            pFileName);
+    END;
+
+    LOCAL PROCEDURE DownloadftpFiles@1000000001();
+    VAR
+      lWebIntegrationManagement@1000000000 : Codeunit 50100;
+    BEGIN
+      IF NOT lWebIntegrationManagement.DownloadftpFiles(IntegrationProcessingGroup."Working Location",
+                                                        ModistSetup."Demandware Import SFTP Server",
+                                                        IntegrationProcessingGroup."FTP Folder")
+      THEN BEGIN
+        AutoNAVToolkit.AddEntryForTask(AutoNAVTask,GETLASTERRORTEXT,2);
+        ERROR(GETLASTERRORTEXT);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetItemVariantFromSKU@1000000004(pSKU@1000000004 : Text;VAR pItemNo@1000000005 : Code[20];VAR pVariantCode@1000000006 : Text);
+    VAR
+      lChar@1000000003 : Code[1];
+      lCharPosition@1000000002 : Integer;
+    BEGIN
+      IF pSKU = '' THEN
+        EXIT;
+      lChar := '-';
+      lCharPosition := STRPOS(pSKU,lChar);
+      IF lCharPosition <> 0 THEN BEGIN
+        pItemNo := COPYSTR(pSKU,1,lCharPosition - 1);
+        pVariantCode := COPYSTR(pSKU,lCharPosition + 1);
+      END ELSE
+        pItemNo := pSKU;
+    END;
+
+    LOCAL PROCEDURE MoveSuccessFileToArchLocation@1000000017();
+    BEGIN
+      FOREACH SuccessFile IN SuccessList DO BEGIN
+        IF SuccessFile <> '' THEN BEGIN
+          //FileManagement.MoveFile(SuccessFile,IntegrationProcessingGroup."Archive Location" + FileManagement.GetFileName(SuccessFile));
+          FileSystem.MoveFile(FALSE,SuccessFile,IntegrationProcessingGroup."Archive Location" + FileManagement.GetFileName(SuccessFile));
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ClearErrorLogs@1000000005();
+    BEGIN
+      IntegrationErrorLog.RESET;
+      IntegrationErrorLog.SETCURRENTKEY("Integration Type","Integration Process Group");
+      IntegrationErrorLog.SETRANGE("Integration Type",IntegrationProcessingGroup."Platform Code");
+      IntegrationErrorLog.SETRANGE("Integration Process Group",IntegrationProcessingGroup.Code);
+      IF NOT IntegrationErrorLog.ISEMPTY THEN
+        IntegrationErrorLog.DELETEALL;
+    END;
+
+    BEGIN
+    {
+      //DOC TM0020 AW 23/01/2018 - Returns EDI
+    }
+    END.
+  }
+}
+

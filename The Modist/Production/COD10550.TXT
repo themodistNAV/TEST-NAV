@@ -1,0 +1,186 @@
+OBJECT Codeunit 10550 BACSManagement
+{
+  OBJECT-PROPERTIES
+  {
+    Date=26/11/15;
+    Time=12:00:00 PM;
+    Version List=NAVGB9.00.00.43897;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 10550=rim,
+                TableData 10551=rim;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      GenJnlLine2@1040000 : Record 81;
+      SourceGenJnlLine@1040007 : Record 81;
+      BankAcc@1040001 : Record 270;
+      BACSRegister@1040008 : Record 10551;
+      BankAccLedgEntry2@1040002 : Record 271;
+      BACSLedgEntry2@1040003 : Record 10550;
+      SourceCodeSetup@1040004 : Record 242;
+      BLOBRef@1040020 : TEMPORARY Record 99008535;
+      RBMgt@1040019 : Codeunit 419;
+      NextEntryNo@1040006 : Integer;
+      Text001@1040018 : TextConst 'ENU=You must specify a file name.;ENG=You must specify a file name.';
+      Text002@1040017 : TextConst 'ENU=Do you want to replace the existing file?;ENG=Do you want to replace the existing file?';
+      Text003@1040016 : TextConst 'ENU=Import Cancelled.;ENG=Import Cancelled.';
+      Text005@1040014 : TextConst 'ENU=There is no BACS file.;ENG=There is no BACS file.';
+      Text006@1040013 : TextConst 'ENU=Do you want to delete this BACS file?;ENG=Do you want to delete this BACS file?';
+      Text007@1040012 : TextConst 'ENU=Delete cancelled.;ENG=Delete cancelled.';
+      Text008@1040021 : TextConst 'ENU=Default.txt;ENG=Default.txt';
+
+    PROCEDURE InsertBACS@3(VAR BACSLedgEntry@1040000 : Record 10550);
+    BEGIN
+      IF NextEntryNo = 0 THEN BEGIN
+        SourceCodeSetup.GET;
+        BACSLedgEntry2.LOCKTABLE;
+        BACSLedgEntry2.RESET;
+        IF BACSLedgEntry2.FINDLAST THEN
+          NextEntryNo := BACSLedgEntry2."Entry No." + 1
+        ELSE
+          NextEntryNo := 1;
+        // BACS Register
+        BACSRegister.LOCKTABLE;
+        BACSRegister.RESET;
+        IF BACSRegister.FINDLAST THEN
+          BACSRegister."No." := BACSRegister."No." + 1
+        ELSE
+          BACSRegister."No." := 1;
+        BACSRegister."From BACS Entry No." := NextEntryNo;
+        BACSRegister."Creation Date" := TODAY;
+        BACSRegister."Source Code" := SourceCodeSetup."Payment Journal";
+        BACSRegister."User ID" := USERID;
+        BACSRegister."Journal Batch Name" := SourceGenJnlLine."Journal Batch Name";
+        BACSRegister."From BACS Entry No." := NextEntryNo;
+        BACSRegister."To BACS Entry No." := NextEntryNo;
+        BACSRegister.INSERT;
+      END ELSE BEGIN
+        NextEntryNo := NextEntryNo + 1;
+        BACSRegister."To BACS Entry No." := NextEntryNo;
+        BACSRegister.MODIFY;
+      END;
+
+      BACSLedgEntry.Open := TRUE;
+      BACSLedgEntry."User ID" := USERID;
+      BACSLedgEntry."Entry No." := NextEntryNo;
+      BACSLedgEntry."Register No." := BACSRegister."No.";
+      BACSLedgEntry.INSERT;
+    END;
+
+    PROCEDURE FinancialVoidBACS@5(VAR BACSLedgEntry@1040000 : Record 10550);
+    BEGIN
+      BACSLedgEntry.TESTFIELD("Entry Status",BACSLedgEntry."Entry Status"::Posted);
+      BACSLedgEntry.TESTFIELD("Statement Status",BACSLedgEntry."Statement Status"::Open);
+      BACSLedgEntry.TESTFIELD("Bal. Account No.");
+      BankAcc.GET(BACSLedgEntry."Bal. Account No.");
+      BankAccLedgEntry2.GET(BACSLedgEntry."Bank Account Ledger Entry No.");
+      SourceCodeSetup.GET;
+
+      GenJnlLine2.INIT;
+      GenJnlLine2."Document No." := BACSLedgEntry."Document No.";
+      GenJnlLine2."Account Type" := GenJnlLine2."Account Type"::"Bank Account";
+      GenJnlLine2."Posting Date" := BACSLedgEntry."Posting Date";
+      GenJnlLine2.VALIDATE("Account No.",BACSLedgEntry."Bal. Account No.");
+      GenJnlLine2.Description := STRSUBSTNO('Voiding BACS %1.',BACSLedgEntry."Document No.");
+      GenJnlLine2.VALIDATE(Amount,BACSLedgEntry.Amount);
+      GenJnlLine2."Bal. Account Type" := BACSLedgEntry."Account Type";
+      GenJnlLine2.VALIDATE("Bal. Account No.",BACSLedgEntry."Account No.");
+      GenJnlLine2.VALIDATE("Shortcut Dimension 1 Code",BankAccLedgEntry2."Global Dimension 1 Code");
+      GenJnlLine2.VALIDATE("Shortcut Dimension 2 Code",BankAccLedgEntry2."Global Dimension 2 Code");
+      GenJnlLine2."Dimension Set ID" := BankAccLedgEntry2."Dimension Set ID";
+      GenJnlLine2."Allow Zero-Amount Posting" := TRUE;
+      GenJnlLine2."Source Code" := SourceCodeSetup."Financially Voided BACS";
+      CODEUNIT.RUN(CODEUNIT::"Gen. Jnl.-Post Line",GenJnlLine2);
+
+      BACSLedgEntry."Original Entry Status" := BACSLedgEntry."Entry Status";
+      BACSLedgEntry."Entry Status" := BACSLedgEntry."Entry Status"::"Financially Voided";
+      BACSLedgEntry.MODIFY;
+    END;
+
+    PROCEDURE SetGenJnlLine@1040000(NewGenJnlLine2@1040000 : Record 81);
+    BEGIN
+      SourceGenJnlLine := NewGenJnlLine2;
+    END;
+
+    PROCEDURE GetRegisterNo@1040001() : Integer;
+    BEGIN
+      EXIT(BACSRegister."No.");
+    END;
+
+    PROCEDURE ShowRegisterEntries@1040002(BACSRegister@1040000 : Record 10551);
+    VAR
+      BACSLedgerEntry@1040001 : Record 10550;
+    BEGIN
+      BACSLedgerEntry.SETRANGE(
+        "Entry No.",
+        BACSRegister."From BACS Entry No.",
+        BACSRegister."To BACS Entry No.");
+
+      PAGE.RUN(PAGE::"BACS Ledger Entries",BACSLedgerEntry);
+    END;
+
+    PROCEDURE ImportBACSFile@1040005(BACSRegister@1040002 : Record 10551;FileName@1040000 : Text[1024];ShowCommonDialog@1040001 : Boolean);
+    BEGIN
+      IF FileName = '' THEN
+        IF NOT ShowCommonDialog THEN
+          ERROR(Text001);
+
+      BACSRegister.CALCFIELDS("BACS File");
+      IF BACSRegister."BACS File".HASVALUE THEN
+        IF NOT CONFIRM(Text002) THEN
+          ERROR(Text003);
+
+      CLEAR(BLOBRef);
+      RBMgt.BLOBImport(BLOBRef,FileName);
+      BACSRegister."BACS File" := BLOBRef.Blob;
+      BACSRegister.MODIFY;
+    END;
+
+    PROCEDURE ExportBACSFile@1040004(BACSRegister@1040002 : Record 10551);
+    BEGIN
+      BACSRegister.CALCFIELDS("BACS File");
+      BLOBRef.Blob := BACSRegister."BACS File";
+      RBMgt.BLOBExport(BLOBRef,Text008,TRUE);
+    END;
+
+    PROCEDURE DeleteBACSFile@1040003(BACSRegister@1040000 : Record 10551);
+    BEGIN
+      BACSRegister.CALCFIELDS("BACS File");
+      IF NOT BACSRegister."BACS File".HASVALUE THEN
+        ERROR(Text005);
+
+      IF NOT CONFIRM(Text006) THEN
+        ERROR(Text007);
+      CLEAR(BACSRegister."BACS File");
+      BACSRegister.MODIFY;
+    END;
+
+    PROCEDURE VoidBACS@1040006(VAR GenJnlLine@1040000 : Record 81);
+    VAR
+      BACSLedgerEntry@1040001 : Record 10550;
+    BEGIN
+      GenJnlLine.TESTFIELD("Bank Payment Type",GenJnlLine2."Bank Payment Type"::BACS);
+      GenJnlLine.TESTFIELD("BACS Entry No.");
+
+      BACSLedgerEntry.GET(GenJnlLine."BACS Entry No.");
+      BACSLedgerEntry."Original Entry Status" := BACSLedgerEntry."Entry Status";
+      BACSLedgerEntry."Entry Status" := BACSLedgerEntry."Entry Status"::Voided;
+      BACSLedgerEntry.Open := FALSE;
+      BACSLedgerEntry.MODIFY;
+
+      GenJnlLine."BACS Entry No." := 0;
+      GenJnlLine."Exported to Payment File" := FALSE;
+      GenJnlLine.MODIFY;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,414 @@
+OBJECT Codeunit 9087011 Buying Staging Processing
+{
+  OBJECT-PROPERTIES
+  {
+    Date=29/11/16;
+    Time=[ 2:53:04 PM];
+    Modified=Yes;
+    Version List=NS2016.16,M0034;
+  }
+  PROPERTIES
+  {
+    TableNo=9087016;
+    OnRun=BEGIN
+            BuyingStagingHeader := Rec;
+            Execute();
+            Rec := BuyingStagingHeader;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      nSembleSetup@1000000019 : Record 9087000;
+      BuyingStagingHeader@1000000001 : Record 9087016;
+      BuyingStagingLine@1000000000 : Record 9087017;
+      BuyingSheetHeader@1000000021 : Record 9087020;
+      DialogManagement@1000000006 : Codeunit 9062249;
+      BuyingStagingManagement@1000000002 : Codeunit 9087010;
+      nSembleWorkflowManagement@1000000004 : Codeunit 9087004;
+      ProcessingResult@1000000003 : Boolean;
+      Activity@1000000022 : ',CheckBuyingStagingHeader,CheckBuyingStagingLine,CreateStyle,CreateItem,CreateBuyingSheetHeader,CreateBuyingSheetSummaryLine,ReleaseBuyingSheet';
+      Interaction@1000000005 : Boolean;
+      DialogIndex@1000000007 : ' ,Activity,Progress';
+      tDialogTitle@1000000010 : TextConst 'ENU=Processing buying staging "%1"...;ENG=Processing buying staging "%1"...';
+      tDialogActivity@1000000009 : TextConst 'ENU=Activity;ENG=Activity';
+      tDialogProgress@1000000008 : TextConst 'ENU=Progress;ENG=Progress';
+      tDialogClearingErrors@1000000011 : TextConst 'ENU=Clearing errors;ENG=Clearing errors';
+      tDialogCheckingBuyingStaging@1000000016 : TextConst 'ENU=Checking buying staging;ENG=Checking buying staging';
+      tDialogCreatingStyles@1000000012 : TextConst 'ENU=Creating styles;ENG=Creating styles';
+      tDialogCreatingItems@1000000013 : TextConst 'ENU=Creating items;ENG=Creating items';
+      tDialogCreatingSalesPrices@1000000023 : TextConst 'ENU=Creating sales prices;ENG=Creating sales prices';
+      tDialogCreatingBuyingSheetHeader@1000000014 : TextConst 'ENU=Creating buying sheet header;ENG=Creating buying sheet header';
+      tDialogCreatingBuyingSheetLines@1000000015 : TextConst 'ENU=Creating buying sheet lines;ENG=Creating buying sheet lines';
+      tDialogReleasingBuyingSheet@1000000020 : TextConst 'ENU=Releasing buying sheet;ENG=Releasing buying sheet';
+      tFinalMessageOK@1000000017 : TextConst 'ENU=Buying sheet "%1" has been successfully created from buying staging "%2".;ENG=Buying sheet "%1" has been successfully created from buying staging "%2".';
+      tFinalMessageError@1000000018 : TextConst 'ENU=Buying staging "%1" processing finished with error: %2;ENG=Buying staging "%1" processing finished with error: %2';
+
+    PROCEDURE "--- General Methods ---"@1000000015();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE Execute@1000000004();
+    BEGIN
+      //DOC NS2015.1 - Processing buying staging
+
+      IF (BuyingStagingHeader.Status = BuyingStagingHeader.Status::Processed) THEN
+        EXIT;
+
+      Interaction := GUIALLOWED();
+
+      IF (Interaction) THEN
+      BEGIN
+        DialogManagement.Add(tDialogActivity, 20, DialogIndex::Activity, 40, FALSE, FALSE);
+        DialogManagement.Add(tDialogProgress, 20, DialogIndex::Progress, 40, TRUE, TRUE);
+        DialogManagement.Open(STRSUBSTNO(tDialogTitle, BuyingStagingHeader."No."));
+      END;
+
+      nSembleSetup.VerifyAndGet();
+
+      ClearErrors();
+
+      ProcessingResult := TRUE;
+
+      Check();
+      CreateStyles();
+      CreateItems();
+      CreateBuyingSheet();
+      ReleaseBuyingSheet();
+
+      UpdateStatus();
+
+      ArchiveBuyingStaging();
+
+      nSembleWorkflowManagement.NotifyBuyingSheetCreated(BuyingSheetHeader);
+
+      IF (Interaction) THEN
+      BEGIN
+        DialogManagement.Close();
+        IF (BuyingStagingHeader."Error Message" = '') THEN
+          MESSAGE(tFinalMessageOK, BuyingSheetHeader."No.", BuyingStagingHeader."No.")
+        ELSE
+          MESSAGE(tFinalMessageError, BuyingStagingHeader."No.", BuyingStagingHeader."Error Message");
+      END;
+    END;
+
+    LOCAL PROCEDURE ClearErrors@1000000000();
+    BEGIN
+      //DOC NS2015.1 - Clearing errors
+
+      SetDialogActivity(tDialogClearingErrors);
+
+      BuyingStagingHeader.VALIDATE("Error Message", '');
+
+      BuyingStagingLine.RESET();
+      BuyingStagingLine.SETRANGE("Buying Staging No.", BuyingStagingHeader."No.");
+      SetDialogProgressCount(BuyingStagingLine.COUNT);
+      IF (BuyingStagingLine.FINDSET(TRUE)) THEN
+      REPEAT
+        StepDialogProgress();
+        BuyingStagingLine.VALIDATE("Error Message", '');
+      UNTIL (BuyingStagingLine.NEXT() = 0);
+
+      ClearDialogActivity();
+    END;
+
+    LOCAL PROCEDURE Check@1000000003();
+    BEGIN
+      //DOC NS2015.1 - Checking buying staging
+
+      IF ( NOT (ProcessingResult)) THEN
+        EXIT;
+
+      SetDialogActivity(tDialogCheckingBuyingStaging);
+
+      CLEAR(BuyingStagingManagement);
+      BuyingStagingManagement.SetCheckBuyingStagingHeader(BuyingStagingHeader);
+      COMMIT;
+      ProcessingResult := BuyingStagingManagement.RUN();
+      BuyingStagingManagement.GetBuyingStagingHeader(BuyingStagingHeader);
+      IF (ProcessingResult) THEN
+        BuyingStagingHeader.SetErrorMessage('')
+      ELSE
+        BuyingStagingHeader.SetErrorMessage(GETLASTERRORTEXT());
+      BuyingStagingHeader.MODIFY(TRUE);
+
+      ProcessLines(Activity::CheckBuyingStagingHeader);
+
+      ClearDialogActivity();
+    END;
+
+    LOCAL PROCEDURE CreateStyles@1000000005();
+    BEGIN
+      //DOC NS2015.1 - Creating styles
+
+      SetDialogActivity(tDialogCreatingStyles);
+
+      ProcessLines(Activity::CreateStyle);
+
+      ClearDialogActivity();
+    END;
+
+    LOCAL PROCEDURE CreateItems@1000000006();
+    BEGIN
+      //DOC NS2015.1 - Creating items
+
+      SetDialogActivity(tDialogCreatingItems);
+
+      ProcessLines(Activity::CreateItem);
+
+      ClearDialogActivity();
+    END;
+
+    LOCAL PROCEDURE CreateBuyingSheet@1000000007();
+    BEGIN
+      //DOC NS2015.1 - Creating buying sheet
+
+      IF ( NOT (ProcessingResult)) THEN
+        EXIT;
+
+      SetDialogActivity(tDialogCreatingBuyingSheetHeader);
+
+      CLEAR(BuyingStagingManagement);
+      BuyingStagingManagement.SetCreateBuyingSheetHeader(BuyingStagingHeader);
+      COMMIT;
+      ProcessingResult := BuyingStagingManagement.RUN();
+      BuyingStagingManagement.GetBuyingStagingHeader(BuyingStagingHeader);
+      BuyingStagingManagement.GetBuyingSheetHeader(BuyingSheetHeader);
+      IF (ProcessingResult) THEN
+        BuyingStagingHeader.SetErrorMessage('')
+      ELSE
+        BuyingStagingHeader.SetErrorMessage(GETLASTERRORTEXT());
+      BuyingStagingHeader.MODIFY(TRUE);
+
+      IF (ProcessingResult) THEN
+        ProcessLines(Activity::CreateBuyingSheetSummaryLine);
+
+      ClearDialogActivity();
+    END;
+
+    LOCAL PROCEDURE ReleaseBuyingSheet@1000000008();
+    BEGIN
+      //DOC NS2015.1 - Releasing buying sheet
+
+      IF ( NOT (ProcessingResult)) THEN
+        EXIT;
+
+      SetDialogActivity(tDialogReleasingBuyingSheet);
+
+      CLEAR(BuyingStagingManagement);
+      BuyingStagingManagement.SetReleaseBuyingSheet(BuyingSheetHeader);
+      COMMIT;
+      ProcessingResult := BuyingStagingManagement.RUN();
+      IF (ProcessingResult) THEN
+        BuyingStagingHeader.SetErrorMessage('')
+      ELSE
+        BuyingStagingHeader.SetErrorMessage(GETLASTERRORTEXT());
+
+      ClearDialogActivity();
+    END;
+
+    LOCAL PROCEDURE CreateSalesPrices@1000000009();
+    VAR
+      BuyingStagingSalesPrice@1000000000 : Record 50002;
+      StyleSalesPrice@1000000001 : Record 9087045;
+      SalesPrice@1000000002 : Record 7002;
+      Item@1000000003 : Record 27;
+      Style@1000000004 : Record 9087012;
+      BuyingStagingSalesPrice2@1000000005 : Record 50002;
+      StyleNotExists@1000000006 : TextConst 'ENU=Style %1 does not exists';
+    BEGIN
+      //DOC M0042 DD 27/10/16 ++
+      {
+      SetDialogActivity(tDialogCreatingSalesPrices);
+      BuyingStagingSalesPrice.SETRANGE("Starting Date", BuyingStagingHeader."No.");
+      BuyingStagingSalesPrice.SETRANGE("Currency Code",FALSE);
+      IF BuyingStagingSalesPrice.FINDSET THEN BEGIN
+        BuyingStagingLine.RESET();
+        BuyingStagingLine.SETRANGE("Buying Staging No.", BuyingStagingHeader."No.");
+        REPEAT
+          BuyingStagingLine.SETRANGE("Item No.", BuyingStagingSalesPrice."Buying Staging No.");
+          IF BuyingStagingLine.FINDFIRST THEN BEGIN
+            IF Style.GET(BuyingStagingLine."Style No.") THEN BEGIN
+              StyleSalesPrice.SETCURRENTKEY(
+              "Style No.","Sales Type","Sales Code","Starting Date","Currency Code","Unit of Measure Code","Minimum Quantity");
+              StyleSalesPrice.SETRANGE("Style No.", BuyingStagingLine."Style No.");
+              StyleSalesPrice.SETRANGE("Sales Type", BuyingStagingSalesPrice."Colour Code");
+              StyleSalesPrice.SETRANGE("Sales Code", BuyingStagingSalesPrice."Line No.");
+              StyleSalesPrice.SETRANGE("Starting Date", BuyingStagingSalesPrice."Sales Type");
+              StyleSalesPrice.SETRANGE("Currency Code", BuyingStagingSalesPrice."Vendor Style No.");
+              //StyleSalesPrice.SETRANGE("Unit of Measure Code", );
+              StyleSalesPrice.SETRANGE("Minimum Quantity", 1);
+              IF NOT StyleSalesPrice.FINDFIRST THEN BEGIN
+                StyleSalesPrice.INIT;
+                StyleSalesPrice.VALIDATE("Style No.",BuyingStagingLine."Style No.");
+                StyleSalesPrice.VALIDATE("Sales Type", BuyingStagingSalesPrice."Colour Code");
+                StyleSalesPrice.VALIDATE("Sales Code",BuyingStagingSalesPrice."Line No.");
+                StyleSalesPrice.VALIDATE("Currency Code",BuyingStagingSalesPrice."Vendor Style No.");
+                StyleSalesPrice.VALIDATE("Unit of Measure Code",'PCS');
+                StyleSalesPrice.VALIDATE("Starting Date",BuyingStagingSalesPrice."Sales Type");
+                StyleSalesPrice.VALIDATE("Unit Price", BuyingStagingSalesPrice."Vendor Item No.");
+                StyleSalesPrice.INSERT(TRUE);
+              END;
+
+              {
+              //Create Sales Prices
+              SalesPrice.INIT;
+              SalesPrice.VALIDATE("Item No.", BuyingStagingSalesPrice."Item No.");
+              SalesPrice.VALIDATE("Sales Type", BuyingStagingSalesPrice."Sales Type");
+              SalesPrice.VALIDATE("Sales Code",BuyingStagingSalesPrice."Sales Code");
+              SalesPrice.VALIDATE("Starting Date",BuyingStagingSalesPrice."Starting Date");
+              SalesPrice.VALIDATE("Variant Code",BuyingStagingSalesPrice."Variant Code");
+              SalesPrice.VALIDATE("Currency Code",BuyingStagingSalesPrice."Currency Code");
+              SalesPrice.VALIDATE("Unit Price",BuyingStagingSalesPrice."Unit Price");
+              SalesPrice.INSERT(TRUE);
+              }
+
+              BuyingStagingSalesPrice2.COPY(BuyingStagingSalesPrice);
+              BuyingStagingSalesPrice2."Currency Code" := TRUE;
+              BuyingStagingSalesPrice2.MODIFY;
+            END ELSE BEGIN
+              BuyingStagingSalesPrice."Unit Price" := STRSUBSTNO(StyleNotExists,BuyingStagingLine."Style No.");
+              BuyingStagingSalesPrice.MODIFY
+            END;
+
+          END;
+        UNTIL BuyingStagingSalesPrice.NEXT = 0;
+      END;
+      ClearDialogActivity();
+      }
+    END;
+
+    LOCAL PROCEDURE ArchiveBuyingStaging@1000000001();
+    VAR
+      lMoveToArchive@1000000000 : Boolean;
+    BEGIN
+      //DOC NS2016.16 - Archiving buying staging
+
+      IF (BuyingStagingHeader.Status <> BuyingStagingHeader.Status::Processed) THEN
+        EXIT;
+      IF (nSembleSetup."Arch. Processed Buying Staging" = nSembleSetup."Arch. Processed Buying Staging"::" ") THEN
+        EXIT;
+
+      lMoveToArchive := nSembleSetup."Arch. Processed Buying Staging" = nSembleSetup."Arch. Processed Buying Staging"::"Move to Archive";
+      BuyingStagingManagement.ArchiveBuyingStaging(BuyingStagingHeader, lMoveToArchive, FALSE);
+    END;
+
+    LOCAL PROCEDURE UpdateStatus@1000000002();
+    BEGIN
+      //DOC NS2015.1 - Updating buying staging status
+
+      SetDialogActivity(tDialogCreatingBuyingSheetLines);
+
+      IF (ProcessingResult) THEN
+      BEGIN
+        BuyingStagingHeader.VALIDATE(Status, BuyingStagingHeader.Status::Processed);
+        BuyingStagingHeader.VALIDATE("Error Message", '');
+        BuyingStagingLine.RESET();
+        BuyingStagingLine.SETRANGE("Buying Staging No.", BuyingStagingHeader."No.");
+        IF (BuyingStagingLine.FINDSET(TRUE)) THEN
+        REPEAT
+          BuyingStagingLine.VALIDATE("Error Message", '');
+        UNTIL (BuyingStagingLine.NEXT() = 0);
+      END
+      ELSE
+      BEGIN
+        BuyingStagingHeader.VALIDATE(Status, BuyingStagingHeader.Status::Error);
+        IF (BuyingStagingHeader."Error Message" = '') THEN
+        BEGIN
+          BuyingStagingLine.RESET();
+          BuyingStagingLine.SETRANGE("Buying Staging No.", BuyingStagingHeader."No.");
+          BuyingStagingLine.SETFILTER("Error Message", '<>''''');
+          IF (BuyingStagingLine.FINDFIRST()) THEN
+            BuyingStagingHeader.VALIDATE("Error Message", BuyingStagingLine."Error Message");
+        END;
+      END;
+      BuyingStagingHeader.MODIFY(TRUE);
+
+      ClearDialogActivity();
+    END;
+
+    PROCEDURE "--- Internal Methods ---"@1000000016();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ProcessLines@1000000013(pFunction@1000000000 : Integer);
+    BEGIN
+      //DOC NS2015.1 - Processing lines
+
+      IF ( NOT (ProcessingResult)) THEN
+        EXIT;
+
+      BuyingStagingLine.RESET();
+      BuyingStagingLine.SETRANGE("Buying Staging No.", BuyingStagingHeader."No.");
+
+      //DOC M0034 DD 18/10/16 : Filter only blank Line Status ++
+      BuyingStagingLine.SETRANGE("Line Status", BuyingStagingLine."Line Status"::" ");
+      //DOC M0034 DD 18/10/16 : Filter only blank Line Status --
+
+      SetDialogProgressCount(BuyingStagingLine.COUNT);
+      IF (BuyingStagingLine.FINDSET(TRUE)) THEN
+      REPEAT
+        StepDialogProgress();
+        CLEAR(BuyingStagingManagement);
+        CASE (pFunction) OF
+          Activity::CheckBuyingStagingHeader:
+            BuyingStagingManagement.SetCheckBuyingStagingLine(BuyingStagingLine);
+          Activity::CreateStyle:
+            BuyingStagingManagement.SetCreateStyle(BuyingStagingLine);
+          Activity::CreateItem:
+            BuyingStagingManagement.SetCreateItem(BuyingStagingLine);
+          Activity::CreateBuyingSheetSummaryLine:
+            BuyingStagingManagement.SetCreateBuyingSheetSummaryLine(BuyingStagingLine);
+        END;
+        COMMIT;
+        ProcessingResult := BuyingStagingManagement.RUN();
+        BuyingStagingManagement.GetBuyingStagingLine(BuyingStagingLine);
+        IF (ProcessingResult) THEN
+          BuyingStagingLine.SetErrorMessage('')
+        ELSE
+          BuyingStagingLine.SetErrorMessage(GETLASTERRORTEXT());
+        BuyingStagingLine.MODIFY(TRUE);
+      UNTIL (BuyingStagingLine.NEXT() = 0);
+    END;
+
+    PROCEDURE "--- Dialog Methods ---"@1000000014();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE SetDialogActivity@1000000017(pActivity@1000000000 : Text[250]);
+    BEGIN
+      IF ( NOT (Interaction)) THEN
+        EXIT;
+      DialogManagement.SetCounterTextValue(DialogIndex::Activity, pActivity);
+    END;
+
+    LOCAL PROCEDURE ClearDialogActivity@1000000018();
+    BEGIN
+      IF ( NOT (Interaction)) THEN
+        EXIT;
+      DialogManagement.SetCounterTextValue(DialogIndex::Activity, '');
+      DialogManagement.SetCounterCount(DialogIndex::Progress, 0);
+    END;
+
+    LOCAL PROCEDURE SetDialogProgressCount@1000000026(pCount@1000000000 : Integer);
+    BEGIN
+      DialogManagement.SetCounterCount(DialogIndex::Progress, pCount);
+    END;
+
+    LOCAL PROCEDURE StepDialogProgress@1000000027();
+    BEGIN
+      DialogManagement.StepCounter(DialogIndex::Progress);
+    END;
+
+    BEGIN
+    {
+      //DOC NS2015.1  JH 20/11/2013 - Created
+      //DOC NS2015.1  JH 21/02/2014 - Amendments
+      //DOC NS2016.16 JH 07/09/2016 - nSemble 2016
+      //DOC M0034 DD 18/10/16 : Filter only blank Line Status
+    }
+    END.
+  }
+}
+

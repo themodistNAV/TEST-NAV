@@ -1,0 +1,284 @@
+OBJECT Report 9062354 Create BAK Tables
+{
+  OBJECT-PROPERTIES
+  {
+    Date=26/09/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.16.2;
+  }
+  PROPERTIES
+  {
+    ProcessingOnly=Yes;
+    OnInitReport=BEGIN
+                   StartingObjectId := 90000;
+                   ObjectPrefix := tObjectPrefix;
+                   ObjectVersion := tObjectPrefix;
+                 END;
+
+    OnPreReport=VAR
+                  eStartingObjectIdEmpty@1000000000 : TextConst 'ENU=Starting Object ID can''t be empty.;ENG=Starting Object ID can''t be empty.';
+                  eStartingObjectIdNotIn50000@1000000001 : TextConst 'ENU=Starting Object ID is not within 50000..99999 range. Are you sure you want to continue?;ENG=Starting Object ID is not within 50000..99999 range. Are you sure you want to continue?';
+                BEGIN
+                  IF (StartingObjectId = 0) THEN
+                    ERROR(eStartingObjectIdEmpty);
+                  IF ((StartingObjectId < 50000) OR (StartingObjectId > 99999)) THEN
+                    IF ( NOT (CONFIRM(eStartingObjectIdNotIn50000, TRUE))) THEN
+                      CurrReport.QUIT();
+
+                  CLEAR(ObjectGeneration);
+                  ObjectGeneration.Initialise();
+
+                  ObjectGeneration.ClearBuffer(TablesBuffer);
+                  ObjectGeneration.ClearBuffer(TableCallsBuffer);
+                  ObjectGeneration.ClearBuffer(SaveFunctionsBuffer);
+                  ObjectGeneration.ClearBuffer(ClearFunctionsBuffer);
+                  ObjectGeneration.ClearBuffer(RestoreFunctionsBuffer);
+
+                  CurrentObjectId := StartingObjectId;
+                  CurrentFunctionId := 2000;
+                END;
+
+    OnPostReport=BEGIN
+                   ObjectGeneration.BufferToFile(TablesBuffer);
+                   ProcessCodeunit(0, tSave, SaveBuffer, SaveFunctionsBuffer);
+                   ProcessCodeunit(1, tClear, ClearBuffer, ClearFunctionsBuffer);
+                   ProcessCodeunit(2, tRestore, RestoreBuffer, RestoreFunctionsBuffer);
+                   ObjectGeneration.Finalise(tFileName);
+                 END;
+
+  }
+  DATASET
+  {
+    { 1000000000;;DataItem;dTable            ;
+               DataItemTable=Table2000000038;
+               DataItemTableView=SORTING(Object Type,Object ID)
+                                 WHERE(Object Type=CONST(Table));
+               OnAfterGetRecord=VAR
+                                  lFunctionName@1000000000 : Text;
+                                BEGIN
+                                  lFunctionName := ObjectGeneration.ToCodeIdentifier(dTable."Object Name");
+                                  TableCallsBuffer.Add1('            %1();', lFunctionName);
+
+                                  AddFunctionHeader(SaveFunctionsBuffer, lFunctionName);
+                                  SaveFunctionsBuffer.Add0('      IF (lTable.FINDSET()) THEN');
+                                  SaveFunctionsBuffer.Add0('      REPEAT');
+
+                                  AddFunctionHeader(ClearFunctionsBuffer, lFunctionName);
+                                  ClearFunctionsBuffer.Add0('      lTable.DELETEALL();');
+                                  AddFunctionFooter(ClearFunctionsBuffer);
+
+                                  AddFunctionHeader(RestoreFunctionsBuffer, lFunctionName);
+                                  RestoreFunctionsBuffer.Add0('      IF (lBackup.FINDSET()) THEN');
+                                  RestoreFunctionsBuffer.Add0('      REPEAT');
+                                  RestoreFunctionsBuffer.Add0('        lTable.INIT();');
+                                END;
+
+               ReqFilterFields=Object ID }
+
+    { 1000000001;1;DataItem;dTableField      ;
+               DataItemTable=Table2000000041;
+               DataItemTableView=SORTING(TableNo,No.)
+                                 WHERE(Class=CONST(Normal),
+                                       Enabled=CONST(Yes));
+               OnPreDataItem=VAR
+                               lObjectName@1000000000 : Text;
+                             BEGIN
+                               lObjectName := COPYSTR(STRSUBSTNO('%1 %2', ObjectPrefix, dTable."Object Name"), 1, 30);
+                               ObjectGeneration.AddObjectHeader(TablesBuffer, Object.Type::Table, CurrentObjectId, lObjectName, ObjectVersion);
+                               ObjectGeneration.AddObjectPropertiesHeader(TablesBuffer);
+                               ObjectGeneration.AddObjectPropertiesFooter(TablesBuffer);
+                               TablesBuffer.Add0('  FIELDS');
+                               TablesBuffer.Add0('  {');
+                               CLEAR(CalcFieldsText);
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  lOptionString@1000000001 : Text;
+                                BEGIN
+                                  IF (dTableField.Type = dTableField.Type::Option) THEN
+                                    lOptionString := STRSUBSTNO('OptionString=[%1];', dTableField.OptionString);
+                                  TablesBuffer.Add4('    { %1;;%2;%3;%4 }', FORMAT(dTableField."No.", 0, 1), dTableField.FieldName, dTableField."Type Name", lOptionString);
+                                  IF (dTableField.Type = dTableField.Type::BLOB) THEN
+                                    RestoreFunctionsBuffer.Add1('        lBackup.CALCFIELDS("%1");', dTableField.FieldName);
+                                  RestoreFunctionsBuffer.Add1('        lTable."%1" := lBackup."%1";', dTableField.FieldName);
+                                  IF (dTableField.Type = dTableField.Type::BLOB) THEN
+                                  BEGIN
+                                    IF (CalcFieldsText <> '') THEN
+                                      CalcFieldsText := CalcFieldsText + ', ';
+                                    CalcFieldsText := CalcFieldsText + STRSUBSTNO('"%1"', dTableField.FieldName);
+                                  END;
+                                END;
+
+               OnPostDataItem=VAR
+                                lPrimaryKeyText@1000000004 : Text;
+                                lRecordRef@1000000003 : RecordRef;
+                                lKeyRef@1000000002 : KeyRef;
+                                lFieldRef@1000000001 : FieldRef;
+                                lFieldIndex@1000000000 : Integer;
+                              BEGIN
+                                lRecordRef.OPEN(dTable."Object ID");
+                                lKeyRef := lRecordRef.KEYINDEX(1);
+                                FOR lFieldIndex := 1 TO lKeyRef.FIELDCOUNT DO
+                                BEGIN
+                                  lFieldRef := lKeyRef.FIELDINDEX(lFieldIndex);
+                                  IF (lPrimaryKeyText <> '') THEN
+                                    lPrimaryKeyText := lPrimaryKeyText + ',';
+                                  lPrimaryKeyText := lPrimaryKeyText + lFieldRef.NAME;
+                                END;
+                                lRecordRef.CLOSE();
+
+                                TablesBuffer.Add0('  }');
+                                TablesBuffer.Add0('  KEYS');
+                                TablesBuffer.Add0('  {');
+                                TablesBuffer.Add1('    { ;%1;Clustered=Yes }', lPrimaryKeyText);
+                                TablesBuffer.Add0('  }');
+                                TablesBuffer.Add0('  FIELDGROUPS');
+                                TablesBuffer.Add0('  {');
+                                TablesBuffer.Add0('  }');
+
+                                ObjectGeneration.AddObjectFooter(TablesBuffer);
+                                TablesBuffer.Add0('');
+
+                                CurrentObjectId += 1;
+
+                                IF (CalcFieldsText <> '') THEN
+                                  SaveFunctionsBuffer.Add1('        lTable.CALCFIELDS(%1);', CalcFieldsText);
+                                SaveFunctionsBuffer.Add0('        lBackup.TRANSFERFIELDS(lTable);');
+                                SaveFunctionsBuffer.Add0('        lBackup.INSERT();');
+                                SaveFunctionsBuffer.Add0('      UNTIL (lTable.NEXT() = 0)');
+                                AddFunctionFooter(SaveFunctionsBuffer);
+
+                                RestoreFunctionsBuffer.Add0('        lTable.INSERT();');
+                                RestoreFunctionsBuffer.Add0('      UNTIL (lBackup.NEXT() = 0);');
+                                AddFunctionFooter(RestoreFunctionsBuffer);
+                              END;
+
+               DataItemLink=TableNo=FIELD(Object ID) }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+      { 1000000000;;Container;
+                  ContainerType=ContentArea }
+
+      { 1000000001;1;Group  ;
+                  Name=OptionsGroup;
+                  CaptionML=[ENU=Options;
+                             ENG=Options];
+                  GroupType=Group }
+
+      { 1000000002;2;Field  ;
+                  Name=StartingObjectIdField;
+                  CaptionML=[ENU=Starting Object ID;
+                             ENG=Starting Object ID];
+                  SourceExpr=StartingObjectId;
+                  MinValue=0 }
+
+      { 1000000004;2;Field  ;
+                  Name=ObjectPrefixField;
+                  CaptionML=[ENU=Object Prefix;
+                             ENG=Object Prefix];
+                  SourceExpr=ObjectPrefix }
+
+      { 1000000003;2;Field  ;
+                  Name=ObjectVersionField;
+                  CaptionML=[ENU=Object Version;
+                             ENG=Object Version];
+                  SourceExpr=ObjectVersion }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      TablesBuffer@1000000012 : TEMPORARY Record 9062765;
+      TableCallsBuffer@1000000000 : TEMPORARY Record 9062765;
+      SaveBuffer@1000000013 : TEMPORARY Record 9062765;
+      SaveFunctionsBuffer@1000000001 : TEMPORARY Record 9062765;
+      ClearBuffer@1000000015 : TEMPORARY Record 9062765;
+      ClearFunctionsBuffer@1000000002 : TEMPORARY Record 9062765;
+      RestoreBuffer@1000000014 : TEMPORARY Record 9062765;
+      RestoreFunctionsBuffer@1000000003 : TEMPORARY Record 9062765;
+      Object@1000000016 : Record 2000000001;
+      ObjectGeneration@1000000011 : Codeunit 9062747;
+      ObjectPrefix@1000000020 : Code[3];
+      ObjectVersion@1000000010 : Text;
+      StartingObjectId@1000000008 : Integer;
+      CurrentObjectId@1000000006 : Integer;
+      tObjectPrefix@1000000007 : TextConst 'ENU=BAK;ENG=BAK';
+      tSave@1000000017 : TextConst 'ENU=Save;ENG=Save';
+      tClear@1000000018 : TextConst 'ENU=Clear;ENG=Clear';
+      tRestore@1000000019 : TextConst 'ENU=Restore;ENG=Restore';
+      CurrentFunctionId@1000000004 : Integer;
+      tFileName@1000000005 : TextConst 'ENU=BAK Tables;ENG=BAK Tables';
+      CalcFieldsText@1000000009 : Text;
+
+    LOCAL PROCEDURE ProcessCodeunit@1000000000(pCodeunitIdShift@1000000004 : Integer;pCodeunitName@1000000001 : Text;VAR pBuffer@1000000002 : Record 9062765;VAR pFunctionsBuffer@1000000003 : Record 9062765);
+    VAR
+      lCodeunitName@1000000000 : Text;
+    BEGIN
+      lCodeunitName := COPYSTR(STRSUBSTNO('%1 %2', ObjectPrefix, pCodeunitName), 1, 30);
+      ObjectGeneration.ClearBuffer(pBuffer);
+      ObjectGeneration.AddObjectHeader(pBuffer, Object.Type::Codeunit, StartingObjectId + pCodeunitIdShift, lCodeunitName, ObjectVersion);
+      ObjectGeneration.AddObjectPropertiesHeader(pBuffer);
+      pBuffer.Add0('    OnRun=VAR');
+      pBuffer.Add1('            eConfirmation@1001 : TextConst ''ENU=Do you want to run %1?;ENG=Do you want to run %1?'';', lCodeunitName);
+      pBuffer.Add1('            eFinalMessage@1002 : TextConst ''ENU=%1 has been completed.;ENG=%1 has been completed.'';', lCodeunitName);
+      pBuffer.Add0('          BEGIN');
+      pBuffer.Add0('            IF ( NOT (CONFIRM(eConfirmation))) THEN');
+      pBuffer.Add0('              EXIT;');
+      pBuffer.Add1('            Dlg.OPEN(PADSTR(''%1'', 30, ''#''));', '#1');
+      pBuffer.Add0('');
+      ObjectGeneration.CopyBuffer(TableCallsBuffer, pBuffer);
+      pBuffer.Add0('');
+      pBuffer.Add0('            Dlg.Close();');
+      pBuffer.Add0('            MESSAGE(eFinalMessage);');
+      pBuffer.Add0('          END;');
+      pBuffer.Add0('');
+      ObjectGeneration.AddObjectPropertiesFooter(pBuffer);
+      ObjectGeneration.AddObjectCodeHeader(pBuffer);
+      pBuffer.Add0('    VAR');
+      pBuffer.Add0('      Dlg@1000 : Dialog;');
+      pBuffer.Add0('');
+      ObjectGeneration.CopyBuffer(pFunctionsBuffer, pBuffer);
+      ObjectGeneration.AddObjectCodeFooter(pBuffer);
+      ObjectGeneration.AddObjectFooter(pBuffer);
+      ObjectGeneration.BufferToFile(pBuffer);
+    END;
+
+    LOCAL PROCEDURE AddFunctionHeader@1000000003(VAR pBuffer@1000000000 : Record 9062765;pFunctionName@1000000001 : Text);
+    BEGIN
+      CurrentFunctionId += 1;
+      pBuffer.Add2('    LOCAL PROCEDURE %1@%2();', pFunctionName, FORMAT(CurrentFunctionId, 0, 1));
+      pBuffer.Add0('    VAR');
+      pBuffer.Add1('      lTable@1001 : Record %1;', FORMAT(dTable."Object ID", 0, 1));
+      pBuffer.Add1('      lBackup@1002 : Record %1;', FORMAT(CurrentObjectId, 0, 1));
+      pBuffer.Add0('    BEGIN');
+      pBuffer.Add0('      Dlg.Update(1, lTable.TABLECAPTION());');
+    END;
+
+    LOCAL PROCEDURE AddFunctionFooter@1000000004(VAR pBuffer@1000000000 : Record 9062765);
+    BEGIN
+      pBuffer.Add0('    END;');
+      pBuffer.Add0('');
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.16.2 JH 24/08/2016 - Created
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

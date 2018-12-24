@@ -1,0 +1,322 @@
+OBJECT Codeunit 9087040 Replenishment Processing
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/10/16;
+    Time=12:30:13 PM;
+    Version List=NS2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ReplenishmentLine@1000000010 : Record 9087043;
+      tDefaultTemplateCode@1000000008 : TextConst 'ENU=DEFAULT;ENG=DEFAULT';
+      tDefaultTemplateDescription@1000000009 : TextConst 'ENU=Default Replenishment Template;ENG=Default Replenishment Template';
+      tDefaultBatchCode@1000000001 : TextConst 'ENU=DEFAULT;ENG=DEFAULT';
+      tDefaultBatchDescription@1000000000 : TextConst 'ENU=Default Replenishment Batch;ENG=Default Replenishment Batch';
+      tEmptyTemplate@1000000002 : TextConst 'ENU=Replenishment template code is empty;ENG=Replenishment template code is empty';
+      tEmptyBatch@1000000003 : TextConst 'ENU=Replenishment batch code is empty;ENG=Replenishment batch code is empty';
+      ReplenishmentContext@1000000004 : Record 9087044;
+      TnpToolkit@1000000006 : Codeunit 9062230;
+      DialogManagement@1000000012 : Codeunit 9062249;
+
+    LOCAL PROCEDURE "--- Calculations ---"@1000000000();
+    BEGIN
+    END;
+
+    PROCEDURE FillItemVariantReplenishmentBuffer@1000000017(pReplenishmentContext@1000000001 : Record 9087044;VAR pReplenishmentBuffer@1000000002 : Record 9087048);
+    BEGIN
+      //DOC NS2016.16 - Filling item variant replenishment buffer for given template and batch
+      //  -> pReplenishmentContext: Replenishment context
+      //  <> pReplenishmentBuffer: Target buffer
+
+      ReplenishmentContext := pReplenishmentContext;
+
+      ReplenishmentLine.RESET();
+      ReplenishmentLine.SETRANGE("Replenishment Template Code", ReplenishmentContext."Replenishment Template Code");
+      ReplenishmentLine.SETRANGE("Replenishment Batch Code", ReplenishmentContext."Replenishment Batch Code");
+      IF (ReplenishmentLine.FINDSET()) THEN
+      REPEAT
+        IF ( NOT (pReplenishmentBuffer.GET(ReplenishmentLine."Item No.", ReplenishmentLine."Variant Code"))) THEN
+        BEGIN
+          pReplenishmentBuffer."Item No." := ReplenishmentLine."Item No.";
+          pReplenishmentBuffer."Variant Code" := ReplenishmentLine."Variant Code";
+          pReplenishmentBuffer.INSERT();
+        END;
+      UNTIL (ReplenishmentLine.NEXT() = 0);
+    END;
+
+    PROCEDURE FillRequiredReplenishmentBuffer@1000000023(pReplenishmentContext@1000000003 : Record 9087044;VAR pReplenishmentBuffer@1000000002 : Record 9087048);
+    BEGIN
+      //DOC NS2016.16 - Filling required replenishment buffer for given template and batch
+      //  -> pReplenishmentContext: Replenishment context
+      //  <> pReplenishmentBuffer: Target buffer
+
+      ReplenishmentContext := pReplenishmentContext;
+
+      ReplenishmentLine.RESET();
+      ReplenishmentLine.SETRANGE("Replenishment Template Code", ReplenishmentContext."Replenishment Template Code");
+      ReplenishmentLine.SETRANGE("Replenishment Batch Code", ReplenishmentContext."Replenishment Batch Code");
+      IF (ReplenishmentLine.FINDSET()) THEN
+      REPEAT
+        IF ( NOT (pReplenishmentBuffer.GET(ReplenishmentLine."Item No.", ReplenishmentLine."Variant Code",
+             ReplenishmentLine."To Location Code"))) THEN
+        BEGIN
+          pReplenishmentBuffer."Item No." := ReplenishmentLine."Item No.";
+          pReplenishmentBuffer."Variant Code" := ReplenishmentLine."Variant Code";
+          pReplenishmentBuffer."To Location Code" := ReplenishmentLine."To Location Code";
+          pReplenishmentBuffer.Quantity := ReplenishmentLine."Required Quantity";
+          pReplenishmentBuffer."Outstanding Quantity" := ReplenishmentLine."Required Quantity";
+          pReplenishmentBuffer.INSERT();
+        END;
+      UNTIL (ReplenishmentLine.NEXT() = 0);
+    END;
+
+    PROCEDURE FillTransferReplenishmentBuffer@1000000024(pReplenishmentContext@1000000000 : Record 9087044;VAR pRequiredReplenishmentBuffer@1000000011 : Record 9087048;VAR pAvailableReplenishmentBuffer@1000000012 : Record 9087048;VAR pTransferReplenishmentBuffer@1000000013 : Record 9087048) : Boolean;
+    VAR
+      eNoLines@1000000003 : TextConst 'ENU=There are no lines to calculate availability for in replenishment %1.;ENG=There are no lines to calculate availability for in replenishment %1.';
+      eConfirmation@1000000004 : TextConst 'ENU=Do you want to calculate availability for replenishment %1?;ENG=Do you want to calculate availability for replenishment %1?';
+      eReduced@1000000008 : TextConst 'ENU=Reduced due to distribution centre availability.;ENG=Reduced due to distribution centre availability.';
+      lLookingForAvailable@1000000002 : Boolean;
+      lQuantity@1000000007 : Decimal;
+    BEGIN
+      //DOC NS2016.16 - Filling transfer replenishment buffer
+      //  -> pReplenishmentContext: Replenishment context
+      //  <> pRequiredReplenishmentBuffer: Required buffer
+      //  <> pAvailableReplenishmentBuffer: Available buffer
+      //  <> pTransferReplenishmentBuffer: Target buffer
+
+      ReplenishmentContext := pReplenishmentContext;
+
+      IF (pRequiredReplenishmentBuffer.FINDSET()) THEN
+      REPEAT
+        lLookingForAvailable := (pRequiredReplenishmentBuffer."Outstanding Quantity" <> 0);
+        WHILE (lLookingForAvailable) DO
+        BEGIN
+          pAvailableReplenishmentBuffer.RESET();
+          pAvailableReplenishmentBuffer.SETRANGE("Item No.", pRequiredReplenishmentBuffer."Item No.");
+          pAvailableReplenishmentBuffer.SETRANGE("Variant Code", pRequiredReplenishmentBuffer."Variant Code");
+          pAvailableReplenishmentBuffer.SETFILTER("Outstanding Quantity", '>0');
+          IF (pAvailableReplenishmentBuffer.FINDSET()) THEN
+          BEGIN
+            lQuantity := TnpToolkit.MinDecimal(pAvailableReplenishmentBuffer."Outstanding Quantity",
+              pRequiredReplenishmentBuffer."Outstanding Quantity");
+
+            pTransferReplenishmentBuffer."Item No." := pRequiredReplenishmentBuffer."Item No.";
+            pTransferReplenishmentBuffer."Variant Code" := pRequiredReplenishmentBuffer."Variant Code";
+            pTransferReplenishmentBuffer."From Location Code" := pAvailableReplenishmentBuffer."From Location Code";
+            pTransferReplenishmentBuffer."To Location Code" := pRequiredReplenishmentBuffer."To Location Code";
+            pTransferReplenishmentBuffer.Quantity := lQuantity;
+            pTransferReplenishmentBuffer.INSERT();
+
+            pAvailableReplenishmentBuffer."Outstanding Quantity" -= lQuantity;
+            pAvailableReplenishmentBuffer.MODIFY();
+
+            pRequiredReplenishmentBuffer."Outstanding Quantity" -= lQuantity;
+            pRequiredReplenishmentBuffer.MODIFY();
+
+            lLookingForAvailable := (pRequiredReplenishmentBuffer."Outstanding Quantity" > 0);
+          END
+          ELSE
+            lLookingForAvailable := FALSE;
+        END;
+      UNTIL (pRequiredReplenishmentBuffer.NEXT() = 0);
+    END;
+
+    PROCEDURE ApplyTransferReplenishmentBuffer@1000000025(pReplenishmentContext@1000000000 : Record 9087044;VAR pTransferReplenishmentBuffer@1000000009 : Record 9087048) : Boolean;
+    VAR
+      eNoLines@1000000003 : TextConst 'ENU=There are no lines to calculate availability for in replenishment %1.;ENG=There are no lines to calculate availability for in replenishment %1.';
+      eConfirmation@1000000004 : TextConst 'ENU=Do you want to calculate availability for replenishment %1?;ENG=Do you want to calculate availability for replenishment %1?';
+      eReduced@1000000008 : TextConst 'ENU=Reduced due to distribution centre availability.;ENG=Reduced due to distribution centre availability.';
+      lReplenishmentLineNo@1000000001 : Integer;
+    BEGIN
+      //DOC NS2016.16 - Applying transfer replenishment buffer
+      //  -> pReplenishmentContext: Replenishment context
+      //  <> pTransferReplenishmentBuffer: The buffer
+
+      ReplenishmentContext := pReplenishmentContext;
+
+      ReplenishmentLine.RESET();
+      ReplenishmentLine.SETRANGE("Replenishment Template Code", ReplenishmentContext."Replenishment Template Code");
+      ReplenishmentLine.SETRANGE("Replenishment Batch Code", ReplenishmentContext."Replenishment Batch Code");
+      IF (ReplenishmentLine.FINDLAST()) THEN
+        lReplenishmentLineNo := ReplenishmentLine."Line No.";
+
+      IF (pTransferReplenishmentBuffer.FINDSET()) THEN
+      REPEAT
+        lReplenishmentLineNo += 10000;
+
+        CLEAR(ReplenishmentLine);
+        ReplenishmentLine.VALIDATE("Replenishment Template Code", ReplenishmentContext."Replenishment Template Code");
+        ReplenishmentLine.VALIDATE("Replenishment Batch Code", ReplenishmentContext."Replenishment Batch Code");
+        ReplenishmentLine.VALIDATE("Line No.", lReplenishmentLineNo);
+        ReplenishmentLine.VALIDATE("Item No.", pTransferReplenishmentBuffer."Item No.");
+        ReplenishmentLine.VALIDATE("Variant Code", pTransferReplenishmentBuffer."Variant Code");
+        ReplenishmentLine.VALIDATE("From Location Code", pTransferReplenishmentBuffer."From Location Code");
+        ReplenishmentLine.VALIDATE("To Location Code", pTransferReplenishmentBuffer."To Location Code");
+        ReplenishmentLine.VALIDATE("Required Quantity", pTransferReplenishmentBuffer.Quantity);
+        ReplenishmentLine.VALIDATE(Quantity, pTransferReplenishmentBuffer.Quantity);
+        ReplenishmentLine.INSERT(TRUE);
+      UNTIL (pTransferReplenishmentBuffer.NEXT() = 0);
+    END;
+
+    PROCEDURE ApplyRequiredReplenishmentBuffer@1000000032(pReplenishmentContext@1000000000 : Record 9087044;VAR pRequiredReplenishmentBuffer@1000000009 : Record 9087048) : Boolean;
+    VAR
+      eNoLines@1000000003 : TextConst 'ENU=There are no lines to calculate availability for in replenishment %1.;ENG=There are no lines to calculate availability for in replenishment %1.';
+      eConfirmation@1000000004 : TextConst 'ENU=Do you want to calculate availability for replenishment %1?;ENG=Do you want to calculate availability for replenishment %1?';
+      eReduced@1000000008 : TextConst 'ENU=Reduced due to distribution centre availability.;ENG=Reduced due to distribution centre availability.';
+    BEGIN
+      //DOC NS2016.16 - Applying required replenishment buffer
+      //  -> pReplenishmentContext: Replenishment context
+      //  <> pRequiredReplenishmentBuffer: The buffer
+
+      ReplenishmentContext := pReplenishmentContext;
+
+      ReplenishmentLine.RESET();
+      ReplenishmentLine.SETRANGE("Replenishment Template Code", ReplenishmentContext."Replenishment Template Code");
+      ReplenishmentLine.SETRANGE("Replenishment Batch Code", ReplenishmentContext."Replenishment Batch Code");
+
+      IF (pRequiredReplenishmentBuffer.FINDSET()) THEN
+      REPEAT
+        ReplenishmentLine.SETRANGE("Item No.", pRequiredReplenishmentBuffer."Item No.");
+        ReplenishmentLine.SETRANGE("Variant Code", pRequiredReplenishmentBuffer."Variant Code");
+        ReplenishmentLine.VALIDATE("To Location Code", pRequiredReplenishmentBuffer."To Location Code");
+        IF (ReplenishmentLine.FINDFIRST()) THEN
+        BEGIN
+          IF (ReplenishmentLine."Required Quantity" <> pRequiredReplenishmentBuffer.Quantity) THEN
+          BEGIN
+            ReplenishmentLine.VALIDATE("Required Quantity", pRequiredReplenishmentBuffer.Quantity);
+            ReplenishmentLine.MODIFY();
+          END;
+          IF (ReplenishmentLine."Required Quantity" = 0) THEN
+            ReplenishmentLine.DELETE(TRUE);
+        END;
+      UNTIL (pRequiredReplenishmentBuffer.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE "--- Transfer Orders ---"@1000000030();
+    BEGIN
+    END;
+
+    PROCEDURE CreateTransferOrders@1000000029(pReplenishmentTemplateCode@1000000000 : Code[20];pReplenishmentBatchCode@1000000011 : Code[20];pInteraction@1000000001 : Boolean) : Boolean;
+    VAR
+      eNoLines@1000000004 : TextConst 'ENU=There are no lines to create transfer orders from in replenishment "%1" "%2".;ENG=There are no lines to create transfer orders from in replenishment "%1" "%2".';
+      eConfirmation@1000000003 : TextConst 'ENU=Do you want to create transfer orders for replenishment "%1" "%2"?;ENG=Do you want to create transfer orders for replenishment "%1" "%2"?';
+      lReplenishmentLinesToDelete@1000000005 : TEMPORARY Record 9087043;
+      eDialogTitle@1000000007 : TextConst 'ENU=Creating Transfer Orders...;ENG=Creating Transfer Orders...';
+      eDialogCounter@1000000006 : TextConst 'ENU=Progress;ENG=Progress';
+      lTransferHeader@1000000002 : Record 5740;
+      lFromLocationCode@1000000008 : Code[10];
+      lToLocationCode@1000000009 : Code[10];
+      lTransferLineNo@1000000010 : Integer;
+    BEGIN
+      //DOC NS2016.16 - Creating transfer orders for specified replenishment worksheet
+      //  -> pReplenishmentTemplateCode: Replenishment template code
+      //  -> pReplenishmentBatchCode: Replenishment batch code
+      //  -> pInteraction: Interaction flag
+      //  <- TRUE = Transfers created, FALSE = No lines to create them from and interaction is off
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+
+      ReplenishmentLine.RESET();
+      ReplenishmentLine.SETCURRENTKEY("Replenishment Template Code", "Replenishment Batch Code", "From Location Code", "To Location Code");
+      ReplenishmentLine.SETRANGE("Replenishment Template Code", pReplenishmentTemplateCode);
+      ReplenishmentLine.SETRANGE("Replenishment Batch Code", pReplenishmentBatchCode);
+      ReplenishmentLine.SETFILTER("From Location Code", '<>''''');
+      ReplenishmentLine.SETFILTER("To Location Code", '<>''''');
+      ReplenishmentLine.SETFILTER(Quantity, '>0');
+      IF (ReplenishmentLine.ISEMPTY) THEN
+        IF (pInteraction) THEN
+          ERROR(eNoLines, pReplenishmentTemplateCode, pReplenishmentBatchCode)
+        ELSE
+          EXIT(FALSE);
+
+      IF (pInteraction) THEN
+        IF ( NOT (CONFIRM(eConfirmation, TRUE, pReplenishmentTemplateCode, pReplenishmentBatchCode))) THEN
+          EXIT(FALSE);
+
+      DialogManagement.Add(eDialogCounter, 20, 1, 20, TRUE, TRUE);
+      DialogManagement.Open(eDialogTitle);
+
+      IF (ReplenishmentLine.FINDSET()) THEN
+      REPEAT
+        DialogManagement.StepCounter(1);
+        IF ((ReplenishmentLine."From Location Code" <> lFromLocationCode) OR (ReplenishmentLine."To Location Code" <> lToLocationCode)) THEN
+        BEGIN
+          CreateTransferHeader(lFromLocationCode, lToLocationCode, lTransferHeader, lTransferLineNo);
+          lFromLocationCode := ReplenishmentLine."From Location Code";
+          lToLocationCode := ReplenishmentLine."To Location Code";
+        END;
+        CreateTransferLine(lTransferHeader, lTransferLineNo);
+        lReplenishmentLinesToDelete := ReplenishmentLine;
+        lReplenishmentLinesToDelete.INSERT();
+      UNTIL (ReplenishmentLine.NEXT() = 0);
+
+      lReplenishmentLinesToDelete.RESET();
+      IF (lReplenishmentLinesToDelete.FINDSET()) THEN
+      REPEAT
+        ReplenishmentLine.GET(lReplenishmentLinesToDelete."Replenishment Template Code", lReplenishmentLinesToDelete."Replenishment Batch Code",
+          lReplenishmentLinesToDelete."Line No.");
+        ReplenishmentLine.DELETE(TRUE);
+      UNTIL (lReplenishmentLinesToDelete.NEXT() = 0);
+
+      DialogManagement.Close();
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateTransferHeader@1000000027(pFromLocationCode@1000000001 : Code[10];pToLocationCode@1000000000 : Code[10];VAR pTransferHeader@1000000002 : Record 5740;VAR pTransferLineNo@1000000003 : Integer);
+    BEGIN
+      //DOC NS2016.16 - Creating transfer header
+      //  -> pFromLocationCode: Source location code
+      //  -> pToLocationCode: Destination location code
+      //  <> pTransferHeader: Target transfer header
+      //  <> pTransferLineNo: Target transfer line no.
+
+      CLEAR(pTransferHeader);
+      pTransferHeader.INIT();
+      pTransferHeader.INSERT(TRUE);
+      pTransferHeader.VALIDATE("Transfer-from Code", pFromLocationCode);
+      pTransferHeader.VALIDATE("Transfer-to Code", pToLocationCode);
+      pTransferHeader.VALIDATE("Posting Date", WORKDATE);
+      pTransferHeader.VALIDATE("Shipment Date", WORKDATE);
+      pTransferHeader.VALIDATE("Receipt Date", WORKDATE);
+      pTransferHeader.MODIFY(TRUE);
+
+      pTransferLineNo := 0;
+    END;
+
+    LOCAL PROCEDURE CreateTransferLine@1000000026(pTransferHeader@1000000000 : Record 5740;VAR pTransferLineNo@1000000001 : Integer);
+    VAR
+      lTransferLine@1000000002 : Record 5741;
+    BEGIN
+      //DOC NS2016.16 - Creating transfer line
+      //  -> pTransferHeader: Transfer header to create the line for
+      //  <> pTransferLineNo: Transfer line no. (to be modified)
+
+      pTransferLineNo += 10000;
+
+      CLEAR(lTransferLine);
+      lTransferLine.INIT();
+      lTransferLine.VALIDATE("Document No.", pTransferHeader."No.");
+      lTransferLine.VALIDATE("Line No.", pTransferLineNo);
+      lTransferLine.VALIDATE("Item No.", ReplenishmentLine."Item No.");
+      lTransferLine.VALIDATE("Variant Code", ReplenishmentLine."Variant Code");
+      lTransferLine.VALIDATE(Quantity, ReplenishmentLine.Quantity);
+      lTransferLine.INSERT(TRUE);
+    END;
+
+    BEGIN
+    {
+      //DOC NS2016.16 JH 15/09/2016 - Created
+    }
+    END.
+  }
+}
+

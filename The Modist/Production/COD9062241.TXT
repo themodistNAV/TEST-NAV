@@ -1,0 +1,821 @@
+OBJECT Codeunit 9062241 RecordRef Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.14;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TableFieldBuffer@1000000003 : Record 9062231;
+      Convert@1000000002 : Codeunit 9062683;
+      String@1000000001 : Codeunit 9062236;
+      TableFieldManagement@1000000000 : Codeunit 9062248;
+      TnpToolkit@1000000004 : Codeunit 9062230;
+
+    LOCAL PROCEDURE "--- RecordRef ---"@1000000016();
+    BEGIN
+    END;
+
+    PROCEDURE CopyFields@1000000019(VAR pFromRecordRef@1000000000 : RecordRef;VAR pToRecordRef@1000000001 : RecordRef;pWithPrimaryKey@1000000002 : Boolean);
+    VAR
+      lPrimaryKeyFieldIds@1000000009 : TEMPORARY Record 2000000026;
+      lFieldIndex@1000000005 : Integer;
+      lFromFieldRef@1000000003 : FieldRef;
+      lToFieldRef@1000000004 : FieldRef;
+      eNotTheSameTable@1000000006 : TextConst 'ENU=Source (%1) and destination (%2) tables are not the same - "CopyFields" function can''t be used. Please, use "TransferFields" instead.;ENG=Source (%1) and destination (%2) tables are not the same - "CopyFields" function can''t be used. Please, use "TransferFields" instead.';
+    BEGIN
+      //DOC NA2016.12 - Copying fields between two RecordRefs (they have to be based on the same table)
+      //  <> pFromRecordRef: Source RecordRef
+      //  <> pToRecordRef: Destination RecordRef
+      //  -> pWithPrimaryKey: Flag to include primary key fields
+
+      IF (pFromRecordRef.NUMBER <> pToRecordRef.NUMBER) THEN
+        ERROR(eNotTheSameTable, pFromRecordRef.NUMBER, pToRecordRef.NUMBER);
+
+      GetPrimaryKeyFieldIds(pFromRecordRef, lPrimaryKeyFieldIds);
+
+      FOR lFieldIndex := 1 TO pFromRecordRef.FIELDCOUNT DO
+      BEGIN
+        lFromFieldRef := pFromRecordRef.FIELDINDEX(lFieldIndex);
+        IF (FieldIncluded(pFromRecordRef.NUMBER, lFromFieldRef, lPrimaryKeyFieldIds, pWithPrimaryKey)) THEN
+        BEGIN
+          lToFieldRef := pToRecordRef.FIELDINDEX(lFieldIndex);
+          lToFieldRef.VALUE := lFromFieldRef.VALUE;
+        END;
+      END;
+    END;
+
+    PROCEDURE TransferFields@1000000017(VAR pFromRecordRef@1000000001 : RecordRef;VAR pToRecordRef@1000000000 : RecordRef;pWithPrimaryKey@1000000002 : Boolean);
+    VAR
+      lFromPrimaryKeyFieldIds@1000000003 : TEMPORARY Record 2000000026;
+      lToPrimaryKeyFieldIds@1000000004 : TEMPORARY Record 2000000026;
+      lFieldIndex@1000000006 : Integer;
+      lFromFieldRef@1000000008 : FieldRef;
+      lToFieldRef@1000000009 : FieldRef;
+      lCopyField@1000000007 : Boolean;
+      eFieldsDontMatch@1000000005 : TextConst 'ENU="Table ""%1"" field ""%2"" (%3) %4 doesn''t match the table ""%5"" ""%6"" (%7); transferfields can''t be performed.";ENG="Table ""%1"" field ""%2"" (%3) %4 doesn''t match the table ""%5"" ""%6"" (%7); transferfields can''t be performed."';
+      eType@1000000010 : TextConst 'ENU=type;ENG=type';
+      eLength@1000000011 : TextConst 'ENU=length;ENG=length';
+      eClass@1000000012 : TextConst 'ENU=class;ENG=class';
+    BEGIN
+      //DOC NA2016.12 - Transfering fields between two RecordRefs (they can be based on different tables)
+      //  <> pFromRecordRef: Source RecordRef
+      //  <> pToRecordRef: Destination RecordRef
+      //  -> pWithPrimaryKey: Flag to include primary key fields
+
+      IF (pFromRecordRef.NUMBER = pToRecordRef.NUMBER) THEN
+        CopyFields(pFromRecordRef, pToRecordRef, pWithPrimaryKey)
+      ELSE
+      BEGIN
+        GetPrimaryKeyFieldIds(pFromRecordRef, lFromPrimaryKeyFieldIds);
+        GetPrimaryKeyFieldIds(pToRecordRef, lToPrimaryKeyFieldIds);
+        FOR lFieldIndex := 1 TO pFromRecordRef.FIELDCOUNT DO
+        BEGIN
+          lFromFieldRef := pFromRecordRef.FIELDINDEX(lFieldIndex);
+          IF (FieldIncluded(pFromRecordRef.NUMBER, lFromFieldRef, lFromPrimaryKeyFieldIds, pWithPrimaryKey)) THEN
+            IF (pToRecordRef.FIELDEXIST(lFromFieldRef.NUMBER)) THEN
+            BEGIN
+              lToFieldRef := pToRecordRef.FIELD(lFromFieldRef.NUMBER);
+              IF (FieldIncluded(pToRecordRef.NUMBER, lToFieldRef, lToPrimaryKeyFieldIds, pWithPrimaryKey)) THEN
+              BEGIN
+                IF (lFromFieldRef.TYPE <> lToFieldRef.TYPE) THEN
+                  ERROR(pFromRecordRef.CAPTION, lFromFieldRef.CAPTION, lFromFieldRef.NUMBER, eType, pToRecordRef.CAPTION,
+                    lToFieldRef.CAPTION, lToFieldRef.NUMBER);
+                IF (lFromFieldRef.LENGTH <> lToFieldRef.LENGTH) THEN
+                  ERROR(pFromRecordRef.CAPTION, lFromFieldRef.CAPTION, lFromFieldRef.NUMBER, eLength, pToRecordRef.CAPTION,
+                    lToFieldRef.CAPTION, lToFieldRef.NUMBER);
+                IF (lFromFieldRef.CLASS <> lToFieldRef.CLASS) THEN
+                  ERROR(pFromRecordRef.CAPTION, lFromFieldRef.CAPTION, lFromFieldRef.NUMBER, eClass, pToRecordRef.CAPTION,
+                    lToFieldRef.CAPTION, lToFieldRef.NUMBER);
+                lToFieldRef.VALUE := lFromFieldRef.VALUE;
+              END;
+            END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetPrimaryKeyFieldIds@1000000023(VAR pRecordRef@1000000002 : RecordRef;VAR pIds@1000000000 : Record 2000000026);
+    VAR
+      lKeyRef@1000000001 : KeyRef;
+      lFieldIndex@1000000003 : Integer;
+      lFieldRef@1000000004 : FieldRef;
+    BEGIN
+      //DOC NA2016.12 - Collecting primary key field IDs
+      //  <> pRecordRef: The record reference
+      //  <> pIds: Target recordset
+
+      lKeyRef := pRecordRef.KEYINDEX(1);
+      FOR lFieldIndex := 1 TO lKeyRef.FIELDCOUNT DO
+      BEGIN
+        lFieldRef := lKeyRef.FIELDINDEX(lFieldIndex);
+        pIds.Number := lFieldRef.NUMBER;
+        pIds.INSERT();
+      END;
+    END;
+
+    LOCAL PROCEDURE FieldIncluded@1000000021(pTableId@1000000005 : Integer;VAR pFieldRef@1000000000 : FieldRef;VAR pPrimaryKeyFieldIds@1000000002 : Record 2000000026;pWithPrimaryKey@1000000001 : Boolean) : Boolean;
+    VAR
+      lIncluded@1000000003 : Boolean;
+      lField@1000000004 : Record 2000000041;
+    BEGIN
+      //DOC NA2016.12 - Answering a question whether field should be included in copy / transferfields
+      //  -> pTableId: Table ID
+      //  <> pFieldRef: The field reference
+      //  <> pPrimaryKeyFieldIds: A list of primary key field IDs
+      //  -> pWithPrimaryKey: Flag to include primary key fields
+      //  <- Answer
+
+      IF (pWithPrimaryKey) THEN
+        lIncluded := TRUE
+      ELSE
+        lIncluded := ( NOT (pPrimaryKeyFieldIds.GET(pFieldRef.NUMBER)));
+      IF (lIncluded) THEN
+      BEGIN
+        lField.GET(pTableId, pFieldRef.NUMBER);
+        lIncluded := (lField.Class = lField.Class::Normal);
+      END;
+      EXIT(lIncluded);
+    END;
+
+    PROCEDURE "--- Information Methods ---"@1000000014();
+    BEGIN
+    END;
+
+    PROCEDURE FieldRefIsBlob@1000000042(pFieldRef@1000000000 : FieldRef) : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Returning if field refeference is BLOB
+      //  -> pFieldRef: Field reference
+      //  <- Answer
+
+      EXIT(LOWERCASE(FORMAT(pFieldRef.TYPE)) = 'blob');
+    END;
+
+    PROCEDURE FieldRefIsNumeric@1000000043(pFieldRef@1000000000 : FieldRef) : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Returning if field refeference is numeric
+      //  -> pFieldRef: Field reference
+      //  <- Answer
+
+      EXIT(LOWERCASE(FORMAT(pFieldRef.TYPE)) IN ['integer', 'biginteger', 'decimal']);
+    END;
+
+    PROCEDURE FieldRefIsNormalField@1000000046(pFieldRef@1000000000 : FieldRef) : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Returning if field refeference is a normal field
+      //  -> pFieldRef: Field reference
+      //  <- Answer
+
+      EXIT(LOWERCASE(FORMAT(pFieldRef.CLASS)) = 'normal');
+    END;
+
+    PROCEDURE FieldRefIsFlowField@1000000045(pFieldRef@1000000000 : FieldRef) : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Returning if field refeference is a FlowField
+      //  -> pFieldRef: Field reference
+      //  <- Answer
+
+      EXIT(LOWERCASE(FORMAT(pFieldRef.CLASS)) = 'flowfield');
+    END;
+
+    PROCEDURE FieldRefIsFlowFilter@1000000004(pFieldRef@1000000000 : FieldRef) : Boolean;
+    BEGIN
+      //DOC NA2016.14 - Returning if field refeference is a FlowFilter
+      //  -> pFieldRef: Field reference
+      //  <- Answer
+
+      EXIT(LOWERCASE(FORMAT(pFieldRef.CLASS)) = 'flowfilter');
+    END;
+
+    PROCEDURE "--- General Methods ---"@1000000005();
+    BEGIN
+    END;
+
+    PROCEDURE FieldRefValueIsEmpty@1000000001(pFieldRef@1000000000 : FieldRef) : Boolean;
+    VAR
+      lDataType@1000000015 : Integer;
+    BEGIN
+      //DOC NA2016.14 - Returning if field reference value is empty
+      //  <> pFieldRef: The field reference
+      //  <- Response
+
+      lDataType := TableFieldManagement.FieldRefTypeToDataType(pFieldRef);
+      EXIT(Convert.IsValueEmpty(lDataType, pFieldRef.VALUE()));
+    END;
+
+    PROCEDURE ClearFieldRefValue@1000000000(VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      lDataType@1000000001 : Integer;
+      lValue@1000000002 : Variant;
+    BEGIN
+      //DOC NA2016.14 - Clearing field reference value
+      //  <> pFieldRef: The field reference
+
+      lDataType := TableFieldManagement.FieldRefTypeToDataType(pFieldRef);
+      Convert.EmptyValue(lDataType, lValue);
+      pFieldRef.VALUE(lValue);
+    END;
+
+    PROCEDURE "--- Conversion Methods ---"@1000000008();
+    BEGIN
+    END;
+
+    PROCEDURE FieldRefToFieldRef@1000000020(pFromFieldRef@1000000000 : FieldRef;VAR pFieldRef@1000000001 : FieldRef);
+    BEGIN
+      //DOC NA2016.14 - Copying value from one field reference to another
+      //  -> pFromFieldRef: Source reference
+      //  <> pFieldRef: Target reference
+
+      IF (LOWERCASE(FORMAT(pFromFieldRef.CLASS)) = 'flowfield') THEN
+        pFromFieldRef.CALCFIELD();
+
+      IF (LOWERCASE(FORMAT(pFieldRef.TYPE)) IN ['text', 'code']) THEN
+        pFieldRef.VALUE := COPYSTR(FORMAT(pFromFieldRef.VALUE), 1, pFieldRef.LENGTH)
+      ELSE
+        IF (pFromFieldRef.TYPE = pFieldRef.TYPE) THEN
+          pFieldRef.VALUE := pFromFieldRef.VALUE
+      ELSE
+        TextToFieldRef(FORMAT(pFromFieldRef.VALUE), pFieldRef);
+    END;
+
+    PROCEDURE BooleanToFieldRef@1000000006(pValue@1000000002 : Boolean;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a boolean value into "%1" field "%2".;ENG=Can''t write a boolean value into "%1" field "%2".';
+    BEGIN
+      //DOC NA2016.14 - Copying boolean to a field reference
+      //  -> pValue: Value
+      //  <> pFieldRef: Target reference
+
+      BooleanToFieldRefAdv(pValue, FALSE, pFieldRef);
+    END;
+
+    PROCEDURE BooleanToFieldRefAdv@1000000025(pValue@1000000002 : Boolean;pValidate@1000000004 : Boolean;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a boolean value into "%1" field "%2".;ENG=Can''t write a boolean value into "%1" field "%2".';
+      lDataType@1000000003 : Integer;
+      lValue@1000000005 : Variant;
+    BEGIN
+      //DOC NA2016.14 - Copying boolean to a field reference (advanced version)
+      //  -> pValue: Value
+      //  -> pValidate: Validate flag
+      //  <> pFieldRef: Target reference
+
+      lDataType := TableFieldManagement.FieldRefTypeToDataType(pFieldRef);
+
+      CASE (lDataType) OF
+        TableFieldBuffer."Data Type"::Boolean:
+          lValue := pValue;
+        TableFieldBuffer."Data Type"::BigInteger,
+        TableFieldBuffer."Data Type"::Integer,
+        TableFieldBuffer."Data Type"::Decimal:
+          lValue := TnpToolkit.IIFInteger(pValue, 1, 0);
+        TableFieldBuffer."Data Type"::Code,
+        TableFieldBuffer."Data Type"::OemCode,
+        TableFieldBuffer."Data Type"::OemText,
+        TableFieldBuffer."Data Type"::Text:
+          lValue := FORMAT(pValue, 0, 1);
+        ELSE
+          ERROR(eTypeNotCompatible);
+      END;
+
+      SetFieldValue(lValue, pValidate, pFieldRef);
+    END;
+
+    PROCEDURE IntegerToFieldRef@1000000018(pValue@1000000002 : Integer;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write an integer value into "%1" field "%2".;ENG=Can''t write an integer value into "%1" field "%2".';
+    BEGIN
+      //DOC NA2016.14 - Copying integer to a field reference
+      //  -> pValue: Value
+      //  <> pFieldRef: Target reference
+
+      IntegerToFieldRefAdv(pValue, FALSE, pFieldRef);
+    END;
+
+    PROCEDURE IntegerToFieldRefAdv@1000000029(pValue@1000000002 : Integer;pValidate@1000000003 : Boolean;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write an integer value into "%1" field "%2".;ENG=Can''t write an integer value into "%1" field "%2".';
+      lDataType@1000000004 : Integer;
+      lValue@1000000005 : Variant;
+    BEGIN
+      //DOC NA2016.14 - Copying integer to a field reference (advanced version)
+      //  -> pValue: Value
+      //  -> pValidate: Validate flag
+      //  <> pFieldRef: Target reference
+
+      lDataType := TableFieldManagement.FieldRefTypeToDataType(pFieldRef);
+
+      CASE (lDataType) OF
+        TableFieldBuffer."Data Type"::Boolean:
+          IF (pValue IN [0, 1]) THEN
+            lValue := (pValue = 1)
+          ELSE
+            ERROR(eTypeNotCompatible);
+        TableFieldBuffer."Data Type"::BigInteger,
+        TableFieldBuffer."Data Type"::Integer,
+        TableFieldBuffer."Data Type"::Decimal:
+          lValue := pValue;
+        TableFieldBuffer."Data Type"::Code,
+        TableFieldBuffer."Data Type"::OemCode,
+        TableFieldBuffer."Data Type"::OemText,
+        TableFieldBuffer."Data Type"::Text:
+          lValue := FORMAT(pValue, 0, 1);
+        ELSE
+          ERROR(eTypeNotCompatible);
+      END;
+
+      SetFieldValue(lValue, pValidate, pFieldRef);
+    END;
+
+    PROCEDURE DecimalToFieldRef@1000000007(pValue@1000000002 : Decimal;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a decimal value into "%1" field "%2".;ENG=Can''t write a decimal value into "%1" field "%2".';
+    BEGIN
+      //DOC NA2016.14 - Copying decimal to a field reference
+      //  -> pValue: Value
+      //  <> pFieldRef: Target reference
+
+      DecimalToFieldRefAdv(pValue, FALSE, pFieldRef);
+    END;
+
+    PROCEDURE DecimalToFieldRefAdv@1000000031(pValue@1000000002 : Decimal;pValidate@1000000004 : Boolean;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a decimal value into "%1" field "%2".;ENG=Can''t write a decimal value into "%1" field "%2".';
+      lDataType@1000000003 : Integer;
+      lValue@1000000005 : Variant;
+    BEGIN
+      //DOC NA2016.14 - Copying decimal to a field reference (advanced version)
+      //  -> pValue: Value
+      //  -> pValidate: Validate flag
+      //  <> pFieldRef: Target reference
+
+      lDataType := TableFieldManagement.FieldRefTypeToDataType(pFieldRef);
+
+      CASE (lDataType) OF
+        TableFieldBuffer."Data Type"::Boolean:
+          IF (pValue IN [0, 1]) THEN
+            lValue := (pValue = 1)
+          ELSE
+            ERROR(eTypeNotCompatible);
+        TableFieldBuffer."Data Type"::BigInteger,
+        TableFieldBuffer."Data Type"::Integer,
+        TableFieldBuffer."Data Type"::Decimal:
+          IF (pValue = ROUND(pValue, 1)) THEN
+            lValue := pValue
+          ELSE
+            ERROR(eTypeNotCompatible);
+        TableFieldBuffer."Data Type"::Code,
+        TableFieldBuffer."Data Type"::OemCode,
+        TableFieldBuffer."Data Type"::OemText,
+        TableFieldBuffer."Data Type"::Text:
+          lValue := FORMAT(pValue, 0, 1);
+        ELSE
+          ERROR(eTypeNotCompatible);
+      END;
+
+      SetFieldValue(lValue, pValidate, pFieldRef);
+    END;
+
+    PROCEDURE TextToFieldRef@1000000009(pValue@1000000002 : Text;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a text value into field "%1".;ENG=Can''t write a text value into field "%1".';
+    BEGIN
+      //DOC NA2016.14 - Copying text to a field reference
+      //  -> pValue: Value
+      //  <> pFieldRef: Target reference
+
+      TextToFieldRefAdv(pValue, FALSE, pFieldRef);
+    END;
+
+    PROCEDURE TextToFieldRefAdv@1000000032(pValue@1000000002 : Text;pValidate@1000000005 : Boolean;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      lDataType@1000000003 : Integer;
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a text value into field "%1".;ENG=Can''t write a text value into field "%1".';
+      lResult@1000000006 : Boolean;
+      lValue@1000000004 : Variant;
+    BEGIN
+      //DOC NA2016.14 - Copying text to a field reference (advanced version)
+      //  -> pValue: Value
+      //  -> pValidate: Validate flag
+      //  <> pFieldRef: Target reference
+
+      lDataType := TableFieldManagement.FieldRefTypeToDataType(pFieldRef);
+      IF (lDataType = TableFieldBuffer."Data Type"::Option) THEN
+        lResult := Convert.TryToParseFieldRefOption(pValue, pFieldRef, lValue)
+      ELSE
+        lResult := Convert.TryToParse(pValue, lDataType, lValue);
+      IF (lResult) THEN
+        SetFieldValue(lValue, pValidate, pFieldRef);
+    END;
+
+    PROCEDURE DateToFieldRef@1000000010(pValue@1000000002 : Date;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a date value into "%1" field "%2".;ENG=Can''t write a date value into "%1" field "%2".';
+    BEGIN
+      //DOC NA2016.14 - Copying date to a field reference
+      //  -> pValue: Value
+      //  <> pFieldRef: Target reference
+
+      DateToFieldRefAdv(pValue, FALSE, pFieldRef);
+    END;
+
+    PROCEDURE DateToFieldRefAdv@1000000034(pValue@1000000002 : Date;pValidate@1000000004 : Boolean;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a date value into "%1" field "%2".;ENG=Can''t write a date value into "%1" field "%2".';
+      lDataType@1000000003 : Integer;
+      lValue@1000000005 : Variant;
+    BEGIN
+      //DOC NA2016.14 - Copying date to a field reference (advanced version)
+      //  -> pValue: Value
+      //  -> pValidate: Validate flag
+      //  <> pFieldRef: Target reference
+
+      lDataType := TableFieldManagement.FieldRefTypeToDataType(pFieldRef);
+
+      CASE (lDataType) OF
+        TableFieldBuffer."Data Type"::Date:
+          lValue := pValue;
+        TableFieldBuffer."Data Type"::DateTime:
+          lValue := CREATEDATETIME(pValue, 000000T);
+        TableFieldBuffer."Data Type"::Code,
+        TableFieldBuffer."Data Type"::OemCode,
+        TableFieldBuffer."Data Type"::OemText,
+        TableFieldBuffer."Data Type"::Text:
+          lValue := FORMAT(pValue, 0, 1);
+        ELSE
+          ERROR(eTypeNotCompatible);
+      END;
+
+      SetFieldValue(lValue, pValidate, pFieldRef);
+    END;
+
+    PROCEDURE TimeToFieldRef@1000000011(pValue@1000000002 : Integer;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a time value into "%1" field "%2".;ENG=Can''t write a time value into "%1" field "%2".';
+    BEGIN
+      //DOC NA2015.1 - Copying time to a field reference
+      //  -> pValue: Value
+      //  <> pFieldRef: Target reference
+
+      TimeToFieldRefAdv(pValue, FALSE, pFieldRef);
+    END;
+
+    PROCEDURE TimeToFieldRefAdv@1000000035(pValue@1000000002 : Integer;pValidate@1000000004 : Boolean;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a time value into "%1" field "%2".;ENG=Can''t write a time value into "%1" field "%2".';
+      lDataType@1000000003 : Integer;
+      lValue@1000000005 : Variant;
+    BEGIN
+      //DOC NA2015.1 - Copying time to a field reference (advanced version)
+      //  -> pValue: Value
+      //  -> pValidate: Validate flag
+      //  <> pFieldRef: Target reference
+
+      lDataType := TableFieldManagement.FieldRefTypeToDataType(pFieldRef);
+
+      CASE (lDataType) OF
+        TableFieldBuffer."Data Type"::Time:
+          lValue := pValue;
+        TableFieldBuffer."Data Type"::Code,
+        TableFieldBuffer."Data Type"::OemCode,
+        TableFieldBuffer."Data Type"::OemText,
+        TableFieldBuffer."Data Type"::Text:
+          lValue := FORMAT(pValue, 0, 1);
+        ELSE
+          ERROR(eTypeNotCompatible);
+      END;
+
+      SetFieldValue(lValue, pValidate, pFieldRef);
+    END;
+
+    PROCEDURE DateTimeToFieldRef@1000000012(pValue@1000000002 : DateTime;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a datetime value into "%1" field "%2".;ENG=Can''t write a datetime value into "%1" field "%2".';
+    BEGIN
+      //DOC NA2015.1 - Copying datetime to a field reference
+      //  -> pValue: Value
+      //  <> pFieldRef: Target reference
+
+      DateTimeToFieldRefAdv(pValue, FALSE, pFieldRef);
+    END;
+
+    PROCEDURE DateTimeToFieldRefAdv@1000000036(pValue@1000000002 : DateTime;pValidate@1000000003 : Boolean;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a datetime value into "%1" field "%2".;ENG=Can''t write a datetime value into "%1" field "%2".';
+      lDataType@1000000004 : Integer;
+      lValue@1000000005 : Variant;
+    BEGIN
+      //DOC NA2015.1 - Copying datetime to a field reference (advanced version)
+      //  -> pValue: Value
+      //  -> pValidate: Validate flag
+      //  <> pFieldRef: Target reference
+
+      lDataType := TableFieldManagement.FieldRefTypeToDataType(pFieldRef);
+
+      CASE (lDataType) OF
+        TableFieldBuffer."Data Type"::Date:
+          lValue := DT2DATE(pValue);
+        TableFieldBuffer."Data Type"::Time:
+          lValue := DT2TIME(pValue);
+        TableFieldBuffer."Data Type"::DateTime:
+          lValue := pValue;
+        TableFieldBuffer."Data Type"::Code,
+        TableFieldBuffer."Data Type"::OemCode,
+        TableFieldBuffer."Data Type"::OemText,
+        TableFieldBuffer."Data Type"::Text:
+          lValue := FORMAT(pValue, 0, 1);
+        ELSE
+          ERROR(eTypeNotCompatible);
+      END;
+
+      SetFieldValue(lValue, pValidate, pFieldRef);
+    END;
+
+    PROCEDURE DateFormulaToFieldRef@1000000026(pValue@1000000002 : DateFormula;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a date formula value into "%1" field "%2".;ENG=Can''t write a date formula value into "%1" field "%2".';
+    BEGIN
+      //DOC NA2015.1 - Copying date formula to a field reference
+      //  -> pValue: Value
+      //  <> pFieldRef: Target reference
+
+      DateFormulaToFieldRefAdv(pValue, FALSE, pFieldRef);
+    END;
+
+    PROCEDURE DateFormulaToFieldRefAdv@1000000037(pValue@1000000002 : DateFormula;pValidate@1000000003 : Boolean;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a date formula value into "%1" field "%2".;ENG=Can''t write a date formula value into "%1" field "%2".';
+      lDataType@1000000004 : Integer;
+      lValue@1000000005 : Variant;
+    BEGIN
+      //DOC NA2015.1 - Copying date formula to a field reference (advanced version)
+      //  -> pValue: Value
+      //  -> pValidate: Validate flag
+      //  <> pFieldRef: Target reference
+
+      lDataType := TableFieldManagement.FieldRefTypeToDataType(pFieldRef);
+
+      CASE (lDataType) OF
+        TableFieldBuffer."Data Type"::DateFormula:
+          lValue := pValue;
+        TableFieldBuffer."Data Type"::Code,
+        TableFieldBuffer."Data Type"::OemCode,
+        TableFieldBuffer."Data Type"::OemText,
+        TableFieldBuffer."Data Type"::Text:
+          lValue := FORMAT(pValue, 0, 1);
+        ELSE
+          ERROR(eTypeNotCompatible);
+      END;
+
+      SetFieldValue(lValue, pValidate, pFieldRef);
+    END;
+
+    PROCEDURE DurationToFieldRef@1000000027(pValue@1000000002 : Duration;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a duration value into "%1" field "%2".;ENG=Can''t write a duration value into "%1" field "%2".';
+    BEGIN
+      //DOC NA2015.1 - Copying duration to a field reference
+      //  -> pValue: Value
+      //  <> pFieldRef: Target reference
+
+      DurationToFieldRefAdv(pValue, FALSE, pFieldRef);
+    END;
+
+    PROCEDURE DurationToFieldRefAdv@1000000038(pValue@1000000002 : Duration;pValidate@1000000005 : Boolean;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a duration value into "%1" field "%2".;ENG=Can''t write a duration value into "%1" field "%2".';
+      lDataType@1000000004 : Integer;
+      lValue@1000000003 : Variant;
+    BEGIN
+      //DOC NA2015.1 - Copying duration to a field reference (advanced version)
+      //  -> pValue: Value
+      //  -> pValidate: Validate flag
+      //  <> pFieldRef: Target reference
+
+      lDataType := TableFieldManagement.FieldRefTypeToDataType(pFieldRef);
+
+      CASE (lDataType) OF
+        TableFieldBuffer."Data Type"::Duration:
+          lValue := pValue;
+        TableFieldBuffer."Data Type"::Code,
+        TableFieldBuffer."Data Type"::OemCode,
+        TableFieldBuffer."Data Type"::OemText,
+        TableFieldBuffer."Data Type"::Text:
+          lValue := FORMAT(pValue, 0, 1);
+        ELSE
+          ERROR(eTypeNotCompatible);
+      END;
+
+      SetFieldValue(lValue, pValidate, pFieldRef);
+    END;
+
+    PROCEDURE GuidToFieldRef@1000000028(pValue@1000000002 : GUID;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a GUID value into "%1" field "%2".;ENG=Can''t write a GUID value into "%1" field "%2".';
+    BEGIN
+      //DOC NA2015.1 - Copying GUID to a field reference
+      //  -> pValue: Value
+      //  <> pFieldRef: Target reference
+
+      GuidToFieldRefAdv(pValue, FALSE, pFieldRef);
+    END;
+
+    PROCEDURE GuidToFieldRefAdv@1000000039(pValue@1000000002 : GUID;pValidate@1000000003 : Boolean;VAR pFieldRef@1000000000 : FieldRef);
+    VAR
+      eTypeNotCompatible@1000000001 : TextConst 'ENU=Can''t write a GUID value into "%1" field "%2".;ENG=Can''t write a GUID value into "%1" field "%2".';
+      lDataType@1000000004 : Integer;
+      lValue@1000000005 : Variant;
+    BEGIN
+      //DOC NA2015.1 - Copying GUID to a field reference (advanced version)
+      //  -> pValue: Value
+      //  -> pValidate: Validate flag
+      //  <> pFieldRef: Target reference
+
+      lDataType := TableFieldManagement.FieldRefTypeToDataType(pFieldRef);
+
+      CASE (lDataType) OF
+        TableFieldBuffer."Data Type"::GUID:
+          lValue := pValue;
+        TableFieldBuffer."Data Type"::Code,
+        TableFieldBuffer."Data Type"::OemCode,
+        TableFieldBuffer."Data Type"::OemText,
+        TableFieldBuffer."Data Type"::Text:
+          lValue := FORMAT(pValue, 0, 1);
+        ELSE
+          ERROR(eTypeNotCompatible);
+      END;
+
+      SetFieldValue(lValue, pValidate, pFieldRef);
+    END;
+
+    PROCEDURE FormatFieldRef@1000000002(pFieldRef@1000000000 : FieldRef) : Text[250];
+    VAR
+      lDataType@1000000002 : Integer;
+    BEGIN
+      //DOC NA2015.1 - Returning formatted value of field reference
+      //  -> pFieldRef: The field reference
+      //  <- The value
+
+      lDataType := TableFieldManagement.FieldRefTypeToDataType(pFieldRef);
+
+      CASE (lDataType) OF
+        TableFieldBuffer."Data Type"::Boolean,
+        TableFieldBuffer."Data Type"::Integer,
+        TableFieldBuffer."Data Type"::BigInteger,
+        TableFieldBuffer."Data Type"::Decimal,
+        TableFieldBuffer."Data Type"::Option:
+          EXIT(FORMAT(pFieldRef.VALUE, 0, 2));
+        TableFieldBuffer."Data Type"::Code,
+        TableFieldBuffer."Data Type"::OemCode,
+        TableFieldBuffer."Data Type"::Text,
+        TableFieldBuffer."Data Type"::OemText:
+          EXIT(pFieldRef.VALUE);
+        TableFieldBuffer."Data Type"::BLOB:
+          EXIT('(BLOB)');
+        ELSE
+          EXIT(FORMAT(pFieldRef.VALUE));
+      END;
+
+      EXIT('');
+    END;
+
+    PROCEDURE "--- Tools ---"@1000000013();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ToCode@1000000033(pText@1000000000 : Text[1024]) : Code[1024];
+    VAR
+      lCode@1000000001 : Code[1024];
+    BEGIN
+      //DOC NA2015.1 - Converting text to code
+      //  -> pText: Text
+      //  <- Code
+
+      lCode := COPYSTR(pText, 1, MAXSTRLEN(pText));
+      EXIT(lCode);
+    END;
+
+    LOCAL PROCEDURE OptionValue@1000000003(pOptionText@1000000001 : Text;pFieldRef@1000000000 : FieldRef) : Integer;
+    VAR
+      lOptionFound@1000000002 : Boolean;
+      lOptionValue@1000000003 : Integer;
+    BEGIN
+      //DOC NA2015.8 - Returning given option value for the fieldref (zero if option can't be found)
+      //  -> pOptionText: Option text
+      //  -> pFieldRef: The fieldref
+      //  <- The value
+
+      pOptionText := DELCHR(LOWERCASE(pOptionText), '<>', ' ');
+
+      CLEAR(lOptionFound);
+      CLEAR(lOptionValue);
+
+      IF ( NOT (lOptionFound)) THEN
+        lOptionFound := OptionValueForOptionString(pOptionText, pFieldRef.OPTIONCAPTION, lOptionValue);
+      IF ( NOT (lOptionFound)) THEN
+        lOptionFound := OptionValueForOptionString(pOptionText, pFieldRef.OPTIONSTRING, lOptionValue);
+      IF ( NOT (lOptionFound)) THEN
+        lOptionValue := 0;
+
+      EXIT(lOptionValue);
+    END;
+
+    LOCAL PROCEDURE OptionValueForOptionString@1000000015(pOptionText@1000000000 : Text;pOptionString@1000000001 : Text;VAR pOptionValue@1000000002 : Integer) : Boolean;
+    VAR
+      lOptionBuffer@1000000003 : TEMPORARY Record 9062730;
+      lResult@1000000004 : Boolean;
+    BEGIN
+      //DOC NA2015.8 - Trying to find option value for given option string
+      //  -> pOptionText: Option text
+      //  -> pOptionString: Option string
+      //  <> pOptionValue: Target option value
+      //  <- TRUE = Option found, FALSE = Not
+
+      lResult := FALSE;
+
+      String.SplitAdvanced(pOptionString, ',', FALSE, TRUE, lOptionBuffer);
+
+      lOptionBuffer.RESET();
+      IF (lOptionBuffer.FINDSET()) THEN
+      REPEAT
+        lOptionBuffer.Value := DELCHR(LOWERCASE(lOptionBuffer.Value), '<>', ' ');
+      UNTIL (lOptionBuffer.NEXT() = 0);
+
+      lOptionBuffer.RESET();
+      lOptionBuffer.SETRANGE(Value, pOptionText);
+      IF (lOptionBuffer.FINDFIRST()) THEN
+      BEGIN
+        pOptionValue := lOptionBuffer.ID;
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE "--- Field Value ---"@1000000024();
+    BEGIN
+    END;
+
+    PROCEDURE GetFieldValue@1000000022(VAR RecRef@1000000000 : RecordRef;FieldType@1000000006 : ' ,Field,Enhanced Field';FieldNo@1000000007 : Integer;VAR Value@1000000008 : Variant);
+    VAR
+      Field@1000000002 : Record 2000000041;
+      EnhancedFieldMgt@1000000003 : Codeunit 9062298;
+      FldRef@1000000001 : FieldRef;
+    BEGIN
+      //DOC NA2016.14 - Get Field/Enhanced Field Value
+
+      CLEAR(Value);
+      IF (FieldNo <> 0) THEN BEGIN
+        CASE (FieldType) OF
+          FieldType::Field:
+            BEGIN
+              FldRef := RecRef.FIELD(FieldNo);
+              Field.GET(RecRef.NUMBER, FldRef.NUMBER);
+              IF (Field.Class = Field.Class::FlowField) THEN
+                FldRef.CALCFIELD();
+              Value := FldRef.VALUE;
+            END;
+          FieldType::"Enhanced Field":
+            Value := EnhancedFieldMgt.CalculateFieldValue(RecRef.NUMBER, FieldNo, RecRef.GETPOSITION(FALSE));
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE SetFieldValue@1000000040(pValue@1000000000 : Variant;pValidate@1000000001 : Boolean;VAR pFieldRef@1000000002 : FieldRef);
+    BEGIN
+      //DOC NA2016.14 - Setting field value with / without validation
+      //  -> pValue: The value
+      //  -> pValidate: Validation flag
+      //  <> pFieldRef: Target FieldRef
+
+      IF (pValidate) THEN
+        pFieldRef.VALIDATE(pValue)
+      ELSE
+        pFieldRef.VALUE(pValue);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  JH 02/09/2013 - Created
+      //DOC NA2015.2  JH 08/05/2014 - Information functions added
+      //DOC NA2015.8  JH 26/06/2015 - Option fields proper processing
+      //DOC NA2016.10 JH 26/08/2015 - Upgraded to 2016
+      //DOC NA2016.12 JH 07/01/2016 - Renamed to "RecordRef mManagement"
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit used
+      //DOC NA2016.14 AZ 22/02/2016 - Get Field/Enhanced Field Value
+      //DOC NA2016.14 JH 01/03/2016 - FlowFilter recognition function added
+      //DOC NA2016.14 JH 14/03/2016 - Functions with validation, bugfixes
+      //DOC NA2016.15 JH 09/05/2016 - CfMD modifications
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,987 @@
+OBJECT Codeunit 11102049 OM - Update Variable Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    TableNo=11102064;
+    OnRun=VAR
+            OriginalObjectToUpdateVars@1000 : Record 11102064;
+          BEGIN
+            OriginalObjectToUpdateVars := Rec;
+            UpdateObjects(Rec);
+            Rec := OriginalObjectToUpdateVars;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ExportFileName@1000 : Text;
+      FunctionNoFilter@1001 : Text;
+      ObjectNoFilter@1002 : Text;
+      SourceFileName@1003 : Text;
+      VariableNoFilter@1004 : Text;
+      NoOfObjects@1005 : Integer;
+      RunType@1006 : 'Update in DB,Export,Update File';
+      UpdateAllVariables@1007 : ' ,Yes,No';
+      VariableSorting@1008 : ' ,Record,,Report,,XMLPort,Codeunit,MenuSuite,Page,Query,Automation,OCX,Variant,Binary,Dialog,File,RecordRef,FieldRef,KeyRef,InStream,OutStream,DateFormula,Date,DateTime,Time,Duration,Text,Code,GUID,Char,Decimal,BigInteger,Integer,Option,Action,Boolean,TextConst,Unknown';
+      DoDeleteUnusedVariables@1009 : Boolean;
+      DoLocalizeFunctions@1010 : Boolean;
+      DoSortVariables@1011 : Boolean;
+      SetModifyFlag@1012 : Boolean;
+
+    LOCAL PROCEDURE UpdateObjects@1(VAR ObjectToUpdateVars@1000 : Record 11102064);
+    VAR
+      Setup@1001 : Record 11102035;
+      TmpSourceObject@1002 : TEMPORARY Record 11102052;
+      TmpCALHistoryLine@1003 : TEMPORARY Record 11102053;
+      TmpSourceLine@1004 : TEMPORARY Record 11102053;
+      ObjectLock@1005 : Record 11102054;
+      Object@1006 : Record 2000000001;
+      TmpChangedObject@1007 : TEMPORARY Record 2000000001;
+      TmpObject@1008 : TEMPORARY Record 2000000001;
+      Progressbar@1009 : Codeunit 11102044;
+      WhereUsedMgt@1010 : Codeunit 11102045;
+      ObjectMgt@1011 : Codeunit 11102046;
+      SourceControl@1012 : Codeunit 11102050;
+      CheckCALHistory@1013 : Codeunit 11102063;
+      FileHandler@1014 : Codeunit 11102097;
+      oFile@1015 : File;
+      oSourceFile@1016 : File;
+      StartDate@1017 : Date;
+      StartTime@1018 : Time;
+      Directory@1019 : Text;
+      FileName@1020 : Text;
+      ObjectChanged@1021 : Boolean;
+      ctCALNotUpToDate@1022 : TextConst 'DEU=The where used objects are not up to date.\Update now?;ENU=The where used objects are not up to date.\Update now?;ESP=The where used objects are not up to date.\Update now?;FRA=The where used objects are not up to date.\Update now?;NLD=De waar-gebruikt objecten zijn niet bijgewerkt.\Nu bijwerken?;DEA=The where used objects are not up to date.\Update now?';
+      ctCheckingObjects@1023 : TextConst 'DEU=Checking objects...;ENU=Checking objects...;ESP=Checking objects...;FRA=Checking objects...;NLD=Objecten controleren...;DEA=Checking objects...';
+      ctCompilingObjects@1024 : TextConst 'DEU=Compiling objects...;ENU=Compiling objects...;ESP=Compiling objects...;FRA=Compiling objects...;NLD=Objecten compileren...;DEA=Compiling objects...';
+      ctNoFileNameSpecified@1025 : TextConst 'DEU=No file name specified.;ENU=No file name specified.;ESP=No file name specified.;FRA=No file name specified.;NLD=Geen bestandsnaam opgegeven.;DEA=No file name specified.';
+      ctUpdateFileName@1026 : TextConst 'DEU=UpdatingVars.txt;ENU=UpdatingVars.txt;ESP=UpdatingVars.txt;FRA=UpdatingVars.txt;NLD=UpdatingVars.txt;DEA=UpdatingVars.txt';
+      ctUpdatingCALHistory@1027 : TextConst 'DEU=Updating C/AL history...;ENU=Updating C/AL history...;ESP=Updating C/AL history...;FRA=Updating C/AL history...;NLD=C/AL Historie bijwerken...;DEA=Updating C/AL history...';
+      ctUpdatingObjects@1028 : TextConst 'DEU=Updating objects...;ENU=Updating objects...;ESP=Updating objects...;FRA=Updating objects...;NLD=Objecten bijwerken...;DEA=Updating objects...';
+      ctUpdatingVariables@1029 : TextConst 'DEU=Updating variables...;ENU=Updating variables...;ESP=Updating variables...;FRA=Updating variables...;NLD=Objecten bijwerken...;DEA=Updating variables...';
+      ctUpdatingWhereUsedIn@1030 : TextConst 'DEU=Updating Where Used in...;ENU=Updating Where Used in...;ESP=Updating Where Used in...;FRA=Updating Where Used in...;NLD=Waar-gebruikt in bijwerken...;DEA=Updating Where Used in...';
+      ctUpdatingWhereUsedObjects@1031 : TextConst 'DEU=Updating Where Used objects...;ENU=Updating Where Used objects...;ESP=Updating Where Used objects...;FRA=Updating Where Used objects...;NLD=Waar-gebruikt objecten bijwerken...;DEA=Updating Where Used objects...';
+    BEGIN
+      Setup.CustomGet;
+
+      StartDate := TODAY;
+      StartTime := TIME;
+
+      Directory := FileHandler.TempDirectory;
+
+      IF ObjectToUpdateVars.FINDSET THEN
+        REPEAT
+          Object.GET(ObjectToUpdateVars."Object Type", '', ObjectToUpdateVars."Object No.");
+          TmpObject := Object;
+          TmpObject.INSERT;
+        UNTIL ObjectToUpdateVars.NEXT = 0;
+
+      IF RunType <> RunType::"Update File" THEN BEGIN
+        IF NOT CheckCALHistory.RunWithObjectRange(TmpObject) THEN BEGIN
+          IF NOT CONFIRM(ctCALNotUpToDate, TRUE) THEN
+            EXIT;
+          COMMIT;
+          WhereUsedMgt.UpdateObjects;
+        END;
+
+        CheckNoOMObjects(ObjectToUpdateVars);
+      END;
+
+      CASE RunType OF
+
+        RunType::"Update in DB" :
+          BEGIN
+
+            Progressbar.Open(ctUpdatingVariables, 2);
+            Progressbar.BarSize := ObjectToUpdateVars.COUNT * 9;
+
+            FileName := Directory + ctUpdateFileName;
+
+            Progressbar.Text1 := ctCheckingObjects;
+            IF ObjectToUpdateVars.FINDSET THEN
+              REPEAT
+
+                Object.GET(ObjectToUpdateVars."Object Type", '', ObjectToUpdateVars."Object No.");
+                IF NOT SourceControl.CheckObjectBeforeChanging(Object, Progressbar) THEN
+                  EXIT;
+
+                IF Setup."Lock Object at Design" THEN
+                  ObjectLock.InsertLock(Object);
+
+              UNTIL ObjectToUpdateVars.NEXT = 0;
+
+            Progressbar.Text1 := ctUpdatingObjects;
+            IF ObjectToUpdateVars.FINDSET THEN
+              REPEAT
+                Object.GET(ObjectToUpdateVars."Object Type", '', ObjectToUpdateVars."Object No.");
+
+                Progressbar.AddToBar(1);
+                Progressbar.Text2Object := Object;
+
+                SourceControl.FillCALLineBufferWithLatest(TmpCALHistoryLine, Object.Type, Object.ID);
+
+                ObjectChanged := FALSE;
+
+                IF DoDeleteUnusedVariables THEN
+                  IF DeleteUnusedVariables(Object, TmpCALHistoryLine) THEN
+                    ObjectChanged := TRUE;
+
+                IF DoSortVariables THEN
+                  IF SortVariables(TmpCALHistoryLine, Object.ID) THEN
+                    ObjectChanged := TRUE;
+
+                IF DoLocalizeFunctions THEN
+                  IF LocalizeFunctions(Object, TmpCALHistoryLine) THEN
+                    ObjectChanged := TRUE;
+
+                IF ObjectChanged THEN BEGIN
+
+                  TmpChangedObject := Object;
+                  TmpChangedObject.INSERT;
+
+                  SourceControl.ExportTextFile(FileName, TmpCALHistoryLine);
+
+                  ObjectMgt.ImportObject(FileName);
+
+                END;
+
+              UNTIL ObjectToUpdateVars.NEXT = 0;
+
+            IF SetModifyFlag THEN BEGIN
+              Progressbar.Text1 := ctCompilingObjects;
+              IF ObjectToUpdateVars.FINDSET THEN
+                REPEAT
+                  Object.GET(ObjectToUpdateVars."Object Type", '', ObjectToUpdateVars."Object No.");
+
+                  Progressbar.AddToBar(1);
+                  Progressbar.Text2Object := Object;
+
+                  IF TmpChangedObject.GET(ObjectToUpdateVars."Object Type", '', ObjectToUpdateVars."Object No.") THEN BEGIN
+                    ObjectMgt.CompileObject(Object);
+
+                    Object.GET(Object.Type, '', Object.ID);
+                    Object.Date := StartDate;
+                    Object.Time := StartTime;
+                    Object.Modified := TRUE;
+
+                    ObjectMgt.UpdateObject(Object, FALSE);
+
+                  END;
+
+                UNTIL ObjectToUpdateVars.NEXT = 0;
+            END ELSE
+              Progressbar.AddToBar(ObjectToUpdateVars.COUNT);
+
+            Progressbar.Text1 := ctUpdatingCALHistory;
+            IF ObjectToUpdateVars.FINDSET THEN
+              REPEAT
+                Object.GET(ObjectToUpdateVars."Object Type", '', ObjectToUpdateVars."Object No.");
+
+                Progressbar.AddToBar(1);
+                Progressbar.Text2Object := Object;
+
+                IF TmpChangedObject.GET(ObjectToUpdateVars."Object Type", '', ObjectToUpdateVars."Object No.") THEN
+                  SourceControl.AddObject(Object, 0, FALSE, FALSE, 1, FALSE);
+              UNTIL ObjectToUpdateVars.NEXT = 0;
+
+            Progressbar.Text1 := ctUpdatingWhereUsedObjects;
+            IF ObjectToUpdateVars.FINDSET THEN
+              REPEAT
+                Progressbar.AddToBar(1);
+                Object.GET(ObjectToUpdateVars."Object Type", '', ObjectToUpdateVars."Object No.");
+                Progressbar.Text2Object := Object;
+                IF TmpChangedObject.GET(ObjectToUpdateVars."Object Type", '', ObjectToUpdateVars."Object No.") THEN BEGIN
+                  WhereUsedMgt.FillEntryNos;
+                  WhereUsedMgt.UpdateObjectLines(Object);
+                END;
+              UNTIL ObjectToUpdateVars.NEXT = 0;
+
+            Progressbar.Text1 := ctUpdatingWhereUsedIn;
+            IF ObjectToUpdateVars.FINDSET THEN
+              REPEAT
+                Object.GET(ObjectToUpdateVars."Object Type", '', ObjectToUpdateVars."Object No.");
+
+                Progressbar.AddToBar(1);
+                Progressbar.Text2Object := Object;
+
+                IF TmpChangedObject.GET(ObjectToUpdateVars."Object Type", '', ObjectToUpdateVars."Object No.") THEN
+                  WhereUsedMgt.UpdateWhereInOfObject(Object);
+              UNTIL ObjectToUpdateVars.NEXT = 0;
+
+            Progressbar.Close;
+
+          END;
+
+        RunType::Export :
+          BEGIN
+            IF ExportFileName = '' THEN
+              ERROR(ctNoFileNameSpecified);
+
+            oFile.TEXTMODE(TRUE);
+            oFile.CREATE(ExportFileName);
+
+            Progressbar.Open(ctUpdatingVariables, 1);
+            Progressbar.BarSize := ObjectToUpdateVars.COUNT;
+
+            IF ObjectToUpdateVars.FINDSET THEN
+              REPEAT
+
+                Object.GET(ObjectToUpdateVars."Object Type", '', ObjectToUpdateVars."Object No.");
+
+                Progressbar.Text1Object := Object;
+                Progressbar.AddToBar(1);
+
+                IF NOT SourceControl.ConfirmObjectLock(Object) THEN
+                  EXIT;
+
+                IF SourceControl.LatestHistoryIsOutdated(Object) THEN
+                  SourceControl.AddObject(Object, 0, FALSE, FALSE, 1, FALSE);
+
+                SourceControl.FillCALLineBufferWithLatest(TmpCALHistoryLine, Object.Type, Object.ID);
+
+                ObjectChanged := FALSE;
+
+                IF DoDeleteUnusedVariables THEN
+                  IF DeleteUnusedVariables(Object, TmpCALHistoryLine) THEN
+                    ObjectChanged := TRUE;
+
+                IF DoSortVariables THEN
+                  IF SortVariables(TmpCALHistoryLine, Object.ID) THEN
+                    ObjectChanged := TRUE;
+
+                IF DoLocalizeFunctions THEN
+                  IF LocalizeFunctions(Object, TmpCALHistoryLine) THEN
+                    ObjectChanged := TRUE;
+
+                IF ObjectChanged THEN BEGIN
+
+                  TmpChangedObject := Object;
+                  TmpChangedObject.INSERT;
+
+                  IF SetModifyFlag THEN
+                    SourceControl.SetModifyFlagInHistoryLines(TmpCALHistoryLine, StartDate, StartTime);
+                  SourceControl.AppendHistoryLinesToFile(oFile, TmpCALHistoryLine);
+
+                END;
+
+              UNTIL ObjectToUpdateVars.NEXT = 0;
+            Progressbar.Close;
+            oFile.CLOSE;
+
+          END;
+
+        RunType::"Update File" :
+          BEGIN
+            IF SourceFileName = '' THEN
+              ERROR(ctNoFileNameSpecified);
+
+            IF ExportFileName = '' THEN
+              ERROR(ctNoFileNameSpecified);
+
+            oFile.TEXTMODE(TRUE);
+            oFile.CREATE(ExportFileName);
+
+            Progressbar.Open(ctUpdatingVariables, 1);
+
+            oSourceFile.OPEN(SourceFileName);
+            Progressbar.BarSize := oSourceFile.LEN * 2;
+            oSourceFile.CLOSE;
+
+            SourceControl.ImportTextFile2(SourceFileName, 1, Progressbar, 0, TmpSourceObject, TmpSourceLine, TRUE);
+
+            Progressbar.BarSize := TmpSourceObject.COUNT * 2;
+            Progressbar.BarPosition := TmpSourceObject.COUNT;
+
+            IF TmpSourceObject.FINDSET THEN
+              REPEAT
+
+                TmpSourceObject.FillObjectFields(TmpObject);
+                Progressbar.Text1Object := TmpObject;
+
+                Progressbar.AddToBar(1);
+
+                ObjectChanged := FALSE;
+
+                TmpSourceLine.SETRANGE("Entry No.", TmpSourceObject."Entry No.");
+
+                IF DoSortVariables THEN
+                  IF SortVariables(TmpSourceLine, TmpObject.ID) THEN
+                    ObjectChanged := TRUE;
+
+                IF ObjectChanged THEN BEGIN
+                  TmpChangedObject := TmpObject;
+                  TmpChangedObject.INSERT;
+                END;
+
+                IF SetModifyFlag THEN
+                  SourceControl.SetModifyFlagInHistoryLines(TmpSourceLine, StartDate, StartTime);
+                SourceControl.AppendHistoryLinesToFile(oFile, TmpSourceLine);
+
+              UNTIL TmpSourceObject.NEXT = 0;
+
+            Progressbar.Close;
+            oFile.CLOSE;
+
+          END;
+
+      END;
+
+      NoOfObjects := TmpChangedObject.COUNT;
+    END;
+
+    LOCAL PROCEDURE DeleteUnusedVariables@2(VAR Object@1000 : Record 2000000001;VAR CALHistoryLine@1001 : Record 11102053) ObjectChanged : Boolean;
+    VAR
+      WhereUsedObjectLine@1002 : Record 11102058;
+      CodeLine@1003 : Text;
+      CheckNextLine@1004 : Boolean;
+    BEGIN
+      WhereUsedObjectLine.SETCURRENTKEY("Object Type", "Object No.", "C/AL Line No.");
+      WhereUsedObjectLine.SETRANGE("Object Type", Object.Type);
+      WhereUsedObjectLine.SETRANGE("Object No.", Object.ID);
+      WhereUsedObjectLine.SETFILTER(Type, '%1|%2',
+        WhereUsedObjectLine.Type::"Global Variable", WhereUsedObjectLine.Type::"Local Variable");
+      WhereUsedObjectLine.SETRANGE(Used, FALSE);
+
+      IF WhereUsedObjectLine.FINDSET THEN
+        REPEAT
+          IF WhereUsedVariableLineInFilters(WhereUsedObjectLine) THEN BEGIN
+            CALHistoryLine.SETRANGE("Line No.", WhereUsedObjectLine."C/AL Line No.");
+            IF CALHistoryLine.FINDFIRST THEN BEGIN
+              CALHistoryLine.DELETEALL;
+              CheckNextLine := TRUE;
+              WHILE CheckNextLine DO BEGIN
+
+                CALHistoryLine.SETRANGE("Line No.");
+
+                CheckNextLine := FALSE;
+                IF CALHistoryLine.NEXT <> 0 THEN BEGIN
+                  CodeLine := DELCHR(CALHistoryLine.Code, '<>');
+                  IF CodeLine[1] = '''' THEN BEGIN
+                    CALHistoryLine.SETRANGE("Line No.", CALHistoryLine."Line No.");
+                    CALHistoryLine.DELETEALL;
+                    CheckNextLine := TRUE;
+                  END;
+                END;
+              END;
+
+              ObjectChanged := TRUE;
+              CALHistoryLine.SETRANGE("Line No.");
+
+            END;
+          END;
+
+        UNTIL WhereUsedObjectLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE SortVariables@3(VAR CALHistoryLine@1000 : Record 11102053;ObjectNo@1001 : Integer) ObjectChanged : Boolean;
+    VAR
+      SortVariableBuffer@1002 : TEMPORARY Record 11102065;
+      BeginCode@1003 : Text;
+      CodeLine@1004 : Text;
+      EndCode@1005 : Text;
+      BracketPos@1006 : Integer;
+      ParentId@1007 : Integer;
+      SemicolonPos@1008 : Integer;
+      StopLoop@1009 : Boolean;
+      VarSectionOpen@1010 : Boolean;
+    BEGIN
+      CALHistoryLine.SETRANGE("Sub Line No.", 1);
+      IF CALHistoryLine.FINDSET THEN
+        REPEAT
+
+          IF STRLEN(CALHistoryLine.Code) > 5 THEN BEGIN
+
+            IF CALHistoryLine.Code = '  CODE' THEN
+              ParentId := 0;
+
+            IF DELCHR(CALHistoryLine.Code, '<')[1] = '{' THEN BEGIN
+              BracketPos := STRPOS(CALHistoryLine.Code, '{');
+              SemicolonPos := STRPOS(CALHistoryLine.Code, ';');
+              IF SemicolonPos > BracketPos THEN
+                IF EVALUATE(ParentId, COPYSTR(CALHistoryLine.Code, BracketPos + 1, SemicolonPos - BracketPos - 1)) THEN
+                  ;
+            END;
+
+            IF COPYSTR(CALHistoryLine.Code, 5, 9) IN ['PROCEDURE', 'LOCAL PRO'] THEN BEGIN
+              BracketPos := STRPOS(CALHistoryLine.Code, '@');
+              SemicolonPos := STRPOS(CALHistoryLine.Code, '(');
+              IF SemicolonPos > BracketPos THEN
+                IF EVALUATE(ParentId, COPYSTR(CALHistoryLine.Code, BracketPos + 1, SemicolonPos - BracketPos - 1)) THEN
+                  ;
+            END;
+
+            CASE TRUE OF
+
+              CALHistoryLine.Code = '    VAR' :
+                BEGIN
+                  CALHistoryLine.NEXT;
+                  IF CALHistoryLine.Code = '' THEN
+                    CALHistoryLine.NEXT;
+
+                  VarSectionOpen := TRUE;
+
+                  REPEAT
+
+                    IF STRLEN(CALHistoryLine.Code) > 5 THEN
+                      IF CALHistoryLine.Code[5] <> ' ' THEN
+                        VarSectionOpen := FALSE;
+
+                    IF VarSectionOpen THEN BEGIN
+                      CodeLine := DELCHR(CALHistoryLine.Code, '<>');
+
+                      IF (CodeLine[1] = '''') OR (CodeLine = '') THEN BEGIN
+                        SortVariableBuffer."Line No." := CALHistoryLine."Line No.";
+                        SortVariableBuffer.INSERT;
+                      END ELSE BEGIN
+                        SortVariableBuffer."Line No." := CALHistoryLine."Line No.";
+                        AnalyseVariableLine(CodeLine, SortVariableBuffer);
+                        SortVariableBuffer.INSERT;
+                      END;
+                    END;
+                    StopLoop := CALHistoryLine.NEXT = 0;
+                    IF NOT StopLoop THEN
+                      IF STRLEN(CALHistoryLine.Code) > 5 THEN BEGIN
+                        StopLoop := CALHistoryLine.Code[5] <> ' ';
+                        IF StopLoop THEN
+                          CALHistoryLine.NEXT(-1);
+                      END;
+
+                  UNTIL StopLoop;
+                  IF ExecuteSorting(CALHistoryLine, SortVariableBuffer, ObjectNo, ParentId) THEN
+                    ObjectChanged := TRUE;
+
+                END;
+
+              CALHistoryLine.Code = '    BEGIN' :
+                REPEAT
+                  StopLoop := CALHistoryLine.NEXT = 0;
+                UNTIL (DELSTR(CALHistoryLine.Code, 8) = '    END') OR StopLoop;
+
+              COPYSTR(CALHistoryLine.Code, STRLEN(CALHistoryLine.Code) - 3) = '=VAR' :
+                BEGIN
+
+                  BeginCode := PADSTR('', STRPOS(CALHistoryLine.Code, '=VAR')) + 'BEGIN';
+                  EndCode := PADSTR('', STRPOS(CALHistoryLine.Code, '=VAR')) + 'END;';
+
+                  CALHistoryLine.NEXT;
+                  VarSectionOpen := TRUE;
+                  REPEAT
+                    IF CALHistoryLine.Code = BeginCode THEN
+                      VarSectionOpen := FALSE;
+
+                    IF VarSectionOpen THEN BEGIN
+                      CodeLine := DELCHR(CALHistoryLine.Code, '<>');
+                      IF CodeLine[1] = '''' THEN BEGIN
+                        SortVariableBuffer."Line No." := CALHistoryLine."Line No.";
+                        SortVariableBuffer.INSERT;
+                      END ELSE BEGIN
+                        SortVariableBuffer."Line No." := CALHistoryLine."Line No.";
+                        AnalyseVariableLine(CodeLine, SortVariableBuffer);
+                        SortVariableBuffer.INSERT;
+                      END;
+                    END;
+
+                    StopLoop := CALHistoryLine.NEXT = 0;
+                  UNTIL (CALHistoryLine.Code = EndCode) OR StopLoop;
+                  IF ExecuteSorting(CALHistoryLine, SortVariableBuffer, ObjectNo, ParentId) THEN
+                    ObjectChanged := TRUE;
+                END;
+
+              COPYSTR(CALHistoryLine.Code, STRLEN(CALHistoryLine.Code) - 5) = '=BEGIN' :
+                BEGIN
+                  EndCode := PADSTR('', STRPOS(CALHistoryLine.Code, '=BEGIN')) + 'END;';
+                  REPEAT
+                    StopLoop := CALHistoryLine.NEXT = 0;
+                  UNTIL (CALHistoryLine.Code = EndCode) OR StopLoop;
+                END;
+
+            END;
+          END;
+        UNTIL CALHistoryLine.NEXT = 0;
+
+      CALHistoryLine.SETRANGE("Sub Line No.");
+    END;
+
+    LOCAL PROCEDURE LocalizeFunctions@4(VAR Object@1000 : Record 2000000001;VAR CALHistoryLine@1001 : Record 11102053) ObjectChanged : Boolean;
+    VAR
+      WhereUsedObjectLine@1002 : Record 11102058;
+    BEGIN
+      WhereUsedObjectLine.SETCURRENTKEY("Object Type", "Object No.", Type, Id);
+      WhereUsedObjectLine.SETRANGE("Object Type", Object.Type);
+      WhereUsedObjectLine.SETRANGE("Object No.", Object.ID);
+      WhereUsedObjectLine.SETRANGE(Type, WhereUsedObjectLine.Type::"Global Function");
+      IF WhereUsedObjectLine.FINDSET THEN
+        REPEAT
+          IF WhereUsedFunctionLineInFilters(WhereUsedObjectLine) THEN
+            IF WhereUsedObjectLine.CanBeLocal THEN BEGIN
+              CALHistoryLine.SETRANGE("Line No.", WhereUsedObjectLine."C/AL Line No.");
+              IF CALHistoryLine.FINDFIRST THEN
+
+                IF DELSTR(CALHistoryLine.Code, 14) = '    PROCEDURE' THEN BEGIN
+                  CALHistoryLine.Code := '    LOCAL ' + COPYSTR(CALHistoryLine.Code, 5);
+                  CALHistoryLine.MODIFY;
+
+                  ObjectChanged := TRUE;
+
+                END;
+            END;
+
+        UNTIL WhereUsedObjectLine.NEXT = 0;
+
+      CALHistoryLine.SETRANGE("Line No.");
+    END;
+
+    LOCAL PROCEDURE AnalyseVariableLine@5(VAR CodeLine@1000 : Text;VAR SortVariableBuffer@1001 : TEMPORARY Record 11102065);
+    VAR
+      Object@1002 : Record 2000000001;
+      CodeLine2@1003 : Text;
+      IdString@1004 : Text;
+      NameId@1005 : Text;
+      ObjectNoString@1006 : Text;
+      ObjectTypeString@1007 : Text;
+      Type@1008 : Text;
+      SplitPos@1009 : Integer;
+      SplitPos2@1010 : Integer;
+      Advanced@1011 : Boolean;
+      TypeFound@1012 : Boolean;
+    BEGIN
+      CodeLine := DELCHR(CodeLine, '<>');
+
+      IF (CodeLine[1] IN ['''', ';']) OR (CodeLine = '') THEN
+        EXIT;
+
+      Advanced := CodeLine[1] = '"';
+      IF Advanced THEN BEGIN
+        SplitPos := STRPOS(CodeLine, ' : ');
+        IF STRPOS(CodeLine, '@') > SplitPos THEN BEGIN
+          CodeLine2 := COPYSTR(CodeLine, STRPOS(CodeLine, '@'));
+          SplitPos := STRPOS(CodeLine, '@') + STRPOS(CodeLine2, ' : ');
+        END;
+      END ELSE
+        SplitPos := STRPOS(CodeLine, ' : ');
+
+      NameId := DELSTR(CodeLine, SplitPos);
+
+      Type := COPYSTR(CodeLine, SplitPos + 3);
+
+      IF DELSTR(Type, 8) = 'ARRAY [' THEN BEGIN
+        SplitPos := STRPOS(Type, ' OF ');
+        IF SplitPos > 0 THEN
+          Type := COPYSTR(Type, STRPOS(Type, ' OF ') + 4);
+      END;
+
+      SortVariableBuffer."Object No." := 0;
+
+      SplitPos := STRPOS(Type, ' ');
+      IF SplitPos > 0 THEN
+        ObjectTypeString := DELSTR(Type, SplitPos);
+
+      IF ObjectTypeString = 'TEMPORARY' THEN BEGIN
+        Type := COPYSTR(Type, SplitPos + 1);
+        ObjectTypeString := '';
+        SplitPos := STRPOS(Type, ' ');
+        IF SplitPos > 0 THEN
+          ObjectTypeString := DELSTR(Type, SplitPos);
+      END;
+
+      IF ObjectTypeString <> '' THEN BEGIN
+        IF ObjectTypeString = 'Record' THEN
+          Object.Type := Object.Type::Table
+        ELSE
+          IF EVALUATE(Object.Type, ObjectTypeString) THEN
+            ;
+        IF Object.Type <> Object.Type::TableData THEN BEGIN
+          ObjectNoString := COPYSTR(Type, STRLEN(ObjectTypeString) + 2);
+          ObjectNoString := DELSTR(ObjectNoString, STRLEN(ObjectNoString));
+          SplitPos := STRPOS(ObjectNoString, ' ');
+          IF SplitPos > 0 THEN
+            ObjectNoString := COPYSTR(ObjectNoString, 1, SplitPos);
+          EVALUATE(SortVariableBuffer."Object No.", ObjectNoString);
+          SortVariableBuffer."Variable Type" := Object.Type;
+          TypeFound := TRUE;
+        END;
+      END;
+
+      IF Advanced THEN BEGIN
+        SplitPos2 := STRLEN(NameId) - 1;
+        WHILE NameId[SplitPos2] <> '@' DO
+          SplitPos2 -= 1;
+      END ELSE
+        SplitPos2 := STRPOS(NameId, '@');
+
+      IF SplitPos2 > 0 THEN BEGIN
+        IdString := COPYSTR(NameId, SplitPos2 + 1);
+        EVALUATE(SortVariableBuffer."Variable No.", IdString);
+      END;
+
+      IF NOT TypeFound THEN BEGIN
+
+        SplitPos := STRPOS(Type, '[');
+        IF SplitPos > 0 THEN
+          Type := DELSTR(Type, SplitPos);
+        SplitPos := STRPOS(Type, ' ');
+        IF SplitPos > 0 THEN
+          Type := DELSTR(Type, SplitPos);
+        IF Type[STRLEN(Type)] = ';' THEN
+          Type := DELSTR(Type, STRLEN(Type));
+
+        IF Type[1] = '''' THEN
+          Type := 'Option';
+
+        CASE Type OF
+
+          'Page' : SortVariableBuffer."Variable Type" := VariableSorting::Page;
+          'Automation' : SortVariableBuffer."Variable Type" := VariableSorting::Automation;
+          'OCX' : SortVariableBuffer."Variable Type" := VariableSorting::OCX;
+          'Variant' : SortVariableBuffer."Variable Type" := VariableSorting::Variant;
+          'Binary' : SortVariableBuffer."Variable Type" := VariableSorting::Binary;
+          'Dialog' : SortVariableBuffer."Variable Type" := VariableSorting::Dialog;
+          'File' : SortVariableBuffer."Variable Type" := VariableSorting::File;
+          'RecordRef' : SortVariableBuffer."Variable Type" := VariableSorting::RecordRef;
+          'FieldRef' : SortVariableBuffer."Variable Type" := VariableSorting::FieldRef;
+          'KeyRef' : SortVariableBuffer."Variable Type" := VariableSorting::KeyRef;
+          'InStream' : SortVariableBuffer."Variable Type" := VariableSorting::InStream;
+          'OutStream' : SortVariableBuffer."Variable Type" := VariableSorting::OutStream;
+          'DateFormula' : SortVariableBuffer."Variable Type" := VariableSorting::DateFormula;
+          'Date' : SortVariableBuffer."Variable Type" := VariableSorting::Date;
+          'DateTime' : SortVariableBuffer."Variable Type" := VariableSorting::DateTime;
+          'Time' : SortVariableBuffer."Variable Type" := VariableSorting::Time;
+          'Duration' : SortVariableBuffer."Variable Type" := VariableSorting::Duration;
+          'Text' : SortVariableBuffer."Variable Type" := VariableSorting::Text;
+          'Code' : SortVariableBuffer."Variable Type" := VariableSorting::Code;
+          'GUID' : SortVariableBuffer."Variable Type" := VariableSorting::GUID;
+          'Char' : SortVariableBuffer."Variable Type" := VariableSorting::Char;
+          'Decimal' : SortVariableBuffer."Variable Type" := VariableSorting::Decimal;
+          'BigInteger' : SortVariableBuffer."Variable Type" := VariableSorting::BigInteger;
+          'Integer' : SortVariableBuffer."Variable Type" := VariableSorting::Integer;
+          'Option' : SortVariableBuffer."Variable Type" := VariableSorting::Option;
+          'Action' : SortVariableBuffer."Variable Type" := VariableSorting::Action;
+          'Boolean' : SortVariableBuffer."Variable Type" := VariableSorting::Boolean;
+          'TextConst' : SortVariableBuffer."Variable Type" := VariableSorting::TextConst;
+
+          ELSE
+            SortVariableBuffer."Variable Type" := VariableSorting::Unknown;
+
+        END;
+
+      END;
+
+      IF Advanced THEN BEGIN
+        SplitPos2 := STRLEN(NameId) - 1;
+        WHILE NameId[SplitPos2] <> '@' DO
+          SplitPos2 -= 1;
+      END ELSE
+        SplitPos2 := STRPOS(NameId, '@');
+
+      SortVariableBuffer."Variable Name" := DELSTR(NameId, SplitPos2);
+      IF Advanced THEN
+        SortVariableBuffer."Variable Name" := DELCHR(SortVariableBuffer."Variable Name", '<>', '"');
+    END;
+
+    LOCAL PROCEDURE ExecuteSorting@6(VAR CALHistoryLine@1000 : Record 11102053;VAR SortVariableBuffer@1001 : TEMPORARY Record 11102065;ObjectNo@1002 : Integer;ParentId@1003 : Integer) ObjectChanged : Boolean;
+    VAR
+      PrevCALHistoryLine@1004 : Record 11102053;
+      LineNo@1005 : Integer;
+    BEGIN
+      CALHistoryLine.SETRANGE("Sub Line No.");
+
+      PrevCALHistoryLine := CALHistoryLine;
+
+      SortVariableBuffer.SETCURRENTKEY("Line No.");
+      IF SortVariableBuffer.FINDSET THEN
+        REPEAT
+          SortVariableBuffer.Sort := SortVariableBufferInFilters(SortVariableBuffer, ObjectNo, ParentId);
+          SortVariableBuffer.MODIFY;
+        UNTIL SortVariableBuffer.NEXT = 0;
+
+      IF SortVariableBuffer.FINDFIRST THEN BEGIN
+
+        LineNo := SortVariableBuffer."Line No.";
+        SortVariableBuffer.SETRANGE(Sort, FALSE);
+        IF SortVariableBuffer.FINDSET THEN
+          REPEAT
+            IF SortVariableBuffer."Line No." <> LineNo THEN BEGIN
+              CALHistoryLine.SETRANGE("Line No.", SortVariableBuffer."Line No.");
+              IF CALHistoryLine.FINDSET THEN
+                REPEAT
+                  CALHistoryLine.DELETE;
+                  CALHistoryLine."Line No." := - LineNo;
+                  CALHistoryLine.INSERT;
+                UNTIL CALHistoryLine.NEXT = 0;
+            END;
+            LineNo += 1;
+          UNTIL SortVariableBuffer.NEXT = 0;
+
+        SortVariableBuffer.SETRANGE(Sort, TRUE);
+        SortVariableBuffer.SETCURRENTKEY(Sort, "Variable Type", "Object No.", "Variable Name");
+        IF SortVariableBuffer.FINDSET THEN
+          REPEAT
+
+            IF SortVariableBuffer."Line No." <> LineNo THEN BEGIN
+
+              CALHistoryLine.SETRANGE("Line No.", SortVariableBuffer."Line No.");
+              IF CALHistoryLine.FINDSET THEN
+                REPEAT
+                  CALHistoryLine.DELETE;
+                  CALHistoryLine."Line No." := - LineNo;
+                  CALHistoryLine.INSERT;
+                UNTIL CALHistoryLine.NEXT = 0;
+
+            END;
+
+            LineNo += 1;
+
+          UNTIL SortVariableBuffer.NEXT = 0;
+
+        SortVariableBuffer.SETRANGE(Sort);
+        SortVariableBuffer.DELETEALL;
+
+      END;
+
+      CALHistoryLine.SETFILTER("Line No.", '<0');
+      IF CALHistoryLine.FINDSET THEN BEGIN
+        ObjectChanged := TRUE;
+        REPEAT
+
+          CALHistoryLine.DELETE;
+          CALHistoryLine."Line No." := - CALHistoryLine."Line No.";
+          CALHistoryLine.INSERT;
+          CALHistoryLine."Line No." := - CALHistoryLine."Line No.";
+
+        UNTIL CALHistoryLine.NEXT = 0;
+      END;
+
+      CALHistoryLine.SETRANGE("Line No.");
+      CALHistoryLine.SETRANGE("Sub Line No.", 1);
+
+      CALHistoryLine := PrevCALHistoryLine;
+    END;
+
+    PROCEDURE SetRunType@7(NewValue@1000 : Integer);
+    BEGIN
+      RunType := NewValue;
+    END;
+
+    PROCEDURE SetFilters@8(NewUpdateAllVariables@1000 : Boolean;NewObjectNoFilter@1001 : Text;NewFunctionNoFromFilter@1002 : Text;NewVariableNoFromFilter@1003 : Text);
+    BEGIN
+      IF NewUpdateAllVariables THEN
+        UpdateAllVariables := UpdateAllVariables::Yes
+      ELSE
+        UpdateAllVariables := UpdateAllVariables::No;
+
+      ObjectNoFilter := NewObjectNoFilter;
+      FunctionNoFilter := NewFunctionNoFromFilter;
+      VariableNoFilter := NewVariableNoFromFilter;
+    END;
+
+    PROCEDURE SetSourceFileName@9(NewValue@1000 : Text);
+    BEGIN
+      SourceFileName := NewValue;
+    END;
+
+    PROCEDURE SetExportFileName@10(NewValue@1000 : Text);
+    BEGIN
+      ExportFileName := NewValue;
+    END;
+
+    PROCEDURE SetDeleteUnusedVariables@11(NewValue@1000 : Boolean);
+    BEGIN
+      DoDeleteUnusedVariables := NewValue;
+    END;
+
+    PROCEDURE SetSortVariables@12(NewValue@1000 : Boolean);
+    BEGIN
+      DoSortVariables := NewValue;
+    END;
+
+    PROCEDURE SetLocalizeFunctions@13(NewValue@1000 : Boolean);
+    BEGIN
+      DoLocalizeFunctions := NewValue;
+    END;
+
+    PROCEDURE SetSetModifyFlag@25(NewValue@1000 : Boolean);
+    BEGIN
+      SetModifyFlag := NewValue;
+    END;
+
+    LOCAL PROCEDURE CheckNoOMObjects@14(VAR ObjectToUpdateVars@1000 : Record 11102064);
+    VAR
+      Mgt@1001 : Codeunit 11102035;
+      ctOMObjectsError@1002 : TextConst 'DEU=You cannot update the Object Manager objects.;ENU=You cannot update the Object Manager objects.;ESP=You cannot update the Object Manager objects.;FRA=You cannot update the Object Manager objects.;NLD=De Object Manager objecten kunnen niet worden bijgewerkt.;DEA=You cannot update the Object Manager objects.';
+    BEGIN
+      IF Mgt.ShortUserId <> 'REIJER' THEN BEGIN
+        ObjectToUpdateVars.SETFILTER("Object Name", 'OM - *');
+        IF NOT ObjectToUpdateVars.ISEMPTY THEN
+          ERROR(ctOMObjectsError);
+
+        ObjectToUpdateVars.SETRANGE("Object Name");
+      END;
+    END;
+
+    PROCEDURE ExportDefinition@15(FileName@1000 : Text);
+    VAR
+      ObjectToUpdateVars@1001 : Record 11102064;
+      oFile@1002 : File;
+      Tab@1003 : Char;
+    BEGIN
+      oFile.TEXTMODE(TRUE);
+      oFile.CREATE(FileName);
+
+      Tab := 9;
+
+      WITH ObjectToUpdateVars DO
+        IF FINDSET THEN
+          REPEAT
+            oFile.WRITE(FORMAT("Object Type" + 0) + FORMAT(Tab) + FORMAT("Object No."));
+          UNTIL NEXT = 0;
+
+      oFile.CLOSE;
+    END;
+
+    PROCEDURE ImportDefinition@16(FileName@1000 : Text);
+    VAR
+      ObjectToUpdateVars@1001 : Record 11102064;
+      Mgt@1002 : Codeunit 11102035;
+      oFile@1003 : File;
+      SplitTextLine@1004 : ARRAY [100] OF Text[1024];
+      Tab@1005 : Text;
+      TextLine@1006 : Text;
+      ReadChar@1007 : Char;
+      ObjectNo@1008 : Integer;
+      ObjectType2@1009 : Integer;
+    BEGIN
+      oFile.TEXTMODE(FALSE);
+      oFile.OPEN(FileName);
+
+      Tab[1] := 9;
+
+      WHILE oFile.READ(ReadChar) > 0 DO
+        CASE ReadChar OF
+          13, 10 :
+
+            IF TextLine <> '' THEN BEGIN
+
+              Mgt.Split(TextLine, Tab, SplitTextLine);
+
+              EVALUATE(ObjectType2, SplitTextLine[1]);
+              EVALUATE(ObjectNo, SplitTextLine[2]);
+
+              IF NOT ObjectToUpdateVars.GET(ObjectType2, ObjectNo) THEN BEGIN
+                ObjectToUpdateVars."Object Type" := ObjectType2;
+                ObjectToUpdateVars."Object No." := ObjectNo;
+                ObjectToUpdateVars.INSERT;
+              END;
+
+              TextLine := '';
+            END;
+
+          ELSE
+            TextLine += FORMAT(ReadChar);
+        END;
+
+      oFile.CLOSE;
+    END;
+
+    LOCAL PROCEDURE WhereUsedVariableLineInFilters@17(VAR WhereUsedObjectLine@1000 : Record 11102058) : Boolean;
+    VAR
+      WhereUsedObjectLine2@1001 : Record 11102058;
+    BEGIN
+      IF UpdateAllVariables <> UpdateAllVariables::No THEN
+        EXIT(TRUE);
+
+      IF InFilter(WhereUsedObjectLine."Object No.", ObjectNoFilter) THEN
+        EXIT(TRUE);
+
+      IF InFilter(WhereUsedObjectLine.Id, VariableNoFilter) THEN
+        EXIT(TRUE);
+
+      WhereUsedObjectLine2.SETCURRENTKEY("Object Type", "Object No.", "C/AL Line No.");
+      WhereUsedObjectLine2.SETRANGE("Object Type", WhereUsedObjectLine."Object Type");
+      WhereUsedObjectLine2.SETRANGE("Object No.", WhereUsedObjectLine."Object No.");
+      WhereUsedObjectLine2.SETFILTER("C/AL Line No.", '<%1', WhereUsedObjectLine."C/AL Line No.");
+      IF WhereUsedObjectLine2.FINDLAST THEN
+        IF InFilter(WhereUsedObjectLine2.Id, FunctionNoFilter) THEN
+          EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE WhereUsedFunctionLineInFilters@18(VAR WhereUsedObjectLine@1000 : Record 11102058) : Boolean;
+    BEGIN
+      IF UpdateAllVariables <> UpdateAllVariables::No THEN
+        EXIT(TRUE);
+
+      IF InFilter(WhereUsedObjectLine."Object No.", ObjectNoFilter) THEN
+        EXIT(TRUE);
+
+      IF InFilter(WhereUsedObjectLine.Id, FunctionNoFilter) THEN
+        EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE SortVariableBufferInFilters@19(VAR SortVariableBuffer@1000 : TEMPORARY Record 11102065;ObjectNo@1001 : Integer;ParentId@1002 : Integer) : Boolean;
+    BEGIN
+      IF UpdateAllVariables <> UpdateAllVariables::No THEN
+        EXIT(TRUE);
+
+      IF InFilter(ObjectNo, ObjectNoFilter) THEN
+        EXIT(TRUE);
+
+      IF InFilter(ParentId, FunctionNoFilter) THEN
+        EXIT(TRUE);
+
+      IF InFilter(SortVariableBuffer."Variable No.", VariableNoFilter) THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE ShowSucceedMessage@20();
+    VAR
+      ObjectText@1000 : Text;
+      ctObject@1001 : TextConst 'DEU=object;ENU=object;ESP=object;FRA=object;NLD=object;DEA=object';
+      ctObjects@1002 : TextConst 'DEU=objects;ENU=objects;ESP=objects;FRA=objects;NLD=objecten;DEA=objects';
+      ctObjectsExported@1003 : TextConst 'DEU=%1 %2 exported.;ENU=%1 %2 exported.;ESP=%1 %2 exported.;FRA=%1 %2 exported.;NLD=%1 %2 ge‰xporteerd.;DEA=%1 %2 exported.';
+      ctObjectsOk@1004 : TextConst 'DEU=Objects already OK.;ENU=Objects already OK.;ESP=Objects already OK.;FRA=Objects already OK.;NLD=Objecten zijn optimaal.;DEA=Objects already OK.';
+      ctObjectsUpdated@1005 : TextConst 'DEU=%1 %2 updated.;ENU=%1 %2 updated.;ESP=%1 %2 updated.;FRA=%1 %2 updated.;NLD=%1 %2 bijgewerkt.;DEA=%1 %2 updated.';
+      ctTextFileUpdated@1006 : TextConst 'DEU=Text file is updated.;ENU=Text file is updated.;ESP=Text file is updated.;FRA=Text file is updated.;NLD=Tekstbestand is bijgewerkt.;DEA=Text file is updated.';
+    BEGIN
+      IF NoOfObjects = 0 THEN BEGIN
+        MESSAGE(ctObjectsOk);
+        EXIT;
+      END;
+
+      IF NoOfObjects = 1 THEN
+        ObjectText := ctObject
+      ELSE
+        ObjectText := ctObjects;
+
+      CASE RunType OF
+
+        RunType::"Update in DB" :
+          MESSAGE(ctObjectsUpdated, NoOfObjects, ObjectText);
+
+        RunType::Export :
+          MESSAGE(ctObjectsExported, NoOfObjects, ObjectText);
+
+        RunType::"Update File" :
+          MESSAGE(ctTextFileUpdated);
+      END;
+    END;
+
+    LOCAL PROCEDURE InFilter@22(VAR Number@1000 : Integer;VAR Filter@1001 : Text) : Boolean;
+    VAR
+      Integer@1002 : Record 2000000026;
+    BEGIN
+      Integer.SETFILTER(Number, Filter);
+      Integer.Number := Number;
+      EXIT(Integer.FIND('='));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

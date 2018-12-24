@@ -1,0 +1,651 @@
+OBJECT Codeunit 9062326 Migration Export
+{
+  OBJECT-PROPERTIES
+  {
+    Date=16/02/16;
+    Time=[ 2:04:16 PM];
+    Version List=NA2016.14;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      MigrationHeader@1000000000 : Record 9062373;
+      MigrationLine@1000000001 : Record 9062374;
+      MigrationLineBuffer@1000000016 : TEMPORARY Record 9062375;
+      MigrationParameters@1000000009 : Record 9062376;
+      XmlPortBuffer@1000000023 : TEMPORARY Record 2000000038;
+      CompressionToolkit@1000000004 : Codeunit 9062664;
+      CriteriaManagement@1000000019 : Codeunit 9062462;
+      FileSystem@1000000013 : Codeunit 9062264;
+      MigrationExportImportTools@1000000031 : Codeunit 9062325;
+      MigrationToolkit@1000000020 : Codeunit 9062484;
+      TnpToolkit@1000000017 : Codeunit 9062230;
+      ExportMode@1000000002 : ' ,All,Current Group';
+      MigrationFolderPath@1000000014 : Text;
+      MigrationLineFolderPath@1000000015 : Text;
+      MigrationLineFile@1000000018 : File;
+      tTargetFolder@1000000029 : TextConst 'ENU=Target folder: %1;ENG=Target folder: %1';
+      tDialogTitle@1000000003 : TextConst 'ENU=Exporting...;ENG=Exporting...';
+
+    LOCAL PROCEDURE "--- General ---"@1000000008();
+    BEGIN
+    END;
+
+    PROCEDURE ExportAllInitializations@1000000010(pInteraction@1000000001 : Boolean);
+    VAR
+      lMigrationHeader@1000000000 : Record 9062373;
+    BEGIN
+      //DOC NA2016.14 - Exporting all initializations
+      lMigrationHeader.RESET();
+      lMigrationHeader.SETRANGE(Type, lMigrationHeader.Type::Initialization);
+      ExportSelectedMigrations(lMigrationHeader, pInteraction);
+    END;
+
+    PROCEDURE ExportAllMigrations@1000000005(pInteraction@1000000001 : Boolean) : Boolean;
+    VAR
+      lMigrationHeader@1000000000 : Record 9062373;
+    BEGIN
+      //DOC NA2016.11 - Exporting all migrations
+      //  -> pInteraction: Interaction flag
+      //  <- TRUE = Exported, FALSE = Cancelled
+
+      EXIT(ExportSelectedMigrations(lMigrationHeader, pInteraction));
+    END;
+
+    PROCEDURE ExportSelectedMigrations@1000000006(VAR pMigrationHeader@1000000000 : Record 9062373;pInteraction@1000000001 : Boolean) : Boolean;
+    VAR
+      lMigrationLine@1000000002 : Record 9062374;
+      eMigrationsExportStarted@1000000003 : TextConst 'ENU=Migrations export started;ENG=Migrations export started';
+      eMigrationsExportFinished@1000000004 : TextConst 'ENU=Migrations export finished;ENG=Migrations export finished';
+      lMultipleFiles@1000000005 : Boolean;
+    BEGIN
+      //DOC NA2016.11 - Exporting selected migrations
+      //  <> pMigrationHeader: The migrations recordset
+      //  -> pInteraction: Interaction flag
+      //  <- TRUE = Exported, FALSE = Cancelled
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+      MigrationExportImportTools.InitialiseDialog(pInteraction, TRUE);
+      IF (pInteraction) THEN
+        IF ( NOT (GetExportParameters(pMigrationHeader, TRUE))) THEN
+          EXIT(FALSE);
+
+      //DOC NA2016.14 >>
+      IF (MigrationParameters."Data Format" = MigrationParameters."Data Format"::"ZIP File") THEN
+        lMultipleFiles := MigrationParameters."Multiple Output Files"
+      ELSE
+        lMultipleFiles := FALSE;
+      //DOC NA2016.14 <<
+
+      MigrationExportImportTools.OpenDialog(tDialogTitle);
+
+      MigrationExportImportTools.PrepareMigrationsFolder();
+
+      MigrationExportImportTools.InitialiseLog(MigrationParameters."Log Level", MigrationParameters."Open Log");
+      MigrationExportImportTools.LogMessage(eMigrationsExportStarted, 0);
+      MigrationExportImportTools.LogMessage(STRSUBSTNO(tTargetFolder, MigrationExportImportTools.GetMigrationsFolderPath()), 0);
+
+      MigrationExportImportTools.SetDialogStageCount(pMigrationHeader.COUNT());
+      IF (pMigrationHeader.FINDSET()) THEN
+      REPEAT
+        Export(pMigrationHeader, lMigrationLine, ExportMode::All, pInteraction, TRUE, lMultipleFiles);
+      UNTIL (pMigrationHeader.NEXT() = 0);
+
+      //DOC NA2016.14 >>
+      IF (NOT(lMultipleFiles)) THEN
+        DownloadMigrations(TRUE, FALSE);
+      //DOC NA2016.14 <<
+
+      MigrationExportImportTools.LogMessage(eMigrationsExportFinished, 0);
+
+      MigrationExportImportTools.CloseDialog();
+
+      IF (MigrationParameters."Open when Finished") THEN
+        HYPERLINK(MigrationParameters.Path);
+
+      MigrationExportImportTools.ShowLog();
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ExportMigration@1000000003(pMigrationHeader@1000000002 : Record 9062373;pInteraction@1000000001 : Boolean) : Boolean;
+    VAR
+      lMigrationLine@1000000000 : Record 9062374;
+    BEGIN
+      //DOC NA2016.11 - Exporting a migration
+      //  -> pMigrationHeader: Migration header
+      //  -> pInteraction: Interaction flag
+
+      EXIT(Export(pMigrationHeader, lMigrationLine, ExportMode::All, pInteraction, FALSE, FALSE));
+    END;
+
+    PROCEDURE ExportMigrationCurrentGroup@1000000004(pMigrationHeader@1000000002 : Record 9062373;pMigrationLine@1000000001 : Record 9062374;pInteraction@1000000000 : Boolean) : Boolean;
+    BEGIN
+      //DOC NA2016.11 - Exporting migration current group
+      //  -> pMigrationHeader: Migration header
+      //  -> pMigrationLine: Migration line (current)
+      //  -> pInteraction: Interaction flag
+
+      EXIT(Export(pMigrationHeader, pMigrationLine, ExportMode::"Current Group", pInteraction, FALSE, FALSE));
+    END;
+
+    LOCAL PROCEDURE "--- Internal ---"@1000000007();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE Export@1000000000(pMigrationHeader@1000000000 : Record 9062373;pMigrationLine@1000000002 : Record 9062374;pExportMode@1000000001 : Option;pInteraction@1000000004 : Boolean;pPartOfBiggerExport@1000000005 : Boolean;pMultipleFiles@1000000013 : Boolean) : Boolean;
+    VAR
+      eNoLines@1000000003 : TextConst 'ENU=There are no lines to be exported.;ENG=There are no lines to be exported.';
+      lMigrationsFolderToDelete@1000000007 : Boolean;
+      lDialogToClose@1000000006 : Boolean;
+      lOutStream@1000000008 : OutStream;
+      eMigrationStarted@1000000009 : TextConst 'ENU=Migration %1 started;ENG=Migration %1 started';
+      eMigrationFinished@1000000010 : TextConst 'ENU=Migration %1 finished;ENG=Migration %1 finished';
+      eMigrationGroup@1000000011 : TextConst 'ENU=Migration group "%1";ENG=Migration group "%1"';
+      eMigrationXmlPort@1000000012 : TextConst 'ENU=Migration XMLport "%1";ENG=Migration XMLport "%1"';
+    BEGIN
+      //DOC NA2016.11 - Exporting migration
+      //  -> pMigrationHeader: Migration header
+      //  -> pMigrationLine: Migration line (current)
+      //  -> pExport: Export option (see "Migration Header"."Export" field for options)
+      //  -> pInteraction: Interaction flag
+      //  -> pPartOfBiggerExport: Flag telling this function is a part of bigger export
+      //  <- TRUE = Exported, FALSE = Cancelled
+
+      MigrationHeader := pMigrationHeader;
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+      IF (pInteraction) THEN
+        IF ( NOT (pPartOfBiggerExport)) THEN
+        BEGIN
+          MigrationExportImportTools.InitialiseDialog(pInteraction, TRUE);
+          IF ( NOT (GetExportParameters(pMigrationHeader, FALSE))) THEN
+            EXIT(FALSE);
+          MigrationExportImportTools.OpenDialog(tDialogTitle);
+          MigrationExportImportTools.SetDialogStageCount(1);
+          lDialogToClose := TRUE;
+        END;
+
+      MigrationExportImportTools.UpdateDialogBeforeStage(MigrationHeader.Name);
+
+      IF ( NOT (pPartOfBiggerExport)) THEN
+        MigrationExportImportTools.PrepareMigrationsFolder();
+      PrepareMigrationFolder();
+
+      IF ( NOT (pPartOfBiggerExport)) THEN
+        MigrationExportImportTools.InitialiseLog(MigrationParameters."Log Level", MigrationParameters."Open Log");
+      MigrationExportImportTools.LogMessage(STRSUBSTNO(eMigrationStarted, MigrationHeader.Code), 0);
+      MigrationExportImportTools.LogMessage(STRSUBSTNO(tTargetFolder, MigrationFolderPath), 0);
+
+      MigrationLineBuffer.RESET();
+      MigrationLineBuffer.DELETEALL();
+
+      XmlPortBuffer.RESET();
+      XmlPortBuffer.DELETEALL();
+
+      MigrationLine.RESET();
+      MigrationLine.SETCURRENTKEY("Migration Code", Enabled, "Full Hash");
+      MigrationLine.SETRANGE("Migration Code", MigrationHeader.Code);
+      MigrationLine.SETRANGE(Enabled, TRUE);
+      IF (pExportMode = ExportMode::"Current Group") THEN
+        MigrationLine.SETFILTER("Full Hash", pMigrationLine."Full Hash" + '*');
+      IF (MigrationLine.FINDSET()) THEN
+      BEGIN
+        MigrationExportImportTools.SetDialogStepCount(MigrationLine.COUNT());
+        REPEAT
+          MigrationExportImportTools.UpdateDialogBeforeStep(MigrationLine.Description);
+          PrepareMigrationLineFolder();
+          CASE (MigrationLine.Type) OF
+            MigrationLine.Type::Group:
+              MigrationExportImportTools.LogMessage(STRSUBSTNO(eMigrationGroup, MigrationLine.Description), 0);
+            MigrationLine.Type::XMLport:
+              MigrationExportImportTools.LogMessage(STRSUBSTNO(eMigrationXmlPort, MigrationLine.Description), MigrationLine."XMLport ID");
+          END;
+          IF (MigrationLineShouldBeExported()) THEN
+          BEGIN
+            OpenMigrationLineFile(lOutStream);
+            ExportMigrationLine(lOutStream);
+            CloseMigrationLineFile();
+          END;
+          CLEAR(MigrationLineFolderPath);
+          CLEAR(MigrationLineFile);
+          MigrationExportImportTools.UpdateDialogAfterStep();
+        UNTIL (MigrationLine.NEXT() = 0);
+      END
+      ELSE
+        MESSAGE(eNoLines);
+
+      ExportTheMigration();
+
+      IF ( NOT (pPartOfBiggerExport)) OR (pMultipleFiles) THEN
+        DownloadMigrations(FALSE, TRUE);
+
+      MigrationExportImportTools.UpdateDialogAfterStage();
+
+      CLEAR(MigrationFolderPath);
+
+      MigrationExportImportTools.LogMessage(STRSUBSTNO(eMigrationFinished, MigrationHeader.Code), 0);
+
+      IF ( NOT (pPartOfBiggerExport)) THEN
+      BEGIN
+        MigrationExportImportTools.CloseDialog();
+        IF (MigrationParameters."Open when Finished") THEN
+          HYPERLINK(MigrationParameters.Path);
+        MigrationExportImportTools.ShowLog();
+      END;
+    END;
+
+    LOCAL PROCEDURE GetExportParameters@1000000002(VAR pMigrationHeader@1000000005 : Record 9062373;pMultipleMigrations@1000000004 : Boolean) : Boolean;
+    VAR
+      lEnablementSetup@1000000007 : Record 9062229;
+      lExportMigration@1000000000 : Report 9062343;
+      eEmptyDataFormat@1000000001 : TextConst 'ENU=Data format of migration export can''t be empty.;ENG=Data format of migration export can''t be empty.';
+      eEmptyPath@1000000002 : TextConst 'ENU=Path can''t be empty.;ENG=Path can''t be empty.';
+      eEmptyDataStructure@1000000003 : TextConst 'ENU=Data structure of migration export can''t be empty.;ENG=Data structure of migration export can''t be empty.';
+      lMigrationType@1000000006 : Integer;
+      lMultipleFiles@1000000008 : Boolean;
+      lOutputPath@1000000009 : Text;
+      lDataFormat@1000000010 : Integer;
+    BEGIN
+      //DOC NA2016.11 - Getting export parameters from user (using a report)
+      //  -> pMultipleMigrations: Flag to collect parameters for multiple (rather than single) migrations
+      //  <- TRUE = Parameters collected, FALSE = Cancelled
+
+      //DOC NA2016.14 >>
+      lMigrationType := -1;
+      IF (pMultipleMigrations) THEN BEGIN
+        IF (pMigrationHeader.FINDSET()) THEN BEGIN
+          lMigrationType := pMigrationHeader.Type;
+          REPEAT
+            IF (lMigrationType <> pMigrationHeader.Type) THEN
+              lMigrationType := -1;
+          UNTIL (pMigrationHeader.NEXT() = 0);
+        END;
+      END ELSE
+        lMigrationType := pMigrationHeader.Type;
+
+      IF (lMigrationType = pMigrationHeader.Type::Initialization) THEN BEGIN
+        lEnablementSetup.GET();
+        lOutputPath := lEnablementSetup."Def. Init. Pkg. Output Folder";
+        lDataFormat := MigrationParameters."Data Format"::"ZIP File";
+        lMultipleFiles := TRUE;
+      END ELSE BEGIN
+        lOutputPath := '';
+        lDataFormat := 0;
+        lMultipleFiles := FALSE;
+      END;
+      //DOC NA2016.14 <<
+
+      lExportMigration.Initialise(MigrationHeader, pMultipleMigrations, lMultipleFiles, lDataFormat, lOutputPath);
+      lExportMigration.RUNMODAL();
+      IF ( NOT (lExportMigration.GetOk())) THEN
+        EXIT(FALSE);
+
+      lExportMigration.GetParameters(MigrationParameters);
+
+      IF (MigrationParameters."Data Format" = MigrationParameters."Data Format"::" ") THEN
+        ERROR(eEmptyDataFormat);
+      IF (MigrationParameters.Path = '') THEN
+        ERROR(eEmptyPath);
+      IF (MigrationParameters."Data Structure" = MigrationParameters."Data Structure"::" ") THEN
+        ERROR(eEmptyDataStructure);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE MigrationLineShouldBeExported@1000000017() : Boolean;
+    BEGIN
+      //DOC NA2016.11 - Answering a question whether migration line should be exported
+      //  <- The response
+
+      IF (MigrationLine."XMLport ID" = 0) THEN
+        EXIT(FALSE);
+
+      IF (MigrationParameters."Ignore Duplicate XMLports") THEN
+      BEGIN
+        IF (XmlPortBuffer.GET(XmlPortBuffer."Object Type"::XMLport, MigrationLine."XMLport ID")) THEN
+          EXIT(FALSE);
+
+        XmlPortBuffer."Object Type" := XmlPortBuffer."Object Type"::XMLport;
+        XmlPortBuffer."Object ID" := MigrationLine."XMLport ID";
+        XmlPortBuffer.INSERT();
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ExportMigrationLine@1000000046(VAR pOutStream@1000000001 : OutStream);
+    VAR
+      lRecordFilterPresent@1000000002 : Boolean;
+      lRecordRef@1000000003 : RecordRef;
+    BEGIN
+      //DOC NA2016.11 - Exporting migration line
+      //  <> pOutStream: Outstream
+
+      lRecordFilterPresent := OpenXmlPortRecordRef(lRecordRef);
+      IF ( NOT (ExportXmlPort(pOutStream, lRecordFilterPresent, lRecordRef))) THEN
+        MigrationExportImportTools.LogError(GETLASTERRORTEXT(), MigrationLine."XMLport ID");
+      IF (lRecordFilterPresent) THEN
+        CloseXmlPortRecordRef(lRecordRef);
+    END;
+
+    LOCAL PROCEDURE OpenXmlPortRecordRef@1000000019(VAR pRecordRef@1000000000 : RecordRef) : Boolean;
+    VAR
+      lResult@1000000001 : Boolean;
+    BEGIN
+      //DOC NA2016.11 - Opening XMLport record reference
+      //  <> pRecordRef: Target record reference
+      //  <- TRUE = Record reference opened and filter applied, FALSE = No filter
+
+      IF ((MigrationLine."Table ID" <> 0) AND (MigrationLine."Table Filter ID" <> 0)) THEN
+      BEGIN
+        pRecordRef.OPEN(MigrationLine."Table ID");
+        CriteriaManagement.ApplyCriteriaToRecRef(MigrationLine."Table Filter ID", pRecordRef);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE CloseXmlPortRecordRef@1000000051(VAR pRecordRef@1000000000 : RecordRef);
+    BEGIN
+      //DOC NA2016.11 - Closing XMLport record reference
+      //  <> pRecordRef: The record reference
+
+      pRecordRef.CLOSE();
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ExportXmlPort@1000000014(VAR pOutStream@1000000003 : OutStream;pRecordFilterPresent@1000000000 : Boolean;VAR pRecordRef@1000000002 : RecordRef);
+    VAR
+      lRecordVariant@1000000001 : Variant;
+    BEGIN
+      //DOC NA2016.11 - Exporting XMLport with error catching
+      //  <> pOutStream: Out stream
+      //  -> pRecordFilterPresent: Flag telling whether record filter is present
+      //  <> pRecordRef: Record reference
+
+      MigrationToolkit.SetSilentMode(TRUE);
+
+      IF (pRecordFilterPresent) THEN
+      BEGIN
+        lRecordVariant := pRecordRef;
+        XMLPORT.EXPORT(MigrationLine."XMLport ID", pOutStream, lRecordVariant)
+      END
+      ELSE
+        XMLPORT.EXPORT(MigrationLine."XMLport ID", pOutStream);
+
+      MigrationToolkit.SetSilentMode(FALSE);
+    END;
+
+    LOCAL PROCEDURE ExportTheMigration@1000000015();
+    VAR
+      lMigrationHeader@1000000005 : Record 9062373;
+      lFileName@1000000000 : Text;
+      lFilePath@1000000001 : Text;
+      eFileName@1000000002 : TextConst 'ENU=[0000] Migration %1.xml;ENG=[0000] Migration %1.xml';
+      lFile@1000000006 : File;
+      lOutStream@1000000003 : OutStream;
+      lRecordRef@1000000004 : RecordRef;
+    BEGIN
+      //DOC NA2016.11 - Exporting the migration
+
+      IF ( NOT (MigrationHeader."Export the Migration")) THEN
+        EXIT;
+
+      CLEAR(MigrationLine);
+      MigrationLine."Migration Code" := MigrationHeader.Code;
+      MigrationLine.Type := MigrationLine.Type::XMLport;
+      MigrationLine."XMLport ID" := XMLPORT::"Migrate Migrations";
+
+      lFileName := STRSUBSTNO(eFileName, MigrationHeader.Code);
+      lFileName := FileSystem.ToFileName(lFileName);
+      lFilePath := FileSystem.Combine(FALSE, MigrationFolderPath, lFileName);
+
+      FileSystem.DeleteFileIfExists(FALSE, lFilePath);
+
+      lFile.CREATE(lFilePath);
+      lFile.CREATEOUTSTREAM(lOutStream);
+
+      lMigrationHeader.RESET();
+      lMigrationHeader.SETRANGE(Code, MigrationHeader.Code);
+      lRecordRef.OPEN(DATABASE::"Migration Header");
+      lRecordRef.SETVIEW(lMigrationHeader.GETVIEW());
+
+      IF ( NOT (ExportXmlPort(lOutStream, TRUE, lRecordRef))) THEN
+        MigrationExportImportTools.LogError(GETLASTERRORTEXT(), MigrationLine."XMLport ID");
+
+      lRecordRef.CLOSE();
+      lFile.CLOSE();
+    END;
+
+    LOCAL PROCEDURE DownloadMigrations@1000000001(pMigrations@1000000005 : Boolean;pUseMigrationFileName@1000000007 : Boolean);
+    VAR
+      lZipName@1000000004 : Text;
+      lServerFolderPath@1000000000 : Text;
+      lServerZipPath@1000000001 : Text;
+      lClientFolderPath@1000000002 : Text;
+      lClientZipPath@1000000003 : Text;
+      lFileExtension@1000000006 : Text;
+    BEGIN
+      //DOC NA2016.11 - Downloading migrations / migration
+      //  -> pMigrations: TRUE = Multiple migrations, FALSE = One migration
+
+      IF (pMigrations) THEN
+        lServerFolderPath := MigrationExportImportTools.GetMigrationsFolderPath()
+      ELSE
+        lServerFolderPath := MigrationFolderPath;
+      lClientFolderPath := MigrationParameters.Path;
+
+      CASE (MigrationParameters."Data Format") OF
+        MigrationParameters."Data Format"::Folder:
+          BEGIN
+            FileSystem.DownloadFolder(FileSystem.Client(), lServerFolderPath, lClientFolderPath);
+            MigrationExportImportTools.DeleteMigrationsFolder();
+          END;
+        MigrationParameters."Data Format"::"ZIP File":
+          BEGIN
+            lServerZipPath := lServerFolderPath + '.zip';
+            CompressionToolkit.CompressFolder(FALSE, lServerFolderPath, lServerZipPath);
+
+            //DOC NA2016.14 >>
+            IF ((MigrationHeader."File Name" <> '') AND (pUseMigrationFileName)) THEN BEGIN
+              IF (MigrationHeader."Module Name" <> '') THEN
+                lZipName := MigrationHeader."Module Name" + '\' + MigrationHeader."File Name"
+              ELSE
+                lZipName := MigrationHeader."File Name";
+              lFileExtension := LOWERCASE(FileSystem.GetExtension(FALSE, lZipName));
+              IF (lFileExtension <> '.zip') THEN
+                lZipName := lZipName + '.zip';
+            END ELSE BEGIN
+              lZipName := FileSystem.GetFileName(FALSE, lServerZipPath);
+            END;
+            //DOC NA2016.14 <<
+
+            lClientZipPath := FileSystem.Combine(TRUE, lClientFolderPath, lZipName);
+            FileSystem.DownloadSilent(FileSystem.Client(), lServerZipPath, lClientZipPath);
+            FileSystem.DeleteFile(FALSE, lServerZipPath);
+            MigrationExportImportTools.DeleteMigrationsFolder();
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- File System ---"@1000000009();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE PrepareMigrationFolder@1000000025();
+    VAR
+      lMigrationFolderName@1000000000 : Text;
+      lDataTimestampText@1000000001 : Text;
+    BEGIN
+      //DOC NA2016.11 - Preparing migration folder
+
+      CLEAR(lMigrationFolderName);
+      IF (MigrationParameters."Prefix with Company") THEN
+        lMigrationFolderName := FileSystem.ToFolderName(COMPANYNAME());
+      IF (lMigrationFolderName <> '') THEN
+        lMigrationFolderName := lMigrationFolderName + ' ';
+      lMigrationFolderName := lMigrationFolderName + FileSystem.ToFolderName(MigrationHeader.Code);
+      CASE (MigrationParameters."Data Timestamp") OF
+        MigrationParameters."Data Timestamp"::Date:
+          lDataTimestampText := MigrationExportImportTools.CurrentDateText();
+        MigrationParameters."Data Timestamp"::"Date and Time":
+          lDataTimestampText := MigrationExportImportTools.CurrentDateTimeText();
+      END;
+      IF (lDataTimestampText <> '') THEN
+      BEGIN
+        IF (lMigrationFolderName <> '') THEN
+          lMigrationFolderName := lMigrationFolderName + ' ';
+        lMigrationFolderName := lMigrationFolderName + lDataTimestampText;
+      END;
+      lMigrationFolderName := FileSystem.ToFolderName(lMigrationFolderName);
+      MigrationFolderPath := FileSystem.Combine(FALSE, MigrationExportImportTools.GetMigrationsFolderPath(), lMigrationFolderName);
+      FileSystem.DeleteFolderIfExists(FALSE, MigrationFolderPath, TRUE);
+      FileSystem.CreateFolder(FALSE, MigrationFolderPath);
+    END;
+
+    LOCAL PROCEDURE PrepareMigrationLineFolder@1000000020();
+    VAR
+      lParentFolderPath@1000000000 : Text;
+      lMigrationLineFolderName@1000000001 : Text;
+    BEGIN
+      //DOC NA2016.11 - Preparing migration line folder
+
+      IF (MigrationParameters."Data Structure" = MigrationParameters."Data Structure"::"With Folders") THEN
+      BEGIN
+        FindParentMigrationLineBuffer(FALSE);
+        CASE (MigrationLine.Type) OF
+          MigrationLine.Type::Group:
+            BEGIN
+              lMigrationLineFolderName := STRSUBSTNO('[%1] %2', GetMigrationLineIndexText(), GetMigrationLineText());
+              lMigrationLineFolderName := FileSystem.ToFolderName(lMigrationLineFolderName);
+              MigrationLineFolderPath := FileSystem.Combine(FALSE, MigrationLineBuffer."Folder Path", lMigrationLineFolderName);
+
+              FileSystem.DeleteFolderIfExists(FALSE, MigrationLineFolderPath, TRUE);
+              FileSystem.CreateFolder(FALSE, MigrationLineFolderPath);
+
+              CLEAR(MigrationLineBuffer);
+              MigrationLineBuffer.INIT();
+              MigrationLineBuffer."Migration Code" := MigrationLine."Migration Code";
+              MigrationLineBuffer.ID := MigrationLine.ID;
+              MigrationLineBuffer."Folder Path" := MigrationLineFolderPath;
+              MigrationLineBuffer.INSERT();
+            END;
+          MigrationLine.Type::XMLport:
+            BEGIN
+              IF (MigrationLineBuffer.GET(MigrationLine."Migration Code", MigrationLine."Parent ID")) THEN
+                MigrationLineFolderPath := MigrationLineBuffer."Folder Path"
+              ELSE
+                MigrationLineFolderPath := MigrationFolderPath;
+            END;
+        END;
+      END
+      ELSE
+      BEGIN
+        FindParentMigrationLineBuffer(TRUE);
+        MigrationLineFolderPath := MigrationFolderPath;
+      END;
+    END;
+
+    LOCAL PROCEDURE OpenMigrationLineFile@1000000016(VAR pOutStream@1000000002 : OutStream);
+    VAR
+      lMigrationLineText@1000000001 : Text;
+      lFileName@1000000000 : Text;
+      lFilePath@1000000003 : Text;
+    BEGIN
+      //DOC NA2016.11 - Opening migration line file
+      //  <> pOutStream: Targed outstream
+
+      lFileName := STRSUBSTNO('[%1] %2.xml', GetMigrationLineIndexText(), GetMigrationLineText());
+      lFileName := FileSystem.ToFileName(lFileName);
+      lFilePath := FileSystem.Combine(FALSE, MigrationLineFolderPath, lFileName);
+
+      FileSystem.DeleteFileIfExists(FALSE, lFilePath);
+
+      MigrationLineFile.CREATE(lFilePath);
+      MigrationLineFile.CREATEOUTSTREAM(pOutStream);
+    END;
+
+    LOCAL PROCEDURE CloseMigrationLineFile@1000000044();
+    BEGIN
+      //DOC NA2016.11 - Closing migration line file
+
+      MigrationLineFile.CLOSE();
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@1000000031();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE FindParentMigrationLineBuffer@1000000035(pFlatStructure@1000000000 : Boolean);
+    VAR
+      lMigrationCode@1000000002 : Code[20];
+      lParentId@1000000001 : Integer;
+    BEGIN
+      //DOC NA2016.11 - Trying to find parent migration line buffer
+      //  -> pFlatStructure: Flat structure flag
+
+      lMigrationCode := MigrationLine."Migration Code";
+
+      IF (pFlatStructure) THEN
+        lParentId := 0
+      ELSE
+        lParentId := MigrationLine."Parent ID";
+
+      IF (MigrationLineBuffer.GET(lMigrationCode, lParentId)) THEN
+        EXIT;
+
+      CLEAR(MigrationLineBuffer);
+      MigrationLineBuffer.INIT();
+      MigrationLineBuffer."Migration Code" := lMigrationCode;
+      MigrationLineBuffer.ID := lParentId;
+      MigrationLineBuffer."Folder Path" := MigrationFolderPath;
+      MigrationLineBuffer.INSERT();
+    END;
+
+    LOCAL PROCEDURE GetMigrationLineIndexText@1000000038() : Text;
+    VAR
+      lMigrationLineIndex@1000000000 : Integer;
+      lMigrationLineIndexText@1000000001 : Text;
+    BEGIN
+      //DOC NA2016.11 - Returning migration line index text
+      //  <- The text
+
+      lMigrationLineIndex := MigrationLineBuffer."Line Index" + 1;
+      lMigrationLineIndexText := TnpToolkit.IntegerWithLeadingZeros(lMigrationLineIndex, 4);
+
+      MigrationLineBuffer."Line Index" := lMigrationLineIndex;
+      MigrationLineBuffer.MODIFY();
+
+      EXIT(lMigrationLineIndexText);
+    END;
+
+    LOCAL PROCEDURE GetMigrationLineText@1000000022() : Text;
+    VAR
+      eMigrationLineText@1000000000 : TextConst 'ENU=Line %1;ENG=Line %1';
+    BEGIN
+      //DOC NA2016.11 - Returning migration line text
+      //  <- The text
+
+      IF (MigrationLine.Description <> '') THEN
+        EXIT(MigrationLine.Description)
+      ELSE
+        EXIT(STRSUBSTNO(eMigrationLineText, MigrationLine.ID));
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.11 JH 25/11/2015 - Created
+      //DOC NA2016.12 JH 27/12/2015 - Criteria references changed
+    }
+    END.
+  }
+}
+

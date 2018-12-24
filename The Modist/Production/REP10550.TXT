@@ -1,0 +1,1449 @@
+OBJECT Report 10550 BACS Export
+{
+  OBJECT-PROPERTIES
+  {
+    Date=23/03/16;
+    Time=12:00:00 PM;
+    Version List=NAVGB9.00.00.45480;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 10551=rm;
+    CaptionML=[ENU=BACS Export;
+               ENG=BACS Export];
+    OnPreReport=VAR
+                  FileMgt@1040003 : Codeunit 419;
+                  ExpDialog@1040000 : Page 10553;
+                BEGIN
+                  IF ExportBACS THEN BEGIN
+                    ServerFilename := FileMgt.ServerTempFileName('txt');
+                    IF ServerFilename = '' THEN
+                      ERROR(Text1040018);
+                    IF ClientFile = '' THEN
+                      ClientFile := FileMgt.SaveFileDialog(Text1040026,ExtensionTxt,'');
+
+                    IF ISCLEAR(FSAuto) THEN
+                      CREATE(FSAuto,TRUE,TRUE);
+                    BACSFile.TEXTMODE(TRUE);
+                    BACSFile.WRITEMODE(TRUE);
+                    IF FILE.EXISTS(ClientFile) THEN BEGIN
+                      IF ExpDialog.RUNMODAL IN [ACTION::OK,ACTION::Yes] THEN BEGIN
+                        ExpDialog.GetSelectedOption(Selection);
+                        CLEAR(ExpDialog);
+                        CASE Selection OF
+                          Selection::Overwrite:
+                            Mode := Text1040019;
+                          Selection::Append:
+                            Mode := Text1040020;
+                        END;
+                        BACSFile.CREATE(ServerFilename);
+                      END ELSE
+                        ERROR('');
+                    END ELSE
+                      BACSFile.CREATE(ServerFilename);
+                  END;
+
+                  IF  ExportBACS THEN BEGIN
+                    Settings := STRSUBSTNO(Text1040021,ClientFile,FORMAT(TODAY),FORMAT(TIME),Mode)
+                  END ELSE
+                    Settings := Text1040022;
+                END;
+
+    OnPostReport=VAR
+                   FileMgt@1040000 : Codeunit 419;
+                 BEGIN
+                   IF ExportBACS THEN BEGIN
+                     BACSFile.CLOSE;
+                     IF PurchSetup."Import BACS Files" THEN BEGIN
+                       BACSRegister.GET(BACSManagement.GetRegisterNo);
+                       BACSRegister.ImportBACSFile(ServerFilename,FALSE);
+                       BACSRegister.MODIFY;
+                     END;
+                     PurchSetup.GET;
+                     CASE Selection OF
+                       Selection::Overwrite:
+                         FileMgt.DownloadToFile(ServerFilename,ClientFile);
+                       Selection::Append:
+                         FileMgt.AppendAllTextToClientFile(ServerFilename,ClientFile);
+                     END;
+                     MESSAGE(Text1040023);
+                     FILE.ERASE(ServerFilename);
+                     UpdateDefaultBACSFileName(ClientFile);
+                   END;
+                 END;
+
+  }
+  DATASET
+  {
+    { 7024;    ;DataItem;                    ;
+               DataItemTable=Table81;
+               DataItemTableView=SORTING(Journal Template Name,Journal Batch Name,Line No.)
+                                 WHERE(Bank Payment Type=CONST(BACS));
+               OnAfterGetRecord=BEGIN
+                                  TESTFIELD("Document No.");
+                                  TESTFIELD("Account Type","Account Type"::Vendor);
+                                  TESTFIELD("Account No.");
+                                  TESTFIELD("Bal. Account Type","Bal. Account Type"::"Bank Account");
+                                  TESTFIELD("Bal. Account No.");
+                                  TESTFIELD("Posting No. Series",'');
+                                  TESTFIELD("Currency Code",'');  // This might be changed to allow Euro
+                                  IF Amount < 0 THEN
+                                    FIELDERROR(
+                                      Amount,
+                                      STRSUBSTNO(
+                                        Text1040017,FIELDCAPTION("Bank Payment Type"),
+                                        FORMAT("Bank Payment Type")));
+                                  BankAccount.GET("Bal. Account No.");
+                                  BankAccount.TESTFIELD("Bank Branch No.");
+                                  BankAccount.TESTFIELD("Bank Account No.");
+                                  Vendor.GET("Gen. Journal Line"."Account No.");
+                                  TESTFIELD("BACS Account No.");
+                                  VendorBankAccount.GET("Account No.","BACS Account No.");
+                                  VendorBankAccount.TESTFIELD("Bank Branch No.");
+                                  VendorBankAccount.TESTFIELD("Bank Account No.");
+
+                                  IF ExportBACS THEN BEGIN
+                                    Line := FORMAT(COPYSTR(VendorBankAccount."Bank Branch No.",1,8),10);
+                                    Line := FORMAT(Line + COPYSTR(VendorBankAccount."Bank Account No.",1,8),20);
+                                    Line := FORMAT(Line + '0',23);
+                                    Line := FORMAT(Line + COPYSTR(Vendor.Name,1,18),43);
+                                    Line := FORMAT(Line + FORMAT("Amount (LCY)",0,'<Sign><Integer><Decimals,3>'),53);
+                                    IF VendorBankAccount."Reference No." <> '' THEN
+                                      Line := FORMAT(Line + COPYSTR(VendorBankAccount."Reference No.",1,18),77)
+                                    ELSE BEGIN
+                                      Reference := '';
+                                      IF "Applies-to Doc. No." <> '' THEN BEGIN
+                                        VendLedgEntry.SETCURRENTKEY("Document No.");
+                                        VendLedgEntry.SETRANGE("Document No.","Applies-to Doc. No.");
+                                        VendLedgEntry.SETRANGE("Document Type","Applies-to Doc. Type");
+                                        IF VendLedgEntry.FIND('=><') THEN
+                                          Reference := VendLedgEntry."External Document No.";
+                                        IF Reference = '' THEN
+                                          Reference := "Applies-to Doc. No.";
+                                      END;
+                                      IF Reference = '' THEN
+                                        Reference := "Document No.";
+                                      Line := FORMAT(Line + COPYSTR(Reference,1,18),77);
+                                    END;
+                                    Line := FORMAT(Line + COPYSTR(BankAccount."Bank Branch No.",1,8),87);
+                                    Line := FORMAT(Line + COPYSTR(BankAccount."Bank Account No.",1,8),97);
+                                    Line := FORMAT(Line + '0',100);
+                                    Line := Line + FORMAT(BankAccount.Name,18);
+                                    BACSFile.WRITE(Line);
+
+                                    BACSLedgEntry.INIT;
+                                    BACSLedgEntry."Bank Account No." := VendorBankAccount.Code;
+                                    BACSLedgEntry."Posting Date" := "Posting Date";
+                                    BACSLedgEntry."Document Type" := "Document Type";
+                                    BACSLedgEntry."Document No." := "Document No.";
+                                    BACSLedgEntry.Description := Description;
+                                    BACSLedgEntry."Bal. Account Type" := "Bal. Account Type";
+                                    BACSLedgEntry."Bal. Account No." := "Bal. Account No.";
+                                    BACSLedgEntry."Account Type" := "Account Type";
+                                    BACSLedgEntry."Account No." := "Account No.";
+                                    BACSLedgEntry."Entry Status" := BACSLedgEntry."Entry Status"::Exported;
+                                    BACSLedgEntry.Amount := Amount;
+                                    BACSLedgEntry."BACS Date" := "Posting Date";
+                                    BACSLedgEntry."Entry No." := "BACS Entry No.";
+                                    BACSManagement.SetGenJnlLine("Gen. Journal Line");
+                                    BACSManagement.InsertBACS(BACSLedgEntry);
+
+                                    "BACS Entry No." := BACSLedgEntry."Entry No.";
+                                    "Exported to Payment File" := TRUE;
+                                    MODIFY;
+                                  END;
+                                END;
+                                 }
+
+    { 2   ;1   ;Column  ;FORMAT_TODAY_0_4_   ;
+               SourceExpr=FORMAT(TODAY,0,4) }
+
+    { 3   ;1   ;Column  ;COMPANYNAME         ;
+               SourceExpr=COMPANYNAME }
+
+    { 4   ;1   ;Column  ;CurrReport_PAGENO   ;
+               SourceExpr=CurrReport.PAGENO }
+
+    { 6   ;1   ;Column  ;USERID              ;
+               SourceExpr=USERID }
+
+    { 8   ;1   ;Column  ;Settings            ;
+               SourceExpr=Settings }
+
+    { 9   ;1   ;Column  ;Gen__Journal_Line__Journal_Batch_Name_;
+               SourceExpr="Journal Batch Name" }
+
+    { 23  ;1   ;Column  ;Gen__Journal_Line__Journal_Template_Name_;
+               SourceExpr="Journal Template Name" }
+
+    { 7   ;1   ;Column  ;VendorBankAccount__Bank_Branch_No__;
+               SourceExpr=VendorBankAccount."Bank Branch No." }
+
+    { 11  ;1   ;Column  ;VendorBankAccount__Bank_Account_No__;
+               SourceExpr=VendorBankAccount."Bank Account No." }
+
+    { 13  ;1   ;Column  ;Vendor_Name         ;
+               SourceExpr=Vendor.Name }
+
+    { 15  ;1   ;Column  ;Gen__Journal_Line__Amount__LCY__;
+               SourceExpr="Amount (LCY)" }
+
+    { 17  ;1   ;Column  ;VendorBankAccount__Reference_No__;
+               SourceExpr=VendorBankAccount."Reference No." }
+
+    { 8309;1   ;Column  ;Gen__Journal_Line_Line_No_;
+               SourceExpr="Line No." }
+
+    { 1   ;1   ;Column  ;BACS_ExportCaption  ;
+               SourceExpr=BACS_ExportCaptionLbl }
+
+    { 5   ;1   ;Column  ;CurrReport_PAGENOCaption;
+               SourceExpr=CurrReport_PAGENOCaptionLbl }
+
+    { 19  ;1   ;Column  ;Gen__Journal_Line__Journal_Batch_Name_Caption;
+               SourceExpr=Gen__Journal_Line__Journal_Batch_Name_CaptionLbl }
+
+    { 22  ;1   ;Column  ;Gen__Journal_Line__Journal_Template_Name_Caption;
+               SourceExpr=FIELDCAPTION("Journal Template Name") }
+
+    { 10  ;1   ;Column  ;VendorBankAccount__Bank_Branch_No__Caption;
+               SourceExpr=VendorBankAccount__Bank_Branch_No__CaptionLbl }
+
+    { 12  ;1   ;Column  ;VendorBankAccount__Bank_Account_No__Caption;
+               SourceExpr=VendorBankAccount__Bank_Account_No__CaptionLbl }
+
+    { 14  ;1   ;Column  ;Vendor_NameCaption  ;
+               SourceExpr=Vendor_NameCaptionLbl }
+
+    { 16  ;1   ;Column  ;Gen__Journal_Line__Amount__LCY__Caption;
+               SourceExpr=FIELDCAPTION("Amount (LCY)") }
+
+    { 18  ;1   ;Column  ;VendorBankAccount__Reference_No__Caption;
+               SourceExpr=VendorBankAccount__Reference_No__CaptionLbl }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnOpenPage=BEGIN
+                   PurchSetup.GET;
+                   ClientFile := PurchSetup."BACS File Name";
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=[ENU=Options;
+                             ENG=Options] }
+
+      { 3   ;2   ;Field     ;
+                  Name=CreateBACSFile;
+                  CaptionML=[ENU=Create BACS File;
+                             ENG=Create BACS File];
+                  SourceExpr=ExportBACS }
+
+      { 4   ;2   ;Field     ;
+                  Name=ClientFile;
+                  CaptionML=[ENU=BACS FileName;
+                             ENG=BACS FileName];
+                  SourceExpr=ClientFile }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      BankAccount@1040000 : Record 270;
+      Vendor@1040001 : Record 23;
+      VendorBankAccount@1040002 : Record 288;
+      VendLedgEntry@1040003 : Record 25;
+      PurchSetup@1040004 : Record 312;
+      BACSRegister@1040024 : Record 10551;
+      BACSLedgEntry@1040005 : Record 10550;
+      BACSManagement@1040007 : Codeunit 10550;
+      FSAuto@1040025 : Automation "{F935DC20-1CF0-11D0-ADB9-00C04FD58A0B} 1.0:{0D43FE01-F093-11CF-8940-00A0C9054228}:'Windows Script Host Object Model'.FileSystemObject";
+      BACSFile@1040012 : File;
+      ServerFilename@1040008 : Text;
+      Line@1040009 : Text;
+      Settings@1040010 : Text;
+      Mode@1040011 : Text;
+      ExportBACS@1040013 : Boolean;
+      Selection@1040014 : 'Overwrite,Append';
+      Reference@1040015 : Text;
+      Text1040026@1040016 : TextConst 'ENU=Export BACS to ...;ENG=Export BACS to ...';
+      Text1040017@1040017 : TextConst 'ENU=must be positive when %1 is %2;ENG=must be positive when %1 is %2';
+      Text1040018@1040018 : TextConst 'ENU=BACS filename must be entered.;ENG=BACS filename must be entered.';
+      Text1040019@1040019 : TextConst 'ENU=overwriting existing file.;ENG=overwriting existing file.';
+      Text1040020@1040020 : TextConst 'ENU=appending to existing file.;ENG=appending to existing file.';
+      Text1040021@1040021 : TextConst 'ENU=File %1  exported on %2 at %3 %4;ENG=File %1  exported on %2 at %3 %4';
+      Text1040022@1040022 : TextConst 'ENU=No file exported.;ENG=No file exported.';
+      Text1040023@1040023 : TextConst 'ENU=Successfully exported.;ENG=Successfully exported.';
+      ClientFile@1040034 : Text;
+      BACS_ExportCaptionLbl@2034 : TextConst 'ENU=BACS Export;ENG=BACS Export';
+      CurrReport_PAGENOCaptionLbl@8565 : TextConst 'ENU=Page;ENG=Page';
+      Gen__Journal_Line__Journal_Batch_Name_CaptionLbl@6995 : TextConst 'ENU=Journal Batch;ENG=Journal Batch';
+      VendorBankAccount__Bank_Branch_No__CaptionLbl@5585 : TextConst 'ENU=Sort Code;ENG=Sort Code';
+      VendorBankAccount__Bank_Account_No__CaptionLbl@2722 : TextConst 'ENU=Account No.;ENG=Account No.';
+      Vendor_NameCaptionLbl@8151 : TextConst 'ENU=Account Name;ENG=Account Name';
+      VendorBankAccount__Reference_No__CaptionLbl@3590 : TextConst 'ENU=Reference;ENG=Reference';
+      ExtensionTxt@1040006 : TextConst '@@@={Locked};ENU=.txt;ENG=.txt';
+
+    LOCAL PROCEDURE UpdateDefaultBACSFileName@1040002(FileName@1040000 : Text);
+    BEGIN
+      PurchSetup.GET;
+      IF PurchSetup."BACS File Name" = FileName THEN
+        EXIT;
+      PurchSetup.VALIDATE("BACS File Name",FileName);
+      PurchSetup.MODIFY(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+    <?xml version="1.0" encoding="utf-8"?>
+<Report xmlns:rd="http://schemas.microsoft.com/SQLServer/reporting/reportdesigner" xmlns="http://schemas.microsoft.com/sqlserver/reporting/2010/01/reportdefinition">
+  <AutoRefresh>0</AutoRefresh>
+  <DataSources>
+    <DataSource Name="DataSource">
+      <ConnectionProperties>
+        <DataProvider>SQL</DataProvider>
+        <ConnectString />
+      </ConnectionProperties>
+      <rd:SecurityType>None</rd:SecurityType>
+      <rd:DataSourceID>837801c3-9fcb-471d-ab54-e259416a160f</rd:DataSourceID>
+    </DataSource>
+  </DataSources>
+  <DataSets>
+    <DataSet Name="DataSet_Result">
+      <Query>
+        <DataSourceName>DataSource</DataSourceName>
+        <CommandText />
+      </Query>
+      <Fields>
+        <Field Name="FORMAT_TODAY_0_4_">
+          <DataField>FORMAT_TODAY_0_4_</DataField>
+        </Field>
+        <Field Name="COMPANYNAME">
+          <DataField>COMPANYNAME</DataField>
+        </Field>
+        <Field Name="CurrReport_PAGENO">
+          <DataField>CurrReport_PAGENO</DataField>
+        </Field>
+        <Field Name="USERID">
+          <DataField>USERID</DataField>
+        </Field>
+        <Field Name="Settings">
+          <DataField>Settings</DataField>
+        </Field>
+        <Field Name="Gen__Journal_Line__Journal_Batch_Name_">
+          <DataField>Gen__Journal_Line__Journal_Batch_Name_</DataField>
+        </Field>
+        <Field Name="Gen__Journal_Line__Journal_Template_Name_">
+          <DataField>Gen__Journal_Line__Journal_Template_Name_</DataField>
+        </Field>
+        <Field Name="VendorBankAccount__Bank_Branch_No__">
+          <DataField>VendorBankAccount__Bank_Branch_No__</DataField>
+        </Field>
+        <Field Name="VendorBankAccount__Bank_Account_No__">
+          <DataField>VendorBankAccount__Bank_Account_No__</DataField>
+        </Field>
+        <Field Name="Vendor_Name">
+          <DataField>Vendor_Name</DataField>
+        </Field>
+        <Field Name="Gen__Journal_Line__Amount__LCY__">
+          <DataField>Gen__Journal_Line__Amount__LCY__</DataField>
+        </Field>
+        <Field Name="Gen__Journal_Line__Amount__LCY__Format">
+          <DataField>Gen__Journal_Line__Amount__LCY__Format</DataField>
+        </Field>
+        <Field Name="VendorBankAccount__Reference_No__">
+          <DataField>VendorBankAccount__Reference_No__</DataField>
+        </Field>
+        <Field Name="Gen__Journal_Line_Line_No_">
+          <DataField>Gen__Journal_Line_Line_No_</DataField>
+        </Field>
+        <Field Name="BACS_ExportCaption">
+          <DataField>BACS_ExportCaption</DataField>
+        </Field>
+        <Field Name="CurrReport_PAGENOCaption">
+          <DataField>CurrReport_PAGENOCaption</DataField>
+        </Field>
+        <Field Name="Gen__Journal_Line__Journal_Batch_Name_Caption">
+          <DataField>Gen__Journal_Line__Journal_Batch_Name_Caption</DataField>
+        </Field>
+        <Field Name="Gen__Journal_Line__Journal_Template_Name_Caption">
+          <DataField>Gen__Journal_Line__Journal_Template_Name_Caption</DataField>
+        </Field>
+        <Field Name="VendorBankAccount__Bank_Branch_No__Caption">
+          <DataField>VendorBankAccount__Bank_Branch_No__Caption</DataField>
+        </Field>
+        <Field Name="VendorBankAccount__Bank_Account_No__Caption">
+          <DataField>VendorBankAccount__Bank_Account_No__Caption</DataField>
+        </Field>
+        <Field Name="Vendor_NameCaption">
+          <DataField>Vendor_NameCaption</DataField>
+        </Field>
+        <Field Name="Gen__Journal_Line__Amount__LCY__Caption">
+          <DataField>Gen__Journal_Line__Amount__LCY__Caption</DataField>
+        </Field>
+        <Field Name="VendorBankAccount__Reference_No__Caption">
+          <DataField>VendorBankAccount__Reference_No__Caption</DataField>
+        </Field>
+      </Fields>
+      <rd:DataSetInfo>
+        <rd:DataSetName>DataSet</rd:DataSetName>
+        <rd:SchemaPath>Report.xsd</rd:SchemaPath>
+        <rd:TableName>Result</rd:TableName>
+      </rd:DataSetInfo>
+    </DataSet>
+  </DataSets>
+  <ReportSections>
+    <ReportSection>
+      <Body>
+        <ReportItems>
+          <Tablix Name="Table1">
+            <TablixBody>
+              <TablixColumns>
+                <TablixColumn>
+                  <Width>1.925cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.8cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.95cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>4.725cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.925cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.07937cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.07937cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.07937cm</Width>
+                </TablixColumn>
+              </TablixColumns>
+              <TablixRows>
+                <TablixRow>
+                  <Height>0.846cm</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="VendorBankAccount__Bank_Branch_No__Caption">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!VendorBankAccount__Bank_Branch_No__Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>24</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>0.225cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="VendorBankAccount__Bank_Account_No__Caption">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!VendorBankAccount__Bank_Account_No__Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>23</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>0.225cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Gen__Journal_Line__Amount__LCY__Caption">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!Gen__Journal_Line__Amount__LCY__Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Right</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>21</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>0.15cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Vendor_NameCaption">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!Vendor_NameCaption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>20</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>0.15cm</PaddingLeft>
+                            <PaddingRight>0.225cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="VendorBankAccount__Reference_No__Caption">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!VendorBankAccount__Reference_No__Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>19</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>0.225cm</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="FORMAT_TODAY_0_4_">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!FORMAT_TODAY_0_4_.Value</Value>
+                                  <Style>
+                                    <Color>#ff0000</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>18</ZIndex>
+                          <Style>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Gen__Journal_Line__Journal_Template_Name_Caption">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Gen__Journal_Line__Journal_Template_Name_Caption.Value</Value>
+                                  <Style>
+                                    <Color>#ff0000</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>17</ZIndex>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="textbox3">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>textbox3</rd:DefaultName>
+                          <ZIndex>16</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+                <TablixRow>
+                  <Height>0.423cm</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Date">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!FORMAT_TODAY_0_4_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Color>Red</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>15</ZIndex>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>0.225cm</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="COMPANYNAME">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!COMPANYNAME.Value</Value>
+                                  <Style>
+                                    <Color>#ff0000</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>14</ZIndex>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Gen__Journal_Line__Journal_Batch_Name_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Gen__Journal_Line__Journal_Batch_Name_.Value</Value>
+                                  <Style>
+                                    <Color>#ff0000</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>12</ZIndex>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Gen__Journal_Line__Journal_Template_Name_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Gen__Journal_Line__Journal_Template_Name_.Value</Value>
+                                  <Style>
+                                    <Color>#ff0000</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>11</ZIndex>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="BACS_ExportCaption">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!BACS_ExportCaption.Value</Value>
+                                  <Style>
+                                    <Color>#ff0000</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>10</ZIndex>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="CurrReport_PAGENOCaption">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!CurrReport_PAGENOCaption.Value</Value>
+                                  <Style>
+                                    <Color>#ff0000</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>9</ZIndex>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Settings">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Settings.Value</Value>
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <Style>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Gen__Journal_Line__Journal_Batch_Name_Caption">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Gen__Journal_Line__Journal_Batch_Name_Caption.Value</Value>
+                                  <Style>
+                                    <Color>#ff0000</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>7</ZIndex>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+                <TablixRow>
+                  <Height>0.423cm</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="VendorBankAccount__Bank_Branch_No__">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!VendorBankAccount__Bank_Branch_No__.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>6</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>0.225cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="VendorBankAccount__Bank_Account_No__">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!VendorBankAccount__Bank_Account_No__.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>5</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.225cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Gen__Journal_Line__Amount__LCY__">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Gen__Journal_Line__Amount__LCY__.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!Gen__Journal_Line__Amount__LCY__Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>3</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>0.15cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Vendor_Name">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Vendor_Name.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>2</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.15cm</PaddingLeft>
+                            <PaddingRight>0.225cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="VendorBankAccount__Reference_No__">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!VendorBankAccount__Reference_No__.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>1</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.225cm</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="textbox16">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>textbox16</rd:DefaultName>
+                          <Style>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                        <ColSpan>3</ColSpan>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell />
+                    <TablixCell />
+                  </TablixCells>
+                </TablixRow>
+              </TablixRows>
+            </TablixBody>
+            <TablixColumnHierarchy>
+              <TablixMembers>
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+              </TablixMembers>
+            </TablixColumnHierarchy>
+            <TablixRowHierarchy>
+              <TablixMembers>
+                <TablixMember>
+                  <KeepWithGroup>After</KeepWithGroup>
+                  <RepeatOnNewPage>true</RepeatOnNewPage>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+                <TablixMember>
+                  <KeepWithGroup>After</KeepWithGroup>
+                  <RepeatOnNewPage>true</RepeatOnNewPage>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+                <TablixMember>
+                  <Group Name="Table1_Details_Group">
+                    <DataElementName>Detail</DataElementName>
+                  </Group>
+                  <TablixMembers>
+                    <TablixMember />
+                  </TablixMembers>
+                  <DataElementName>Detail_Collection</DataElementName>
+                  <DataElementOutput>Output</DataElementOutput>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+              </TablixMembers>
+            </TablixRowHierarchy>
+            <DataSetName>DataSet_Result</DataSetName>
+            <Width>12.56311cm</Width>
+          </Tablix>
+        </ReportItems>
+        <Height>1.692cm</Height>
+      </Body>
+      <Width>18.15cm</Width>
+      <Page>
+        <PageHeader>
+          <Height>2.961cm</Height>
+          <PrintOnFirstPage>true</PrintOnFirstPage>
+          <PrintOnLastPage>true</PrintOnLastPage>
+          <ReportItems>
+            <Textbox Name="PageNumberTextBox">
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=Globals!PageNumber</Value>
+                      <Style>
+                        <FontSize>7pt</FontSize>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                  <Style>
+                    <TextAlign>Right</TextAlign>
+                  </Style>
+                </Paragraph>
+              </Paragraphs>
+              <Top>0.423cm</Top>
+              <Left>17.7cm</Left>
+              <Height>0.423cm</Height>
+              <ZIndex>10</ZIndex>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+            <Textbox Name="UserIdTextBox">
+              <CanGrow>true</CanGrow>
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=User!UserID</Value>
+                      <Style>
+                        <FontSize>7pt</FontSize>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                  <Style>
+                    <TextAlign>Right</TextAlign>
+                  </Style>
+                </Paragraph>
+              </Paragraphs>
+              <Top>0.846cm</Top>
+              <Left>14.9cm</Left>
+              <Height>0.423cm</Height>
+              <ZIndex>9</ZIndex>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+            <Textbox Name="ExecutionTimeTextBox">
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=ReportItems!FORMAT_TODAY_0_4_.Value</Value>
+                      <Style>
+                        <FontSize>7pt</FontSize>
+                        <Format>D</Format>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                  <Style>
+                    <TextAlign>Right</TextAlign>
+                  </Style>
+                </Paragraph>
+              </Paragraphs>
+              <Left>12.69841cm</Left>
+              <Height>0.423cm</Height>
+              <ZIndex>8</ZIndex>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+            <Textbox Name="COMPANYNAME1">
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=ReportItems!COMPANYNAME.Value</Value>
+                      <Style>
+                        <FontSize>7pt</FontSize>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                </Paragraph>
+              </Paragraphs>
+              <Top>0.423cm</Top>
+              <Height>0.423cm</Height>
+              <Width>7.5cm</Width>
+              <ZIndex>7</ZIndex>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+            <Textbox Name="Settings1">
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=ReportItems!Settings.Value</Value>
+                      <Style>
+                        <FontSize>7pt</FontSize>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                </Paragraph>
+              </Paragraphs>
+              <Top>2.538cm</Top>
+              <Width>18cm</Width>
+              <ZIndex>6</ZIndex>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+            <Textbox Name="Gen__Journal_Line__Journal_Batch_Name_1">
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=ReportItems!Gen__Journal_Line__Journal_Batch_Name_.Value</Value>
+                      <Style>
+                        <FontSize>7pt</FontSize>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                </Paragraph>
+              </Paragraphs>
+              <Top>1.692cm</Top>
+              <Left>3.15cm</Left>
+              <Height>0.423cm</Height>
+              <Width>1.5cm</Width>
+              <ZIndex>5</ZIndex>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+            <Textbox Name="Gen__Journal_Line__Journal_Template_Name_1">
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=ReportItems!Gen__Journal_Line__Journal_Template_Name_.Value</Value>
+                      <Style>
+                        <FontSize>7pt</FontSize>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                </Paragraph>
+              </Paragraphs>
+              <Top>1.269cm</Top>
+              <Left>3.15cm</Left>
+              <Height>0.423cm</Height>
+              <Width>1.5cm</Width>
+              <ZIndex>4</ZIndex>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+            <Textbox Name="BACS_ExportCaption1">
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=ReportItems!BACS_ExportCaption.Value</Value>
+                      <Style>
+                        <FontSize>8pt</FontSize>
+                        <FontWeight>Bold</FontWeight>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                </Paragraph>
+              </Paragraphs>
+              <Height>0.423cm</Height>
+              <Width>7.5cm</Width>
+              <ZIndex>3</ZIndex>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+            <Textbox Name="CurrReport_PAGENOCaption1">
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=ReportItems!CurrReport_PAGENOCaption.Value</Value>
+                      <Style>
+                        <FontSize>7pt</FontSize>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                </Paragraph>
+              </Paragraphs>
+              <Top>0.423cm</Top>
+              <Left>16.95cm</Left>
+              <Height>0.423cm</Height>
+              <Width>0.75cm</Width>
+              <ZIndex>2</ZIndex>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+            <Textbox Name="Gen__Journal_Line__Journal_Batch_Name_Caption1">
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=ReportItems!Gen__Journal_Line__Journal_Batch_Name_Caption.Value</Value>
+                      <Style>
+                        <FontSize>7pt</FontSize>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                </Paragraph>
+              </Paragraphs>
+              <Top>1.692cm</Top>
+              <Height>0.423cm</Height>
+              <Width>3cm</Width>
+              <ZIndex>1</ZIndex>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+            <Textbox Name="Gen__Journal_Line__Journal_Template_Name_Caption1">
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=ReportItems!Gen__Journal_Line__Journal_Template_Name_Caption.Value</Value>
+                      <Style>
+                        <FontSize>7pt</FontSize>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                </Paragraph>
+              </Paragraphs>
+              <Top>1.269cm</Top>
+              <Height>0.423cm</Height>
+              <Width>3cm</Width>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+          </ReportItems>
+        </PageHeader>
+        <PageHeight>29.7cm</PageHeight>
+        <PageWidth>21cm</PageWidth>
+        <InteractiveHeight>11in</InteractiveHeight>
+        <InteractiveWidth>8.5in</InteractiveWidth>
+        <LeftMargin>1.5cm</LeftMargin>
+        <TopMargin>2cm</TopMargin>
+        <BottomMargin>2cm</BottomMargin>
+      </Page>
+    </ReportSection>
+  </ReportSections>
+  <Code>Public Function BlankZero(ByVal Value As Decimal)
+    if Value = 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankPos(ByVal Value As Decimal)
+    if Value &gt; 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankZeroAndPos(ByVal Value As Decimal)
+    if Value &gt;= 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankNeg(ByVal Value As Decimal)
+    if Value &lt; 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankNegAndZero(ByVal Value As Decimal)
+    if Value &lt;= 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+</Code>
+  <Language>=User!Language</Language>
+  <ConsumeContainerWhitespace>true</ConsumeContainerWhitespace>
+  <rd:ReportUnitType>Invalid</rd:ReportUnitType>
+  <rd:ReportID>62d9e54e-02ad-40fa-903e-60648832d7a0</rd:ReportID>
+</Report>
+    END_OF_RDLDATA
+  }
+}
+

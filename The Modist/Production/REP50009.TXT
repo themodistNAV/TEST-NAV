@@ -1,0 +1,455 @@
+OBJECT Report 50009 Create Exchange Orders
+{
+  OBJECT-PROPERTIES
+  {
+    Date=17/12/18;
+    Time=[ 1:56:49 PM];
+    Modified=Yes;
+    Version List=TM0020,TM0004;
+  }
+  PROPERTIES
+  {
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  WITH SalesInvoiceHeader DO BEGIN
+                    IF (OrderNo = '') OR ("No." = '' ) THEN
+                      ERROR(Text000);
+
+                    IF GUIALLOWED THEN
+                      IF NOT CONFIRM(STRSUBSTNO(Text001,OrderNo)) THEN
+                        EXIT;
+
+                    ModistSetup.GET;
+                    ModistSetup.TESTFIELD("Exchange Gen. Bus. Post. Grp.");
+
+                    TempRetRelDoc.RESET;
+                    TempRetRelDoc.DELETEALL;
+                    TmpSalesInvoiceLine.RESET;
+                    TmpSalesInvoiceLine.DELETEALL;
+
+                    GetSalesInvoiceLines;
+                    IF AllItemsReturned THEN
+                      ERROR(Text002);
+
+                    //1. Create Sales Return Order
+                    CLEAR(SalesHeader);
+                    SalesHeader.INIT;
+                    SalesHeader.VALIDATE("Document Type",SalesHeader."Document Type"::"Return Order");
+                    IF ReturnDocumentNo <> '' THEN BEGIN
+                      SalesHeader.VALIDATE("No.",ReturnDocumentNo);
+                      //SalesHeader."Internet Order Reference" := ReturnDocumentNo;
+                    END;
+                    SalesHeader.INSERT(TRUE);
+                    SalesHeader.VALIDATE("Sell-to Customer No.","Sell-to Customer No.");
+                    //SalesHeader.VALIDATE("Posting Date","Posting Date");
+                    SalesHeader.VALIDATE("Posting Date",TODAY);
+                    SalesHeader.VALIDATE("External Document No.","External Document No.");
+                    SalesHeader.VALIDATE("Farfetch Order","Farfetch Order");
+                    //DOC TM0020.01 AW 13/12/17 -
+                    //SalesHeader.VALIDATE("Applies-to Doc. Type",SalesHeader."Applies-to Doc. Type"::Invoice);
+                    //SalesHeader.VALIDATE("Applies-to Doc. No.","No.");
+                    //DOC TM0020.01 AW 13/12/17 +
+                    SalesHeader.VALIDATE("Exahange Order",CreateSalesOrder);
+                    SalesHeader.VALIDATE("Origianl Order No.","Order No.");
+
+                    //DOC TM0020.02 AW 13/12/17 -
+                  //  IF ("Original Order No." = '') AND ("Origianl Order No." = '') THEN
+                  //    SalesHeader."Original Order No." := "Order No."
+                  //  ELSE
+                  //    SalesHeader."Original Order No." := "Original Order No.";
+                  //  //DOC TM0020.02 AW 13/12/17 +
+
+                    SalesHeader."Order GuID" := "Order GuID";
+                    IF CreateSalesOrder THEN
+                      SalesHeader.VALIDATE("Gen. Bus. Posting Group",ModistSetup."Exchange Gen. Bus. Post. Grp.");
+                    SalesHeader.VALIDATE("Return Type",ReturnType);
+                    SalesHeader.VALIDATE("Currency Code","Currency Code");
+                    SalesHeader.VALIDATE("VAT Bus. Posting Group","VAT Bus. Posting Group");
+                    SalesHeader.VALIDATE("Ship-to Country/Region Code","Ship-to Country/Region Code");
+                    IF SalesHeader."Farfetch Order" THEN
+                      SalesHeader.VALIDATE("Payment Method Code","Payment Method Code")
+                    ELSE
+                      SalesHeader."Payment Method Code" := "Payment Method Code";
+                    SalesHeader.MODIFY(TRUE);
+                    CreateSalesLines(SalesHeader);
+
+                    ReleaseSalesDocument.RUN(SalesHeader);
+                    IF AutoCreateWarehouseReceipt THEN
+                      GetSourceDocInbound.CreateFromSalesReturnOrderHideDialog(SalesHeader);
+                    IF AutoSendToWMS THEN BEGIN
+                      WarehouseReceiptLine.RESET;
+                      WarehouseReceiptLine.SETRANGE("Source Document",WarehouseReceiptLine."Source Document"::"Sales Return Order");
+                      WarehouseReceiptLine.SETRANGE("Source No.",SalesHeader."No.");
+                      WarehouseReceiptLine.FINDFIRST;
+                      WarehouseReceiptHeader.GET(WarehouseReceiptLine."No.");
+                      IntegrationProcessProcessor.AddReturnOrderASN(WarehouseReceiptHeader);
+                      WarehouseReceiptHeader."Sent to WMS" := TRUE;
+                      WarehouseReceiptHeader."Vendor Shipment No." := OrderNo;
+                      WarehouseReceiptHeader.MODIFY;
+                    END;
+
+                    TempRetRelDoc."Entry No." := 0;
+                    TempRetRelDoc."Document Type" := TempRetRelDoc."Document Type"::"Sales Return Order";
+                    TempRetRelDoc."No." := SalesHeader."No.";
+                    TempRetRelDoc.INSERT;
+
+                    //2. Create Sales Order if it is an exchange
+                    IF CreateSalesOrder THEN BEGIN
+                      CLEAR(SalesHeader);
+                      SalesHeader.INIT;
+                      SalesHeader.VALIDATE("Document Type",SalesHeader."Document Type"::Order);
+                      SalesHeader.INSERT(TRUE);
+                      SalesHeader.VALIDATE("Sell-to Customer No.","Sell-to Customer No.");
+                      //SalesHeader.VALIDATE("Posting Date","Posting Date");
+                      SalesHeader.VALIDATE("Posting Date",TODAY);
+                      SalesHeader.VALIDATE("External Document No.","External Document No.");
+                      SalesHeader.VALIDATE("Exahange Order",CreateSalesOrder);
+                      SalesHeader.VALIDATE("Origianl Order No.","Order No.");
+                      SalesHeader.VALIDATE("Farfetch Order","Farfetch Order");
+
+                      //DOC TM0020.02 AW 13/12/17 -
+                  //    IF ("Original Order No." = '') AND ("Origianl Order No." = '') THEN
+                  //      SalesHeader."Original Order No." := "Order No."
+                  //    ELSE
+                  //      SalesHeader."Original Order No." := "Original Order No.";
+                      //DOC TM0020.02 AW 13/12/17 +
+
+                      SalesHeader.VALIDATE("Gen. Bus. Posting Group",ModistSetup."Exchange Gen. Bus. Post. Grp.");
+                      SalesHeader.VALIDATE("Return Type",ReturnType);
+                      SalesHeader.VALIDATE("Currency Code","Currency Code");
+                      SalesHeader.VALIDATE("VAT Bus. Posting Group","VAT Bus. Posting Group");
+                      SalesHeader.VALIDATE("Ship-to Country/Region Code","Ship-to Country/Region Code");
+                      IF NOT SalesHeader."Farfetch Order" THEN
+                        SalesHeader.VALIDATE("Payment Method Code",'')
+                      ELSE
+                        SalesHeader.VALIDATE("Payment Method Code","Payment Method Code");
+                      SalesHeader.MODIFY(TRUE);
+                      CreateSalesLines(SalesHeader);
+
+                      TempRetRelDoc."Entry No." := 1;
+                      TempRetRelDoc."Document Type" := TempRetRelDoc."Document Type"::"Sales Order";
+                      TempRetRelDoc."No." := SalesHeader."No.";
+                      TempRetRelDoc.INSERT;
+                    END;
+                  END;
+
+                   IF GUIALLOWED THEN BEGIN
+                    TempRetRelDoc.RESET;
+                    IF NOT TempRetRelDoc.ISEMPTY THEN
+                      PAGE.RUN(PAGE::"Returns-Related Documents",TempRetRelDoc);
+                   END;
+                END;
+
+  }
+  DATASET
+  {
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      OnInit=BEGIN
+               FromCompanyName := COMPANYNAME;
+             END;
+
+      OnOpenPage=BEGIN
+                   //ClearAllVars;
+                   FromCompanyName := COMPANYNAME;
+                   AutoCreateWarehouseReceipt := TRUE;
+                   AutoSendToWMS := TRUE;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1000000000;;Container;
+                  Name=ContentArea1;
+                  ContainerType=ContentArea }
+
+      { 1000000001;1;Group  ;
+                  Name=Options;
+                  GroupType=Group }
+
+      { 1000000005;2;Group  ;
+                  CaptionML=ENU=Original Order...;
+                  GroupType=Group }
+
+      { 1000000010;3;Field  ;
+                  CaptionML=ENU=From Company Name;
+                  SourceExpr=FromCompanyName;
+                  TableRelation=Company }
+
+      { 1000000002;3;Field  ;
+                  CaptionML=ENU=Order No.;
+                  SourceExpr=OrderNo;
+                  OnValidate=BEGIN
+                               SetSalesInvoice(OrderNo);
+                             END;
+
+                  OnLookup=BEGIN
+                             IF OrderNo = '' THEN
+                               CLEAR(SalesInvoiceHeader);
+                             IF FromCompanyName <> COMPANYNAME THEN
+                               SalesInvoiceHeader.CHANGECOMPANY(FromCompanyName);
+                             SalesInvoiceHeader.SETCURRENTKEY("Order No.");
+                             IF PAGE.RUNMODAL(0,SalesInvoiceHeader) = ACTION::LookupOK THEN BEGIN
+                               OrderNo := SalesInvoiceHeader."Order No.";
+                               SetCustomerInfo(SalesInvoiceHeader);
+                             END;
+                           END;
+
+                  ShowMandatory=true }
+
+      { 1000000009;3;Field  ;
+                  CaptionML=ENU=Invoice No.;
+                  SourceExpr=InvoiceNo;
+                  Editable=FALSE }
+
+      { 1000000007;3;Field  ;
+                  CaptionML=ENU=Customer No.;
+                  SourceExpr=CustomerNo;
+                  Editable=FALSE }
+
+      { 1000000008;3;Field  ;
+                  CaptionML=ENU=Customer Name;
+                  SourceExpr=CustomerName;
+                  Editable=FALSE }
+
+      { 1000000003;3;Field  ;
+                  CaptionML=ENU=Return Type;
+                  SourceExpr=ReturnType }
+
+      { 1000000011;3;Field  ;
+                  CaptionML=ENU=Create Whse. Receipt;
+                  SourceExpr=AutoCreateWarehouseReceipt }
+
+      { 1000000012;3;Field  ;
+                  CaptionML=ENU=Send to WMS?;
+                  SourceExpr=AutoSendToWMS }
+
+      { 1000000006;2;Group  ;
+                  CaptionML=ENU=Exchange...;
+                  GroupType=Group }
+
+      { 1000000004;3;Field  ;
+                  CaptionML=ENU=Create Sales Order;
+                  SourceExpr=CreateSalesOrder }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      SalesInvoiceHeader@1000000003 : Record 112;
+      SalesInvoiceLine@1000000013 : Record 113;
+      TmpSalesInvoiceLine@1000000007 : TEMPORARY Record 113;
+      ReturnReceiptLine@1000000012 : Record 6661;
+      SalesHeader@1000000006 : Record 36;
+      SalesLine@1000000018 : Record 37;
+      SalesReturnLine@1000000020 : Record 37;
+      TempRetRelDoc@1000000009 : TEMPORARY Record 6670;
+      ModistSetup@1000000016 : Record 50000;
+      WarehouseReceiptHeader@1000000030 : Record 7316;
+      ReturnReason@1000100027 : Record 6635;
+      WarehouseReceiptLine@1000000029 : Record 7317;
+      GLAccount@1000000031 : Record 15;
+      CopyDocMgt@1000000008 : Codeunit 6620;
+      GetSourceDocInbound@1000000027 : Codeunit 5751;
+      ReleaseSalesDocument@1000000026 : Codeunit 414;
+      IntegrationProcessProcessor@1000000028 : Codeunit 50005;
+      FromCompanyName@1000000022 : Text;
+      OrderNo@1000000000 : Code[20];
+      CustomerNo@1000000014 : Code[20];
+      InvoiceNo@1000000017 : Code[20];
+      ReturnDocumentNo@1001000026 : Code[20];
+      ReturnReasonCode@1200000028 : Code[20];
+      CustomerName@1000000015 : Text;
+      ReturnType@1000000001 : 'Normal,Blind';
+      DocType@1000000010 : 'Quote,Blanket Order,Order,Invoice,Return Order,Credit Memo,Posted Shipment,Posted Invoice,Posted Return Receipt,Posted Credit Memo';
+      CreateSalesOrder@1000000002 : Boolean;
+      SameItem@1000000004 : Boolean;
+      Text000@1000000005 : TextConst 'ENU=Please select Order No.';
+      Text001@1000000011 : TextConst 'ENU=Are you sure you want to create Return for Order No. %1?';
+      Text002@1000000019 : TextConst 'ENU=All Items are returned for this order OR Open Sales Return Order(s) for this order.';
+      Text003@1000000021 : TextConst 'ENU=Order No. %1 is not posted yet or Cannot be found. Please post it from Sales Order Page.';
+      DifferentCompany@1000000023 : Boolean;
+      AutoCreateWarehouseReceipt@1000000024 : Boolean;
+      AutoSendToWMS@1000000025 : Boolean;
+
+    PROCEDURE SetSalesInvoice@1000000002(pOrderNo@1000000000 : Code[20]);
+    BEGIN
+      CLEAR(SalesInvoiceHeader);
+      IF FromCompanyName <> COMPANYNAME THEN
+        SalesInvoiceHeader.CHANGECOMPANY(FromCompanyName);
+
+      SalesInvoiceHeader.SETCURRENTKEY("Order No.");
+      SalesInvoiceHeader.SETRANGE("Order No.",pOrderNo);
+      IF SalesInvoiceHeader.COUNT > 1 THEN BEGIN
+        //IF PAGE.RUNMODAL(0,SalesInvoiceHeader) = ACTION::LookupOK THEN
+        SalesInvoiceHeader.FINDFIRST;
+          OrderNo := SalesInvoiceHeader."Order No.";
+      END ELSE IF SalesInvoiceHeader.FINDLAST THEN
+        OrderNo := SalesInvoiceHeader."Order No.";
+
+      IF SalesInvoiceHeader."No." = '' THEN
+        ERROR(Text003,pOrderNo);
+      SetCustomerInfo(SalesInvoiceHeader);
+    END;
+
+    LOCAL PROCEDURE GetSalesInvoiceLines@1000000011();
+    VAR
+      lReturnedQty@1000000001 : Decimal;
+    BEGIN
+      WITH SalesInvoiceHeader DO BEGIN
+        lReturnedQty := 0;
+        SalesInvoiceLine.RESET;
+        IF FromCompanyName <> COMPANYNAME THEN BEGIN
+          SalesInvoiceLine.CHANGECOMPANY(FromCompanyName);
+          ReturnReceiptLine.CHANGECOMPANY(FromCompanyName);
+        END;
+        SalesInvoiceLine.SETRANGE("Document No.","No.");
+        SalesInvoiceLine.SETFILTER("No.",'<>%1','');
+        IF SalesInvoiceLine.FINDSET THEN BEGIN
+          ReturnReceiptLine.RESET;
+          IF FromCompanyName <> COMPANYNAME THEN BEGIN
+            ReturnReceiptLine.CHANGECOMPANY(FromCompanyName);
+          END;
+          ReturnReceiptLine.SETCURRENTKEY("Origianl Order No.","Exchange Order");
+          ReturnReceiptLine.SETRANGE("Origianl Order No.","Order No.");
+          REPEAT
+            lReturnedQty := 0;
+            TmpSalesInvoiceLine.INIT;
+            TmpSalesInvoiceLine := SalesInvoiceLine;
+            TmpSalesInvoiceLine.INSERT;
+            {
+            ReturnReceiptLine.SETRANGE(Type,SalesInvoiceLine.Type);
+            ReturnReceiptLine.SETRANGE("No.",SalesInvoiceLine."No.");
+            ReturnReceiptLine.SETRANGE("Variant Code",SalesInvoiceLine."Variant Code");
+            IF ReturnReceiptLine.FINDSET THEN BEGIN
+              REPEAT
+                lReturnedQty += ReturnReceiptLine.Quantity;
+              UNTIL ReturnReceiptLine.NEXT=0;
+            END;
+            TmpSalesInvoiceLine.Quantity := SalesInvoiceLine.Quantity - lReturnedQty;
+            IF (TmpSalesInvoiceLine.Quantity > 0) THEN //OR (TmpSalesInvoiceLine.Type = TmpSalesInvoiceLine.Type::"G/L Account") THEN
+              TmpSalesInvoiceLine.INSERT;
+            }
+          UNTIL SalesInvoiceLine.NEXT=0;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE SetCustomerInfo@1000000000(pSalesInvoiceHeader@1000000000 : Record 112);
+    BEGIN
+      CustomerNo := pSalesInvoiceHeader."Bill-to Customer No.";
+      CustomerName := pSalesInvoiceHeader."Bill-to Name";
+      InvoiceNo := pSalesInvoiceHeader."No.";
+    END;
+
+    LOCAL PROCEDURE CreateSalesLines@1000000003(pSalesHeader@1000000000 : Record 36);
+    VAR
+      lLineNo@1000000001 : Integer;
+      lCreateLine@1000000002 : Boolean;
+    BEGIN
+      WITH  pSalesHeader DO BEGIN
+        TmpSalesInvoiceLine.RESET;
+        IF TmpSalesInvoiceLine.FINDSET THEN BEGIN
+          lCreateLine := TRUE;
+          SalesLine.INIT;
+          SalesLine.VALIDATE("Document Type","Document Type");
+          SalesLine.VALIDATE("Document No.","No.");
+          REPEAT
+            lCreateLine := TRUE;
+            IF TmpSalesInvoiceLine.Type = TmpSalesInvoiceLine.Type::"G/L Account" THEN BEGIN
+              GLAccount.GET(TmpSalesInvoiceLine."No.");
+              IF "Document Type" = "Document Type"::"Return Order" THEN
+                lCreateLine := (NOT GLAccount."Exclude from Refund");
+            END;
+            SalesLine.INIT;
+            SalesLine.VALIDATE("Line No.",TmpSalesInvoiceLine."Line No.");
+            SalesLine.VALIDATE(Type,TmpSalesInvoiceLine.Type);
+            SalesLine.VALIDATE("No.",TmpSalesInvoiceLine."No.");
+            IF SalesLine."Document Type" = SalesLine."Document Type"::"Return Order" THEN
+              SalesLine.VALIDATE("Variant Code",TmpSalesInvoiceLine."Variant Code");
+            SalesLine.Description := TmpSalesInvoiceLine.Description;
+            SalesLine.VALIDATE("Location Code",TmpSalesInvoiceLine."Location Code");
+            SalesLine.VALIDATE(Quantity,TmpSalesInvoiceLine.Quantity);
+            SalesLine.VALIDATE("Unit Price",TmpSalesInvoiceLine."Unit Price");
+            SalesLine.VALIDATE("Line Discount %",TmpSalesInvoiceLine."Line Discount %");
+            SalesLine.VALIDATE("Main Line No.",TmpSalesInvoiceLine."Main Line No.");
+            SalesLine.VALIDATE("Is Returnable",TmpSalesInvoiceLine."Is Returnable");
+            SalesLine."Return Reason Code" := ReturnReasonCode;
+            IF CreateSalesOrder THEN BEGIN
+              SalesLine.VALIDATE("Gen. Bus. Posting Group",ModistSetup."Exchange Gen. Bus. Post. Grp.");
+              lCreateLine := TRUE;
+            END;
+            IF lCreateLine THEN
+              SalesLine.INSERT(TRUE);
+          UNTIL TmpSalesInvoiceLine.NEXT=0;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE AllItemsReturned@1000000005() : Boolean;
+    BEGIN
+      TmpSalesInvoiceLine.RESET;
+      TmpSalesInvoiceLine.SETRANGE(Type,TmpSalesInvoiceLine.Type::Item);
+      TmpSalesInvoiceLine.SETFILTER(Quantity,'>%1',0);
+      EXIT(TmpSalesInvoiceLine.ISEMPTY);
+    END;
+
+    LOCAL PROCEDURE ClearAllVars@1000000001();
+    BEGIN
+      CustomerName := '';
+      CustomerNo := '';
+      OrderNo := '';
+      InvoiceNo := '';
+    END;
+
+    PROCEDURE SetAutoCreateWhseRcpt@1000000004(pSetAutoCreateWhseRcpt@1000000000 : Boolean);
+    BEGIN
+      AutoCreateWarehouseReceipt := pSetAutoCreateWhseRcpt;
+    END;
+
+    PROCEDURE SetReturnOrderNo@1000000006(pDocumentNo@1000000000 : Code[20]);
+    BEGIN
+      ReturnDocumentNo := pDocumentNo;
+    END;
+
+    PROCEDURE SetReturnReasonCode@1000000007(pReturnReasonCode@1000000000 : Code[20]);
+    BEGIN
+      ReturnReasonCode := pReturnReasonCode;
+      IF NOT ReturnReason.GET(ReturnReason) THEN BEGIN
+        ReturnReason.INIT;
+        ReturnReason.Code := COPYSTR(ReturnReasonCode,1,9);
+        ReturnReason.Description := ReturnReasonCode;
+        IF ReturnReason.INSERT THEN;
+      END;
+    END;
+
+    PROCEDURE SetAutoSendToWMS@1000000008(pSetAutoSentToWMS@1000000000 : Boolean);
+    BEGIN
+      AutoSendToWMS := pSetAutoSentToWMS;
+    END;
+
+    PROCEDURE SetFromCompanyName@1000000009(pCompanyName@1000000000 : Text);
+    BEGIN
+      FromCompanyName := pCompanyName;
+    END;
+
+    BEGIN
+    {
+      //DOC TM0020    AW 10/09/17 - Returns & Exchange Process
+      //DOC TM0020.01 AW 13/12/17 - Don't apply to invoice
+      //DOC TM0020.02 AW 13/12/17 - Don't New Original Order No. & Ref. Order No. Fields
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

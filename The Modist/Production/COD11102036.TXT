@@ -1,0 +1,555 @@
+OBJECT Codeunit 11102036 OM - Assign Modifications Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12/10/14;
+    Time=12:00:00 PM;
+    Version List=OMA9.04;
+  }
+  PROPERTIES
+  {
+    SingleInstance=Yes;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      gActiveProjectNo@1000 : Code[20];
+      gAssignType@1001 : 'Manual,,Active Project';
+      SettingsSet@1002 : Boolean;
+
+    PROCEDURE GetSettings@1(VAR AssignType@1000 : Option;VAR ActiveProjectNo@1001 : Code[20]);
+    VAR
+      User@1002 : Record 11102056;
+    BEGIN
+      IF SettingsSet THEN BEGIN
+        AssignType := gAssignType;
+        ActiveProjectNo := gActiveProjectNo;
+      END ELSE
+        IF GetUser(User) THEN BEGIN
+          AssignType := User."Assign Mode";
+          gActiveProjectNo := User."Active Project No.";
+        END;
+    END;
+
+    PROCEDURE SetSettings@2(AssignType@1000 : 'Manual,,Active Project';ActiveProjectNo@1001 : Code[20];SaveSettings@1002 : Boolean);
+    VAR
+      User@1003 : Record 11102056;
+    BEGIN
+      SettingsSet := TRUE;
+
+      gAssignType := AssignType;
+      gActiveProjectNo := ActiveProjectNo;
+
+      IF SaveSettings THEN
+        IF GetUser(User) THEN
+          IF (User."Assign Mode" <> gAssignType) OR
+             (User."Active Project No." <> gActiveProjectNo)
+          THEN BEGIN
+            User."Assign Mode" := gAssignType;
+            User."Active Project No." := gActiveProjectNo;
+            User.MODIFY;
+          END;
+    END;
+
+    LOCAL PROCEDURE SaveModification@3(VAR VarModification@1000 : Record 11102042;VAR NewModification@1001 : Record 11102042);
+    VAR
+      Setup@1002 : Record 11102035;
+      Modification@1003 : Record 11102042;
+      CALHistoryObject@1004 : Record 11102052;
+      ObjectLock@1005 : Record 11102054;
+      Object@1006 : Record 2000000001;
+      SourceControl@1007 : Codeunit 11102050;
+    BEGIN
+      Setup.CustomGet;
+
+      NewModification := VarModification;
+      NewModification."Entry No." := 0;
+      NewModification."Inserted By" := USERID;
+      NewModification."Insert Date" := TODAY;
+      NewModification."Insert Time" := TIME;
+      NewModification.Status := NewModification.Status::Inserted;
+
+      IF ObjectLock.GET(VarModification."Object Type", VarModification."Object No.") THEN BEGIN
+        NewModification."Locked By" := ObjectLock.ShortLockedBy;
+        NewModification."Token No." := ObjectLock."Token No.";
+      END;
+
+      IF Setup."Group Mods. Period (sec.)" > 0 THEN
+        IF AddToPreviousModification(NewModification) THEN
+          EXIT;
+
+      NewModification.INSERT(TRUE);
+
+      IF NewModification."Auto Assigned" THEN BEGIN
+        Modification := NewModification;
+        Modification.SETRECFILTER;
+        AssignModificationsToProject(Modification, NewModification."Assigned to Project No.");
+      END;
+
+      IF (Setup."Save C/AL at Modification" <> Setup."Save C/AL at Modification"::No) AND
+         NOT ((Setup."Save C/AL at Assigning" <> Setup."Save C/AL at Assigning"::No) AND NewModification."Auto Assigned")
+      THEN
+        IF Object.GET(NewModification."Object Type", '', NewModification."Object No.") THEN
+          SourceControl.AddObject(
+            Object,
+            CALHistoryObject."Action Type"::Modification,
+            Setup."Save C/AL at Modification" = Setup."Save C/AL at Modification"::"If Changed", FALSE, 3, FALSE);
+    END;
+
+    LOCAL PROCEDURE AddObjectToModifications@4(VAR Object@1000 : Record 2000000001;VAR Modification@1001 : Record 11102042;VAR EntryNo@1002 : Integer);
+    VAR
+      ObjectLock@1003 : Record 11102054;
+      Mgt@1004 : Codeunit 11102035;
+      ActiveProject@1005 : Code[20];
+      ActiveProjectFetched@1006 : Boolean;
+    BEGIN
+      EntryNo += 1;
+      Modification.INIT;
+      Modification."Entry No." := EntryNo;
+      Modification."Object Type" := Object.Type;
+      Modification."Object No." := Object.ID;
+      Modification."Object Date" := Object.Date;
+      Modification."Object Time" := Object.Time;
+      Modification."Object Date Time" := CREATEDATETIME(Object.Date, Object.Time);
+      Modification."Object Name" := Object.Name;
+
+      IF ObjectLock.GET(Object.Type, Object.ID) THEN
+        IF ObjectLock.ShortLockedBy = Mgt.ShortUserId THEN BEGIN
+          IF NOT ActiveProjectFetched THEN BEGIN
+            ActiveProject := GetActiveProjectNo;
+            ActiveProjectFetched := TRUE;
+          END;
+          IF ActiveProject <> '' THEN BEGIN
+            Modification."Auto Assigned" := TRUE;
+            Modification."Assigned to Project No." := ActiveProject;
+          END;
+        END;
+
+      Modification.INSERT;
+    END;
+
+    PROCEDURE ObjectIsModified@5(VAR Object@1000 : Record 2000000001;IncludeLockedByOthers@1001 : Boolean) : Boolean;
+    VAR
+      Setup@1002 : Record 11102035;
+      Modification@1003 : Record 11102042;
+      ObjectLock@1004 : Record 11102054;
+      KnownObjectExportError@1005 : Record 11102073;
+      Mgt@1006 : Codeunit 11102035;
+    BEGIN
+      Setup.CustomGet;
+
+      Modification.SETCURRENTKEY("Object Type", "Object No.", "Entry No.");
+      Modification.SETRANGE("Object Type", Object.Type);
+      Modification.SETRANGE("Object No.", Object.ID);
+
+      IF Setup."Set Modify Flag to False" THEN
+        Modification.SETRANGE(Status, Modification.Status::Inserted);
+
+      IF Modification.FINDLAST THEN
+        IF (Modification."Object Date" = Object.Date) AND
+           (FORMAT(Modification."Object Time") = FORMAT(Object.Time))
+        THEN
+          EXIT(FALSE);
+
+      IF NOT IncludeLockedByOthers THEN
+        IF ObjectLock.GET(Object.Type, Object.ID) THEN
+          IF ObjectLock.ShortLockedBy <> Mgt.ShortUserId THEN
+            EXIT(FALSE);
+
+      IF Setup."Set Modify Flag to False" THEN
+        IF KnownObjectExportError.GET(Object.Type, Object.ID) THEN
+          EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE AddToPreviousModification@6(VAR Modification@1000 : Record 11102042) : Boolean;
+    VAR
+      Setup@1001 : Record 11102035;
+      PreviousModification@1002 : Record 11102042;
+      MillisecondsBetween@1003 : Integer;
+    BEGIN
+      PreviousModification.SETCURRENTKEY("Object Type", "Object No.", "Entry No.");
+      PreviousModification.SETRANGE("Object Type", Modification."Object Type");
+      PreviousModification.SETRANGE("Object No.", Modification."Object No.");
+      PreviousModification.SETRANGE(Status, Modification.Status);
+      PreviousModification.SETRANGE("Inserted By", Modification."Inserted By");
+      PreviousModification.SETRANGE("SQL Trigger", Modification."SQL Trigger");
+      PreviousModification.SETRANGE("SQL Status", Modification."SQL Status");
+      PreviousModification.SETRANGE("Locked By", Modification."Locked By");
+      PreviousModification.SETRANGE("Token No.", Modification."Token No.");
+      IF PreviousModification.FINDLAST THEN BEGIN
+
+        IF ABS(Modification."Insert Date" - PreviousModification."Insert Date") > 24 THEN
+          MillisecondsBetween := 1000 * 60 * 24 * 100
+        ELSE
+          MillisecondsBetween :=
+            CREATEDATETIME(Modification."Insert Date", Modification."Insert Time") -
+            CREATEDATETIME(PreviousModification."Insert Date", PreviousModification."Insert Time");
+
+        Setup.CustomGet;
+        IF Setup."Group Mods. Period (sec.)" * 1000 > MillisecondsBetween THEN BEGIN
+          PreviousModification."Object Date" := Modification."Object Date";
+          PreviousModification."Object Time" := Modification."Object Time";
+          PreviousModification.MODIFY(TRUE);
+          Modification := PreviousModification;
+          EXIT(TRUE);
+        END;
+
+      END;
+    END;
+
+    PROCEDURE AssignModificationsToProject@7(VAR Modification@1000 : Record 11102042;ProjectNo@1001 : Code[20]);
+    VAR
+      Project@1002 : Record 11102036;
+      Modification2@1003 : Record 11102042;
+      RepositorySetup@1004 : Record 11102085;
+      Progressbar@1005 : Codeunit 11102044;
+      ctAssignModifications@1006 : TextConst 'DEU=Assigning Modifications...;ENU=Assigning Modifications...;ESP=Assigning Modifications...;FRA=Assigning Modifications...;NLD=Wijzigingen toewijzen...;DEA=Assigning Modifications...';
+    BEGIN
+      IF RepositorySetup.GET THEN
+        ;
+
+      IF Modification.FINDSET THEN BEGIN
+
+        IF RepositorySetup."Use Repository" THEN BEGIN
+          Project.GET(ProjectNo);
+          Project."Repository Busy" := TRUE;
+          Project.MODIFY;
+        END;
+
+        Progressbar.Open(ctAssignModifications, 0);
+        Progressbar.BarSize := Modification.COUNT;
+
+        REPEAT
+          Progressbar.AddToBar(1);
+          Modification2 := Modification;
+          AssignModificationToProject(Modification2, ProjectNo);
+        UNTIL Modification.NEXT = 0;
+
+        Progressbar.Close;
+
+        IF RepositorySetup."Use Repository" THEN BEGIN
+          Project."Repository Busy" := FALSE;
+          Project.MODIFY(TRUE);
+        END;
+
+      END;
+    END;
+
+    PROCEDURE AssignModificationToProject@8(VAR Modification@1000 : Record 11102042;ProjectNo@1001 : Code[20]);
+    VAR
+      Setup@1002 : Record 11102035;
+      Project@1003 : Record 11102036;
+      ProjectObject@1004 : Record 11102037;
+      CALHistoryObject@1005 : Record 11102052;
+      KnownObjectExportError@1006 : Record 11102073;
+      Object@1007 : Record 2000000001;
+      Mgt@1008 : Codeunit 11102035;
+      ObjectMgt@1009 : Codeunit 11102046;
+      SourceControl@1010 : Codeunit 11102050;
+      ctAlreadyProcessed@1011 : TextConst 'DEU=Modification already processed.;ENU=Modification already processed.;ESP=Modification already processed.;FRA=Modification already processed.;NLD=Wijziging reeds verwerkt.;DEA=Modification already processed.';
+    BEGIN
+      Setup.CustomGet;
+
+      IF Modification.Status <> Modification.Status::Inserted THEN
+        ERROR(ctAlreadyProcessed);
+
+      Modification := Modification;
+      Modification."Assigned to Project No." := ProjectNo;
+      Modification."Assigned By" := Mgt.ShortUserId;
+      Modification."Assign Date" := TODAY;
+      Modification."Assign Time" := TIME;
+      Modification.VALIDATE(Status, Modification.Status::Assigned);
+      Project.GET(ProjectNo);
+      Modification."Transport No." := Project."Transport No.";
+      Modification.MODIFY;
+
+      IF NOT ProjectObject.GET(ProjectNo, Modification."Object Type", Modification."Object No.") THEN BEGIN
+        ProjectObject."Project No." := ProjectNo;
+        ProjectObject."Object Type" := Modification."Object Type";
+        ProjectObject."Object No." := Modification."Object No.";
+        ProjectObject."Include in Transport" := TRUE;
+        ProjectObject.INSERT(TRUE);
+      END ELSE BEGIN
+        ProjectObject."Include in Transport" := TRUE;
+        ProjectObject.MODIFY(TRUE);
+      END;
+
+      IF Setup."Set Modify Flag to False" THEN
+        IF Object.GET(Modification."Object Type", '', Modification."Object No.") THEN
+          IF Object.Modified THEN
+            IF NOT KnownObjectExportError.GET(Object.Type, Object.ID) THEN BEGIN
+              Object.Modified := FALSE;
+              ObjectMgt.UpdateObject(Object, FALSE);
+            END;
+
+      IF Setup."Save C/AL at Assigning" <> Setup."Save C/AL at Assigning"::No THEN
+        IF Object.GET(Modification."Object Type", '', Modification."Object No.") THEN
+          SourceControl.AddObject(
+            Object,
+            CALHistoryObject."Action Type"::Assign,
+            Setup."Save C/AL at Assigning" = Setup."Save C/AL at Assigning"::"If Changed", FALSE, 3, FALSE);
+    END;
+
+    PROCEDURE MoveObjectsBetweenProjects@9(VAR TmpProjectObject@1000 : TEMPORARY Record 11102037);
+    VAR
+      Project@1001 : Record 11102036;
+      ProjectObject@1002 : Record 11102037;
+      ProjectObject2@1003 : Record 11102037;
+      Modification@1004 : Record 11102042;
+      RepositorySetup@1005 : Record 11102085;
+      Projects@1006 : Page 11102040;
+      FromProjectNo@1007 : Code[20];
+      Answer@1008 : ' ,Yes,No';
+      ctMoveModifications@1009 : TextConst 'DEU=Move modifications also?;ENU=Move modifications also?;ESP=Move modifications also?;FRA=Move modifications also?;NLD=De wijzigingen ook verplaatsen?;DEA=Move modifications also?';
+    BEGIN
+      IF RepositorySetup.GET THEN
+        ;
+
+      TmpProjectObject.FINDFIRST;
+      Project.GET(TmpProjectObject."Project No.");
+      Project.TESTFIELD("Status Type", Project."Status Type"::Developing);
+
+      Project.FILTERGROUP(2);
+      Project.SETRANGE("Status Type", Project."Status Type"::Developing);
+      Project.SETFILTER("No.", '<>%1', TmpProjectObject."Project No.");
+      Project.FILTERGROUP(0);
+
+      Projects.SETTABLEVIEW(Project);
+      Projects.LOOKUPMODE := TRUE;
+      Projects.EDITABLE := FALSE;
+
+      IF Projects.RUNMODAL = ACTION::LookupOK THEN BEGIN
+
+        Projects.GETRECORD(Project);
+
+        IF TmpProjectObject.FINDSET THEN BEGIN
+
+          IF RepositorySetup."Use Repository" THEN BEGIN
+            Project."Repository Busy" := TRUE;
+            Project.MODIFY;
+          END;
+
+          REPEAT
+
+            FromProjectNo := TmpProjectObject."Project No.";
+
+            ProjectObject2.GET(FromProjectNo, TmpProjectObject."Object Type", TmpProjectObject."Object No.");
+
+            IF NOT ProjectObject.GET(Project."No.", TmpProjectObject."Object Type", TmpProjectObject."Object No.") THEN BEGIN
+              ProjectObject := TmpProjectObject;
+              ProjectObject."Project No." := Project."No.";
+              ProjectObject.INSERT(TRUE);
+            END;
+
+            ProjectObject2.DELETE(TRUE);
+
+            Modification.SETCURRENTKEY("Assigned to Project No.");
+            Modification.SETRANGE("Assigned to Project No.", FromProjectNo);
+            Modification.SETRANGE("Object Type", TmpProjectObject."Object Type");
+            Modification.SETRANGE("Object No.", TmpProjectObject."Object No.");
+            IF NOT Modification.ISEMPTY THEN BEGIN
+              IF Answer = Answer::" " THEN
+                IF CONFIRM(ctMoveModifications, TRUE) THEN
+                  Answer := Answer::Yes
+                ELSE
+                  Answer := Answer::No;
+              IF Answer = Answer::Yes THEN
+                Modification.MODIFYALL("Assigned to Project No.", Project."No.", TRUE);
+            END;
+
+          UNTIL TmpProjectObject.NEXT = 0;
+
+          IF RepositorySetup."Use Repository" THEN BEGIN
+            Project."Repository Busy" := FALSE;
+            Project.MODIFY(TRUE);
+          END;
+
+        END;
+
+      END;
+    END;
+
+    PROCEDURE MoveModsBetweenProjects@10(VAR Modification@1000 : Record 11102042);
+    VAR
+      Project@1001 : Record 11102036;
+      ProjectObject@1002 : Record 11102037;
+      TmpProjectObject@1003 : TEMPORARY Record 11102037;
+      Modification2@1004 : Record 11102042;
+      Projects@1005 : Page 11102040;
+      ctAddObjectToProject@1006 : TextConst 'DEU="Object %1=''%2'', %3=''%4'' is not yet assigned to Project %5=''%6''.\Assign now?";ENU="Object %1=''%2'', %3=''%4'' is not yet assigned to Project %5=''%6''.\Assign now?";ESP="Object %1=''%2'', %3=''%4'' is not yet assigned to Project %5=''%6''.\Assign now?";FRA="Object %1=''%2'', %3=''%4'' is not yet assigned to Project %5=''%6''.\Assign now?";NLD="Object %1=''%2'', %3=''%4'' is nog niet toegewezen aan Project %5=''%6''.\Wilt u deze nu toewijzen?";DEA="Object %1=''%2'', %3=''%4'' is not yet assigned to Project %5=''%6''.\Assign now?"';
+      ctRemoveObjectFromProject@1007 : TextConst 'DEU="Object %1=''%2'', %3=''%4'' has no modifications left in Project %5=''%6''.\Remove object from project?";ENU="Object %1=''%2'', %3=''%4'' has no modifications left in Project %5=''%6''.\Remove object from project?";ESP="Object %1=''%2'', %3=''%4'' has no modifications left in Project %5=''%6''.\Remove object from project?";FRA="Object %1=''%2'', %3=''%4'' has no modifications left in Project %5=''%6''.\Remove object from project?";NLD="Object %1=''%2'', %3=''%4'' heeft geen wijzigingen meer in Project %5=''%6''.\Wilt u het object uit deze project verwijderen?";DEA="Object %1=''%2'', %3=''%4'' has no modifications left in Project %5=''%6''.\Remove object from project?"';
+    BEGIN
+      Modification.FINDFIRST;
+
+      IF Project.GET(Modification."Assigned to Project No.") THEN BEGIN
+        Project.TESTFIELD(Blocked, FALSE);
+        Project.TESTFIELD("Status Type", Project."Status Type"::Developing);
+      END;
+
+      Project.FILTERGROUP(2);
+      Project.SETRANGE("Status Type", Project."Status Type"::Developing);
+      Project.SETFILTER("No.", '<>%1', Modification."Assigned to Project No.");
+      Project.FILTERGROUP(0);
+
+      Projects.SETTABLEVIEW(Project);
+      Projects.LOOKUPMODE := TRUE;
+      Projects.EDITABLE := FALSE;
+
+      IF Projects.RUNMODAL = ACTION::LookupOK THEN BEGIN
+
+        REPEAT
+          TmpProjectObject."Project No." := Modification."Assigned to Project No.";
+          TmpProjectObject."Object Type" := Modification."Object Type";
+          TmpProjectObject."Object No." := Modification."Object No.";
+          IF TmpProjectObject.INSERT THEN
+            ;
+        UNTIL Modification.NEXT = 0;
+
+        Projects.GETRECORD(Project);
+        Project.TESTFIELD(Blocked, FALSE);
+        Modification.MODIFYALL("Assigned to Project No.", Project."No.", TRUE);
+
+        TmpProjectObject.FINDSET;
+        REPEAT
+
+          IF TmpProjectObject."Project No." <> '' THEN BEGIN
+            Modification2.SETCURRENTKEY("Assigned to Project No.", "Object Type", "Object No.");
+            Modification2.SETRANGE("Assigned to Project No.", TmpProjectObject."Project No.");
+            Modification2.SETRANGE("Object Type", TmpProjectObject."Object Type");
+            Modification2.SETRANGE("Object No.", TmpProjectObject."Object No.");
+            IF Modification2.ISEMPTY AND
+               ProjectObject.GET(TmpProjectObject."Project No.", TmpProjectObject."Object Type", TmpProjectObject."Object No.")
+            THEN
+              IF CONFIRM(
+                   ctRemoveObjectFromProject, TRUE,
+                   TmpProjectObject.FIELDCAPTION("Object Type"), TmpProjectObject."Object Type",
+                   TmpProjectObject.FIELDCAPTION("Object No."), TmpProjectObject."Object No.",
+                   Project.TABLECAPTION, TmpProjectObject."Project No.")
+              THEN
+                ProjectObject.DELETE(TRUE);
+          END;
+
+          IF NOT ProjectObject.GET(Project."No.", TmpProjectObject."Object Type", TmpProjectObject."Object No.") THEN
+            IF CONFIRM(
+                 ctAddObjectToProject, TRUE,
+                 TmpProjectObject.FIELDCAPTION("Object Type"), TmpProjectObject."Object Type",
+                 TmpProjectObject.FIELDCAPTION("Object No."), TmpProjectObject."Object No.",
+                 Project.TABLECAPTION, Project."No.")
+            THEN BEGIN
+              ProjectObject.INIT;
+              ProjectObject."Project No." := Project."No.";
+              ProjectObject."Object Type" := TmpProjectObject."Object Type";
+              ProjectObject."Object No." := TmpProjectObject."Object No.";
+              ProjectObject."Include in Transport" := TRUE;
+              ProjectObject.INSERT(TRUE);
+            END;
+
+        UNTIL TmpProjectObject.NEXT = 0;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE GetActiveProjectNo@11() : Code[20];
+    VAR
+      Project@1000 : Record 11102036;
+      AssignModificationsMgt@1001 : Codeunit 11102036;
+      ActiveProject@1002 : Code[20];
+      AssignType@1003 : 'Save,,Active Project';
+    BEGIN
+      AssignModificationsMgt.GetSettings(AssignType, ActiveProject);
+      IF AssignType = AssignType::"Active Project" THEN
+        IF Project.GET(ActiveProject) THEN
+          IF Project."Status Type" = Project."Status Type"::Developing THEN
+            EXIT(Project."No.");
+    END;
+
+    PROCEDURE CheckObjectsCompiled@12(VAR VarModification@1000 : Record 11102042) : Boolean;
+    VAR
+      Object@1001 : Record 2000000001;
+      ctNotCompiled@1002 : TextConst 'DEU=Object %1 %2 %3 is not compiled.\Are you sure?;ENU=Object %1 %2 %3 is not compiled.\Are you sure?;ESP=Object %1 %2 %3 is not compiled.\Are you sure?;FRA=Object %1 %2 %3 is not compiled.\Are you sure?;NLD=Object %1 %2 %3 is niet gecompileerd.\Weet u het zeker?;DEA=Object %1 %2 %3 is not compiled.\Are you sure?';
+    BEGIN
+      IF VarModification.FINDSET THEN
+        REPEAT
+          IF Object.GET(VarModification."Object Type", '', VarModification."Object No.") THEN
+            IF NOT Object.Compiled THEN
+              EXIT(CONFIRM(ctNotCompiled, TRUE, Object.Type, Object.ID, Object.Name));
+        UNTIL VarModification.NEXT = 0;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE AutoAssignModifiedObject@13(Object@1000 : Record 2000000001;ProjectNo@1001 : Code[20]);
+    VAR
+      Modification@1002 : Record 11102042;
+      TmpModification@1003 : TEMPORARY Record 11102042;
+      EntryNo@1004 : Integer;
+    BEGIN
+      IF ObjectIsModified(Object, FALSE) THEN BEGIN
+        EntryNo := 0;
+        AddObjectToModifications(Object, TmpModification, EntryNo);
+        TmpModification."Auto Assigned" := TRUE;
+        TmpModification."Assigned to Project No." := ProjectNo;
+
+        SaveModification(TmpModification, Modification);
+      END;
+    END;
+
+    PROCEDURE GetLastEntryNo@14(VAR Object@1000 : Record 2000000001) : Integer;
+    VAR
+      Modification@1001 : Record 11102042;
+    BEGIN
+      Modification.LOCKTABLE;
+      Modification.SETCURRENTKEY("Object Type", "Object No.");
+      Modification.SETRANGE("Object Type", Object.Type);
+      Modification.SETRANGE("Object No.", Object.ID);
+      IF Modification.FINDLAST THEN
+        EXIT(Modification."Entry No.");
+    END;
+
+    PROCEDURE AssignIfNewModification@15(VAR Object@1000 : Record 2000000001;ProjectNo@1001 : Code[20];LastEntryNo@1002 : Integer;AddNotTraced@1003 : Boolean);
+    VAR
+      Modification@1004 : Record 11102042;
+      Object2@1005 : Record 2000000001;
+    BEGIN
+      Modification.LOCKTABLE;
+      Modification.SETCURRENTKEY("Object Type", "Object No.");
+      Modification.SETRANGE("Object Type", Object.Type);
+      Modification.SETRANGE("Object No.", Object.ID);
+      Modification.SETFILTER("Entry No.", '>%1', LastEntryNo);
+      IF Modification.FINDLAST THEN
+        IF Modification.Status = Modification.Status::Inserted THEN
+          AssignModificationToProject(Modification, ProjectNo);
+
+      Object2 := Object;
+      IF Object2.FIND('=') THEN
+        ;
+
+      IF AddNotTraced THEN
+        IF ObjectIsModified(Object2, FALSE) THEN
+          AutoAssignModifiedObject(Object2, ProjectNo);
+    END;
+
+    LOCAL PROCEDURE GetUser@16(VAR User@1000 : Record 11102056) : Boolean;
+    VAR
+      Mgt@1001 : Codeunit 11102035;
+    BEGIN
+      IF Mgt.ShortUserId <> '' THEN BEGIN
+        User.SETCURRENTKEY("Short User Id");
+        User.SETRANGE("Short User Id", Mgt.ShortUserId);
+        EXIT(User.FINDFIRST);
+      END;
+    END;
+
+    BEGIN
+    {
+      This is a SingleInstance codeunit
+    }
+    END.
+  }
+}
+

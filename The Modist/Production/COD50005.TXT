@@ -1,0 +1,354 @@
+OBJECT Codeunit 50005 Integration Process Processor
+{
+  OBJECT-PROPERTIES
+  {
+    Date=16/06/17;
+    Time=[ 2:14:01 PM];
+    Modified=Yes;
+    Version List=OP9031,OP10987,TM0004;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            IntegrationProcessStaging@1000000000 : Record 50004;
+          BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      IntegrationType@1000000004 : Code[10];
+      IntegrationFunction@1000000003 : Code[30];
+      SourceTypeNo@1000000002 : Integer;
+      DocumentNumber@1000000001 : Code[20];
+      DocumentType@1000000000 : ' ,Order,Invoice,Credit Memo,Blanket Order,Return Order';
+
+    PROCEDURE CreateProcessEntry@1000000000(integType@1000000000 : Code[10];integFunction@1000000001 : Code[30];sourceType@1000000002 : Integer;docNo@1000000003 : Code[20];docType@1000000004 : Integer;TypeAttribute@1000000007 : Code[20]);
+    VAR
+      IntegrationProcessQueue@1000000005 : Record 50004;
+      IntegrationProcessingFunction@1000000006 : Record 50005;
+    BEGIN
+      //This function is used to create entries in the Integration Process Staging
+
+      IF NOT(ProcessEntryExists(integType,integFunction,sourceType,docNo,docType)) THEN BEGIN
+        IntegrationProcessQueue.INIT;
+        IntegrationProcessQueue."Integration Type" := integType;
+        IntegrationProcessQueue."Function Code" := integFunction;
+      //DOC OP9031 RK 15/02/17 -
+        //IF IntegrationProcessingFunction.GET(integType,integFunction) THEN BEGIN
+        IntegrationProcessingFunction.SETRANGE("Platform Code",integType);
+        IntegrationProcessingFunction.SETRANGE(Code,integFunction);
+        IF IntegrationProcessingFunction.FINDFIRST THEN BEGIN
+      //DOC OP9031 RK 15/02/17 +
+          IntegrationProcessQueue."Group Code" :=  IntegrationProcessingFunction."Group Code";
+          IntegrationProcessQueue."Status Attribute" := IntegrationProcessingFunction."Attribute Value4";
+        END;
+        IntegrationProcessQueue."Source Type" := sourceType;
+      IntegrationProcessQueue."Type Attribute"  := TypeAttribute;
+        IntegrationProcessQueue."Document No." := docNo;
+        IntegrationProcessQueue."Document Type" := docType;
+        IntegrationProcessQueue."Process On" := CURRENTDATETIME;
+        IntegrationProcessQueue."Processed By" := USERID;
+        IntegrationProcessQueue.INSERT;
+      END;
+    END;
+
+    PROCEDURE SetData@1000000001(integType@1000000004 : Code[10];integFunction@1000000003 : Code[30];sourceType@1000000002 : Integer;docNo@1000000001 : Code[20];docType@1000000000 : Integer);
+    BEGIN
+      //This function is used externally to set global variables which will then be used
+      //when invoking specific process function
+
+      IntegrationType := integType;
+      IntegrationFunction := integFunction;
+      SourceTypeNo := sourceType;
+      DocumentNumber := docNo;
+      DocumentType := docType;
+
+
+      //Demandware triggers
+    END;
+
+    PROCEDURE AddUpdateProcessed@1000000004(VAR SalesHeader@1000000000 : Record 36);
+    BEGIN
+      CreateProcessEntry('DMW','SALESUPDATEPROCESSING',DATABASE::"Sales Header",SalesHeader."No.",SalesHeader."Document Type",'');
+    END;
+
+    PROCEDURE AddUpdatePicking@1000000006(VAR SalesHeader@1000000000 : Record 36);
+    BEGIN
+      CreateProcessEntry('DMW','SALESUPDATEPICKING',DATABASE::"Sales Header",SalesHeader."No.",SalesHeader."Document Type",'');
+    END;
+
+    PROCEDURE AddUpdateShipped@1000000007(VAR SalesHeader@1000000000 : Record 36);
+    VAR
+      ShipmentMethod@1000000001 : Record 10;
+      ModistSetup@1000000002 : Record 50000;
+      IntegrationProcessFunction@1000000003 : Record 50005;
+      BRONTOIntegrationProcessor@1000000004 : Codeunit 50022;
+      IntegrationProcessingGroup@1000000005 : Record 50007;
+      ConfirmId@1000000006 : Text[50];
+    BEGIN
+      CreateProcessEntry('DMW','SALESUPDATESHIPPED',DATABASE::"Sales Header",SalesHeader."No.",SalesHeader."Document Type",'');
+      //send bronto shipped message..
+      IF SalesHeader."Message Confirmation ID" = '' THEN BEGIN //only send if it has not previously been sent
+        ModistSetup.GET;
+        IF IntegrationProcessingGroup.GET(ModistSetup."BRONTO Integration Type",ModistSetup."BRONTO Messaging SOAP Group") THEN
+          IF NOT IntegrationProcessingGroup.Disabled THEN BEGIN
+            IF SalesHeader."Shipment Method Code" <> '' THEN BEGIN
+              IF ShipmentMethod.GET(SalesHeader."Shipment Method Code") THEN
+                IF ShipmentMethod."Integration Function" <> '' THEN
+      // OP10987 <<
+      //            IF IntegrationProcessFunction.GET(ModistSetup."BRONTO Integration Type",ModistSetup."BRONTO Messaging SOAP Group",ShipmentMethod."Integration Function") THEN
+                  IF IntegrationProcessFunction.GET(ModistSetup."BRONTO Integration Type",ModistSetup."BRONTO Messaging SOAP Group",ShipmentMethod."Integration Function",SalesHeader."Customer Locale") THEN
+      // OP10987 >>
+                    IF IntegrationProcessFunction."Attribute Value2" <> '' THEN
+                      BRONTOIntegrationProcessor.SendMessage(SalesHeader,IntegrationProcessFunction."Attribute Value2",ConfirmId);
+                    //else log the success
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE AddUpdateCancelled@1000000008(VAR SalesHeader@1000000000 : Record 36);
+    BEGIN
+      CreateProcessEntry('DMW','SALESUPDATECANCELLED',DATABASE::"Sales Header",SalesHeader."No.",SalesHeader."Document Type",'');
+    END;
+
+    PROCEDURE UpdateEntryAsProcessed@1000000009(VAR IntProcessStaging@1000000000 : Record 50004);
+    VAR
+      IntegrationProcessStaging@1000000001 : Record 50004;
+    BEGIN
+      IntProcessStaging.Processed := TRUE;
+      IntProcessStaging.MODIFY;
+    END;
+
+    LOCAL PROCEDURE ProcessEntryExists@1000000002(integType@1000000005 : Code[10];integFunction@1000000004 : Code[30];sourceType@1000000003 : Integer;docNo@1000000002 : Code[20];docType@1000000001 : Integer) : Boolean;
+    VAR
+      IntegrationProcessQueue@1000000000 : Record 50004;
+    BEGIN
+      //This function checks if an entry already exists for this combination
+      IntegrationProcessQueue.RESET;
+      IntegrationProcessQueue.SETRANGE("Integration Type",integType);
+      IntegrationProcessQueue.SETRANGE("Function Code",integFunction);
+      IntegrationProcessQueue.SETRANGE("Source Type",sourceType);
+      IntegrationProcessQueue.SETRANGE("Document No.",docNo);
+      IntegrationProcessQueue.SETRANGE("Document Type",docType);
+      EXIT(IntegrationProcessQueue.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE RecreateProcessedEntry@1000000013(integType@1000000005 : Code[10];integFunction@1000000004 : Code[30];sourceType@1000000003 : Integer;docNo@1000000002 : Code[20];docType@1000000001 : Integer);
+    VAR
+      IntegrationProcessQueue@1000000000 : Record 50004;
+      IntegrationProcessingFunction@1000000006 : Record 50005;
+    BEGIN
+      //DOC OP9031 RK 24/11/2016 -
+      //This function creates process entry if no entry exists or previous entry already processed to resend new one.
+      IntegrationProcessQueue.RESET;
+      IntegrationProcessQueue.SETRANGE("Integration Type",integType);
+      IntegrationProcessQueue.SETRANGE("Function Code",integFunction);
+      IntegrationProcessQueue.SETRANGE("Source Type",sourceType);
+      IntegrationProcessQueue.SETRANGE("Document No.",docNo);
+      IntegrationProcessQueue.SETRANGE("Document Type",docType);
+      IntegrationProcessQueue.SETRANGE(Processed,FALSE);
+      IF IntegrationProcessQueue.ISEMPTY THEN BEGIN
+        IntegrationProcessQueue.RESET;
+        IntegrationProcessQueue.INIT;
+        IntegrationProcessQueue."Integration Type" := integType;
+        IntegrationProcessQueue."Function Code" := integFunction;
+      //DOC OP9031 RK 15/02/17 -
+        //IF IntegrationProcessingFunction.GET(integType,integFunction) THEN BEGIN
+        IntegrationProcessingFunction.SETRANGE("Platform Code",integType);
+        IntegrationProcessingFunction.SETRANGE(Code,integFunction);
+        IF IntegrationProcessingFunction.FINDFIRST THEN BEGIN
+      //DOC OP9031 RK 15/02/17 +
+          IntegrationProcessQueue."Group Code" :=  IntegrationProcessingFunction."Group Code";
+          IntegrationProcessQueue."Status Attribute" := IntegrationProcessingFunction."Attribute Value4";
+        END;
+        IntegrationProcessQueue."Source Type" := sourceType;
+        IntegrationProcessQueue."Document No." := docNo;
+        IntegrationProcessQueue."Document Type" := docType;
+        IntegrationProcessQueue."Process On" := CURRENTDATETIME;
+        IntegrationProcessQueue."Processed By" := USERID;
+        IntegrationProcessQueue.INSERT;
+      END;
+      //DOC OP9031 RK 24/11/2016 +
+    END;
+
+    PROCEDURE GetCurrentOrderStatus@1000000003(SordNo@1000000000 : Code[20]) : Text;
+    VAR
+      IntegrationProcessQueue@1000000001 : Record 50004;
+      SalesHeader@1000000002 : Record 36;
+      SalesShipmentHeader@1000000003 : Record 110;
+    BEGIN
+      //this function is used to display the current status of the order on either the sales order or sales shipment
+      IntegrationProcessQueue.RESET;
+      IntegrationProcessQueue.SETCURRENTKEY("Entry No.","Document No.");
+      IntegrationProcessQueue.SETRANGE("Document No.",SordNo);
+      IF IntegrationProcessQueue.FINDLAST THEN BEGIN
+        EXIT(IntegrationProcessQueue."Status Attribute");
+      END;
+    END;
+
+    PROCEDURE UpdateTracking@1000000005(OrderNo@1000000000 : Code[20];ShipmentID@1000000004 : Code[30];TrackingID@1000000001 : Text[30];AirwayBillNumber@1000000005 : Code[20]);
+    VAR
+      SalesHeader@1000000002 : Record 36;
+      SalesShipmentHeader@1000000003 : Record 110;
+    BEGIN
+      //This function is used to update a sales order and sales shipment with a tracking ID and AirwayBillNumber
+      //will be used when 3PL sends tracking info
+
+      IF SalesHeader.GET(SalesHeader."Document Type"::Order,OrderNo) THEN BEGIN
+        SalesHeader."Package Tracking No." := TrackingID;
+        SalesHeader."Airway Bill No." := AirwayBillNumber;
+        SalesHeader.MODIFY;
+      END;
+
+      SalesShipmentHeader.SETCURRENTKEY("Order No.","Shipment ID");
+      SalesShipmentHeader.SETRANGE("Order No.",OrderNo);
+      SalesShipmentHeader.SETRANGE("Shipment ID",ShipmentID);
+
+      IF SalesShipmentHeader.FINDFIRST THEN BEGIN
+        SalesShipmentHeader."Package Tracking No." := TrackingID;
+        SalesShipmentHeader."Airway Bill No." := AirwayBillNumber;
+        SalesShipmentHeader.MODIFY;
+      END;
+
+      //3PL Triggers
+    END;
+
+    PROCEDURE AddPurchRecieptASN@1000000010(VAR WarehouseReceiptHeader@1000000000 : Record 7316);
+    VAR
+      ModistSetup@1000000001 : Record 50000;
+    BEGIN
+      ModistSetup.GET;
+      CreateProcessEntry('3PL','SENDASNWHSRECEIPT',DATABASE::"Warehouse Receipt Header",WarehouseReceiptHeader."No.",1,ModistSetup."ASN Purchase Type");
+    END;
+
+    PROCEDURE AddReturnOrderASN@1000000022(VAR WarehouseReceiptHeader@1000000000 : Record 7316);
+    VAR
+      ModistSetup@1000000001 : Record 50000;
+    BEGIN
+      ModistSetup.GET;
+      CreateProcessEntry('3PL','SENDASNWHSRECEIPT',DATABASE::"Warehouse Receipt Header",WarehouseReceiptHeader."No.",1,ModistSetup."ASN Sales Return Type");
+    END;
+
+    PROCEDURE Add3PLOrder@1000000011(VAR SalesHeader@1000000000 : Record 36);
+    BEGIN
+      //DOC OP9031 RK 24/11/2016 -
+      RecreateProcessedEntry('3PL','SENDGACORDER',DATABASE::"Sales Header",SalesHeader."No.",1);
+      //DOC OP9031 RK 24/11/2016 +
+    END;
+
+    PROCEDURE Add3PLOrderPR@1000000016(VAR PurchHeader@1000000000 : Record 38);
+    BEGIN
+      //DOC OP9031 RK 24/11/2016 -
+      RecreateProcessedEntry('3PL','SENDGACPURCHRETURN',DATABASE::"Purchase Header",PurchHeader."No.",5);
+      //DOC OP9031 RK 24/11/2016 +
+    END;
+
+    PROCEDURE Add3PLOrderCancellation@1000000012(VAR SalesHeader@1000000000 : Record 36);
+    BEGIN
+      //DOC OP9031 RK 24/11/2016 -
+      CreateProcessEntry('3PL','CANCELGACORDER',DATABASE::"Sales Header",SalesHeader."No.",1,'');
+      //DOC OP9031 RK 24/11/2016 +
+    END;
+
+    PROCEDURE Add3PLOrderUpdateSO@1000000014(VAR SalesHeader@1000000000 : Record 36);
+    BEGIN
+      //DOC OP9031 RK 24/11/2016 -
+      RecreateProcessedEntry('3PL','PROCESSORDERUPDATE',DATABASE::"Sales Header",SalesHeader."No.",1);
+      //DOC OP9031 RK 24/11/2016 +
+    END;
+
+    PROCEDURE Add3PLOrderUpdatePR@1000000015(VAR PurchHeader@1000000000 : Record 38);
+    BEGIN
+      //DOC OP9031 RK 24/11/2016 -
+      RecreateProcessedEntry('3PL','PROCESSORDERUPDATE',DATABASE::"Purchase Header",PurchHeader."No.",5);
+      //DOC OP9031 RK 24/11/2016 +
+    END;
+
+    PROCEDURE AddTransferOrder@1000000017(VAR TransferHeader@1000000000 : Record 5740);
+    BEGIN
+      CreateProcessEntry('3PL','TRANSFERORDER',DATABASE::"Transfer Header",TransferHeader."No.",6,'');
+    END;
+
+    PROCEDURE DeleteUnProcessedProcessEntry@1000000018(TransferOrderNo@1000000000 : Code[20]);
+    VAR
+      ModistSetup@1000000001 : Record 50000;
+      IntegrationProcessQueue@1000000003 : Record 50004;
+    BEGIN
+      ModistSetup.GET;
+      IntegrationProcessQueue.SETCURRENTKEY("Integration Type","Group Code","Document Type","Document No.",Processed);
+      IntegrationProcessQueue.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+      IntegrationProcessQueue.SETRANGE("Group Code",ModistSetup."3PL Inventory Group");
+      IntegrationProcessQueue.SETRANGE("Document Type",IntegrationProcessQueue."Document Type"::"Transfer Order");
+      IntegrationProcessQueue.SETRANGE("Document No.",TransferOrderNo);
+      IntegrationProcessQueue.SETRANGE(Processed,FALSE);
+      IF IntegrationProcessQueue.FINDFIRST THEN
+        IntegrationProcessQueue.DELETE;
+    END;
+
+    PROCEDURE TransferProcessEntryExists@1000000024(TransferOrderNo@1000000000 : Code[20]) : Boolean;
+    VAR
+      ModistSetup@1000000001 : Record 50000;
+      IntegrationProcessQueue@1000000003 : Record 50004;
+    BEGIN
+      ModistSetup.GET;
+      IntegrationProcessQueue.SETCURRENTKEY("Integration Type","Group Code","Document Type","Document No.",Processed);
+      IntegrationProcessQueue.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+      IntegrationProcessQueue.SETRANGE("Group Code",ModistSetup."3PL Inventory Group");
+      IntegrationProcessQueue.SETRANGE("Document Type",IntegrationProcessQueue."Document Type"::"Transfer Order");
+      IntegrationProcessQueue.SETRANGE("Document No.",TransferOrderNo);
+      IntegrationProcessQueue.SETRANGE(Processed,FALSE);
+      EXIT(IntegrationProcessQueue.FINDFIRST);
+    END;
+
+    PROCEDURE ResetProcessEntry@1000000019(integType@1000000000 : Code[10];integGroup@1000000007 : Code[10];sourceType@1000000002 : Integer;docNo@1000000003 : Code[20];docType@1000000004 : Integer);
+    VAR
+      IntegrationProcessQueue@1000000005 : Record 50004;
+      IntegrationProcessingFunction@1000000006 : Record 50005;
+      TEXT001@1000000001 : TextConst 'ENU=Resent by %1 on %2;ENG=Resent by %1 on %2';
+    BEGIN
+      //This function is used to reset the processed flag for an entry on the queue so it can be reprocessed
+
+      IntegrationProcessQueue.SETCURRENTKEY("Integration Type","Group Code","Document Type","Document No.",Processed);
+      IntegrationProcessQueue.SETRANGE("Integration Type",integType);
+      IntegrationProcessQueue.SETRANGE("Group Code",integGroup);
+      IntegrationProcessQueue.SETRANGE("Document Type",docType);
+      IntegrationProcessQueue.SETRANGE("Document No.",docNo);
+      IntegrationProcessQueue.SETRANGE(Processed,TRUE);
+      IF IntegrationProcessQueue.FINDFIRST THEN BEGIN
+        IntegrationProcessQueue.Processed := FALSE;
+        IntegrationProcessQueue.Notes := STRSUBSTNO(TEXT001,USERID,CURRENTDATETIME);
+        IntegrationProcessQueue.MODIFY;
+      END;
+    END;
+
+    PROCEDURE ResendTransferOrder@1000000021(VAR TransferHeader@1000000000 : Record 5740);
+    VAR
+      ModistSetup@1000000001 : Record 50000;
+    BEGIN
+      //This function facilitates the resending of a Transfer Order
+      ModistSetup.GET;
+      ResetProcessEntry('3PL',ModistSetup."3PL Transfer Order Group",DATABASE::"Transfer Header",TransferHeader."No.",6);
+    END;
+
+    PROCEDURE ResendPurchRecieptASN@1000000026(VAR WarehouseReceiptHeader@1000000000 : Record 7316);
+    VAR
+      ModistSetup@1000000001 : Record 50000;
+    BEGIN
+      ModistSetup.GET;
+      ResetProcessEntry('3PL',ModistSetup."3PL ASN Group",DATABASE::"Warehouse Receipt Header",WarehouseReceiptHeader."No.",1);
+    END;
+
+    BEGIN
+    {
+      //DOC OP9031 LF 27/10/2016 - Created - This codeunit is used to facilitate the creation and modification of staging records
+      //DOC OP9031 RK 24/11/2016 - 3PL Order functions.
+      //DOC OP9031 RK 15/02/17 - Use setrange to get integration function instead of get for changed key.
+      //DOC OP10987 TM 16/06/17 - Add Customer Locale in the call for IntegrationProcessFunction.GET as its's been added to the Key
+    }
+    END.
+  }
+}
+

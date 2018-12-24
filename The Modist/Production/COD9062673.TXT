@@ -1,0 +1,444 @@
+OBJECT Codeunit 9062673 Barcode Scanning Doc Handler
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/02/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.12;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            SalesHeader@1000000000 : Record 36;
+          BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE ProcessDocument@1000000001(pVariant@1000000000 : Variant;ProcessText@1000000003 : Code[50]);
+    VAR
+      ScannerInput@1000000001 : Record 9062803;
+      RecRef@1000000002 : RecordRef;
+    BEGIN
+      //This is the entry point from any document
+      //Processtext is additional information used for example where a document  such as a transfer order needs to be both shipped and received.
+
+      IF pVariant.ISRECORD THEN
+        RecRef.GETTABLE(pVariant)
+      ELSE
+        RecRef := pVariant;
+
+      ScannerInput.SETRANGE(TableId,RecRef.NUMBER);
+      ScannerInput.SETRANGE(PositionText, RecRef.GETPOSITION);
+      ScannerInput.SETRANGE(Processed,FALSE);
+
+      IF ScannerInput.FINDSET THEN BEGIN
+
+        FindItemFromBarcode(ScannerInput);
+
+        ScannerInput.SETRANGE(Processed,FALSE);
+        ScannerInput.SETRANGE("Process Error",FALSE);
+        ScannerInput.SETFILTER("Item No",'<>%1','');
+
+        IF NOT ScannerInput.FINDSET THEN
+          EXIT;
+
+        CASE RecRef.NUMBER OF
+          36: //Sales Header //This could be a return order ?
+            SalesDocumentProcessor(ScannerInput,ProcessText);
+
+          5740: //Transfer Order // How to handle ship or Receive ?
+            UpdateTransferDocument(ScannerInput,ProcessText);
+
+        END;
+      END;
+      //  END;
+    END;
+
+    PROCEDURE ShowScansForDocument@1000000002(pVariant@1000000000 : Variant);
+    VAR
+      ScannerInput@1000000001 : Record 9062803;
+      RecRef@1000000002 : RecordRef;
+      ScannerInputEntries@1000000003 : Page 9063221;
+    BEGIN
+      //This is where we run the form for the passed in record
+
+      IF pVariant.ISRECORD THEN
+        RecRef.GETTABLE(pVariant)
+      ELSE
+        RecRef := pVariant;
+
+      ScannerInput.SETRANGE(TableId,RecRef.NUMBER);
+      ScannerInput.SETRANGE(PositionText, RecRef.GETPOSITION);
+          //ScannerInput.SETRANGE(ScannerInput.Processed,FALSE);
+
+          //IF ScannerInput.FINDSET THEN
+          //  BEGIN
+              //ScannerInputEntries.SETRECORD(ScannerInput);
+      ScannerInputEntries.SETTABLEVIEW(ScannerInput);
+      ScannerInputEntries.RUNMODAL;
+          //    END;
+
+      //  END;
+    END;
+
+    LOCAL PROCEDURE FindItemFromBarcode@1000000000(VAR ScannerInput@1000000002 : Record 9062803);
+    VAR
+      ItemCrossReference@1000000000 : Record 5717;
+      Item@1000000001 : Record 27;
+      Continue@1000000003 : Boolean;
+    BEGIN
+      ScannerInput.FINDSET;
+
+      REPEAT
+        Continue := TRUE;
+
+        IF ScannerInput.ScanData = '' THEN BEGIN
+          ScannerInput."Process Error" := TRUE;
+          ScannerInput."Process Message" := 'No barcode';
+          ScannerInput.MODIFY;
+          Continue := FALSE;
+        END;
+
+        IF Continue THEN BEGIN
+          //Is this a cross reference
+          ItemCrossReference.RESET;
+          ItemCrossReference.SETRANGE("Cross-Reference Type",ItemCrossReference."Cross-Reference Type"::"Bar Code");
+          ItemCrossReference.SETFILTER("Cross-Reference No.",'%1',ScannerInput.ScanData);
+          IF ItemCrossReference.FINDFIRST THEN BEGIN
+            ScannerInput."Item No" := ItemCrossReference."Item No.";
+            ScannerInput."Variant Code" := ItemCrossReference."Variant Code";
+            ScannerInput.MODIFY;
+            Continue := FALSE;
+          END;
+        END;
+
+          //Is this an item
+        IF Item.GET(ScannerInput.ScanData) THEN BEGIN
+          ScannerInput."Item No" := Item."No.";
+          ScannerInput.MODIFY;
+          Continue := FALSE;
+        END;
+
+        IF Continue THEN BEGIN
+          ScannerInput."Process Error" := TRUE;
+          ScannerInput."Process Message" := 'Item Not Found for barcode';
+          ScannerInput.MODIFY;
+        END;
+          //Cannot find a reference for this barcode
+
+      UNTIL ScannerInput.NEXT = 0;
+
+      ScannerInput.FINDSET;
+    END;
+
+    LOCAL PROCEDURE SalesDocumentProcessor@1000000005(VAR ScannerInput@1000000000 : Record 9062803;ProcessText@1000000006 : Code[50]);
+    VAR
+      SalesHeader@1000000001 : Record 36;
+      ReleaseSalesDocument@1000000002 : Codeunit 414;
+      SalesLine@1000000004 : Record 37;
+      QtyRem@1000000003 : Integer;
+      QtyToUse@1000000005 : Integer;
+    BEGIN
+      //Find the sales Order
+      SalesHeader.SETPOSITION(ScannerInput.PositionText);
+
+      //Need to do one for receiving / other types
+      CASE SalesHeader."Document Type" OF
+
+        SalesHeader."Document Type"::Quote:
+          UpdateSalesQuote(ScannerInput,ProcessText);
+
+        SalesHeader."Document Type"::Order:
+          UpdateSalesOrder(ScannerInput,ProcessText);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateSalesOrder@1000000012(VAR ScannerInput@1000000000 : Record 9062803;ProcessText@1000000006 : Code[50]);
+    VAR
+      SalesHeader@1000000001 : Record 36;
+      ReleaseSalesDocument@1000000002 : Codeunit 414;
+      SalesLine@1000000004 : Record 37;
+      QtyRem@1000000003 : Integer;
+      QtyToUse@1000000005 : Integer;
+    BEGIN
+      SalesHeader.SETPOSITION(ScannerInput.PositionText);
+
+      CASE ScannerInput.ScanAction OF
+        'SHIP':
+          SalesOrderAddLines(ScannerInput,ProcessText);
+
+        'ADDITEMS':
+          SalesOrderAddLines(ScannerInput,ProcessText);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateSalesQuote@1000000007(VAR ScannerInput@1000000000 : Record 9062803;ProcessText@1000000006 : Code[50]);
+    VAR
+      SalesHeader@1000000001 : Record 36;
+      ReleaseSalesDocument@1000000002 : Codeunit 414;
+      SalesLine@1000000004 : Record 37;
+      QtyRem@1000000003 : Integer;
+      QtyToUse@1000000005 : Integer;
+    BEGIN
+      SalesHeader.SETPOSITION(ScannerInput.PositionText);
+    END;
+
+    LOCAL PROCEDURE SalesOrderAddLines@1000000006(VAR ScannerInput@1000000000 : Record 9062803;ProcessText@1000000006 : Code[50]);
+    VAR
+      SalesHeader@1000000001 : Record 36;
+      ReleaseSalesDocument@1000000002 : Codeunit 414;
+      SalesLine@1000000004 : Record 37;
+      QtyRem@1000000003 : Integer;
+      QtyToUse@1000000005 : Integer;
+      LineNo@1000000007 : Integer;
+    BEGIN
+      ScannerInput.FINDFIRST;
+
+      //Find the sales Order
+      SalesHeader.SETPOSITION(ScannerInput.PositionText);
+
+      IF SalesHeader.Status <> SalesHeader.Status::Open THEN
+        ReleaseSalesDocument.Reopen(SalesHeader);
+
+      REPEAT
+      //Now deal with all the scan lines
+        SalesLine.RESET;
+        QtyRem := 0;
+
+        BEGIN
+          SalesLine.RESET;
+          SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+          SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+          SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+          SalesLine.SETRANGE("No.",ScannerInput."Item No");
+
+          IF ScannerInput."Variant Code" <> '' THEN
+            SalesLine.SETRANGE("Variant Code",ScannerInput."Variant Code");
+
+          IF NOT SalesLine.FINDSET THEN BEGIN
+                //Not found add a line to the order
+            SalesLine.RESET;
+            SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+            SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+
+            IF SalesLine.FINDLAST THEN
+              LineNo := SalesLine."Line No." + 10000
+            ELSE
+              LineNo := 10000;
+
+            SalesLine.INIT;
+            SalesLine."Document Type" := SalesHeader."Document Type";
+            SalesLine."Document No." := SalesHeader."No.";
+            SalesLine."Line No." := LineNo;
+            SalesLine.INSERT(TRUE);
+            SalesLine.VALIDATE(Type,SalesLine.Type::Item);
+            SalesLine.VALIDATE("No.",ScannerInput."Item No");
+            SalesLine.MODIFY(TRUE);
+          END;
+
+          QtyRem := ScannerInput."Qty Remaining" ;
+
+          IF QtyRem > 0 THEN BEGIN
+
+            IF QtyRem >= ScannerInput."Qty Remaining" THEN
+              QtyToUse := ScannerInput."Qty Remaining";
+
+            IF QtyRem < ScannerInput."Qty Remaining" THEN
+              QtyToUse := QtyRem;
+
+            SalesLine.VALIDATE(Quantity, SalesLine.Quantity + QtyToUse);
+            ScannerInput."Qty Used" := ScannerInput."Qty Used" + QtyToUse;
+            ScannerInput."Qty Remaining" := ScannerInput."Qty Remaining"-QtyToUse;
+            ScannerInput.Processed := TRUE;
+            ScannerInput.MODIFY;
+            SalesLine.MODIFY;
+          END;
+          //END;
+        END;
+
+      UNTIL ScannerInput.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE SalesOrderShipping@1000000004(VAR ScannerInput@1000000000 : Record 9062803;ProcessText@1000000006 : Code[50]);
+    VAR
+      SalesHeader@1000000001 : Record 36;
+      ReleaseSalesDocument@1000000002 : Codeunit 414;
+      SalesLine@1000000004 : Record 37;
+      QtyRem@1000000003 : Integer;
+      QtyToUse@1000000005 : Integer;
+    BEGIN
+      //Find the sales Order
+      SalesHeader.SETPOSITION(ScannerInput.PositionText);
+
+      IF SalesHeader.Status <> SalesHeader.Status::Open THEN
+        ReleaseSalesDocument.Reopen(SalesHeader);
+
+      //Need to extend this to use the ProcessText to indicate if we are adding or shipping an order
+
+      REPEAT
+      //Now deal with all the scan lines
+        SalesLine.RESET;
+        QtyRem := 0;
+
+        BEGIN
+          SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+          SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+          SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+          SalesLine.SETRANGE("No.",ScannerInput."Item No");
+
+          IF ScannerInput."Variant Code" <> '' THEN
+            SalesLine.SETRANGE("Variant Code",ScannerInput."Variant Code");
+
+          IF SalesLine.FINDSET THEN BEGIN
+
+            QtyRem := SalesLine.Quantity- SalesLine."Qty. to Ship" ;
+
+            IF QtyRem > 0 THEN BEGIN
+
+              IF QtyRem >= ScannerInput."Qty Remaining" THEN
+                QtyToUse := ScannerInput."Qty Remaining";
+
+              IF QtyRem < ScannerInput."Qty Remaining" THEN
+                QtyToUse := QtyRem;
+
+              SalesLine.VALIDATE("Qty. to Ship", SalesLine."Qty. to Ship" + QtyToUse);
+              ScannerInput."Qty Used" := ScannerInput."Qty Used" + QtyToUse;
+              ScannerInput."Qty Remaining" := ScannerInput."Qty Remaining"-QtyToUse;
+              ScannerInput.Processed := TRUE;
+              ScannerInput.MODIFY;
+              SalesLine.MODIFY;
+            END;
+          END;
+        END;
+
+      UNTIL ScannerInput.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE UpdateTransferDocument@1000000020(VAR ScannerInput@1000000000 : Record 9062803;ProcessText@1000000002 : Code[50]);
+    VAR
+      TransferHeader@1000000001 : Record 5740;
+    BEGIN
+      //Find the sales Order
+      TransferHeader.SETPOSITION(ScannerInput.PositionText);
+
+      //Need to do one for receiving / other types
+      CASE ProcessText OF
+
+        'SHIP':
+          TransferOrderShipping(ScannerInput);
+
+        'RECEIVE':
+          TransferOrderReceiving(ScannerInput);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE TransferOrderShipping@1000000023(VAR ScannerInput@1000000000 : Record 9062803);
+    VAR
+      TransferHeader@1000000001 : Record 5740;
+      TransferLine@1000000004 : Record 5741;
+      QtyRem@1000000003 : Integer;
+      QtyToUse@1000000005 : Integer;
+    BEGIN
+      TransferHeader.SETPOSITION(ScannerInput.PositionText);
+
+      REPEAT
+      //Now deal with all the scan lines
+        TransferLine.RESET;
+        QtyRem := 0;
+
+        BEGIN
+          TransferLine.SETRANGE("Document No.",TransferHeader."No.");
+          TransferLine.SETRANGE("Item No.",ScannerInput."Item No");
+          TransferLine.SETRANGE("Derived From Line No.",0);
+
+          IF ScannerInput."Variant Code" <> '' THEN
+            TransferLine.SETRANGE("Variant Code",ScannerInput."Variant Code");
+
+          IF TransferLine.FINDSET THEN BEGIN
+
+            QtyRem := TransferLine.Quantity- TransferLine."Qty. to Ship" ;
+
+            IF QtyRem > 0 THEN BEGIN
+
+              IF QtyRem >= ScannerInput."Qty Remaining" THEN
+                QtyToUse := ScannerInput."Qty Remaining";
+
+              IF QtyRem < ScannerInput."Qty Remaining" THEN
+                QtyToUse := QtyRem;
+
+              TransferLine.VALIDATE("Qty. to Ship", TransferLine."Qty. to Ship" + QtyToUse);
+              ScannerInput."Qty Used" := ScannerInput."Qty Used" + QtyToUse;
+              ScannerInput."Qty Remaining" := ScannerInput."Qty Remaining"-QtyToUse;
+              ScannerInput.Processed := TRUE;
+              ScannerInput.MODIFY;
+              TransferLine.MODIFY;
+            END;
+          END;
+        END;
+
+      UNTIL ScannerInput.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE TransferOrderReceiving@1000000030(VAR ScannerInput@1000000000 : Record 9062803);
+    VAR
+      TransferHeader@1000000001 : Record 5740;
+      TransferLine@1000000004 : Record 5741;
+      QtyRem@1000000003 : Integer;
+      QtyToUse@1000000005 : Integer;
+    BEGIN
+      TransferHeader.SETPOSITION(ScannerInput.PositionText);
+
+      REPEAT
+      //Now deal with all the scan lines
+        TransferLine.RESET;
+        QtyRem := 0;
+
+        BEGIN
+          TransferLine.SETRANGE("Document No.",TransferHeader."No.");
+          TransferLine.SETRANGE("Item No.",ScannerInput."Item No");
+          TransferLine.SETRANGE("Derived From Line No.",0);
+
+          IF ScannerInput."Variant Code" <> '' THEN
+            TransferLine.SETRANGE("Variant Code",ScannerInput."Variant Code");
+
+          IF TransferLine.FINDSET THEN BEGIN
+
+            QtyRem := TransferLine.Quantity- TransferLine."Qty. to Receive" ;
+
+            IF QtyRem > 0 THEN BEGIN
+
+              IF QtyRem >= ScannerInput."Qty Remaining" THEN
+                QtyToUse := ScannerInput."Qty Remaining";
+
+              IF QtyRem < ScannerInput."Qty Remaining" THEN
+                QtyToUse := QtyRem;
+
+              TransferLine.VALIDATE("Qty. to Receive", TransferLine."Qty. to Receive" + QtyToUse);
+              ScannerInput."Qty Used" := ScannerInput."Qty Used" + QtyToUse;
+              ScannerInput."Qty Remaining" := ScannerInput."Qty Remaining"-QtyToUse;
+              ScannerInput.Processed := TRUE;
+              ScannerInput.MODIFY;
+              TransferLine.MODIFY;
+            END;
+          END;
+        END;
+
+      UNTIL ScannerInput.NEXT = 0;
+    END;
+
+    BEGIN
+    {
+      //Used to handle the barcode scanning from the mobile phone / ipad etc.
+      //http://www.waldo.be/2013/04/25/the-power-of-variants/
+      //DOC NH2016.12 BM 11/02/2016 - Created
+    }
+    END.
+  }
+}
+

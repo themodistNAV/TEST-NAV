@@ -1,0 +1,180 @@
+OBJECT Codeunit 9087015 Store Allocation Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/10/16;
+    Time=12:30:12 PM;
+    Version List=NS2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      StoreAllocationLine@1000000003 : Record 9087036;
+      nSembleSetup@1000000001 : Record 9087000;
+      NoSeriesManagement@1000000002 : Codeunit 396;
+      StoreLinesCounter@1000000000 : Integer;
+
+    PROCEDURE VerifyStoreAllocationCode@1000000002(VAR pStoreAllocationCode@1000000000 : Code[20]) : Boolean;
+    VAR
+      lNoSeriesCode@1000000001 : Code[10];
+      lResult@1000000002 : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Verifying store allocation code
+      //  <> pStoreAllocationCode: Store allocation code to be verified
+      //  <- TRUE: Store allocation changed, validation necessary, FALSE: Everything OK
+
+      lResult := FALSE;
+
+      nSembleSetup.VerifyAndGet();
+      lNoSeriesCode := nSembleSetup.GetStoreAllocationNos();
+
+      IF (pStoreAllocationCode = '') THEN
+      BEGIN
+        pStoreAllocationCode := NoSeriesManagement.GetNextNo(lNoSeriesCode, WORKDATE(), TRUE);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE ShowStoreAllocation@1000000000(pStoreAllocationCode@1000000000 : Code[20];pItemNo@1000000006 : Code[20];pVariantCode@1000000007 : Code[10]);
+    BEGIN
+      //DOC NS2015.1 - Showing store allocation
+      //  -> pStoreAllocationCode: Store allocation code
+      //  -> pItemNo: Item number
+      //  -> pVariantCode: Variant code
+
+      IF ((pStoreAllocationCode = '') OR (pItemNo = '')) THEN
+        EXIT;
+
+      StoreAllocationLine.RESET();
+      StoreAllocationLine.FILTERGROUP(2);
+      StoreAllocationLine.SETRANGE("Store Allocation Code", pStoreAllocationCode);
+      StoreAllocationLine.SETRANGE("Item No.", pItemNo);
+      IF (pVariantCode <> '') THEN
+        StoreAllocationLine.SETRANGE("Variant Code", pVariantCode);
+      StoreAllocationLine.FILTERGROUP(0);
+
+      PAGE.RUNMODAL(0, StoreAllocationLine);
+    END;
+
+    PROCEDURE ShowStoreAllocationMatrix@1000000004(pStoreAllocationCode@1000000008 : Code[20];pTableId@1000000007 : Integer;pTableView@1000000006 : Text[1024];pItemNoFieldId@1000000005 : Integer;pVariantCodeFieldId@1000000004 : Integer;pDescriptionFieldId@1000000003 : Integer;pQuantityFieldId@1000000001 : Integer;pQuantityAllocatedFieldId@1000000000 : Integer;pSequenceFieldId@1000000010 : Integer;pReadOnly@1000000009 : Boolean);
+    VAR
+      lStoreAllocationMatrix@1000000002 : Page 9087080;
+    BEGIN
+      //DOC NS2015.1 - Showing store allocation matrix
+      //  -> pStoreAllocationCode: Store allocation code
+      //  -> pTableId: Table ID (source table for allocation)
+      //  -> pTableView: Table view (source table for allocation)
+      //  -> pItemNoFieldId: Item number field ID
+      //  -> pVariantCodeFieldId: Variant code field ID
+      //  -> pDescriptionFieldId: Description field ID
+      //  -> pQuantityFieldId: Quantity field ID
+      //  -> pQuantityAllocatedFieldId: Quantity allocated field ID
+      //  -> pSequenceFieldId: Sequence field ID
+      //  -> pReadOnly: Read-only flag
+
+      IF (pStoreAllocationCode = '') THEN
+        EXIT;
+
+      CLEAR(lStoreAllocationMatrix);
+      lStoreAllocationMatrix.Initialise(pStoreAllocationCode, pTableId, pTableView, pItemNoFieldId, pVariantCodeFieldId, pDescriptionFieldId,
+        pQuantityFieldId, pQuantityAllocatedFieldId, pSequenceFieldId, pReadOnly);
+      lStoreAllocationMatrix.RUNMODAL();
+    END;
+
+    PROCEDURE CreateLinesForStores@1000000001(pStoreAllocationLine@1000000000 : Record 9087036;pInteraction@1000000007 : Boolean) : Boolean;
+    VAR
+      lItem@1000000002 : Record 27;
+      lSizeValue@1000000003 : Record 9087002;
+      eConfirmation@1000000009 : TextConst 'ENU=Do you want to create blank lines for all stores?;ENG=Do you want to create blank lines for all stores?';
+      eNoLinesCreated@1000000006 : TextConst 'ENU=No store line have been created;ENG=No store line have been created';
+      lResult@1000000008 : Boolean;
+    BEGIN
+      //DOC NS2015.1 - Creating empty lins for all stores
+      //  -> pStoreAllocationLine: The master line
+      //  -> pInteraction: Interaction flag
+      //  <- Result
+
+      lResult := FALSE;
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+      IF (pInteraction) THEN
+        IF ( NOT (CONFIRM(eConfirmation, TRUE))) THEN
+          EXIT(FALSE);
+
+      StoreLinesCounter := 0;
+
+      pStoreAllocationLine.TESTFIELD("Store Allocation Code");
+      pStoreAllocationLine.TESTFIELD("Item No.");
+      IF (pStoreAllocationLine."Variant Code" = '') THEN
+      BEGIN
+        lItem.GET(pStoreAllocationLine."Item No.");
+        lItem.TESTFIELD("Size Group Code");
+        lSizeValue.RESET();
+        lSizeValue.SETRANGE("Size Group Code", lItem."Size Group Code");
+        IF (lSizeValue.FINDSET()) THEN
+        REPEAT
+          CreateLinesForStoresInt(pStoreAllocationLine."Store Allocation Code", pStoreAllocationLine."Item No.", lSizeValue.Code);
+        UNTIL (lSizeValue.NEXT() = 0);
+      END
+      ELSE
+        CreateLinesForStoresInt(pStoreAllocationLine."Store Allocation Code", pStoreAllocationLine."Item No.", pStoreAllocationLine."Variant Code");
+
+      IF (pInteraction) THEN
+        IF (StoreLinesCounter = 0) THEN
+          MESSAGE(eNoLinesCreated);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateLinesForStoresInt@1000000005(pAllocationCode@1000000000 : Code[20];pItemNo@1000000001 : Code[20];pVariantCode@1000000002 : Code[10]);
+    VAR
+      lLocation@1000000004 : Record 14;
+      lStoreAllocationLine@1000000005 : Record 9087036;
+    BEGIN
+      //DOC NS2015.1 - Create empty lines for all stores (internal)
+      //  -> pAllocationCode: Allocation code
+      //  -> pItemNo: Item number
+      //  -> pVariantCode: Variant code
+
+      lLocation.RESET();
+      lLocation.SETRANGE(Store, TRUE);
+      lLocation.SETRANGE(Blocked, FALSE);
+      IF (lLocation.FINDSET()) THEN
+      REPEAT
+        lStoreAllocationLine.RESET();
+        lStoreAllocationLine.SETRANGE("Store Allocation Code", pAllocationCode);
+        lStoreAllocationLine.SETRANGE("Item No.", pItemNo);
+        lStoreAllocationLine.SETRANGE("Variant Code", pVariantCode);
+        lStoreAllocationLine.SETRANGE("Location Code", lLocation.Code);
+        IF (lStoreAllocationLine.ISEMPTY) THEN
+        BEGIN
+          CLEAR(lStoreAllocationLine);
+          lStoreAllocationLine.INIT();
+          lStoreAllocationLine.VALIDATE("Store Allocation Code", pAllocationCode);
+          lStoreAllocationLine.VALIDATE("Item No.", pItemNo);
+          lStoreAllocationLine.VALIDATE("Variant Code", pVariantCode);
+          lStoreAllocationLine.VALIDATE("Location Code", lLocation.Code);
+          lStoreAllocationLine.INSERT(TRUE);
+          StoreLinesCounter += 1;
+        END;
+      UNTIL (lLocation.NEXT() = 0);
+    END;
+
+    BEGIN
+    {
+      //DOC NS2015.1  JH 19/11/2013 - Created
+      //DOC NS2015.6  JH 09/04/2015 - Name changed to "*Store*" (clash with order stock allocation)
+      //DOC NS2016.16 JH 07/09/2016 - nSemble 2016
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,823 @@
+OBJECT Codeunit 50026 Sales Payment Processing
+{
+  OBJECT-PROPERTIES
+  {
+    Date=20/11/17;
+    Time=[ 4:50:43 PM];
+    Modified=Yes;
+    Version List=OP9031,DEL-118,TM3026;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            //ProcessPaymentRequest(TRUE,0,'ID6E552682XG112573Y','USD',59);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      PaymentSetup@1000000000 : Record 50010;
+      PaymentMethod@1000000010 : Record 289;
+      Dict@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.Dictionary`2";
+      Type@1000000002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Type";
+      Activator@1000000003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Activator";
+      Arr@1000000004 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      Str@1000000005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      gResponseId@1000000009 : Text;
+      gErrorText@1000000008 : Text;
+      gReasonCode@1000000007 : Code[10];
+      gOperation@1000000006 : 'Capture,Refund,Cancel,ReAuthorize';
+      gBalAcType@1000000011 : 'G/L Account,Customer,Vendor,Bank Account';
+      SalesPaymentG@1170000000 : Record 50008;
+
+    PROCEDURE ProcessPaymentRequest@1000000006(PayPal@1000000000 : Boolean;Operation@1000000001 : 'Capture,Refund,Cancel,ReAuthorize';TransID@1000000003 : Text;CurrCode@1000000004 : Code[10];Amount@1000000002 : Decimal;VAR ResponseID@1000000005 : Text;VAR ErrorText@1000000006 : Text;MerchRef@1000000007 : Text;VAR ReasonCode@1000000008 : Code[10]);
+    BEGIN
+      PaymentSetup.GET;
+
+      IF PayPal = TRUE THEN BEGIN
+        CASE Operation OF
+          Operation::Capture:
+            BEGIN
+              IF CapturePayment(PaymentSetup."PayPal Client ID",PaymentSetup."PayPal Client Secret",TransID,CurrCode,Amount,ResponseID) THEN BEGIN
+                ErrorText := '';
+              END ELSE BEGIN
+                ErrorText := GETLASTERRORTEXT;
+              END;
+            END;
+          Operation::Refund:
+            BEGIN
+              IF RefundCapture(PaymentSetup."PayPal Client ID",PaymentSetup."PayPal Client Secret",TransID,CurrCode,Amount,ResponseID) THEN
+                ErrorText := ''
+              ELSE
+                ErrorText := GETLASTERRORTEXT;
+            END;
+          Operation::ReAuthorize:
+            BEGIN
+              IF ReAuthorizeCapture(PaymentSetup."PayPal Client ID",PaymentSetup."PayPal Client Secret",TransID,CurrCode,Amount,ResponseID) THEN
+                ErrorText := ''
+              ELSE
+                ErrorText := GETLASTERRORTEXT;
+            END;
+          Operation::Cancel:
+            BEGIN
+              IF CancelAuthorization(PaymentSetup."PayPal Client ID",PaymentSetup."PayPal Client Secret",TransID,ResponseID) THEN
+                ErrorText := ''
+              ELSE
+                ErrorText := GETLASTERRORTEXT;
+            END;
+        END;
+      END ELSE BEGIN
+        CASE Operation OF
+          Operation::Capture:
+            BEGIN
+      //DOC TM3026 ST 03/10/2018 -
+              IF CheckOutCapturePayment(SalesPaymentG."Transaction ID", Amount, ResponseID, ReasonCode) THEN
+              //IF CapturePaymentCS(MerchRef,CurrCode,Amount,TransID,ResponseID,ReasonCode) THEN
+      //DOC TM3026 ST 03/10/2018 +
+                ErrorText := ''
+              ELSE
+                ErrorText := GETLASTERRORTEXT;
+            END;
+          Operation::Cancel:
+            BEGIN
+      //DOC TM3026 ST 03/10/2018 -
+              IF CheckOutVoidPayment(SalesPaymentG."Transaction ID", Amount, ResponseID, ReasonCode) THEN
+              //IF CancelAuthorizationCS(MerchRef,CurrCode,Amount,TransID,ResponseID,ReasonCode) THEN
+      //DOC TM3026 ST 03/10/2018 +
+                ErrorText := ''
+              ELSE
+                ErrorText := GETLASTERRORTEXT;
+            END;
+          Operation::Refund:
+            BEGIN
+      //DOC TM3026 ST 03/10/2018 -
+              IF CheckOutRefundPayment(SalesPaymentG."Capture ID", SalesPaymentG."Refund Amount", ResponseID, ReasonCode) THEN
+              //IF RefundCaptureCS(MerchRef,CurrCode,Amount,TransID,ResponseID,ReasonCode) THEN
+      //DOC TM3026 ST 03/10/2018 -
+                ErrorText := ''
+              ELSE
+                ErrorText := GETLASTERRORTEXT;
+            END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetAccessToken@1000000001(ClientID@1000000001 : Text;ClientSecret@1000000000 : Text) : Text;
+    VAR
+      OAuth@1000000003 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.OAuthTokenCredential";
+    BEGIN
+      //DOC OP9031 RK 08/03/17 -
+      CLEAR(Arr);
+      CLEAR(Dict);
+      //DOC OP9031 RK 08/03/17 +
+      Arr := Arr.CreateInstance(GETDOTNETTYPE(Type),2);
+      Arr.SetValue(GETDOTNETTYPE(Str),0);
+      Arr.SetValue(GETDOTNETTYPE(Str),1);
+      Type := GETDOTNETTYPE(Dict);
+      Type := Type.MakeGenericType(Arr);
+      Dict := Activator.CreateInstance(Type);
+      IF PaymentSetup."PayPal Mode" = PaymentSetup."PayPal Mode"::Sandbox THEN
+        Dict.Add('mode','sandbox')
+      ELSE
+        Dict.Add('mode','live');
+      Dict.Add('clientId',ClientID);
+      Dict.Add('clientSecret',ClientSecret);
+      Dict.Add('trust level','Full');
+      OAuth := OAuth.OAuthTokenCredential(ClientID,ClientSecret,Dict);
+      EXIT(OAuth.GetAccessToken);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE CapturePayment@1000000000(ClientID@1000000002 : Text;ClientSecret@1000000003 : Text;TransID@1000000004 : Text;CurrCode@1000000006 : Code[10];TransAmount@1000000007 : Decimal;VAR pResponseID@1000000008 : Text);
+    VAR
+      PaypalAPIContext@1000000000 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.APIContext";
+      OAuth@1000000001 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.OAuthTokenCredential";
+      Authorization@1000000005 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.Authorization";
+      PaypalAmount@1000000009 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.Amount";
+      PaypalCapture@1000000010 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.Capture";
+      ResponseCapture@1000000011 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.Capture";
+    BEGIN
+      PaypalAPIContext := PaypalAPIContext.APIContext(GetAccessToken(ClientID,ClientSecret));
+      //DOC OP9031 RK 08/03/17 -
+      PaypalAPIContext.Config := Dict;
+      //DOC OP9031 RK 08/03/17 +
+      Authorization := Authorization.Get(PaypalAPIContext,TransID);
+      PaypalAmount := PaypalAmount.Amount;
+      PaypalAmount.currency := CurrCode;
+      PaypalAmount.total := FORMAT(TransAmount,0,'<Integer><Decimals,3>');
+      PaypalCapture := PaypalCapture.Capture;
+      PaypalCapture.amount := PaypalAmount;
+      ResponseCapture := Authorization.Capture(PaypalAPIContext,PaypalCapture);
+      pResponseID := ResponseCapture.id;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE CancelAuthorization@1000000007(ClientID@1000000004 : Text;ClientSecret@1000000003 : Text;TransID@1000000002 : Text;VAR pResponseID@1000000000 : Text);
+    VAR
+      PaypalAPIContext@1000000010 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.APIContext";
+      OAuth@1000000009 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.OAuthTokenCredential";
+      Authorization@1000000008 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.Authorization";
+      ResponseAuth@1000000005 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.Authorization";
+    BEGIN
+      PaypalAPIContext := PaypalAPIContext.APIContext(GetAccessToken(ClientID,ClientSecret));
+      //DOC OP9031 RK 08/03/17 -
+      PaypalAPIContext.Config := Dict;
+      //DOC OP9031 RK 08/03/17 +
+      Authorization := Authorization.Get(PaypalAPIContext,TransID);
+      ResponseAuth := Authorization.Void(PaypalAPIContext);
+      pResponseID := ResponseAuth.id;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE RefundCapture@1000000008(ClientID@1000000004 : Text;ClientSecret@1000000003 : Text;CaptureID@1000000002 : Text;CurrCode@1000000001 : Code[10];TransAmount@1000000000 : Decimal;VAR pResponseID@1000000005 : Text);
+    VAR
+      PaypalAPIContext@1000000008 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.APIContext";
+      OAuth@1000000007 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.OAuthTokenCredential";
+      PaypalCapture@1000000010 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.Capture";
+      PaypalRefund@1000000011 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.Refund";
+      ResponseRefund@1000000012 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.Refund";
+      PaypalAmount@1000000013 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.Amount";
+    BEGIN
+      PaypalAPIContext := PaypalAPIContext.APIContext(GetAccessToken(ClientID,ClientSecret));
+      //DOC OP9031 RK 08/03/17 -
+      PaypalAPIContext.Config := Dict;
+      //DOC OP9031 RK 08/03/17 +
+      PaypalCapture := PaypalCapture.Get(PaypalAPIContext,CaptureID);
+      PaypalRefund := PaypalRefund.Refund;
+      PaypalAmount := PaypalAmount.Amount;
+      PaypalAmount.currency := CurrCode;
+      PaypalAmount.total := FORMAT(TransAmount,0,'<Integer><Decimals,3>');
+      PaypalRefund.amount := PaypalAmount;
+      ResponseRefund := PaypalCapture.Refund(PaypalAPIContext,PaypalRefund);
+      pResponseID := ResponseRefund.id;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ReAuthorizeCapture@1000000009(ClientID@1000000004 : Text;ClientSecret@1000000003 : Text;TransID@1000000002 : Text;CurrCode@1000000010 : Code[10];TransAmount@1000000009 : Decimal;VAR pResponseID@1000000007 : Text);
+    VAR
+      PaypalAPIContext@1000000006 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.APIContext";
+      OAuth@1000000005 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.OAuthTokenCredential";
+      Authorization@1000000001 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.Authorization";
+      ResponseAuth@1000000000 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.Authorization";
+      PaypalAmount@1000000008 : DotNet "'PayPal, Version=1.7.4.0, Culture=neutral, PublicKeyToken=5b4afc1ccaef40fb'.PayPal.Api.Amount";
+    BEGIN
+      PaypalAPIContext := PaypalAPIContext.APIContext(GetAccessToken(ClientID,ClientSecret));
+      //DOC OP9031 RK 08/03/17 -
+      PaypalAPIContext.Config := Dict;
+      //DOC OP9031 RK 08/03/17 +
+      Authorization := Authorization.Get(PaypalAPIContext,TransID);
+      //MESSAGE('%1 and %2',PaypalAPIContext.AccessToken,Authorization.id);
+      PaypalAmount := PaypalAmount.Amount;
+      PaypalAmount.currency := CurrCode;
+      PaypalAmount.total := FORMAT(TransAmount,0,'<Integer><Decimals,3>');
+      Authorization.amount := PaypalAmount;
+      ResponseAuth := Authorization.Reauthorize(PaypalAPIContext);
+      pResponseID := ResponseAuth.id;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE CheckOutCapturePayment@1170000000(ChargeIDP@1170000010 : Text;AmountP@1170000009 : Decimal;VAR ResponseIdP@1170000018 : Text;VAR ReasonCodeP@1170000017 : Code[10]);
+    VAR
+      ModistSetupL@1170000000 : Record 50000;
+      C_Body@1170000015 : TextConst 'ENU={"value":"%1"}';
+      HttpClientL@1170000026 : DotNet "'System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.HttpClient";
+      HttpResponseMessageL@1170000025 : DotNet "'System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.HttpResponseMessage";
+      UriL@1170000024 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Uri";
+      HttpStringContentL@1170000023 : DotNet "'System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.StringContent";
+      EncodingL@1170000022 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      JObjectL@1170000021 : DotNet "'Newtonsoft.Json, Version=6.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed'.Newtonsoft.Json.Linq.JObject";
+      BaseUrlL@1170000001 : Text;
+      ConvertedAmtL@1170000002 : BigInteger;
+      ReponseTextL@1170000003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      ServicePointManagerL@1170000005 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.ServicePointManager";
+      SecurityProtocolTypeL@1170000004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.SecurityProtocolType";
+    BEGIN
+      //DOC TM3026 ST 03/10/2018 -
+      AmountP := AmountP * 100;
+      ConvertedAmtL := AmountP;
+      ModistSetupL.GET;
+      ModistSetupL.TESTFIELD("CheckOut Secret Key");
+      ModistSetupL.TESTFIELD("Capture Url");
+      BaseUrlL := STRSUBSTNO(ModistSetupL."Capture Url", ChargeIDP);
+
+      ServicePointManagerL.SecurityProtocol := SecurityProtocolTypeL.Tls12;
+      HttpClientL := HttpClientL.HttpClient();
+      HttpClientL.BaseAddress := UriL.Uri(BaseUrlL);
+      HttpClientL.DefaultRequestHeaders.Add('Authorization', ModistSetupL."CheckOut Secret Key");
+      HttpStringContentL := HttpStringContentL.StringContent(STRSUBSTNO(C_Body, ConvertedAmtL), EncodingL.UTF8,'application/json');
+      HttpResponseMessageL := HttpClientL.PostAsync(BaseUrlL, HttpStringContentL).Result;
+      ReponseTextL := HttpResponseMessageL.Content.ReadAsStringAsync().Result;
+      JObjectL := JObjectL.Parse(ReponseTextL.ToString());
+      IF HttpResponseMessageL.IsSuccessStatusCode THEN BEGIN
+        ReasonCodeP := '100';
+        ResponseIdP := JObjectL.GetValue('responseCode').ToString;
+        SalesPaymentG."Capture ID" := JObjectL.GetValue('id').ToString;
+      END ELSE
+        ERROR(JObjectL.GetValue('message').ToString)
+      //DOC TM3026 ST 03/10/2018 +
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE CapturePaymentCS@1000000002(MerchantRef@1000000013 : Text;CurrCode@1000000014 : Code[10];TransAmount@1000000015 : Decimal;authID@1000000016 : Text;VAR pResponseID@1000000017 : Text;VAR pReasonCode@1000000018 : Code[10]);
+    VAR
+      StrBuild@1000000012 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      URIObj@1000000011 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Uri";
+      WebRequest@1000000010 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      StrWriter@1000000009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamWriter";
+      WebResponse@1000000008 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+      Stream@1000000007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Stream";
+      Reader@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlTextReader";
+      Encoding@1000000005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      CredCache@1000000004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.CredentialCache";
+      NWCred@1000000003 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.NetworkCredential";
+      SysConvert@1000000002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Convert";
+      STREAD@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader";
+      AuthLevel@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.Security.AuthenticationLevel";
+    BEGIN
+      //NWCred :=  NWCred.NetworkCredential(PaymentSetup."Cybersource User ID",PaymentSetup."Cybersource Password",'');
+      //CredCache := CredCache.CredentialCache();
+      URIObj := URIObj.Uri(PaymentSetup."Cybersource url");
+      WebRequest := WebRequest.CreateDefault(URIObj);
+      //CredCache.Add(URIObj,'Basic',NWCred);
+      //WebRequest.Credentials := CredCache;
+      WebRequest.Method := 'POST';
+      WebRequest.ContentType := 'application/soap+xml; charset=utf-8';
+      WebRequest.Headers.Add('SOAPAction','runTransaction');
+      StrBuild := StrBuild.StringBuilder();
+      StrBuild.Append('<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:schemas-cybersource-com:transaction-data-1.132">');
+      StrBuild.Append(' <soapenv:Header> <wsse:Security soapenv:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">');
+      StrBuild.Append(' <wsse:UsernameToken> <wsse:Username>' + PaymentSetup."Cybersource Merchant ID" + '</wsse:Username>');
+      StrBuild.Append(' <wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">' +
+                            PaymentSetup."Cybersource Security Key 1" + PaymentSetup."Cybersource Security Key 2" + '</wsse:Password>');
+      StrBuild.Append(' </wsse:UsernameToken> </wsse:Security> </soapenv:Header>');
+      StrBuild.Append(' <soapenv:Body> <urn:requestMessage xmlns="urn:schemas-cybersource-com:transaction-data-1.37">');
+      StrBuild.Append('<urn:merchantID>' + PaymentSetup."Cybersource Merchant ID" + '</urn:merchantID>');
+      StrBuild.Append('<urn:merchantReferenceCode>' + MerchantRef + '</urn:merchantReferenceCode>');
+      StrBuild.Append('<urn:purchaseTotals> <urn:currency>' + CurrCode + '</urn:currency>');
+      StrBuild.Append('<urn:grandTotalAmount>' + FORMAT(TransAmount,0,'<Integer><Decimals,3>') + '</urn:grandTotalAmount> </urn:purchaseTotals>');
+      StrBuild.Append('<urn:ccCaptureService run="true"> <urn:authRequestID>' + authID + '</urn:authRequestID> </urn:ccCaptureService>');
+      StrBuild.Append('</urn:requestMessage> </soapenv:Body> </soapenv:Envelope>');
+      //WebRequest.Timeout := 120000;
+      StrWriter := StrWriter.StreamWriter(WebRequest.GetRequestStream(), Encoding.ASCII);
+      StrWriter.Write(StrBuild.ToString());
+      StrWriter.Close();
+      WebResponse := WebRequest.GetResponse();
+      Stream := WebResponse.GetResponseStream();
+      Reader := Reader.XmlTextReader(Stream);
+      WHILE Reader.Read DO BEGIN
+        IF Reader.IsStartElement THEN BEGIN
+          CASE Reader.Name OF
+            'c:requestToken':
+              pResponseID := Reader.ReadString;
+            'c:reasonCode':
+              pReasonCode := Reader.ReadString;
+          END;
+        END;
+      END;
+      Reader.Close();
+      Stream.Close();
+      CLEAR(StrBuild);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE CheckOutVoidPayment@1170000004(ChargeIDP@1170000003 : Text;VoidAmountP@1170000002 : Decimal;VAR ResponseIdP@1170000001 : Text;VAR ReasonCodeP@1170000000 : Code[10]);
+    VAR
+      C_Body@1170000016 : TextConst 'ENU={}';
+      ModistSetupL@1170000027 : Record 50000;
+      HttpClientL@1170000026 : DotNet "'System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.HttpClient";
+      HttpResponseMessageL@1170000025 : DotNet "'System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.HttpResponseMessage";
+      UriL@1170000024 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Uri";
+      HttpStringContentL@1170000023 : DotNet "'System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.StringContent";
+      EncodingL@1170000022 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      JObjectL@1170000021 : DotNet "'Newtonsoft.Json, Version=6.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed'.Newtonsoft.Json.Linq.JObject";
+      BaseUrlL@1170000019 : Text;
+      ReponseTextL@1170000004 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      ServicePointManagerL@1170000006 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.ServicePointManager";
+      SecurityProtocolTypeL@1170000005 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.SecurityProtocolType";
+    BEGIN
+      //DOC TM3026 ST 03/10/2018 -
+      ModistSetupL.GET;
+      ModistSetupL.TESTFIELD("CheckOut Secret Key");
+      ModistSetupL.TESTFIELD("Void Url");
+      BaseUrlL := STRSUBSTNO(ModistSetupL."Void Url", ChargeIDP);
+
+      HttpClientL := HttpClientL.HttpClient();
+      HttpClientL.BaseAddress := UriL.Uri(BaseUrlL);
+      HttpClientL.DefaultRequestHeaders.Add('Authorization', ModistSetupL."CheckOut Secret Key");
+      HttpStringContentL := HttpStringContentL.StringContent(STRSUBSTNO(C_Body), EncodingL.UTF8,'application/json');
+      HttpResponseMessageL := HttpClientL.PostAsync(BaseUrlL, HttpStringContentL).Result;
+      ReponseTextL := HttpResponseMessageL.Content.ReadAsStringAsync().Result;
+      JObjectL := JObjectL.Parse(ReponseTextL.ToString());
+      IF HttpResponseMessageL.IsSuccessStatusCode THEN BEGIN
+        ReasonCodeP := '100';
+        ResponseIdP := JObjectL.GetValue('responseCode').ToString;
+        SalesPaymentG."Capture ID" := JObjectL.GetValue('id').ToString;
+      END ELSE
+        ERROR(JObjectL.GetValue('message').ToString)
+      //DOC TM3026 ST 03/10/2018 +
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE CancelAuthorizationCS@1000000003(MerchantRef@1000000003 : Text;CurrCode@1000000002 : Code[10];TransAmount@1000000001 : Decimal;authID@1000000000 : Text;VAR pResponseID@1000000018 : Text;VAR pReasonCode@1000000017 : Code[10]);
+    VAR
+      StrBuild@1000000016 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      URIObj@1000000015 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Uri";
+      WebRequest@1000000014 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      StrWriter@1000000013 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamWriter";
+      WebResponse@1000000012 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+      Stream@1000000011 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Stream";
+      Reader@1000000010 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlTextReader";
+      Encoding@1000000009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      CredCache@1000000008 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.CredentialCache";
+      NWCred@1000000007 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.NetworkCredential";
+      SysConvert@1000000006 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Convert";
+      STREAD@1000000005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader";
+      AuthLevel@1000000004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.Security.AuthenticationLevel";
+    BEGIN
+      URIObj := URIObj.Uri(PaymentSetup."Cybersource url");
+      WebRequest := WebRequest.CreateDefault(URIObj);
+      WebRequest.Method := 'POST';
+      WebRequest.ContentType := 'application/soap+xml; charset=utf-8';
+      WebRequest.Headers.Add('SOAPAction','runTransaction');
+      StrBuild := StrBuild.StringBuilder();
+      StrBuild.Append('<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:schemas-cybersource-com:transaction-data-1.132">');
+      StrBuild.Append(' <soapenv:Header> <wsse:Security soapenv:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">');
+      StrBuild.Append(' <wsse:UsernameToken> <wsse:Username>' + PaymentSetup."Cybersource Merchant ID" + '</wsse:Username>');
+      StrBuild.Append(' <wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">' +
+                            PaymentSetup."Cybersource Security Key 1" + PaymentSetup."Cybersource Security Key 2" + '</wsse:Password>');
+      StrBuild.Append(' </wsse:UsernameToken> </wsse:Security> </soapenv:Header>');
+      StrBuild.Append(' <soapenv:Body> <urn:requestMessage xmlns="urn:schemas-cybersource-com:transaction-data-1.37">');
+      StrBuild.Append('<urn:merchantID>' + PaymentSetup."Cybersource Merchant ID" + '</urn:merchantID>');
+      StrBuild.Append('<urn:merchantReferenceCode>' + MerchantRef + '</urn:merchantReferenceCode>');
+      StrBuild.Append('<urn:purchaseTotals> <urn:currency>' + CurrCode + '</urn:currency>');
+      StrBuild.Append('<urn:grandTotalAmount>' + FORMAT(TransAmount,0,'<Integer><Decimals,3>') + '</urn:grandTotalAmount> </urn:purchaseTotals>');
+      StrBuild.Append(' <urn:ccAuthReversalService run="true"> <urn:authRequestID>' + authID + '</urn:authRequestID> </urn:ccAuthReversalService>');
+      StrBuild.Append(' </urn:requestMessage> </soapenv:Body> </soapenv:Envelope>');
+
+      StrWriter := StrWriter.StreamWriter(WebRequest.GetRequestStream(), Encoding.ASCII);
+      StrWriter.Write(StrBuild.ToString());
+      StrWriter.Close();
+      WebResponse := WebRequest.GetResponse();
+      Stream := WebResponse.GetResponseStream();
+      Reader := Reader.XmlTextReader(Stream);
+      WHILE Reader.Read DO BEGIN
+        IF Reader.IsStartElement THEN BEGIN
+          CASE Reader.Name OF
+            'c:requestToken':
+              pResponseID := Reader.ReadString;
+            'c:reasonCode':
+              pReasonCode := Reader.ReadString;
+          END;
+        END;
+      END;
+      Reader.Close();
+      Stream.Close();
+      CLEAR(StrBuild);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE CheckOutRefundPayment@1170000003(ChargeIDP@1170000003 : Text;RefundAmountP@1170000002 : Decimal;VAR ResponseIdP@1170000001 : Text;VAR ReasonCodeP@1170000000 : Code[10]);
+    VAR
+      C_Body@1170000016 : TextConst 'ENU={"value":"%1"}';
+      ModistSetupL@1170000012 : Record 50000;
+      HttpClientL@1170000011 : DotNet "'System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.HttpClient";
+      HttpResponseMessageL@1170000010 : DotNet "'System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.HttpResponseMessage";
+      UriL@1170000009 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Uri";
+      HttpStringContentL@1170000008 : DotNet "'System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.StringContent";
+      EncodingL@1170000007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      JObjectL@1170000006 : DotNet "'Newtonsoft.Json, Version=6.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed'.Newtonsoft.Json.Linq.JObject";
+      BaseUrlL@1170000004 : Text;
+      ConvertedAmtL@1170000013 : BigInteger;
+      ReponseTextL@1170000014 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      ServicePointManagerL@1170000015 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.ServicePointManager";
+      SecurityProtocolTypeL@1170000005 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.SecurityProtocolType";
+    BEGIN
+      //DOC TM3026 ST 03/10/2018 -
+      RefundAmountP := RefundAmountP * 100;
+      ConvertedAmtL := RefundAmountP;
+      ModistSetupL.GET;
+      ModistSetupL.TESTFIELD("CheckOut Secret Key");
+      ModistSetupL.TESTFIELD("Refund Url");
+      BaseUrlL := STRSUBSTNO(ModistSetupL."Refund Url", ChargeIDP);
+      ServicePointManagerL.SecurityProtocol := SecurityProtocolTypeL.Tls12;
+      HttpClientL := HttpClientL.HttpClient();
+      HttpClientL.BaseAddress := UriL.Uri(BaseUrlL);
+      HttpClientL.DefaultRequestHeaders.Add('Authorization', ModistSetupL."CheckOut Secret Key");
+      HttpStringContentL := HttpStringContentL.StringContent(STRSUBSTNO(C_Body, ConvertedAmtL), EncodingL.UTF8,'application/json');
+      HttpResponseMessageL := HttpClientL.PostAsync(BaseUrlL, HttpStringContentL).Result;
+      ReponseTextL := HttpResponseMessageL.Content.ReadAsStringAsync().Result;
+      JObjectL := JObjectL.Parse(ReponseTextL.ToString());
+      IF HttpResponseMessageL.IsSuccessStatusCode THEN BEGIN
+        ReasonCodeP := '100';
+        ResponseIdP := JObjectL.GetValue('responseCode').ToString;
+        SalesPaymentG."Capture ID" := JObjectL.GetValue('id').ToString;
+      END ELSE
+        ERROR(JObjectL.GetValue('message').ToString)
+      //DOC TM3026 ST 03/10/2018 +
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE RefundCaptureCS@1000000004(MerchantRef@1000000003 : Text;CurrCode@1000000002 : Code[10];TransAmount@1000000001 : Decimal;CaptureID@1000000000 : Text;VAR pResponseID@1000000018 : Text;VAR pReasonCode@1000000017 : Code[10]);
+    VAR
+      StrBuild@1000000016 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      URIObj@1000000015 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Uri";
+      WebRequest@1000000014 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      StrWriter@1000000013 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamWriter";
+      WebResponse@1000000012 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+      Stream@1000000011 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Stream";
+      Reader@1000000010 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlTextReader";
+      Encoding@1000000009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      CredCache@1000000008 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.CredentialCache";
+      NWCred@1000000007 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.NetworkCredential";
+      SysConvert@1000000006 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Convert";
+      STREAD@1000000005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader";
+      AuthLevel@1000000004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.Security.AuthenticationLevel";
+    BEGIN
+      URIObj := URIObj.Uri(PaymentSetup."Cybersource url");
+      WebRequest := WebRequest.CreateDefault(URIObj);
+      WebRequest.Method := 'POST';
+      WebRequest.ContentType := 'application/soap+xml; charset=utf-8';
+      WebRequest.Headers.Add('SOAPAction','runTransaction');
+      StrBuild := StrBuild.StringBuilder();
+      StrBuild.Append('<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:schemas-cybersource-com:transaction-data-1.132">');
+      StrBuild.Append(' <soapenv:Header> <wsse:Security soapenv:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">');
+      StrBuild.Append(' <wsse:UsernameToken> <wsse:Username>' + PaymentSetup."Cybersource Merchant ID" + '</wsse:Username>');
+      StrBuild.Append(' <wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">' +
+                            PaymentSetup."Cybersource Security Key 1" + PaymentSetup."Cybersource Security Key 2" + '</wsse:Password>');
+      StrBuild.Append(' </wsse:UsernameToken> </wsse:Security> </soapenv:Header>');
+      StrBuild.Append(' <soapenv:Body> <urn:requestMessage xmlns="urn:schemas-cybersource-com:transaction-data-1.37">');
+      StrBuild.Append('<urn:merchantID>' + PaymentSetup."Cybersource Merchant ID" + '</urn:merchantID>');
+      StrBuild.Append('<urn:merchantReferenceCode>' + MerchantRef + '</urn:merchantReferenceCode>');
+      StrBuild.Append('<urn:purchaseTotals> <urn:currency>' + CurrCode + '</urn:currency>');
+      StrBuild.Append('<urn:grandTotalAmount>' + FORMAT(TransAmount,0,'<Integer><Decimals,3>') + '</urn:grandTotalAmount> </urn:purchaseTotals>');
+      StrBuild.Append(' <urn:ccCreditService run="true"> <urn:captureRequestID>' + CaptureID + '</urn:captureRequestID> </urn:ccCreditService>');
+      StrBuild.Append(' </urn:requestMessage> </soapenv:Body> </soapenv:Envelope>');
+
+      StrWriter := StrWriter.StreamWriter(WebRequest.GetRequestStream(), Encoding.ASCII);
+      StrWriter.Write(StrBuild.ToString());
+      StrWriter.Close();
+      WebResponse := WebRequest.GetResponse();
+      Stream := WebResponse.GetResponseStream();
+      Reader := Reader.XmlTextReader(Stream);
+      WHILE Reader.Read DO BEGIN
+        IF Reader.IsStartElement THEN BEGIN
+          CASE Reader.Name OF
+            'c:requestToken':
+              pResponseID := Reader.ReadString;
+            'c:reasonCode':
+              pReasonCode := Reader.ReadString;
+          END;
+        END;
+      END;
+      Reader.Close();
+      Stream.Close();
+      CLEAR(StrBuild);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ReAuthorizeCS@1000000005();
+    BEGIN
+    END;
+
+    PROCEDURE CreatePostGenJournal@1190000005(AcNo@1190000009 : Code[20];PayAmount@1190000013 : Decimal;BalAcType@1190000014 : 'G/L Account,Customer,Vendor,Bank Account';BalAcNo@1190000015 : Code[20];VAR DocNo@1000000002 : Code[20];UseTemplate@1000000004 : Boolean;CurrCode@1000000005 : Code[10]);
+    VAR
+      GenJnlLine@1190000007 : Record 81;
+      GenJnlPost@1190000006 : Codeunit 12;
+      NoSeriesMgt@1190000005 : Codeunit 396;
+      JournalTemplate@1000000000 : Code[10];
+      JournalBatch@1000000001 : Code[10];
+      LineNo@1000000003 : Integer;
+    BEGIN
+      PaymentSetup.GET;
+      CLEAR(NoSeriesMgt);
+      DocNo := NoSeriesMgt.GetNextNo(PaymentSetup."G/L Journals Doc No. Series",TODAY,TRUE);
+      IF UseTemplate THEN BEGIN
+        PaymentSetup.TESTFIELD("Payment Journal Template");
+        PaymentSetup.TESTFIELD("Payment Journal Batch");
+        JournalTemplate := PaymentSetup."Payment Journal Template";
+        JournalBatch := PaymentSetup."Payment Journal Batch";
+        GenJnlLine.RESET;
+        GenJnlLine.SETRANGE("Journal Template Name",JournalTemplate);
+        GenJnlLine.SETRANGE("Journal Batch Name",JournalBatch);
+        GenJnlLine.DELETEALL;
+        LineNo := 10000;
+      END;
+      GenJnlLine.INIT;
+      IF UseTemplate THEN BEGIN
+        GenJnlLine."Journal Template Name" := JournalTemplate;
+        GenJnlLine."Journal Batch Name" := JournalBatch;
+        GenJnlLine."Line No." := LineNo;
+      END;
+      GenJnlLine.VALIDATE("Posting Date",TODAY);
+      IF PayAmount > 0 THEN
+        GenJnlLine.VALIDATE("Document Type",GenJnlLine."Document Type"::Payment)
+      ELSE
+        GenJnlLine.VALIDATE("Document Type",GenJnlLine."Document Type"::Refund);
+      GenJnlLine.VALIDATE("Account Type",GenJnlLine."Account Type"::Customer);
+      GenJnlLine.VALIDATE("Account No.",AcNo);
+      GenJnlLine.VALIDATE("Document No.",DocNo);
+      GenJnlLine.VALIDATE("Currency Code",CurrCode);
+      GenJnlLine.VALIDATE(Amount,-PayAmount);
+      GenJnlLine.TESTFIELD("Gen. Posting Type",GenJnlLine."Gen. Posting Type"::" ");
+      IF BalAcNo = '' THEN BEGIN
+        GenJnlLine.VALIDATE("Bal. Account Type",GenJnlLine."Bal. Account Type"::"G/L Account");
+        GenJnlLine.VALIDATE("Bal. Account No.",'');
+      END ELSE BEGIN
+        GenJnlLine.VALIDATE("Bal. Account Type",BalAcType);
+        GenJnlLine.VALIDATE("Bal. Account No.",BalAcNo);
+      END;
+      CLEAR(GenJnlPost);
+      GenJnlPost.RUN(GenJnlLine);
+      CLEAR(GenJnlPost);
+      IF UseTemplate THEN BEGIN
+        GenJnlLine.RESET;
+        GenJnlLine.SETRANGE("Journal Template Name",JournalTemplate);
+        GenJnlLine.SETRANGE("Journal Batch Name",JournalBatch);
+        GenJnlLine.DELETEALL;
+      END;
+      CLEAR(NoSeriesMgt);
+    END;
+
+    PROCEDURE CaptureOrderPayments@1000000010(OrderNo@1000000000 : Code[20];CustNo@1000000004 : Code[20]);
+    VAR
+      SalesPayment@1000000001 : Record 50008;
+      SalesPayment2@1000000002 : Record 50008;
+      lDocNo@1000000003 : Code[20];
+      ReauthOperation@1000000005 : 'Capture,Refund,Cancel,ReAuthorize';
+    BEGIN
+      SalesPayment.SETRANGE("Sales Order No.",OrderNo);
+      SalesPayment.SETFILTER("Payment Type",'%1|%2',SalesPayment."Payment Type"::CreditCard,SalesPayment."Payment Type"::PayPal);
+      SalesPayment.SETFILTER(Status,'%1|%2',SalesPayment.Status::Authorized,SalesPayment.Status::Reauthorized);
+      IF SalesPayment.FINDFIRST THEN BEGIN
+        REPEAT
+          SalesPayment2.GET(SalesPayment."Order Guid",SalesPayment."Line No.");
+          gOperation := gOperation::Capture;
+          ReauthOperation := ReauthOperation::ReAuthorize;
+          IF SalesPayment."Payment Type" = SalesPayment."Payment Type"::PayPal THEN BEGIN
+            //DOC OP9031 RK 31/01/17 -
+            //FindPaymentMethod(TRUE);
+            FindPaymentMethod(TRUE,SalesPayment."Currency Code",SalesPayment."Card Type");//DOC OP9031 RK 08/03/17 -
+            //DOC OP9031 RK 31/01/17 +
+            IF SalesPayment.Status = SalesPayment.Status::Reauthorized THEN
+              ProcessPaymentRequest(TRUE,gOperation,SalesPayment."Reauthorize ID",SalesPayment."Currency Code",SalesPayment."Capture Amount",gResponseId,gErrorText,'',gReasonCode)
+            ELSE
+              ProcessPaymentRequest(TRUE,gOperation,SalesPayment."Transaction ID",SalesPayment."Currency Code",SalesPayment."Capture Amount",gResponseId,gErrorText,'',gReasonCode);
+            IF gErrorText = '' THEN BEGIN
+              SalesPayment2.Status := SalesPayment.Status::Captured;
+              SalesPayment2."Capture ID" := gResponseId;
+              SalesPayment2."Response ID" := gResponseId;
+              SalesPayment2.MODIFY;
+              COMMIT;
+              CreatePostGenJournal(CustNo,SalesPayment."Capture Amount",gBalAcType,PaymentMethod."Bal. Account No.",lDocNo,FALSE,SalesPayment."Currency Code");
+              SalesPayment2."Payment Journal Created" := TRUE;
+              SalesPayment2."Payment Doc. No." := lDocNo;
+              SalesPayment2.MODIFY;
+              COMMIT;
+            END ELSE BEGIN
+              IF SalesPayment.Status = SalesPayment.Status::Authorized THEN BEGIN
+                gErrorText := '';
+                ProcessPaymentRequest(TRUE,ReauthOperation,SalesPayment."Transaction ID",SalesPayment."Currency Code",SalesPayment."Capture Amount",gResponseId,gErrorText,'',gReasonCode);
+                IF gErrorText = '' THEN BEGIN
+                  SalesPayment2.Status := SalesPayment2.Status::Reauthorized;
+                  SalesPayment2."Reauthorize ID" := gResponseId;
+                  SalesPayment2.MODIFY;
+                  COMMIT;
+                  ProcessPaymentRequest(TRUE,gOperation,SalesPayment2."Reauthorize ID",SalesPayment2."Currency Code",SalesPayment2."Capture Amount",gResponseId,gErrorText,'',gReasonCode);
+                  IF gErrorText = '' THEN BEGIN
+                    SalesPayment2.Status := SalesPayment.Status::Captured;
+                    SalesPayment2."Capture ID" := gResponseId;
+                    SalesPayment2."Response ID" := gResponseId;
+                    SalesPayment2.MODIFY;
+                    COMMIT;
+                    CreatePostGenJournal(CustNo,SalesPayment."Capture Amount",gBalAcType,PaymentMethod."Bal. Account No.",lDocNo,FALSE,SalesPayment."Currency Code");
+                    SalesPayment2."Payment Journal Created" := TRUE;
+                    SalesPayment2."Payment Doc. No." := lDocNo;
+                    SalesPayment2.MODIFY;
+                    COMMIT;
+                  END ELSE BEGIN
+                    SalesPayment2."Error Text" := gErrorText;
+                    SalesPayment2.Status := SalesPayment2.Status::Failed;
+                    SalesPayment2.MODIFY;
+                    COMMIT;
+                  END;
+                END ELSE BEGIN
+                  SalesPayment2."Error Text" := gErrorText;
+                  SalesPayment2.Status := SalesPayment2.Status::Failed;
+                  SalesPayment2.MODIFY;
+                  COMMIT;
+                END;
+              END ELSE BEGIN
+                SalesPayment2."Error Text" := gErrorText;
+                SalesPayment2.Status := SalesPayment2.Status::Failed;
+                SalesPayment2.MODIFY;
+                COMMIT;
+              END;
+            END;
+          END ELSE IF SalesPayment."Payment Type" = SalesPayment."Payment Type"::CreditCard THEN BEGIN
+            //DOC OP9031 RK 31/01/17 -
+            //FindPaymentMethod(FALSE);
+            FindPaymentMethod(FALSE,SalesPayment."Currency Code",SalesPayment."Card Type");//DOC OP9031 RK 08/03/17 -
+            //DOC OP9031 RK 31/01/17 +
+            SalesPaymentG := SalesPayment2; //DOC TM3026 ST 03/10/2018
+            ProcessPaymentRequest(FALSE,gOperation,SalesPayment."Request ID",SalesPayment."Currency Code",SalesPayment."Capture Amount",gResponseId,gErrorText,SalesPayment."Internet Order No.",gReasonCode);
+            SalesPayment2 := SalesPaymentG; //DOC TM3026 ST 03/10/2018
+            IF (gErrorText = '') AND(gReasonCode = '100') THEN BEGIN
+              SalesPayment2.Status := SalesPayment2.Status::Captured;
+              SalesPayment2."Response ID" := gResponseId;
+              SalesPayment2."Response Reason Code" := gReasonCode;
+              SalesPayment2.MODIFY;
+              COMMIT;
+              CreatePostGenJournal(CustNo,SalesPayment."Capture Amount",gBalAcType,PaymentMethod."Bal. Account No.",lDocNo,FALSE,SalesPayment."Currency Code");
+              SalesPayment2."Payment Journal Created" := TRUE;
+              SalesPayment2."Payment Doc. No." := lDocNo;
+              SalesPayment2.MODIFY;
+              COMMIT;
+            END ELSE BEGIN
+              SalesPayment2."Error Text" := gErrorText;
+              SalesPayment2.Status := SalesPayment2.Status::Failed;
+              SalesPayment2."Response ID" := gResponseId;
+              SalesPayment2."Response Reason Code" := gReasonCode;
+              SalesPayment2.MODIFY;
+              COMMIT;
+            END;
+          END;
+        UNTIL SalesPayment.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE VoidOrderPayments@1000000013(OrderNo@1000000001 : Code[20]);
+    VAR
+      SalesPayment@1000000003 : Record 50008;
+      SalesPayment2@1000000002 : Record 50008;
+    BEGIN
+      SalesPayment.SETRANGE("Sales Order No.",OrderNo);
+      SalesPayment.SETFILTER("Payment Type",'%1|%2',SalesPayment."Payment Type"::CreditCard,SalesPayment."Payment Type"::PayPal);
+      SalesPayment.SETFILTER(Status,'%1|%2',SalesPayment.Status::Authorized,SalesPayment.Status::Reauthorized);
+      IF SalesPayment.FINDFIRST THEN BEGIN
+        REPEAT
+          SalesPayment2.GET(SalesPayment."Order Guid",SalesPayment."Line No.");
+          gOperation := gOperation::Cancel;
+          IF SalesPayment."Payment Type" = SalesPayment."Payment Type"::PayPal THEN BEGIN
+            IF SalesPayment.Status = SalesPayment.Status::Authorized THEN
+              ProcessPaymentRequest(TRUE,gOperation,SalesPayment."Transaction ID",SalesPayment."Currency Code",SalesPayment."Capture Amount",gResponseId,gErrorText,'',gReasonCode)
+            ELSE
+              ProcessPaymentRequest(TRUE,gOperation,SalesPayment."Reauthorize ID",SalesPayment."Currency Code",SalesPayment."Capture Amount",gResponseId,gErrorText,'',gReasonCode);
+            IF gErrorText = '' THEN BEGIN
+              SalesPayment2.Status := SalesPayment2.Status::Cancelled;
+              SalesPayment2."Response ID" := gResponseId;
+              SalesPayment2.MODIFY;
+              COMMIT;
+            END ELSE BEGIN
+              SalesPayment2."Error Text" := gErrorText;
+              SalesPayment2.Status := SalesPayment2.Status::Failed;
+              SalesPayment2.MODIFY;
+              COMMIT;
+            END;
+          END ELSE BEGIN
+            SetSalesPayment(SalesPayment); //DOC TM3026.01 ST 18/10/18
+            ProcessPaymentRequest(FALSE,gOperation,SalesPayment."Request ID",SalesPayment."Currency Code",SalesPayment."Capture Amount",gResponseId,gErrorText,SalesPayment."Internet Order No.",gReasonCode);
+            IF (gErrorText = '') AND (gReasonCode = '100') THEN BEGIN
+              GetSalesPayment(SalesPayment2); //DOC TM3026.01 ST 18/10/18
+              SalesPayment2.Status := SalesPayment2.Status::Cancelled;
+              SalesPayment2."Response ID" := gResponseId;
+              SalesPayment2."Response Reason Code" := gReasonCode;
+              SalesPayment2.MODIFY;
+              COMMIT;
+            END ELSE BEGIN
+              GetSalesPayment(SalesPayment2); //DOC TM3026 ST 18/10/18
+              SalesPayment2."Error Text" := gErrorText;
+              SalesPayment2.Status := SalesPayment2.Status::Failed;
+              SalesPayment2."Response ID" := gResponseId;
+              SalesPayment2."Response Reason Code" := gReasonCode;
+              SalesPayment2.MODIFY;
+              COMMIT;
+            END;
+          END;
+        UNTIL SalesPayment.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE FindPaymentMethod@1000000012(isPayPal@1000000000 : Boolean;CurrCode@1000000001 : Code[10];CardType@1000000002 : Code[20]);
+    BEGIN
+      PaymentMethod.RESET;
+      IF isPayPal THEN
+        PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::PayPal)
+      ELSE
+      //DOC OP9031 RK 08/03/17 -
+        //PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::CreditCard);
+      BEGIN
+        PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::CreditCard);
+        PaymentMethod.SETRANGE("Card Type",CardType);
+      END;
+      //DOC OP9031 RK 08/03/17 +
+      //DOC OP9031 RK 31/01/17 -
+      PaymentMethod.SETRANGE("Currency Code",CurrCode);
+      //DOC OP9031 RK 31/01/17 +
+      PaymentMethod.FINDFIRST;
+      PaymentMethod.TESTFIELD("Bal. Account No.");
+      IF PaymentMethod."Bal. Account Type" = PaymentMethod."Bal. Account Type"::"Bank Account" THEN
+        gBalAcType := gBalAcType::"Bank Account"
+      ELSE
+        gBalAcType := gBalAcType::"G/L Account";
+    END;
+
+    PROCEDURE RecalculateOrderCapture@1000000011(OrderNo@1000000000 : Code[20]);
+    VAR
+      SalesHeader@1000000002 : Record 36;
+      SalesLine@1000000003 : Record 37;
+      SalesPayment@1000000001 : Record 50008;
+      OrderTotal@1000000004 : Decimal;
+      PayTotal@1000000005 : Decimal;
+      CaptureTotal@1000000006 : Decimal;
+      NoCaptureChangeMsg@1000000007 : TextConst 'ENU=Order payment remaining amounts insufficient, please refund from sales payments.;ENG=Order payment remaining amounts insufficient, please refund from sales payments.';
+    BEGIN
+      OrderTotal := 0;
+      PayTotal := 0;
+      CaptureTotal := 0;
+      SalesLine.SETRANGE("Document Type",SalesLine."Document Type"::Order);
+      SalesLine.SETRANGE("Document No.",OrderNo);
+      IF SalesLine.FINDFIRST THEN
+        REPEAT
+          OrderTotal := OrderTotal + SalesLine."Line Amount";
+        UNTIL SalesLine.NEXT = 0;
+      SalesPayment.RESET;
+      SalesPayment.SETRANGE("Sales Order No.",OrderNo);
+      IF SalesPayment.FINDFIRST THEN
+        REPEAT
+          PayTotal := PayTotal + SalesPayment.Amount;
+          IF (SalesPayment.Status = SalesPayment.Status::Captured) OR (SalesPayment."Payment Type" = SalesPayment."Payment Type"::"Gift Voucher") THEN
+            CaptureTotal := CaptureTotal + SalesPayment.Amount;
+        UNTIL SalesPayment.NEXT = 0;
+      IF OrderTotal < (PayTotal - CaptureTotal) THEN BEGIN
+        SalesPayment.SETFILTER("Payment Type",'<>%1',SalesPayment."Payment Type"::"Gift Voucher");
+        IF SalesPayment.FINDFIRST THEN BEGIN
+          SalesPayment."Capture Amount" := OrderTotal - CaptureTotal;
+          SalesPayment.MODIFY;
+        END;
+      END ELSE
+        MESSAGE(NoCaptureChangeMsg);
+    END;
+
+    PROCEDURE SetSalesPayment@1170000001(VAR SalesPaymentP@1170000000 : Record 50008);
+    BEGIN
+      SalesPaymentG := SalesPaymentP; //DOC TM3026 ST 03/10/2018
+    END;
+
+    PROCEDURE GetSalesPayment@1170000002(VAR SalesPaymentP@1170000000 : Record 50008);
+    BEGIN
+      SalesPaymentP := SalesPaymentG; //DOC TM3026 ST 03/10/2018
+    END;
+
+    BEGIN
+    {
+      //DOC OP9031 RK 31/01/17 - Use currency code to find payment method in combination with payment type.
+      //DOC OP9031 RK 08/03/17 - Add dictionary as config parameter of apicontext.
+      //DOC OP9031 RK 08/03/17 - For credit card payment find payment method by card type.
+      //DOC TM3026 ST 03/10/18 - New function added for CheckOut Integration - "CheckOutCapturePayment"
+      //DOC TM3026.01 ST 18/10/18 - Void on cancel sales order.
+    }
+    END.
+  }
+}
+

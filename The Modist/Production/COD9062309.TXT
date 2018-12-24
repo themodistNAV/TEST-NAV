@@ -1,0 +1,504 @@
+OBJECT Codeunit 9062309 Planning Board Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=26/07/16;
+    Time=12:15:31 PM;
+    Version List=NA2016.16.1;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      PlanningBoardHeader@1000000000 : Record 9062337;
+      PlanningBoardSetup@1000000007 : Record 9062335;
+      PlanningBoardTable@1000000003 : Record 9062338;
+      PlanningBoardTableField@1000000005 : Record 9062340;
+      PlanningBoardDataManagement@1000000006 : Codeunit 9062307;
+      PlanningBoardDiagnostics@9062233 : Codeunit 9062313;
+      PlanningBoardToolkit@1000000008 : Codeunit 9062301;
+      PlanningBoardWebSession@1000000010 : Codeunit 9062336;
+      ReleasePlanningBoard@1000000009 : Codeunit 9062310;
+      TnpToolkit@9062230 : Codeunit 9062230;
+      BlobToolkit@9062231 : Codeunit 9062242;
+      FileSystem@9062232 : Codeunit 9062264;
+      Control@1000000011 : ' ,Desktop,Web';
+      EmptyDateFormula@1000000001 : DateFormula;
+      MaxFiltersToUse@1000000004 : Integer;
+      FiltersUsed@1000000002 : Integer;
+
+    LOCAL PROCEDURE "--- General ---"@1000000001();
+    BEGIN
+    END;
+
+    PROCEDURE InitialisePlanningBoardControls@1000000011(VAR pDesktopControlEnabled@1000000000 : Boolean;VAR pWebControlEnabled@1000000001 : Boolean);
+    VAR
+      eNoControl@1000000002 : TextConst 'ENU="Neither desktop nor web planning board control can be used; please contact your system administrator.";ENG="Neither desktop nor web planning board control can be used; please contact your system administrator."';
+    BEGIN
+      //DOC NA2016.12 - Initialising planning board controls
+      //  <> pDesktopControlEnabled: Target flag for desktop control
+      //  <> pWebControlEnabled: Target flag for web control
+
+      pDesktopControlEnabled := PlanningBoardToolkit.DesktopControlEnabled();
+      pWebControlEnabled := PlanningBoardToolkit.WebControlEnabled();
+      IF (pDesktopControlEnabled) THEN
+        Control := Control::Desktop
+      ELSE IF (pWebControlEnabled) THEN
+        Control := Control::Web
+      ELSE
+        ERROR(eNoControl);
+    END;
+
+    PROCEDURE InitialisePlanningBoard@1000000000(VAR pPlanningBoardContext@1000000000 : Record 9062349);
+    VAR
+      lFilterGroup@1000000001 : Integer;
+    BEGIN
+      //DOC NA2016.12 - Initialising planning board
+      //  <> pPlanningBoardContext: Planning board context
+
+      pPlanningBoardContext.INIT();
+      pPlanningBoardContext.INSERT();
+      pPlanningBoardContext."Update Type" := pPlanningBoardContext."Update Type"::First;
+
+      FOR lFilterGroup := 5 DOWNTO 0 DO
+      BEGIN
+        pPlanningBoardContext.FILTERGROUP(lFilterGroup);
+        IF (pPlanningBoardContext.GETFILTER("Planning Board Code") <> '') THEN
+          pPlanningBoardContext."Planning Board Code" := pPlanningBoardContext.GETRANGEMIN("Planning Board Code");
+        IF (pPlanningBoardContext.GETFILTER("Current Date") <> '') THEN
+          pPlanningBoardContext."Current Date" := pPlanningBoardContext.GETRANGEMIN("Current Date");
+        IF (pPlanningBoardContext.GETFILTER("Start Date") <> '') THEN
+          pPlanningBoardContext."Start Date" := pPlanningBoardContext.GETRANGEMIN("Start Date");
+        IF (pPlanningBoardContext.GETFILTER("End Date") <> '') THEN
+          pPlanningBoardContext."End Date" := pPlanningBoardContext.GETRANGEMIN("End Date");
+      END;
+      pPlanningBoardContext.FILTERGROUP(0);
+
+      IF (pPlanningBoardContext."Planning Board Code" = '') THEN
+        pPlanningBoardContext."Planning Board Code" := SelectPlanningBoard();
+
+      PlanningBoardHeader.GET(pPlanningBoardContext."Planning Board Code");
+      IF (PlanningBoardHeader.Name <> '') THEN
+        pPlanningBoardContext."Page Caption" := STRSUBSTNO('%1 (%2)', PlanningBoardHeader.Name, PlanningBoardHeader.Code)
+      ELSE
+        pPlanningBoardContext."Page Caption" := PlanningBoardHeader.Code;
+
+      pPlanningBoardContext."Non-Empty Resources" := PlanningBoardHeader."Non-Empty Resources";
+      pPlanningBoardContext."Non-Empty Resources Optional" := PlanningBoardHeader."Non-Empty Resources Optional";
+
+      UpdatePlanningBoard(pPlanningBoardContext, pPlanningBoardContext."Update Type"::First, TRUE);
+    END;
+
+    PROCEDURE UpdatePlanningBoard@1000000002(VAR pPlanningBoardContext@1000000000 : Record 9062349;pUpdateType@1000000002 : Integer;pUpdateControlData@1000000003 : Boolean);
+    VAR
+      lTableType@1000000001 : Integer;
+    BEGIN
+      //DOC NA2016.12 - Updating planning board
+      //  <> pPlanningBoardContext: Planning board context
+      //  -> pUpdateType: Update type
+      //  -> pUpdateControlData: Flag to update control data
+
+      pPlanningBoardContext."Update Type" := pUpdateType;
+      PlanningBoardDiagnostics.DumpContextToFile(pPlanningBoardContext, 'Pre Update Context');
+
+      PlanningBoardSetup.VerifyAndGet();
+
+      VerifyViewType(pPlanningBoardContext);
+
+      IF ((pPlanningBoardContext."Planning Board Code" <> pPlanningBoardContext."Current Planning Board Code") OR
+          (pPlanningBoardContext."Update Type" <> pPlanningBoardContext."Update Type"::" ")) THEN
+      BEGIN
+        VerifyCurrentDate(pPlanningBoardContext);
+
+        IF (pPlanningBoardContext."Planning Board Code" <> '') THEN
+        BEGIN
+          PlanningBoardHeader.GET(pPlanningBoardContext."Planning Board Code");
+          IF (PlanningBoardHeader.Status <> PlanningBoardHeader.Status::Released) THEN
+            ReleasePlanningBoard.Check(PlanningBoardHeader);
+          IF (pPlanningBoardContext."Update Type" <> pPlanningBoardContext."Update Type"::Incremental) THEN
+          BEGIN
+            pPlanningBoardContext."Cloning Enabled" := PlanningBoardHeader."Cloning Enabled";
+            pPlanningBoardContext."Dragging Enabled" := PlanningBoardHeader."Dragging Enabled";
+            pPlanningBoardContext."Resource Changing Enabled" := PlanningBoardHeader."Resource Changing Enabled";
+            pPlanningBoardContext."Resizing Enabled" := PlanningBoardHeader."Resizing Enabled";
+            pPlanningBoardContext."Work Week View Full Week" := PlanningBoardHeader."Work Week View Full Week";
+            MaxFiltersToUse := 6;
+            CLEAR(FiltersUsed);
+            FOR lTableType := PlanningBoardTable."Table Type"::Resource TO PlanningBoardTable."Table Type"::Entry DO
+              AddFilters(pPlanningBoardContext, lTableType);
+          END;
+        END
+        ELSE
+          pPlanningBoardContext.INIT();
+
+        pPlanningBoardContext."Current Planning Board Code" := pPlanningBoardContext."Planning Board Code";
+        pPlanningBoardContext."Timestamp Date Time" := CURRENTDATETIME();
+        pPlanningBoardContext.MODIFY();
+
+        PlanningBoardDataManagement.LoadData(pPlanningBoardContext);
+        IF (pUpdateControlData) THEN
+          GenerateControlData(pPlanningBoardContext);
+        pPlanningBoardContext.ClearIncrementalUpdate(TRUE);
+      END
+      ELSE IF (pPlanningBoardContext."Last Update Type" = pPlanningBoardContext."Last Update Type"::Incremental) THEN
+        RestoreControlData(pPlanningBoardContext);
+
+      PlanningBoardDiagnostics.DumpContextToFile(pPlanningBoardContext, 'Post Update Context');
+
+      pPlanningBoardContext."Last Update Type" := pPlanningBoardContext."Update Type";
+      pPlanningBoardContext."Update Type" := pPlanningBoardContext."Update Type"::" ";
+    END;
+
+    PROCEDURE HandleEvent@1000000005(VAR pPlanningBoardContext@9062232 : Record 9062349;pEventData@9062230 : Text) : Text;
+    VAR
+      lPlanningBoardEventHandling@1000000000 : Codeunit 9062304;
+      lErrorMessage@1000000001 : Text;
+    BEGIN
+      //DOC NA2016.12 - Handling event
+      //  <> pPlanningBoardContext: Source / target planning board context
+      //  -> pEventData: Event data
+      //  <- Error message
+
+      CLEAR(pPlanningBoardContext."Update Type");
+      CLEAR(pPlanningBoardContext."Force Update");
+      CLEAR(pPlanningBoardContext."Update Control");
+
+      lErrorMessage := lPlanningBoardEventHandling.HandleEvent(pPlanningBoardContext, pEventData);
+      IF (pPlanningBoardContext."Update Type" <> pPlanningBoardContext."Update Type"::" ") THEN
+      BEGIN
+        UpdatePlanningBoard(pPlanningBoardContext, pPlanningBoardContext."Update Type", pPlanningBoardContext."Update Control");
+        CLEAR(pPlanningBoardContext."Update Control");
+        CLEAR(pPlanningBoardContext."Force Update");
+      END;
+      EXIT(lErrorMessage);
+    END;
+
+    LOCAL PROCEDURE "--- Web ---"@1000000012();
+    BEGIN
+    END;
+
+    PROCEDURE InitialiseWebPlanningBoard@1000000014(VAR pPlanningBoardContext@1000000001 : Record 9062349;VAR pRequestMessageEvent@1000000000 : DotNet "'TheNavPeople.HtmlControlCommunication.9.0.0.0, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7c0c47cc7f65ff95'.TheNavPeople.HtmlControlCommunication.RequestMessageEvent");
+    BEGIN
+      //DOC NA2016.12 - Initialising web planning board
+      //  <> pPlanningBoardContext: Planning board context
+      //  <> pRequestMessageEvent: Request message event object
+    END;
+
+    PROCEDURE UpdateWebPlanningBoard@1000000015(VAR pPlanningBoardContext@1000000003 : Record 9062349);
+    BEGIN
+      //DOC NA2016.12 - Updating web planning board
+      //  <> pPlanningBoardContext: Planning board context
+    END;
+
+    LOCAL PROCEDURE "--- Previous / Next Period ---"@9062230();
+    BEGIN
+    END;
+
+    PROCEDURE MoveToPreviousNextWeek@9062231(VAR pPlanningBoardContext@9062231 : Record 9062349;pDirection@9062230 : Integer);
+    BEGIN
+      //DOC NA2016.12 - Moving to previous / next week
+      //  <> pPlanningBoardContext: Planning board context
+      //  -> pDirection: Direction (-1 = previous, 1 = next)
+
+      MoveToPreviousNextPeriod(pPlanningBoardContext, pDirection, 'W');
+    END;
+
+    PROCEDURE MoveToPreviousNextMonth@9062232(VAR pPlanningBoardContext@9062231 : Record 9062349;pDirection@9062230 : Integer);
+    BEGIN
+      //DOC NA2016.12 - Moving to previous / next month
+      //  <> pPlanningBoardContext: Planning board context
+      //  -> pDirection: Direction (-1 = previous, 1 = next)
+
+      MoveToPreviousNextPeriod(pPlanningBoardContext, pDirection, 'M');
+    END;
+
+    PROCEDURE MoveToPreviousNextQuarter@9062234(VAR pPlanningBoardContext@9062231 : Record 9062349;pDirection@9062230 : Integer);
+    BEGIN
+      //DOC NA2016.12 - Moving to previous / next quarter
+      //  <> pPlanningBoardContext: Planning board context
+      //  -> pDirection: Direction (-1 = previous, 1 = next)
+
+      MoveToPreviousNextPeriod(pPlanningBoardContext, pDirection, 'Q');
+    END;
+
+    PROCEDURE MoveToPreviousNextYear@9062233(VAR pPlanningBoardContext@9062231 : Record 9062349;pDirection@9062230 : Integer);
+    BEGIN
+      //DOC NA2016.12 - Moving to previous / next year
+      //  <> pPlanningBoardContext: Planning board context
+      //  -> pDirection: Direction (-1 = previous, 1 = next)
+
+      MoveToPreviousNextPeriod(pPlanningBoardContext, pDirection, 'Y');
+    END;
+
+    PROCEDURE MoveToPreviousNextPeriod@1000000006(VAR pPlanningBoardContext@1000000001 : Record 9062349;pDirection@1000000000 : Integer;pPeriodTypeCharacter@9062230 : Code[1]);
+    VAR
+      lDirectionSign@1000000003 : Code[2];
+      lDirectionManipulator@1000000002 : Code[10];
+      lPeriodType@1000000004 : Integer;
+      lCurrentDate@1000000005 : Date;
+    BEGIN
+      //DOC NA2016.12 - Moving to previous / next period
+      //  <> pPlanningBoardContext: Planning board context
+      //  -> pDirection: Direction (-1 = previous, 1 = next)
+      //  -> pPeriodTypeCharacter: Period type character
+
+      VerifyCurrentDate(pPlanningBoardContext);
+
+      IF (pPlanningBoardContext."Planning Board Code" <> '') THEN
+      BEGIN
+        CASE (pDirection) OF
+          -1: lDirectionSign := '-1';
+          1: lDirectionSign := '+1';
+          ELSE EXIT;
+        END;
+        lDirectionManipulator := STRSUBSTNO('<%1%2>', lDirectionSign, pPeriodTypeCharacter);
+        lCurrentDate := CALCDATE(lDirectionManipulator, pPlanningBoardContext."Current Date");
+        pPlanningBoardContext.VALIDATE("Current Date", lCurrentDate);
+      END;
+
+      UpdatePlanningBoard(pPlanningBoardContext, pPlanningBoardContext."Update Type"::Full, TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- View ---"@9062236();
+    BEGIN
+    END;
+
+    PROCEDURE ChangeToTimelineView@9062238(VAR pPlanningBoardContext@9062230 : Record 9062349);
+    BEGIN
+      //DOC NA2016.12 - Changing to timeline view
+      //  <> pPlanningBoardContext: Planning board context
+
+      ChangeView(pPlanningBoardContext, pPlanningBoardContext."View Type"::Timeline);
+    END;
+
+    PROCEDURE ChangeToMonthView@9062243(VAR pPlanningBoardContext@9062230 : Record 9062349);
+    BEGIN
+      //DOC NA2016.12 - Changing to month view
+      //  <> pPlanningBoardContext: Planning board context
+
+      ChangeView(pPlanningBoardContext, pPlanningBoardContext."View Type"::Month);
+    END;
+
+    PROCEDURE ChangeToWeekView@9062242(VAR pPlanningBoardContext@9062230 : Record 9062349);
+    BEGIN
+      //DOC NA2016.12 - Changing to week view
+      //  <> pPlanningBoardContext: Planning board context
+
+      ChangeView(pPlanningBoardContext, pPlanningBoardContext."View Type"::Week);
+    END;
+
+    PROCEDURE ChangeToWorkWeekView@9062241(VAR pPlanningBoardContext@9062230 : Record 9062349);
+    BEGIN
+      //DOC NA2016.12 - Changing to work week view
+      //  <> pPlanningBoardContext: Planning board context
+
+      ChangeView(pPlanningBoardContext, pPlanningBoardContext."View Type"::"Work Week");
+    END;
+
+    PROCEDURE ChangeToDayView@9062240(VAR pPlanningBoardContext@9062230 : Record 9062349);
+    BEGIN
+      //DOC NA2016.12 - Changing to day view
+      //  <> pPlanningBoardContext: Planning board context
+
+      ChangeView(pPlanningBoardContext, pPlanningBoardContext."View Type"::Day);
+    END;
+
+    LOCAL PROCEDURE ChangeView@9062237(VAR pPlanningBoardContext@9062230 : Record 9062349;pViewType@9062231 : Integer);
+    BEGIN
+      //DOC NA2016.12 - Changing view
+      //  <> pPlanningBoardContext: Planning board context
+      //  -> pViewType: View type
+
+      pPlanningBoardContext."View Type" := pViewType;
+      pPlanningBoardContext.ClearIncrementalUpdate(TRUE);
+
+      UpdatePlanningBoard(pPlanningBoardContext, pPlanningBoardContext."Update Type"::Incremental, TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@1000000003();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE SelectPlanningBoard@1000000009() : Code[20];
+    VAR
+      eNoPlanningBoards@1000000003 : TextConst 'ENU=There are no planning boards available to show.;ENG=There are no planning boards available to show.';
+      ePleaseSelect@1000000000 : TextConst 'ENU=Please, select planning board to show.;ENG=Please, select planning board to show.';
+      lPlanningBoardBuffer@1000000001 : TEMPORARY Record 9062730;
+      lPlanningBoardBufferId@1000000002 : Integer;
+    BEGIN
+      //DOC NA2016.12 - Selecting planning board code
+      //  <- The code selected
+
+      PlanningBoardHeader.RESET();
+      IF (PlanningBoardHeader.FINDSET()) THEN
+      REPEAT
+        lPlanningBoardBufferId += 1;
+        lPlanningBoardBuffer.ID := lPlanningBoardBufferId;
+        lPlanningBoardBuffer.Name := PlanningBoardHeader.Name;
+        lPlanningBoardBuffer.Value := PlanningBoardHeader.Code;
+        lPlanningBoardBuffer.INSERT();
+      UNTIL (PlanningBoardHeader.NEXT() = 0);
+      IF (lPlanningBoardBuffer.FINDFIRST()) THEN;
+
+      CASE (lPlanningBoardBuffer.COUNT()) OF
+        0:
+          ERROR(eNoPlanningBoards);
+        1:
+          lPlanningBoardBuffer.FINDFIRST();
+        ELSE
+          IF (PAGE.RUNMODAL(PAGE::"Name Value Buffer", lPlanningBoardBuffer) <> ACTION::LookupOK) THEN
+            ERROR(ePleaseSelect);
+      END;
+
+      EXIT(lPlanningBoardBuffer.Value);
+    END;
+
+    LOCAL PROCEDURE VerifyCurrentDate@1000000013(VAR pPlanningBoardContext@1000000000 : Record 9062349);
+    VAR
+      lCurentDate@1000000001 : Date;
+    BEGIN
+      //DOC NA2016.12 - Verifying current date of planning board context
+      //  <> pPlanningBoardContext: The context
+
+      IF (pPlanningBoardContext."Update Type" = pPlanningBoardContext."Update Type"::First) THEN
+        pPlanningBoardContext."Current Date" := 0D;
+
+      IF (pPlanningBoardContext."Planning Board Code" <> '') THEN
+      BEGIN
+        IF (pPlanningBoardContext."Current Date" = 0D) THEN
+        BEGIN
+          lCurentDate := WORKDATE();
+          ApplyDateFormula(lCurentDate, PlanningBoardHeader."Current Date Formula");
+          pPlanningBoardContext.VALIDATE("Current Date", lCurentDate);
+        END;
+      END
+      ELSE
+        pPlanningBoardContext.VALIDATE("Current Date", 0D);
+    END;
+
+    LOCAL PROCEDURE ApplyDateFormula@1000000004(VAR pDate@1000000000 : Date;pDateFormula@1000000001 : DateFormula);
+    BEGIN
+      //DOC NA2016.12 - Applying date formula
+      //  <> pDate: Source / target date
+      //  -> pDateFormula: Date formula
+
+      pDate := WORKDATE();
+      IF (pDateFormula <> EmptyDateFormula) THEN
+        pDate := CALCDATE(pDateFormula, pDate);
+    END;
+
+    LOCAL PROCEDURE AddFilters@1000000008(VAR pPlanningBoardContext@1000000001 : Record 9062349;pTableType@1000000000 : Integer);
+    VAR
+      lFilterIndex@1000000002 : Integer;
+      eEmptyFilterCaption@1000000003 : TextConst 'ENU=Filter %1;ENG=Filter %1';
+    BEGIN
+      //DOC NA2016.12 - Adding filters
+      //  <> pPlanningBoardContext: Planning board context
+      //  -> pTableType: Table type
+
+      IF (FiltersUsed >= MaxFiltersToUse) THEN
+        EXIT;
+
+      PlanningBoardTableField.RESET();
+      PlanningBoardTableField.SETCURRENTKEY("Planning Board Code", "Planning Board Table Type", "Field Application", Index);
+      PlanningBoardTableField.SETRANGE("Planning Board Code", PlanningBoardHeader.Code);
+      PlanningBoardTableField.SETRANGE("Planning Board Table Type", pTableType);
+      PlanningBoardTableField.SETRANGE("Field Application", PlanningBoardTableField."Field Application"::Filter);
+      IF (PlanningBoardTableField.FINDSET()) THEN
+      REPEAT
+        FiltersUsed += 1;
+        IF (FiltersUsed <= MaxFiltersToUse) THEN
+        BEGIN
+          pPlanningBoardContext.SetFilterEnabled(FiltersUsed, TRUE);
+          pPlanningBoardContext.SetFilterCaption(FiltersUsed, PlanningBoardTableField.Caption);
+          pPlanningBoardContext.SetFilterTableType(FiltersUsed, PlanningBoardTableField."Planning Board Table Type");
+          pPlanningBoardContext.SetFilterId(FiltersUsed, PlanningBoardTableField.ID);
+          pPlanningBoardContext.SetFilterFlexible(FiltersUsed, PlanningBoardTableField."Flexible Filter");
+        END;
+      UNTIL ((PlanningBoardTableField.NEXT() = 0) OR (FiltersUsed >= MaxFiltersToUse));
+
+      IF (FiltersUsed < MaxFiltersToUse) THEN
+        FOR lFilterIndex := FiltersUsed + 1 TO MaxFiltersToUse DO
+          pPlanningBoardContext.SetFilterCaption(lFilterIndex, STRSUBSTNO(eEmptyFilterCaption, lFilterIndex));
+    END;
+
+    LOCAL PROCEDURE GenerateControlData@1000000010(VAR pPlanningBoardContext@1000000001 : Record 9062349);
+    VAR
+      lPlanningBoardDataXmlPort@1000000000 : XMLport 9062232;
+      lBlob@1000000002 : Record 99008535;
+      lOutStream@9062230 : OutStream;
+      lData@1000000004 : Text;
+    BEGIN
+      //DOC NA2016.12 - Generating control data
+      //  <> pPlanningBoardContext: Planning board context
+
+      lBlob.Blob.CREATEOUTSTREAM(lOutStream);
+
+      lPlanningBoardDataXmlPort.SetPlanningBoardContext(pPlanningBoardContext);
+      lPlanningBoardDataXmlPort.SETDESTINATION(lOutStream);
+      lPlanningBoardDataXmlPort.EXPORT();
+
+      lData := BlobToolkit.BlobToText(lBlob);
+      IF (pPlanningBoardContext."Update Type" = pPlanningBoardContext."Update Type"::Incremental) THEN
+        pPlanningBoardContext.SaveRequestData();
+      pPlanningBoardContext.SetRequestData(lData);
+
+      PlanningBoardDiagnostics.DumpTextToFile('Data', 'xml', lData);
+    END;
+
+    LOCAL PROCEDURE RestoreControlData@9062235(VAR pPlanningBoardContext@1000000001 : Record 9062349);
+    VAR
+      lData@9062230 : Text;
+    BEGIN
+      //DOC NA2016.12 - Restoring control data (from saved)
+      //  <> pPlanningBoardContext: Planning board context
+
+      lData := pPlanningBoardContext.RestoreRequestData();
+
+      PlanningBoardDiagnostics.DumpTextToFile('Data', 'xml', lData);
+    END;
+
+    LOCAL PROCEDURE VerifyViewType@9062239(VAR pPlanningBoardContext@9062230 : Record 9062349);
+    VAR
+      lPlanningBoardThemeView@9062231 : Record 9062351;
+      lViewType@9062232 : Integer;
+    BEGIN
+      //DOC NA2016.12 - Verifying view type
+      //  <> pPlanningBoardContext: Planning board context
+
+      IF (pPlanningBoardContext."View Type" <> pPlanningBoardContext."View Type"::" ") THEN
+        EXIT;
+
+      lPlanningBoardThemeView.RESET();
+      lPlanningBoardThemeView.SETRANGE("Planning Board Code", pPlanningBoardContext."Planning Board Code");
+      lPlanningBoardThemeView.SETRANGE(Default, TRUE);
+      IF (lPlanningBoardThemeView.FINDFIRST()) THEN
+        lViewType := lPlanningBoardThemeView.Type
+      ELSE
+      BEGIN
+        lPlanningBoardThemeView.SETRANGE(Default);
+        IF (lPlanningBoardThemeView.FINDFIRST()) THEN
+          lViewType := lPlanningBoardThemeView.Type
+        ELSE
+          lViewType := pPlanningBoardContext."View Type"::Timeline;
+      END;
+
+      pPlanningBoardContext."View Type" := lViewType;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.12 JH 11/10/2015 - Created
+      //DOC NA2016.16 AZ 24/05/2016 - CfMD amendments
+      //DOC NA2016.16 JH 25/05/2016 - Web planing board code commented out
+      //DOC NA2016.16.1 JH 26/07/2016 - "Work Week View Full Week" added
+    }
+    END.
+  }
+}
+

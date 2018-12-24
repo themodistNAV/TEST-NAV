@@ -1,0 +1,597 @@
+OBJECT Codeunit 9086960 nF. Permission Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=22/12/16;
+    Time=11:17:10 AM;
+    Version List=NF2016.17.11;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      NfUser@1000000013 : Record 9086953;
+      NfPermissionGroup@1000000003 : Record 9086960;
+      NfPermission@1000000006 : Record 9086958;
+      NfSetup@1000000000 : Record 9086950;
+      NfLog@1000000008 : Record 9086967;
+      tGiveEverythingGroupName@1000000004 : TextConst 'ENU=GiveEverything;ENG=GiveEverything';
+      tGiveEverythingGroupDescription@1000000005 : TextConst 'ENU=Group containing all objects assigned to every user by default;ENG=Group containing all objects assigned to every user by default';
+      AllObj@1000000014 : Record 2000000038;
+      AllObjTmp@1000000002 : TEMPORARY Record 2000000038;
+      NfDialogManagement@1000000012 : Codeunit 9086952;
+      NfToolkit@1000000007 : Codeunit 9086951;
+      tLogActivity@1000000009 : TextConst 'ENU=Permission Group;ENG=Permission Group';
+      UpdatingGiveEverythingGroup@1000000010 : Boolean;
+      UpdatingGiveEverythingGroupActivityId@1000000011 : Integer;
+
+    LOCAL PROCEDURE "--- Give Everything Group ---"@1000000011();
+    BEGIN
+    END;
+
+    PROCEDURE UpdateGiveEverythingGroup@1000000012(pUpdateObjects@1000000000 : Boolean);
+    VAR
+      lExists@1000000001 : Boolean;
+      eDialogTitle@1000000003 : TextConst 'ENU="Updating default permission group; please wait...";ENG="Updating default permission group; please wait..."';
+      lPermissionsAmended@1000000002 : Boolean;
+    BEGIN
+      ///<summary>Creating "give everything" group (if it doesn't exist)</summary>
+      ///<param name="pUpdateObjects">Flag to update objects even if the group exists</param>
+
+      LogUpdateGiveEverythingGroupBegin();
+
+      lPermissionsAmended := FALSE;
+
+      NfPermissionGroup.RESET();
+      NfPermissionGroup.SETCURRENTKEY("Give Everything");
+      NfPermissionGroup.SETRANGE("Give Everything", TRUE);
+      lExists := NfPermissionGroup.FINDFIRST();
+      IF ( NOT (lExists)) THEN
+      BEGIN
+        CLEAR(NfPermissionGroup);
+        NfPermissionGroup.INIT();
+        NfPermissionGroup.VALIDATE("Give Everything", TRUE);
+        NfPermissionGroup.VALIDATE(Name, tGiveEverythingGroupName);
+        NfPermissionGroup.VALIDATE(Description, tGiveEverythingGroupDescription);
+        NfPermissionGroup.VALIDATE(Type, NfPermissionGroup.Type::Give);
+        NfPermissionGroup.INSERT(TRUE);
+        lPermissionsAmended := TRUE;
+      END;
+
+      IF ( NOT (lExists)) THEN
+        CreateGiveEverythingGroupPermissions(lPermissionsAmended)
+      ELSE IF (pUpdateObjects) THEN
+        UpdateGiveEverythingGroupPermissions(lPermissionsAmended);
+
+      IF (lPermissionsAmended) THEN
+        MarkAllUsersAsPending();
+
+      LogUpdateGiveEverythingGroupEnd();
+    END;
+
+    LOCAL PROCEDURE CreateGiveEverythingGroupPermissions@1000000013(VAR pPermissionsAmended@1000000002 : Boolean);
+    VAR
+      eDialogTitle@1000000000 : TextConst 'ENU=Creating "Give Everything" permission group permissions...;ENG=Creating "Give Everything" permission group permissions...';
+      lDialogControl@1000000001 : ' ,Progress';
+    BEGIN
+      ///<summary>Creating "give everything" group permissions</summary>
+      ///<param name="pPermissionsAmended">Permissions amended flag</param>
+
+      CollectObjects(TRUE);
+
+      AllObjTmp.RESET();
+      AllObjTmp.SETFILTER("Object Type", '>%1', AllObjTmp."Object Type"::TableData);
+      IF (AllObjTmp.FINDSET()) THEN
+      BEGIN
+        CLEAR(NfDialogManagement);
+        NfDialogManagement.AddProgressControlNoCaption(lDialogControl::Progress);
+        NfDialogManagement.SetCount(lDialogControl::Progress, AllObjTmp.COUNT());
+        NfDialogManagement.Open(eDialogTitle);
+        REPEAT
+          NfDialogManagement.Step(lDialogControl::Progress);
+          CreateGroupPermission(TRUE, pPermissionsAmended);
+        UNTIL (AllObjTmp.NEXT() = 0);
+        NfDialogManagement.Close();
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateGiveEverythingGroupPermissions@1000000014(VAR pPermissionsAmended@1000000006 : Boolean);
+    VAR
+      lNfPermissionToDelete@1000000000 : TEMPORARY Record 9086958;
+      eDialogTitle@1000000003 : TextConst 'ENU=Updating default permission group permissions...;ENG=Updating default permission group permissions...';
+      eCreatingPermissions@1000000001 : TextConst 'ENU=Creating Permissions;ENG=Creating Permissions';
+      eCollectingOldPermissions@1000000004 : TextConst 'ENU=Collecting Old Permissions;ENG=Collecting Old Permissions';
+      eRemovingOldPermissions@1000000002 : TextConst 'ENU=Removing Old Permissions;ENG=Removing Old Permissions';
+      lDialogControl@1000000005 : ' ,CreatingPermissions,CollectingOldPermissions,RemovingOldPermissions';
+    BEGIN
+      ///<summary>Updating "give everything" group permissions</summary>
+      ///<param name="pPermissionsAmended">Permissions amended flag</param>
+
+      NfPermission.RESET();
+      NfPermission.SETCURRENTKEY("nF. Permission Group ID", "Object Type", "Object ID");
+      NfPermission.SETRANGE("nF. Permission Group ID", NfPermissionGroup.ID);
+
+      CLEAR(NfDialogManagement);
+      NfDialogManagement.AddProgressControl(lDialogControl::CreatingPermissions, eCreatingPermissions);
+      NfDialogManagement.AddProgressControl(lDialogControl::CollectingOldPermissions, eCollectingOldPermissions);
+      NfDialogManagement.AddProgressControl(lDialogControl::RemovingOldPermissions, eRemovingOldPermissions);
+      NfDialogManagement.Open(eDialogTitle);
+
+      CollectObjects(TRUE);
+
+      AllObjTmp.RESET();
+      AllObjTmp.SETFILTER("Object Type", '>%1', AllObjTmp."Object Type"::TableData);
+      IF (AllObjTmp.FINDSET()) THEN
+      BEGIN
+        NfDialogManagement.SetCount(lDialogControl::CreatingPermissions, AllObjTmp.COUNT());
+        REPEAT
+          NfDialogManagement.Step(lDialogControl::CreatingPermissions);
+          NfPermission.SETRANGE("Object Type", AllObjTmp."Object Type");
+          NfPermission.SETRANGE("Object ID", AllObjTmp."Object ID");
+          IF (NfPermission.ISEMPTY()) THEN
+            CreateGroupPermission(TRUE, pPermissionsAmended);
+        UNTIL (AllObjTmp.NEXT() = 0);
+      END
+      ELSE
+        NfDialogManagement.MoveToEnd(lDialogControl::CreatingPermissions);
+
+      NfPermission.RESET();
+      NfPermission.SETRANGE("nF. Permission Group ID", NfPermissionGroup.ID);
+      IF (NfPermission.FINDSET()) THEN
+      BEGIN
+        NfDialogManagement.SetCount(lDialogControl::CollectingOldPermissions, NfPermission.COUNT());
+        REPEAT
+          NfDialogManagement.Step(lDialogControl::CollectingOldPermissions);
+          IF ( NOT (AllObjTmp.GET(NfPermission."Object Type", NfPermission."Object ID"))) THEN
+          BEGIN
+            lNfPermissionToDelete := NfPermission;
+            lNfPermissionToDelete.INSERT();
+          END;
+        UNTIL (NfPermission.NEXT() = 0);
+      END
+      ELSE
+        NfDialogManagement.MoveToEnd(lDialogControl::CollectingOldPermissions);
+
+      lNfPermissionToDelete.RESET();
+      IF (lNfPermissionToDelete.FINDSET()) THEN
+      BEGIN
+        NfDialogManagement.SetCount(lDialogControl::RemovingOldPermissions, lNfPermissionToDelete.COUNT());
+        REPEAT
+          NfDialogManagement.Step(lDialogControl::RemovingOldPermissions);
+          NfPermission.GET(lNfPermissionToDelete.ID);
+          NfPermission.SetSystemActivity(TRUE);
+          NfPermission.DELETE(TRUE);
+          NfPermission.SetSystemActivity(FALSE);
+          LogUpdateGroupPermission(NfSetup.Activity::Delete);
+        UNTIL (lNfPermissionToDelete.NEXT() = 0);
+      END
+      ELSE
+        NfDialogManagement.MoveToEnd(lDialogControl::RemovingOldPermissions);
+
+      NfDialogManagement.Close();
+    END;
+
+    LOCAL PROCEDURE CreateGroupPermission@1000000019(pGiveEverythingGroup@1000000001 : Boolean;VAR pPermissionsAmended@1000000002 : Boolean);
+    VAR
+      lObjectType@1000000000 : Integer;
+      lForce@1000000003 : Boolean;
+    BEGIN
+      ///<summary>Creating "give everything" group permission</summary>
+      ///<param name="pGiveEverythingGroup">"Give everything" group flag</param>
+      ///<param name="pPermissionsAmended">Permissions amended flag</param>
+
+      NfPermission.ID := 0;
+      NfPermission.INIT();
+      NfPermission.VALIDATE("nF. Permission Group ID", NfPermissionGroup.ID);
+      NfPermission.VALIDATE("Object Type", AllObjTmp."Object Type");
+      NfPermission.VALIDATE("Object ID", AllObjTmp."Object ID");
+      NfPermission.SetSystemActivity(TRUE);
+      NfPermission.INSERT(TRUE);
+      NfPermission.SetSystemActivity(FALSE);
+
+      IF (pGiveEverythingGroup) THEN
+      BEGIN
+        lForce := GiveEverythingGroupForcedObject(AllObjTmp."Object Type", AllObjTmp."Object ID");
+        IF (lForce <> NfPermission.Force) THEN
+        BEGIN
+          NfPermission.VALIDATE(Force, lForce);
+          NfPermission.MODIFY(TRUE);
+        END;
+      END;
+
+      pPermissionsAmended := TRUE;
+
+      LogUpdateGroupPermission(NfSetup.Activity::Insert);
+    END;
+
+    LOCAL PROCEDURE MarkAllUsersAsPending@1000000023();
+    BEGIN
+      ///<summary>Marking all users as pending</summary>
+
+      NfUser.RESET();
+      IF (NfUser.FINDSET(TRUE)) THEN
+      REPEAT
+        NfUser.MarkAsPending();
+      UNTIL (NfUser.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE GiveEverythingGroupForcedObject@1000000017(pObjectType@1000000000 : Option;pObjectId@1000000001 : Integer) : Boolean;
+    VAR
+      lForced@1000000002 : Boolean;
+    BEGIN
+      ///<summary>Returning if object with given type and ID should be forced in "give everything" group</summary>
+      ///<param name="pObjectType">Object type</param>
+      ///<param name="pObjectId">Object ID</param>
+      ///<returns>The answer</returns>
+
+      lForced := FALSE;
+
+      CASE (pObjectType) OF
+        AllObjTmp."Object Type"::Page:
+          lForced := pObjectId IN [PAGE::"Payment Terms", PAGE::Currencies, PAGE::"Finance Charge Terms", PAGE::"Standard Text Codes",
+            PAGE::"Countries/Regions", PAGE::"Rounding Methods", PAGE::"Customer Posting Groups", PAGE::"Vendor Posting Groups",
+            PAGE::"Inventory Posting Groups", PAGE::"Standard Sales Codes", PAGE::"Standard Purchase Codes", PAGE::"Source Codes",
+            PAGE::"Reason Codes", PAGE::"Transaction Types", PAGE::"Transport Methods", PAGE::"Tariff Numbers",
+            PAGE::"Gen. Business Posting Groups", PAGE::"Gen. Product Posting Groups", PAGE::"Entry/Exit Points", PAGE::Areas,
+            PAGE::"Transaction Specifications", PAGE::"Payment Methods", PAGE::"Reminder Terms", PAGE::"No. Series",
+            PAGE::"VAT Business Posting Groups", PAGE::"VAT Product Posting Groups", PAGE::Dimensions, PAGE::"Post Codes"
+          ];
+      END;
+
+      EXIT(lForced);
+    END;
+
+    LOCAL PROCEDURE "--- Groups ---"@1000000000();
+    BEGIN
+    END;
+
+    PROCEDURE IndentGroup@1000000003(VAR pNfPermissionGroup@1000000000 : Record 9086960) : Boolean;
+    VAR
+      lSequence@1000000003 : Integer;
+    BEGIN
+      ///<summary>Indenting nForcement permission group</summary>
+      ///<param name="pNfPermissionGroup">The permission group</param>
+      ///<returns>TRUE = Indented, FALSE = Not</returns>
+
+      NfPermissionGroup.RESET();
+      NfPermissionGroup.SETCURRENTKEY("Parent ID", Sequence);
+      NfPermissionGroup.SETRANGE("Parent ID", pNfPermissionGroup."Parent ID");
+      NfPermissionGroup.SETRANGE(Sequence, pNfPermissionGroup.Sequence);
+      NfPermissionGroup.SETFILTER(ID, '<%1', pNfPermissionGroup.ID);
+      IF ( NOT (NfPermissionGroup.FINDLAST())) THEN
+      BEGIN
+        NfPermissionGroup.SETFILTER(Sequence, '<%1', pNfPermissionGroup.Sequence);
+        NfPermissionGroup.SETRANGE(ID);
+        IF ( NOT (NfPermissionGroup.FINDLAST())) THEN
+          EXIT(FALSE);
+      END;
+
+      pNfPermissionGroup.VALIDATE("Parent ID", NfPermissionGroup.ID);
+      pNfPermissionGroup.VALIDATE(Sequence, GroupSequenceAtTheEnd(NfPermissionGroup.ID));
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE UnindentGroup@1000000004(VAR pNfPermissionGroup@1000000000 : Record 9086960) : Boolean;
+    BEGIN
+      ///<summary>Unindenting nForcement permission group</summary>
+      ///<param name="pNfPermissionGroup">The permission group</param>
+      ///<returns>TRUE = Indented, FALSE = Not</returns>
+
+      IF (pNfPermissionGroup."Parent ID" = 0) THEN
+        EXIT(FALSE);
+      IF ( NOT (NfPermissionGroup.GET(pNfPermissionGroup."Parent ID"))) THEN
+        EXIT(FALSE);
+
+      pNfPermissionGroup.VALIDATE("Parent ID", NfPermissionGroup."Parent ID");
+      pNfPermissionGroup.VALIDATE(Sequence, GroupSequenceAtTheEnd(NfPermissionGroup."Parent ID"));
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE MoveGroupUp@1000000005(VAR pNfPermissionGroup@1000000001 : Record 9086960) : Boolean;
+    BEGIN
+      ///<summary>Moving nForcement permission group up</summary>
+      ///<param name="pNfPermissionGroup">The permission group</param>
+      ///<returns>TRUE = Moved, FALSE = Not</returns>
+
+      EXIT(MoveGroup(pNfPermissionGroup, NfSetup.Direction::Up));
+    END;
+
+    PROCEDURE MoveGroupDown@1000000006(VAR pNfPermissionGroup@1000000001 : Record 9086960) : Boolean;
+    BEGIN
+      ///<summary>Moving nForcement permission group down</summary>
+      ///<param name="pNfPermissionGroup">The permission group</param>
+      ///<returns>TRUE = Moved, FALSE = Not</returns>
+
+      EXIT(MoveGroup(pNfPermissionGroup, NfSetup.Direction::Down));
+    END;
+
+    LOCAL PROCEDURE MoveGroup@1000000007(VAR pNfPermissionGroup@1000000000 : Record 9086960;pDirection@1000000001 : Option) : Boolean;
+    VAR
+      lNfPermissionGroupFound@1000000005 : Boolean;
+      lFilter@1000000002 : Text;
+      lResult@1000000004 : Boolean;
+      lSequenceBuffer@1000000006 : Integer;
+    BEGIN
+      ///<summary>Moving nForcement permission group (up / down)</summary>
+      ///<param name="pNfPermissionGroup">The permission group</param>
+      ///<param name="pDirection">Direction (see "nF. Setup"."Direction" field for option values)</param>
+      ///<returns>TRUE = Moved, FALSE = Not</returns>
+
+      CASE (pDirection) OF
+        NfSetup.Direction::Up: lFilter := '<';
+        NfSetup.Direction::Down: lFilter := '>';
+      END;
+
+      NfPermissionGroup.RESET();
+      NfPermissionGroup.SETCURRENTKEY("Parent ID", Sequence);
+      NfPermissionGroup.SETRANGE("Parent ID", pNfPermissionGroup."Parent ID");
+      NfPermissionGroup.SETFILTER(Sequence, lFilter + '%1', pNfPermissionGroup.Sequence);
+      CASE (pDirection) OF
+        NfSetup.Direction::Up: lNfPermissionGroupFound := NfPermissionGroup.FINDLAST();
+        NfSetup.Direction::Down: lNfPermissionGroupFound := NfPermissionGroup.FINDFIRST();
+      END;
+
+      IF (lNfPermissionGroupFound) THEN
+      BEGIN
+        lSequenceBuffer := pNfPermissionGroup.Sequence;
+        pNfPermissionGroup.VALIDATE(Sequence, NfPermissionGroup.Sequence);
+        NfPermissionGroup.VALIDATE(Sequence, lSequenceBuffer);
+        NfPermissionGroup.MODIFY(TRUE);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE GroupSequenceAtTheEnd@1000000008(pParentId@1000000000 : Integer) : Integer;
+    VAR
+      lChildNfPermissionGroup@1000000001 : Record 9086960;
+    BEGIN
+      ///<summary>Returning last sequence within children of given parent</summary>
+      ///<param name="pParentId">Parent ID</param>
+      ///<returns>Sequence</returns>
+
+      lChildNfPermissionGroup.RESET();
+      lChildNfPermissionGroup.SETCURRENTKEY("Parent ID", Sequence);
+      lChildNfPermissionGroup.SETRANGE("Parent ID", pParentId);
+      IF (lChildNfPermissionGroup.FINDLAST()) THEN
+        EXIT(lChildNfPermissionGroup.Sequence + 1)
+      ELSE
+        EXIT(1);
+    END;
+
+    LOCAL PROCEDURE "--- Adding ---"@1000000015();
+    BEGIN
+    END;
+
+    PROCEDURE AddObjects@1000000016(VAR pNfPermission@1000000001 : Record 9086958;pObjectType@1000000000 : Option);
+    VAR
+      lnFObjects@1000000002 : Page 9086973;
+      lPermissionsAmended@1000000003 : Boolean;
+    BEGIN
+      ///<summary>Adding objects of given type</summary>
+      ///<param name="pNfPermission">Target recordset</param>
+      ///<param name="pObjectType">Object type to add</param>
+
+      NfPermissionGroup.GET(pNfPermission."nF. Permission Group ID");
+
+      lPermissionsAmended := FALSE;
+
+      AllObj.RESET();
+      AllObj.FILTERGROUP(2);
+      AllObj.SETRANGE("Object Type", pObjectType);
+      AllObj.FILTERGROUP(0);
+
+      lnFObjects.LOOKUPMODE(TRUE);
+      lnFObjects.SETTABLEVIEW(AllObj);
+      IF (lnFObjects.RUNMODAL() = ACTION::LookupOK) THEN
+      BEGIN
+        lnFObjects.SETSELECTIONFILTER(AllObj);
+        IF (AllObj.FINDSET()) THEN
+        BEGIN
+          NfPermission.RESET();
+          NfPermission.SETCURRENTKEY("nF. Permission Group ID", "Object Type", "Object ID");
+          NfPermission.SETRANGE("nF. Permission Group ID", NfPermissionGroup.ID);
+          REPEAT
+            NfPermission.SETRANGE("Object Type", AllObj."Object Type");
+            NfPermission.SETRANGE("Object ID", AllObj."Object ID");
+            IF (NfPermission.ISEMPTY()) THEN
+              CreateGroupPermission(FALSE, lPermissionsAmended);
+          UNTIL (AllObj.NEXT() = 0);
+          NfPermission.RESET();
+        END;
+      END;
+
+      IF (lPermissionsAmended) THEN
+        NfPermissionGroup.MarkUsersAsPending();
+    END;
+
+    LOCAL PROCEDURE "--- Logging ---"@1000000018();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE LogUpdateGiveEverythingGroupBegin@1000000020();
+    BEGIN
+      ///<summary>Logging "Update Give Everything Group" begin</summary>
+
+      UpdatingGiveEverythingGroup := TRUE;
+    END;
+
+    LOCAL PROCEDURE LogUpdateGiveEverythingGroupEnd@1000000021();
+    BEGIN
+      ///<summary>Logging "Update Give Everything Group" end</summary>
+
+      IF (UpdatingGiveEverythingGroupActivityId <> 0) THEN
+      BEGIN
+        NfLog.GET(UpdatingGiveEverythingGroupActivityId);
+        NfLog.VALIDATE(Result, NfLog.Result::Success);
+        NfLog.MODIFY(TRUE);
+      END;
+
+      CLEAR(UpdatingGiveEverythingGroup);
+      CLEAR(UpdatingGiveEverythingGroupActivityId);
+    END;
+
+    LOCAL PROCEDURE LogUpdateGiveEverythingGroup@1000000032();
+    VAR
+      eMessage@1000000000 : TextConst 'ENU=Updating default permission group;ENG=Updating default permission group';
+    BEGIN
+      ///<summary>Logging "Update Give Everything Group"</summary>
+
+      IF ((UpdatingGiveEverythingGroup) AND (UpdatingGiveEverythingGroupActivityId = 0)) THEN
+        UpdatingGiveEverythingGroupActivityId := NfLog.AddNoResultActivity(tLogActivity, eMessage, FALSE);
+    END;
+
+    LOCAL PROCEDURE LogCreateGiveEverythingGroup@1000000031();
+    VAR
+      eMessage@1000000000 : TextConst 'ENU=Default permission group has been created.;ENG=Default permission group has been created.';
+    BEGIN
+      ///<summary>Logging "Create Give Everything Group"</summary>
+
+      LogUpdateGiveEverythingGroup();
+      NfLog.AddSuccessEvent(tLogActivity, UpdatingGiveEverythingGroupActivityId, eMessage, FALSE);
+    END;
+
+    LOCAL PROCEDURE LogUpdateGroupPermission@1000000026(pActivity@1000000001 : Option);
+    VAR
+      eMessage@1000000000 : TextConst 'ENU=%1 "%2" (%3) permission has been %4.;ENG=%1 "%2" (%3) permission has been %4.';
+      lActivityText@1000000002 : Text;
+    BEGIN
+      ///<summary>Logging "Update Group Permission"</summary>
+      ///<param name="pActivity">Activity</param>
+
+      LogUpdateGiveEverythingGroup();
+
+      NfPermission.CALCFIELDS("Object Name");
+      lActivityText := NfSetup.GetActivityText(pActivity);
+      NfLog.AddSuccessEvent(tLogActivity, UpdatingGiveEverythingGroupActivityId, STRSUBSTNO(eMessage, NfPermission."Object Type",
+        NfPermission."Object Name", NfPermission."Object ID", lActivityText), FALSE);
+    END;
+
+    LOCAL PROCEDURE "--- Objects Buffer ---"@1000000001();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CollectObjects@1000000028(pBasic@1000000000 : Boolean);
+    BEGIN
+      ///<summary>Collecting objects</summary>
+      ///<param name="pBasic">Basic flag</param>
+
+      AllObjTmp.RESET();
+      AllObjTmp.DELETEALL();
+
+      AllObj.RESET();
+      IF (AllObj.FINDSET()) THEN
+      REPEAT
+        AllObjTmp := AllObj;
+        AllObjTmp.INSERT();
+      UNTIL (AllObj.NEXT() = 0);
+
+      CreateSystemObjectsBuffer(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateSystemObjectsBuffer@1000000009(pBasic@1000000000 : Boolean);
+    BEGIN
+      ///<summary>Creating system objects buffer<summary>
+      ///<param name="pBasic">Basic flag</param>
+
+      AllObjTmp.RESET();
+      AllObjTmp.SETRANGE("Object Type", AllObjTmp."Object Type"::System);
+      AllObjTmp.DELETEALL();
+
+      IF ( NOT (pBasic)) THEN
+      BEGIN
+        AddSystemObjectToBuffer(1310, 'File, Import, Binary');
+        AddSystemObjectToBuffer(1320, 'File, Import, Text');
+        AddSystemObjectToBuffer(1330, 'File, Export, Binary');
+        AddSystemObjectToBuffer(1340, 'File, Export, Text');
+        AddSystemObjectToBuffer(1530, 'File, Database, Test');
+        AddSystemObjectToBuffer(1540, 'File, Database, Alter');
+        AddSystemObjectToBuffer(1550, 'File, Database, Delete');
+        AddSystemObjectToBuffer(1570, 'File, Database, Information');
+        AddSystemObjectToBuffer(1580, 'File, Database, Options');
+        AddSystemObjectToBuffer(1610, 'Create a new company');
+        AddSystemObjectToBuffer(1630, 'Rename an existing company');
+        AddSystemObjectToBuffer(1640, 'Delete a company');
+        AddSystemObjectToBuffer(1650, 'Force Unlock');
+      END;
+
+      AddSystemObjectToBuffer(2510, 'Edit, Find');
+      AddSystemObjectToBuffer(2520, 'Edit, Replace');
+      AddSystemObjectToBuffer(3220, 'View, Table Filter');
+      AddSystemObjectToBuffer(3230, 'View, FlowFilter');
+      AddSystemObjectToBuffer(3410, 'View, Sort');
+      AddSystemObjectToBuffer(3510, 'View, Design');
+
+      IF ( NOT (pBasic)) THEN
+      BEGIN
+        AddSystemObjectToBuffer(5210, 'Tools, Object Designer');
+        AddSystemObjectToBuffer(5310, 'Tools, Debugger');
+        AddSystemObjectToBuffer(5315, 'Tools, Code Coverage');
+        AddSystemObjectToBuffer(5320, 'Tools, Client Monitor');
+        AddSystemObjectToBuffer(5330, 'Tools, Zoom');
+        AddSystemObjectToBuffer(5410, 'Export Data to Data File');
+        AddSystemObjectToBuffer(5420, 'Import Data from Data File');
+        AddSystemObjectToBuffer(5510, 'Tools, Clear Old Versions');
+        AddSystemObjectToBuffer(5620, 'Tools, Renumber');
+        AddSystemObjectToBuffer(5630, 'Tools, Cross Reference');
+        AddSystemObjectToBuffer(5710, 'Tools, Translate');
+        AddSystemObjectToBuffer(5810, 'Tools, Security, Roles');
+        AddSystemObjectToBuffer(5820, 'Tools, Security, DB Logins');
+        AddSystemObjectToBuffer(5821, 'Tools, Security, Win. Logins');
+      END;
+
+      AddSystemObjectToBuffer(5830, 'Tools, Security, Password');
+
+      IF ( NOT (pBasic)) THEN
+      BEGIN
+        AddSystemObjectToBuffer(5910, 'Tools, License Information');
+        AddSystemObjectToBuffer(6300, 'Per-database License');
+        AddSystemObjectToBuffer(9010, 'Design, Table, Basic');
+        AddSystemObjectToBuffer(9015, 'Design, Table, Advanced');
+        AddSystemObjectToBuffer(9020, 'Design, Page, Basic');
+        AddSystemObjectToBuffer(9025, 'Design, Page, Advanced');
+        AddSystemObjectToBuffer(9030, 'Design, Report, Basic');
+        AddSystemObjectToBuffer(9035, 'Design, Report, Advanced');
+        AddSystemObjectToBuffer(9040, 'Design, Dataport, Basic');
+        AddSystemObjectToBuffer(9045, 'Design, Dataport, Advanced');
+        AddSystemObjectToBuffer(9050, 'Design, Codeunit, Basic');
+        AddSystemObjectToBuffer(9055, 'Design, Codeunit, Advanced');
+        AddSystemObjectToBuffer(9060, 'Design, XMLport, Basic');
+        AddSystemObjectToBuffer(9065, 'Design, XMLport, Advanced');
+        AddSystemObjectToBuffer(9070, 'Design, MenuSuite, Basic');
+        AddSystemObjectToBuffer(9075, 'Design, MenuSuite, Advanced');
+        AddSystemObjectToBuffer(9090, 'Design, Query, Basic');
+        AddSystemObjectToBuffer(9095, 'Design, Query, Advanced');
+        AddSystemObjectToBuffer(9100, 'Microsoft Dynamics NAV Server');
+        AddSystemObjectToBuffer(9500, 'TestPartner Integration');
+      END;
+    END;
+
+    LOCAL PROCEDURE AddSystemObjectToBuffer@1000000010(pObjectId@1000000000 : Integer;pObjectName@1000000001 : Text);
+    BEGIN
+      ///<summary>Adding to AllObj buffer</summary>
+
+      AllObjTmp."Object Type" := AllObjTmp."Object Type"::System;
+      AllObjTmp."Object ID" := pObjectId;
+      AllObjTmp."Object Name" := pObjectName;
+      AllObjTmp.INSERT();
+    END;
+
+    BEGIN
+    {
+      ///<summary>Managing nForcement permissions</summary>
+      ///<change version="NF2016.17" initials="JH" date="2016-06-20">Created</change>
+      ///<change version="NF2016.17.11" initials="JH" date="2016-11-03">Logic changes, bug fixes</change>
+    }
+    END.
+  }
+}
+

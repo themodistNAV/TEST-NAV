@@ -1,0 +1,1556 @@
+OBJECT Codeunit 9062343 Object Field Toolkit
+{
+  OBJECT-PROPERTIES
+  {
+    Date=17/08/16;
+    Time=10:31:14 AM;
+    Version List=NA2016.16.1;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AllObj@1000000000 : Record 2000000038;
+      EnhancedFieldDefinition@1000000015 : Record 9062327;
+      Field@1000000001 : Record 2000000041;
+      TableFieldBuffer@1000000005 : TEMPORARY Record 9062231;
+      String@1000000018 : Codeunit 9062236;
+      TableFieldManagement@1000000006 : Codeunit 9062248;
+      TnpToolkit@1000000007 : Codeunit 9062230;
+      TableFieldTableId@1000000017 : Integer;
+      TableFieldFieldType@1000000002 : Integer;
+      TableFieldFieldClass@1000000014 : Integer;
+      ObjectIdFilter@1000000003 : Code[1024];
+      FieldIdFilter@1000000004 : Code[1024];
+      tEmpty@1000000008 : TextConst 'ENU=Empty "%1";ENG=Empty "%1"';
+      FieldClass@1000000016 : Integer;
+      NameFilter@1000000009 : ARRAY [4] OF Text[50];
+      NameFilterIndex@1000000011 : Integer;
+      NameFound@1000000010 : Boolean;
+      tTableId@1000000012 : TextConst 'ENU=Table ID;ENG=Table ID';
+      tFieldType@1000000013 : TextConst 'ENU=Field Type;ENG=Field Type';
+
+    PROCEDURE "--- Object ---"@1000000028();
+    BEGIN
+    END;
+
+    PROCEDURE GetObjectName@1000000042(pObjectType@1000000001 : '0';pObjectId@1000000000 : Integer) : Text;
+    BEGIN
+      //DOC NA2015.1 - Returning object name
+      //  -> pObjectType: Object type
+      //  -> pObjectId: Object ID
+      //  <- The name
+
+      IF ( NOT (AllObj.GET(pObjectType, pObjectId))) THEN
+        CLEAR(AllObj);
+      EXIT(AllObj."Object Name");
+    END;
+
+    PROCEDURE ValidateObjectId@1000000003(pObjectType@1000000001 : '0';pObjectId@1000000000 : Integer);
+    VAR
+      eUknownObject@1000000002 : TextConst 'ENU="%1 with ID = %2 doesn''t exist.";ENG="%1 with ID = %2 doesn''t exist."';
+    BEGIN
+      //DOC NA2015.1 - Validating object ID
+      //  -> pObjectType: Object type
+      //  -> pObjectId: Object ID
+
+      IF ( NOT (TryToValidateObjectId(pObjectType, pObjectId))) THEN
+      BEGIN
+        AllObj."Object Type" := pObjectType;
+        ERROR(eUknownObject, FORMAT(AllObj."Object Type"), pObjectId);
+      END;
+    END;
+
+    PROCEDURE TryToValidateObjectId@1000000117(pObjectType@1000000001 : '0';pObjectId@1000000000 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Trying to validate object ID
+      //  -> pObjectType: Object type
+      //  -> pObjectId: Object ID
+      //  <- Result
+
+      IF (pObjectId = 0) THEN
+        EXIT(TRUE);
+
+      IF (pObjectType = 0) THEN
+        ERROR(tEmpty, AllObj.FIELDCAPTION("Object Type"));
+
+      AllObj.RESET();
+      AllObj.SETRANGE("Object Type", pObjectType);
+      ApplyObjectIdFilter(pObjectId);
+      EXIT(AllObj.FINDFIRST());
+    END;
+
+    PROCEDURE ValidateObjectName@1000000001(pObjectType@1000000001 : '0';VAR pObjectId@1000000000 : Integer;VAR pObjectName@1000000002 : Text;pExactMatch@1000000004 : Boolean);
+    BEGIN
+      //DOC NA2015.1 - Validating object name
+      //  -> pObjectType: Object type
+      //  <> pObjectId: Target object ID
+      //  <> pObjectName: Source / target object name
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+
+      ValidateObjectNameAdv(pObjectType, pObjectId, pObjectName, pExactMatch);
+    END;
+
+    PROCEDURE ValidateObjectNameAdv@1000000029(pObjectType@1000000001 : '0';VAR pObjectId@1000000000 : Integer;VAR pObjectName@1000000002 : Text;pExactMatch@1000000006 : Boolean);
+    VAR
+      eUnknownObjectType@1000000003 : TextConst 'ENU=Unknown %1: "%2";ENG=Unknown %1: "%2"';
+      eUnknownObject@1000000004 : TextConst 'ENU=Unknown object: "%1";ENG=Unknown object: "%1"';
+      lErrorMessage@1000000005 : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Validating object name (advanced version)
+      //  <> pObjectType: Source / target object type (if specified on function call - used as a filter)
+      //  <> pObjectId: Target object ID
+      //  <> pObjectName: Source / target object name
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+
+      IF ( NOT (TryToValidateObjectNameAdv(pObjectType, pObjectId, pObjectName, pExactMatch))) THEN
+      BEGIN
+        IF (pObjectType <> 0) THEN
+        BEGIN
+          AllObj."Object Type" := pObjectType;
+          lErrorMessage := STRSUBSTNO(eUnknownObjectType, LOWERCASE(FORMAT(AllObj."Object Type")), pObjectName);
+        END
+        ELSE
+          lErrorMessage := STRSUBSTNO(eUnknownObject, pObjectName);
+        CheckIfNameFound(lErrorMessage);
+      END;
+    END;
+
+    PROCEDURE TryToValidateObjectName@1000000114(pObjectType@1000000001 : '0';VAR pObjectId@1000000000 : Integer;VAR pObjectName@1000000002 : Text;pExactMatch@1000000004 : Boolean) : Boolean;
+    VAR
+      lObjectId@1000000003 : Integer;
+      eUnknownObjectType@1000000007 : TextConst 'ENU=Unknown %1: "%2";ENG=Unknown %1: "%2"';
+      eUnknownObject@1000000008 : TextConst 'ENU=Unknown object: "%1";ENG=Unknown object: "%1"';
+    BEGIN
+      //DOC NA2015.2 - Trying to validate object name
+      //  -> pObjectType: Object type
+      //  <> pObjectId: Target object ID
+      //  <> pObjectName: Source / target object name
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+      //  <- Result
+
+      EXIT(TryToValidateObjectNameAdv(pObjectType, pObjectId, pObjectName, pExactMatch));
+    END;
+
+    PROCEDURE TryToValidateObjectNameAdv@1000000113(pObjectType@1000000001 : '0';VAR pObjectId@1000000000 : Integer;VAR pObjectName@1000000002 : Text;pExactMatch@1000000006 : Boolean) : Boolean;
+    VAR
+      eUnknownObjectType@1000000003 : TextConst 'ENU=Unknown %1: "%2";ENG=Unknown %1: "%2"';
+      eUnknownObject@1000000004 : TextConst 'ENU=Unknown object: "%1";ENG=Unknown object: "%1"';
+      lResult@1000000005 : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Trying to validate object name (advanced version)
+      //  <> pObjectType: Source / target object type (if specified on function call - used as a filter)
+      //  <> pObjectId: Target object ID
+      //  <> pObjectName: Source / target object name
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+      //  <- Result
+
+      lResult := FALSE;
+
+      IF (pObjectName <> '') THEN
+      BEGIN
+        AllObj.RESET();
+        IF (pObjectType <> 0) THEN
+          AllObj.SETRANGE("Object Type", pObjectType);
+        ApplyObjectIdFilter(0);
+        PrepareNameFilters(pObjectName, pExactMatch);
+        WHILE (NextNameFilter()) DO
+        BEGIN
+          AllObj.SETFILTER("Object Name", CurrentNameFilter());
+          SetNameFound(AllObj.FINDFIRST());
+        END;
+        IF ( NOT (HasNameBeenFound())) THEN
+          IF (EVALUATE(pObjectId, pObjectName)) THEN
+          BEGIN
+            AllObj.SETRANGE("Object Name");
+            AllObj.SETRANGE("Object ID", pObjectId);
+            SetNameFound(AllObj.FINDFIRST());
+          END;
+        lResult := HasNameBeenFound();
+        IF (lResult) THEN
+        BEGIN
+          pObjectType := AllObj."Object Type";
+          pObjectId := AllObj."Object ID";
+          pObjectName := AllObj."Object Name";
+        END;
+      END
+      ELSE
+      BEGIN
+        CLEAR(pObjectType);
+        CLEAR(pObjectId);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE ObjectLookup@1000000026(pObjectType@1000000005 : '0';VAR pObjectId@1000000001 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Lookup for objects
+      //  -> pObjectType: Object type
+      //  <> pObjectId: Target object ID
+      //  <- Lookup result
+
+      EXIT(ObjectLookupAdv(pObjectType, pObjectId));
+    END;
+
+    PROCEDURE ObjectLookupAdv@1000000075(VAR pObjectType@1000000005 : '0';VAR pObjectId@1000000001 : Integer) : Boolean;
+    VAR
+      lResult@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Lookup for objects (advanced version)
+      //  <> pObjectType: Source / target object type (if specified on function call - used as a filter)
+      //  <> pObjectId: Target object ID
+      //  <- Lookup result
+
+      lResult := FALSE;
+
+      AllObj.RESET();
+      AllObj.FILTERGROUP(2);
+      IF (pObjectType <> 0) THEN
+        AllObj.SETRANGE("Object Type", pObjectType);
+      IF (pObjectId <> 0) THEN
+      BEGIN
+        ApplyObjectIdFilter(pObjectId);
+        IF (AllObj.FINDFIRST()) THEN;
+        AllObj.SETRANGE("Object ID");
+      END;
+      ApplyObjectIdFilter(0);
+      AllObj.FILTERGROUP(0);
+
+      IF (PAGE.RUNMODAL(PAGE::"All Objects", AllObj) = ACTION::LookupOK) THEN
+      BEGIN
+        pObjectType := AllObj."Object Type";
+        pObjectId := AllObj."Object ID";
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE "--- Table ---"@1000000008();
+    BEGIN
+    END;
+
+    PROCEDURE GetTableName@1000000053(pTableId@1000000000 : Integer) : Text;
+    BEGIN
+      //DOC NA2015.1 - Returning table name
+      //  -> pTableId: Table ID
+      //  <- Table name
+
+      EXIT(GetObjectName(AllObj."Object Type"::Table, pTableId));
+    END;
+
+    PROCEDURE ValidateTableId@1000000009(pTableId@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Validating table ID
+      //  -> pTableId: Table ID
+
+      ValidateObjectId(AllObj."Object Type"::Table, pTableId);
+    END;
+
+    PROCEDURE TryToValidateTableId@1000000119(pTableId@1000000000 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Trying to validate table ID
+      //  -> pTableId: Table ID
+      //  <- Result
+
+      EXIT(TryToValidateObjectId(AllObj."Object Type"::Table, pTableId));
+    END;
+
+    PROCEDURE ValidateTableName@1000000011(VAR pTableId@1000000000 : Integer;VAR pTableName@1000000002 : Text;pExactMatch@1000000001 : Boolean);
+    BEGIN
+      //DOC NA2015.1 - Validating table name
+      //  <> pTableId: Target table ID
+      //  <> pTableName: Source / target table name
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+
+      ValidateObjectName(AllObj."Object Type"::Table, pTableId, pTableName, pExactMatch);
+    END;
+
+    PROCEDURE TryToValidateTableName@1000000120(VAR pTableId@1000000000 : Integer;VAR pTableName@1000000002 : Text;pExactMatch@1000000001 : Boolean) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Trying to validate table name
+      //  <> pTableId: Target table ID
+      //  <> pTableName: Source / target table name
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+      //  <- Result
+
+      EXIT(TryToValidateObjectName(AllObj."Object Type"::Table, pTableId, pTableName, pExactMatch));
+    END;
+
+    PROCEDURE TableLookup@1000000012(VAR pTableId@1000000001 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Table lookup
+      //  <> pTableId: Target table ID
+      //  <- Lookup result
+
+      EXIT(ObjectLookup(AllObj."Object Type"::Table, pTableId));
+    END;
+
+    PROCEDURE "--- Report ---"@1000000023();
+    BEGIN
+    END;
+
+    PROCEDURE GetReportName@1000000059(pReportId@1000000000 : Integer) : Text;
+    BEGIN
+      //DOC NA2015.1 - Returning report name
+      //  -> pReportId: Report ID
+      //  <- Report name
+
+      EXIT(GetObjectName(AllObj."Object Type"::Report, pReportId));
+    END;
+
+    PROCEDURE ValidateReportId@1000000014(pReportId@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Validating report ID
+      //  -> pReportId: Report ID
+
+      ValidateObjectId(AllObj."Object Type"::Report, pReportId);
+    END;
+
+    PROCEDURE TryToValidateReportId@1000000121(pReportId@1000000000 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Validating report ID
+      //  -> pReportId: Report ID
+      //  <- Result
+
+      EXIT(TryToValidateObjectId(AllObj."Object Type"::Report, pReportId));
+    END;
+
+    PROCEDURE ValidateReportName@1000000022(VAR pReportId@1000000000 : Integer;VAR pReportName@1000000002 : Text;pExactMatch@1000000001 : Boolean);
+    BEGIN
+      //DOC NA2015.1 - Validating report name
+      //  <> pReportId: Target report ID
+      //  <> pReportName: Source / target report name
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+
+      ValidateObjectName(AllObj."Object Type"::Report, pReportId, pReportName, pExactMatch);
+    END;
+
+    PROCEDURE TryToValidateReportName@1000000122(VAR pReportId@1000000000 : Integer;VAR pReportName@1000000002 : Text;pExactMatch@1000000001 : Boolean) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Trying to validate report name
+      //  <> pReportId: Target report ID
+      //  <> pReportName: Source / target report name
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+      //  <- Result
+
+      EXIT(TryToValidateObjectName(AllObj."Object Type"::Report, pReportId, pReportName, pExactMatch));
+    END;
+
+    PROCEDURE ReportLookup@1000000021(VAR pReportId@1000000001 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Lookup for reports
+      //  <> pReportId: Target report ID
+      //  <- Lookup result
+
+      EXIT(ObjectLookup(AllObj."Object Type"::Report, pReportId));
+    END;
+
+    PROCEDURE "--- Codeunit ---"@1000000040();
+    BEGIN
+    END;
+
+    PROCEDURE GetCodeunitName@1000000060(pCodeunitId@1000000000 : Integer) : Text;
+    BEGIN
+      //DOC NA2015.1 - Returning codeunit name
+      //  -> pCodeunitId: Codeunit ID
+      //  <- Codeunit name
+
+      EXIT(GetObjectName(AllObj."Object Type"::Codeunit, pCodeunitId));
+    END;
+
+    PROCEDURE ValidateCodeunitId@1000000018(pCodeunitId@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Validating codeunit ID
+      //  -> pCodeunitId: Codeunit ID
+
+      ValidateObjectId(AllObj."Object Type"::Codeunit, pCodeunitId);
+    END;
+
+    PROCEDURE TryToValidateCodeunitId@1000000080(pCodeunitId@1000000000 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Trying to validate codeunit ID
+      //  -> pCodeunitId: Codeunit ID
+      //  <- Result
+
+      EXIT(TryToValidateObjectId(AllObj."Object Type"::Codeunit, pCodeunitId));
+    END;
+
+    PROCEDURE ValidateCodeunitName@1000000039(VAR pCodeunitId@1000000000 : Integer;VAR pCodeunitName@1000000002 : Text;pExactMatch@1000000001 : Boolean);
+    BEGIN
+      //DOC NA2015.1 - Validating codeunit name
+      //  <> pCodeunitId: Target codeunit ID
+      //  <> pCodeunitName: Source / target codeunit name
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+
+      ValidateObjectName(AllObj."Object Type"::Codeunit, pCodeunitId, pCodeunitName, pExactMatch);
+    END;
+
+    PROCEDURE TryToValidateCodeunitName@1000000103(VAR pCodeunitId@1000000000 : Integer;VAR pCodeunitName@1000000002 : Text;pExactMatch@1000000001 : Boolean) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Trying to validate codeunit name
+      //  <> pCodeunitId: Target codeunit ID
+      //  <> pCodeunitName: Source / target codeunit name
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+      //  <- Result
+
+      EXIT(TryToValidateObjectName(AllObj."Object Type"::Codeunit, pCodeunitId, pCodeunitName, pExactMatch));
+    END;
+
+    PROCEDURE CodeunitLookup@1000000038(VAR pCodeunitId@1000000001 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Lookup for codeunits
+      //  <> pCodeunitId: Target codeunit ID
+      //  <- Lookup result
+
+      EXIT(ObjectLookup(AllObj."Object Type"::Codeunit, pCodeunitId));
+    END;
+
+    PROCEDURE "--- XMLport ---"@1000000045();
+    BEGIN
+    END;
+
+    PROCEDURE GetXmlPortName@1000000068(pXmlPortId@1000000000 : Integer) : Text;
+    BEGIN
+      //DOC NA2015.1 - Returning XMLport name
+      //  -> pXmlPortId: XMLport ID
+      //  <- XMLport name
+
+      EXIT(GetObjectName(AllObj."Object Type"::XMLport, pXmlPortId));
+    END;
+
+    PROCEDURE ValidateXmlPortId@1000000025(pXmlPortId@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Validating XMLport ID
+      //  -> pXmlPortId: XMLport ID
+
+      ValidateObjectId(AllObj."Object Type"::XMLport, pXmlPortId);
+    END;
+
+    PROCEDURE TryToValidateXmlPortId@1000000107(pXmlPortId@1000000000 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Trying to validate XMLport ID
+      //  -> pXmlPortId: XMLport ID
+      //  <- Result
+
+      EXIT(TryToValidateObjectId(AllObj."Object Type"::XMLport, pXmlPortId));
+    END;
+
+    PROCEDURE ValidateXmlPortName@1000000044(VAR pXmlPortId@1000000000 : Integer;VAR pXmlPortName@1000000002 : Text;pExactMatch@1000000001 : Boolean);
+    BEGIN
+      //DOC NA2015.1 - Validating XMLport name
+      //  <> pXmlPortId: Target XMLport ID
+      //  <> pXmlPortName: Source / target XMLport name
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+
+      ValidateObjectName(AllObj."Object Type"::XMLport, pXmlPortId, pXmlPortName, pExactMatch);
+    END;
+
+    PROCEDURE TryToValidateXmlPortName@1000000109(VAR pXmlPortId@1000000000 : Integer;VAR pXmlPortName@1000000002 : Text;pExactMatch@1000000001 : Boolean) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Validating XMLport name
+      //  <> pXmlPortId: Target XMLport ID
+      //  <> pXmlPortName: Source / target XMLport name
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+      //  <- Result
+
+      EXIT(TryToValidateObjectName(AllObj."Object Type"::XMLport, pXmlPortId, pXmlPortName, pExactMatch));
+    END;
+
+    PROCEDURE XmlPortLookup@1000000043(VAR pXmlPortId@1000000001 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Lookup for XMLports
+      //  <> pXmlPortId: Target XMLport ID
+      //  <- Lookup result
+
+      EXIT(ObjectLookup(AllObj."Object Type"::XMLport, pXmlPortId));
+    END;
+
+    PROCEDURE "--- Page ---"@1000000035();
+    BEGIN
+    END;
+
+    PROCEDURE GetPageName@1000000076(pPageId@1000000000 : Integer) : Text;
+    BEGIN
+      //DOC NA2015.1 - Returning page name
+      //  -> pPageId: Page ID
+      //  <- Page name
+
+      EXIT(GetObjectName(AllObj."Object Type"::Page, pPageId));
+    END;
+
+    PROCEDURE ValidatePageId@1000000031(pPageId@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Validating page ID
+      //  -> pPageId: Page ID
+
+      ValidateObjectId(AllObj."Object Type"::Page, pPageId);
+    END;
+
+    PROCEDURE TryToValidatePageId@1000000116(pPageId@1000000000 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Trying to validate page ID
+      //  -> pPageId: Page ID
+      //  <- Result
+
+      EXIT(TryToValidateObjectId(AllObj."Object Type"::Page, pPageId));
+    END;
+
+    PROCEDURE ValidatePageName@1000000034(VAR pPageId@1000000000 : Integer;VAR pPageName@1000000002 : Text;pExactMatch@1000000001 : Boolean);
+    BEGIN
+      //DOC NA2015.1 - Validating page name
+      //  <> pPageId: Target page ID
+      //  <> pPageName: Source / target page name
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+
+      ValidateObjectName(AllObj."Object Type"::Page, pPageId, pPageName, pExactMatch);
+    END;
+
+    PROCEDURE TryToValidatePageName@1000000118(VAR pPageId@1000000000 : Integer;VAR pPageName@1000000002 : Text;pExactMatch@1000000001 : Boolean) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Trying to validate page name
+      //  <> pPageId: Target page ID
+      //  <> pPageName: Source / target page name
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+      //  <- Result
+
+      EXIT(TryToValidateObjectName(AllObj."Object Type"::Page, pPageId, pPageName, pExactMatch));
+    END;
+
+    PROCEDURE PageLookup@1000000033(VAR pPageId@1000000001 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Lookup for pages
+      //  <> pPageId: Target page ID
+      //  <- Lookup result
+
+      EXIT(ObjectLookup(AllObj."Object Type"::Page, pPageId));
+    END;
+
+    PROCEDURE "--- Query ---"@1000000050();
+    BEGIN
+    END;
+
+    PROCEDURE GetQueryName@1000000077(pQueryId@1000000000 : Integer) : Text;
+    BEGIN
+      //DOC NA2015.1 - Returning query name
+      //  -> pQueryId: Query ID
+      //  <- Query name
+
+      EXIT(GetObjectName(AllObj."Object Type"::Query, pQueryId));
+    END;
+
+    PROCEDURE ValidateQueryId@1000000041(pQueryId@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Validating query ID
+      //  -> pQueryId: Query ID
+
+      ValidateObjectId(AllObj."Object Type"::Query, pQueryId);
+    END;
+
+    PROCEDURE TryToValidateQueryId@1000000124(pQueryId@1000000000 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Trying to validate query ID
+      //  -> pQueryId: Query ID
+      //  <- Result
+
+      EXIT(TryToValidateObjectId(AllObj."Object Type"::Query, pQueryId));
+    END;
+
+    PROCEDURE ValidateQueryName@1000000049(VAR pQueryId@1000000000 : Integer;VAR pQueryName@1000000002 : Text;pExactMatch@1000000001 : Boolean);
+    BEGIN
+      //DOC NA2015.1 - Validating query name
+      //  <> pQueryId: Target query ID
+      //  <> pQueryName: Source / target query name
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+
+      ValidateObjectName(AllObj."Object Type"::Query, pQueryId, pQueryName, pExactMatch);
+    END;
+
+    PROCEDURE TryToValidateQueryName@1000000125(VAR pQueryId@1000000000 : Integer;VAR pQueryName@1000000002 : Text;pExactMatch@1000000001 : Boolean) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Trying to validate query name
+      //  <> pQueryId: Target query ID
+      //  <> pQueryName: Source / target query name
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+      //  <- Result
+
+      EXIT(TryToValidateObjectName(AllObj."Object Type"::Query, pQueryId, pQueryName, pExactMatch));
+    END;
+
+    PROCEDURE QueryLookup@1000000048(VAR pQueryId@1000000001 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Lookup for queries
+      //  <> pQueryId: Target query ID
+      //  <- Lookup result
+
+      EXIT(ObjectLookup(AllObj."Object Type"::Query, pQueryId));
+    END;
+
+    PROCEDURE "--- Field ---"@1000000091();
+    BEGIN
+    END;
+
+    PROCEDURE GetFieldName@1000000094(pTableId@1000000001 : Integer;pFieldId@1000000000 : Integer) : Text;
+    BEGIN
+      //DOC NA2015.1 - Returning field name
+      //  -> pTableId: Table ID
+      //  -> pFieldId: Target field ID
+      //  <- The name
+
+      IF ( NOT (Field.GET(pTableId, pFieldId))) THEN
+        CLEAR(Field);
+      EXIT(Field.FieldName);
+    END;
+
+    PROCEDURE ValidateFieldId@1000000051(pTableId@1000000001 : Integer;pFieldId@1000000000 : Integer);
+    VAR
+      eUnknownField@1000000002 : TextConst 'ENU=Field %1 doesn''t exist in table %2.;ENG=Field %1 doesn''t exist in table %2.';
+    BEGIN
+      //DOC NA2015.2 - Validating field ID
+      //  -> pTableId: Table ID
+      //  -> pFieldId: Target field ID
+
+      IF ( NOT (TryToValidateFieldId(pTableId, pFieldId))) THEN
+        ERROR(eUnknownField, pFieldId, GetTableName(pTableId));
+    END;
+
+    PROCEDURE TryToValidateFieldId@1000000106(pTableId@1000000001 : Integer;pFieldId@1000000000 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Trying to validate field ID
+      //  -> pTableId: Table ID
+      //  -> pFieldId: Target field ID
+      //  <- TRUE = Field found, FALSE = Field doesn't exist
+
+      IF (pFieldId = 0) THEN
+        EXIT;
+
+      IF (pTableId = 0) THEN
+        ERROR(tEmpty, tTableId);
+
+      Field.RESET();
+      ApplyFieldTableIdFilter(pTableId);
+      ApplyFieldIdFilter(pFieldId);
+      EXIT(Field.FINDFIRST());
+    END;
+
+    PROCEDURE ValidateFieldName@1000000090(pTableId@1000000001 : Integer;VAR pFieldId@1000000000 : Integer;VAR pFieldName@1000000002 : Text;pExactMatch@1000000003 : Boolean);
+    VAR
+      eUnknownField@1000000007 : TextConst 'ENU=Field "%1" doesn''t exist in table "%2";ENG=Field "%1" doesn''t exist in table "%2"';
+    BEGIN
+      //DOC NA2015.2 - Validating field name
+      //  -> pTableId: Table ID
+      //  <> pFieldId: Target field ID
+      //  <> pFieldName: Source / target field name
+      //  -> pExactMatch: Exact match flag (TRUE = Match field name exactly, FALSE = Match any part of field name)
+
+      IF ( NOT (TryToValidateFieldName(pTableId, pFieldId, pFieldName, pExactMatch))) THEN
+        ERROR(eUnknownField, pFieldName, pTableId);
+    END;
+
+    PROCEDURE TryToValidateFieldName@1000000047(pTableId@1000000001 : Integer;VAR pFieldId@1000000000 : Integer;VAR pFieldName@1000000002 : Text;pExactMatch@1000000003 : Boolean) : Boolean;
+    VAR
+      lResult@1000000004 : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Trying to validating field name
+      //  -> pTableId: Table ID
+      //  <> pFieldId: Target field ID
+      //  <> pFieldName: Source / target field name
+      //  -> pExactMatch: Exact match flag (TRUE = Match field name exactly, FALSE = Match any part of field name)
+      //  <- TRUE = Field found (or field blank), FALSE = No such field
+
+      IF (pFieldName <> '') THEN
+      BEGIN
+        IF (pTableId = 0) THEN
+          ERROR(tEmpty, tTableId);
+
+        Field.RESET();
+        ApplyFieldTableIdFilter(pTableId);
+        ApplyFieldIdFilter(0);
+        PrepareNameFilters(pFieldName, pExactMatch);
+        WHILE (NextNameFilter()) DO
+        BEGIN
+          Field.SETFILTER(FieldName, FieldFilter(CurrentNameFilter()));
+          SetNameFound(Field.FINDFIRST());
+        END;
+        IF (HasNameBeenFound()) THEN
+        BEGIN
+          pFieldId := Field."No.";
+          pFieldName := Field.FieldName;
+        END
+        ELSE
+          IF (EVALUATE(pFieldId, pFieldName)) THEN
+          BEGIN
+            Field.SETRANGE(FieldName);
+            Field.SETRANGE("No.", pFieldId);
+            SetNameFound(Field.FINDFIRST());
+          END;
+
+        lResult := HasNameBeenFound();
+      END
+      ELSE
+      BEGIN
+        CLEAR(pFieldId);
+        CLEAR(pFieldName);
+
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE FieldLookup@1000000052(pTableId@1000000000 : Integer;VAR pFieldId@1000000001 : Integer) : Boolean;
+    VAR
+      lResult@1000000002 : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Lookup for field
+      //  -> pTableId: Table ID
+      //  <> pFieldId: Target field ID
+      //  <- Lookup result
+
+      lResult := FALSE;
+
+      IF (pTableId = 0) THEN
+        ERROR(tEmpty, tTableId);
+
+      Field.RESET();
+      Field.FILTERGROUP(2);
+      ApplyFieldTableIdFilter(pTableId);
+      IF (pFieldId <> 0) THEN
+      BEGIN
+        ApplyFieldIdFilter(pFieldId);
+        IF (Field.FINDFIRST()) THEN;
+        Field.SETRANGE("No.");
+      END;
+      ApplyFieldIdFilter(0);
+      Field.FILTERGROUP(0);
+      //DOC NA2016.16.1 PC 17/08/2016 >>>
+      //IF (PAGE.RUNMODAL(PAGE::Fields, Field) = ACTION::LookupOK) THEN
+      IF (PAGE.RUNMODAL(PAGE::"Standard Fields", Field) = ACTION::LookupOK) THEN
+      //DOC NA2016.16.1 PC 17/08/2016  <<<
+      BEGIN
+        pFieldId := Field."No.";
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE SelectFields@1000000006(pTableId@1000000000 : Integer;VAR pTableFieldBuffer@1000000001 : Record 9062231) : Boolean;
+    BEGIN
+      //DOC NA2016.12 - Selecting fields from the given table
+      //  -> pTableId: Table ID
+      //  <- TRUE = Selected, FALSE = Cancelled
+
+      EXIT(SelectFieldsAdv(pTableId, TableFieldBuffer."Field Type"::" ", TableFieldBuffer."Field Class"::" ", pTableFieldBuffer));
+    END;
+
+    PROCEDURE FieldInPrimaryKey@1000000065(pTableId@1000000001 : Integer;pFieldId@1000000000 : Integer) : Boolean;
+    VAR
+      RecordRef@1000000002 : RecordRef;
+      KeyRef@1000000003 : KeyRef;
+      FieldRef@1000000004 : FieldRef;
+      FieldIndex@1000000005 : Integer;
+      IsPrimaryKey@1000000006 : Boolean;
+    BEGIN
+      //DOC NA2016.14 - Checks if field is part of the primary key
+      //  -> pTableId: Table ID
+      //  -> pFieldId: Field ID
+      //  <- TRUE = Is in the primary key
+
+      IsPrimaryKey := FALSE;
+      IF (pTableId <> 0) THEN BEGIN
+        RecordRef.OPEN(pTableId);
+        IF (RecordRef.KEYCOUNT > 0) THEN BEGIN
+          KeyRef := RecordRef.KEYINDEX(1);
+          FieldIndex := 1;
+          WHILE ((FieldIndex <= KeyRef.FIELDCOUNT) AND (NOT(IsPrimaryKey))) DO BEGIN
+            FieldRef := KeyRef.FIELDINDEX(FieldIndex);
+            IF (FieldRef.NUMBER = pFieldId) THEN
+              IsPrimaryKey := TRUE;
+            FieldIndex += 1;
+          END;
+        END;
+        RecordRef.CLOSE();
+      END;
+      EXIT(IsPrimaryKey);
+    END;
+
+    PROCEDURE "--- Field (Advanced) ---"@1000000141();
+    BEGIN
+    END;
+
+    PROCEDURE GetFieldNameAdv@1000000140(pTableID@1000000001 : Integer;pFieldType@1000000002 : '0';pFieldID@1000000000 : Integer) : Text;
+    BEGIN
+      //DOC NA2015.2 - Returning field name (advanced version)
+      //  -> pTableID: Table ID
+      //  -> pFieldType: Field type
+      //  -> pFieldID: Field ID
+      //  <- The name
+
+      CollectTableFields(pTableID, pFieldType, FieldClass);
+      TableFieldBuffer.RESET();
+      ApplyTableFieldTableIdFilter(pTableID);
+      TableFieldBuffer.SETRANGE("Field Type", pFieldType);
+      ApplyTableFieldIdFilter(pFieldID, TRUE);
+      IF (TableFieldBuffer.FINDFIRST()) THEN
+        EXIT(TableFieldBuffer."Field Name")
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE ValidateFieldIdAdv@1000000139(pTableID@1000000001 : Integer;VAR pFieldType@1000000002 : '0';pFieldID@1000000000 : Integer);
+    VAR
+      eUnknownField@1000000003 : TextConst 'ENU=Field %1 doesn''t exist in table %2.;ENG=Field %1 doesn''t exist in table %2.';
+    BEGIN
+      //DOC NA2015.2 - Validating field ID (advanced version)
+      //  -> pTableID: Table ID
+      //  <> pFieldType: Source / target field type
+      //  -> pFieldID: Field ID
+
+      IF ( NOT (TryToValidateFieldIdAdv(pTableID, pFieldType, pFieldID))) THEN
+        ERROR(eUnknownField, pFieldID, GetTableName(pTableID));
+    END;
+
+    PROCEDURE TryToValidateFieldIdAdv@1000000138(pTableID@1000000001 : Integer;VAR pFieldType@1000000002 : '0';pFieldID@1000000000 : Integer) : Boolean;
+    VAR
+      lResult@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Trying to validate field ID (advanced version)
+      //  -> pTableID: Table ID
+      //  <> pFieldType: Source / target field type
+      //  -> pFieldID: Field ID
+      //  <- Result
+
+      IF (pFieldID = 0) THEN
+        EXIT(TRUE);
+
+      lResult := FALSE;
+
+      CollectTableFields(pTableID, pFieldType, FieldClass);
+
+      TableFieldBuffer.RESET();
+      ApplyTableFieldTableIdFilter(pTableID);
+      IF (pFieldType <> TableFieldBuffer."Field Type"::" ") THEN
+        TableFieldBuffer.SETRANGE("Field Type", pFieldType);
+      ApplyTableFieldIdFilter(pFieldID, TRUE);
+      IF (TableFieldBuffer.FINDFIRST()) THEN
+      BEGIN
+        lResult := TRUE;
+        pFieldType := TableFieldBuffer."Field Type";
+      END
+      ELSE IF (pFieldType <> TableFieldBuffer."Field Type"::" ") THEN
+      BEGIN
+        TableFieldBuffer.SETRANGE("Field Type");
+        IF (TableFieldBuffer.FINDFIRST()) THEN
+        BEGIN
+          lResult := TRUE;
+          pFieldType := TableFieldBuffer."Field Type";
+        END
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE ValidateFieldNameAdv@1000000137(pTableID@1000000001 : Integer;VAR pFieldType@1000000003 : '0';VAR pFieldID@1000000000 : Integer;VAR pFieldName@1000000002 : Text);
+    VAR
+      eUnknownField@1000000007 : TextConst 'ENU=%1 "%2" doesn''t exist in table "%3";ENG=%1 "%2" doesn''t exist in table "%3"';
+      lTableField@1000000005 : Record 9062231;
+      lFieldTypeText@1000000004 : Text;
+    BEGIN
+      //DOC NA2015.2 - Validating field name (advanced version)
+      //  -> pTableID: Table ID
+      //  <> pFieldType: Target field type
+      //  <> pFieldID: Target field ID
+      //  <> pFieldName: Source / target field name
+
+      IF ( NOT (TryToValidateFieldNameAdv(pTableID, pFieldType, pFieldID, pFieldName))) THEN
+      BEGIN
+        lTableField."Field Type" := pFieldType;
+        lFieldTypeText := String.ToSentenceCase(FORMAT(lTableField."Field Type"));
+        ERROR(eUnknownField, lFieldTypeText, pFieldName, GetTableName(pTableID));
+      END;
+    END;
+
+    PROCEDURE TryToValidateFieldNameAdv@1000000136(pTableID@1000000001 : Integer;VAR pFieldType@1000000003 : '0';VAR pFieldID@1000000000 : Integer;VAR pFieldName@1000000002 : Text) : Boolean;
+    VAR
+      lResult@1000000004 : Boolean;
+      lFieldId@1000000005 : Integer;
+      lFieldName@1000000006 : Text[50];
+      lExactMatchPass@1000000008 : ' ,Yes,No';
+      lExactMatch@1000000007 : Boolean;
+      lNameFound@1000000009 : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Trying to validating field name (advanced version)
+      //  -> pTableID: Table ID
+      //  <> pFieldType: Source / target field ID
+      //  <> pFieldID: Target field ID
+      //  <> pFieldName: Source / target field name
+      //  <- TRUE = Field found (or field blank), FALSE = No such field
+
+      lResult := FALSE;
+
+      CollectTableFields(pTableID, pFieldType, FieldClass);
+
+      IF (pFieldName <> '') THEN
+      BEGIN
+        IF (pTableID = 0) THEN
+          ERROR(tEmpty, tTableId);
+
+        TableFieldBuffer.RESET();
+        ApplyTableFieldTableIdFilter(pTableID);
+        PrepareNameFilters(pFieldName, FALSE);
+        lNameFound := FALSE;
+        WHILE (NextNameFilter()) DO
+        BEGIN
+          TableFieldBuffer.SETFILTER("Field Name", FieldFilter(CurrentNameFilter()));
+          IF (pFieldType <> TableFieldBuffer."Field Type"::" ") THEN
+          BEGIN
+            TableFieldBuffer.SETRANGE("Field Type", pFieldType);
+            lNameFound := TableFieldBuffer.FINDFIRST();
+          END;
+          IF ( NOT (lNameFound)) THEN
+          BEGIN
+            TableFieldBuffer.SETRANGE("Field Type");
+            lNameFound := TableFieldBuffer.FINDFIRST();
+          END;
+          SetNameFound(lNameFound);
+        END;
+        IF (HasNameBeenFound()) THEN
+        BEGIN
+          pFieldType := TableFieldBuffer."Field Type";
+          pFieldID := TableFieldBuffer."Field ID";
+          pFieldName := TableFieldBuffer."Field Name";
+        END
+        ELSE
+          IF (EVALUATE(pFieldID, pFieldName)) THEN
+          BEGIN
+            TableFieldBuffer.SETRANGE("Field Name");
+            TableFieldBuffer.SETRANGE("Field ID", pFieldID);
+            SetNameFound(TableFieldBuffer.FINDFIRST());
+          END;
+
+        lResult := HasNameBeenFound();
+      END
+      ELSE
+      BEGIN
+        CLEAR(pFieldID);
+        CLEAR(pFieldName);
+
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE FieldLookupAdv@1000000135(pTableId@1000000000 : Integer;VAR pFieldType@1000000003 : '0';VAR pFieldId@1000000001 : Integer) : Boolean;
+    VAR
+      lTableFieldBuffer@1000000004 : Page 9062237;
+      lResult@1000000002 : Boolean;
+    BEGIN
+      //DOC NA2016.12 - Lookup for field (advanced version)
+      //  -> pTableID: Table ID
+      //  <> pFieldType: Target field type
+      //  <> pFieldID: Target field ID
+      //  <- Lookup result
+
+      lResult := FALSE;
+
+      CollectTableFields(pTableId, pFieldType, FieldClass);
+
+      TableFieldBuffer.RESET();
+      ApplyTableFieldTableIdFilter(pTableId);
+      ApplyTableFieldIdFilter(0, FALSE);
+      IF (TableFieldBuffer.GET(pTableId, pFieldType, pFieldId)) THEN;
+
+      CLEAR(lTableFieldBuffer);
+      lTableFieldBuffer.SetRecords(TableFieldBuffer);
+      lTableFieldBuffer.SETRECORD(TableFieldBuffer);
+      lTableFieldBuffer.LOOKUPMODE(TRUE);
+      IF (lTableFieldBuffer.RUNMODAL() = ACTION::LookupOK) THEN
+      BEGIN
+        lTableFieldBuffer.GETRECORD(TableFieldBuffer);
+        pFieldType := TableFieldBuffer."Field Type";
+        pFieldId := TableFieldBuffer."Field ID";
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE FieldLookupMultipleAdv@1000000105(pTableID@1000000000 : Integer;VAR pTableField@1000000001 : Record 9062231) : Boolean;
+    VAR
+      lTableFieldBuffer@1000000003 : Page 9062237;
+      lResult@1000000002 : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Lookup for field returning multiple records (advanced version)
+      //  -> pTableID: Table ID
+      //  <> pTableField: Target recordset
+      //  <- Lookup result
+
+      lResult := FALSE;
+
+      TableFieldBuffer.RESET();
+      ApplyTableFieldTableIdFilter(pTableID);
+      ApplyTableFieldIdFilter(0, FALSE);
+
+      CLEAR(lTableFieldBuffer);
+      lTableFieldBuffer.SETTABLEVIEW(TableFieldBuffer);
+      lTableFieldBuffer.LOOKUPMODE(TRUE);
+      IF (lTableFieldBuffer.RUNMODAL() = ACTION::LookupOK) THEN
+      BEGIN
+        CollectTableFields(pTableID, TableFieldBuffer."Field Type"::" ", TableFieldBuffer."Field Class"::" ");
+        lTableFieldBuffer.GetSelectedRecords(TableFieldBuffer);
+        pTableField.COPY(TableFieldBuffer, TRUE);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE SelectFieldsAdv@1000000002(pTableId@1000000000 : Integer;pFieldType@1000000004 : Integer;pFieldClass@1000000007 : Integer;VAR pTableFieldBuffer@1000000003 : Record 9062231) : Boolean;
+    VAR
+      lTableFieldBufferPage@1000000001 : Page 9062237;
+      lResult@1000000002 : Boolean;
+      lCollectFields@1000000005 : Boolean;
+      lCollectEnhancedFields@1000000006 : Boolean;
+    BEGIN
+      //DOC NA2016.12 - Selecting fields from the given table (advanced version)
+      //  -> pTableId: Table ID
+      //  -> pFieldType: Field type (" " = all fields, "Field" = normal fields, "Enhanced Field" = enhanced fields)
+      //  -> pFieldClass: Field class (" " = all classes, "Normal" = normal fields, "FlowField" = flowfields, "FlowFilter" = flowfilters)
+      //  <> pTableFieldBuffer: Target field buffer recordset
+      //  <- TRUE = Selected, FALSE = Cancelled
+
+      CLEAR(lResult);
+
+      TableFieldBuffer.RESET();
+      ApplyTableFieldTableIdFilter(pTableId);
+      ApplyTableFieldIdFilter(0, FALSE);
+      CollectTableFields(pTableId, pFieldType, pFieldClass);
+
+      CLEAR(lTableFieldBufferPage);
+      lTableFieldBufferPage.SetRecords(TableFieldBuffer);
+      lTableFieldBufferPage.LOOKUPMODE(TRUE);
+      IF (lTableFieldBufferPage.RUNMODAL() = ACTION::LookupOK) THEN
+      BEGIN
+        lTableFieldBufferPage.GetSelectedRecords(TableFieldBuffer);
+        IF (TableFieldBuffer.FINDSET()) THEN
+        REPEAT
+          pTableFieldBuffer := TableFieldBuffer;
+          pTableFieldBuffer.INSERT();
+        UNTIL (TableFieldBuffer.NEXT() = 0);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE FieldInPrimaryKeyAdv@1000000074(pTableId@1000000001 : Integer;pFieldType@1000000007 : Integer;pFieldId@1000000000 : Integer) : Boolean;
+    VAR
+      RecordRef@1000000002 : RecordRef;
+      KeyRef@1000000003 : KeyRef;
+      FieldRef@1000000004 : FieldRef;
+      FieldIndex@1000000005 : Integer;
+      IsPrimaryKey@1000000006 : Boolean;
+    BEGIN
+      //DOC NA2016.14 - Checks if field is part of the primary key
+      //  -> pTableId: Table ID
+      //  -> pFieldType: Field Type
+      //  -> pFieldId: Field ID
+      //  <- TRUE = Is in the primary key
+
+      IF (pFieldType = TableFieldBuffer."Field Type"::Field) THEN
+        EXIT(FieldInPrimaryKey(pTableId, pFieldId));
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE "--- Field (Old) ---"@1000000056();
+    BEGIN
+    END;
+
+    PROCEDURE GetFieldNameOld@1000000037(pTableID@1000000001 : Integer;pFieldType@1000000002 : '0';pFieldID@1000000000 : Integer) : Text;
+    VAR
+      lName@1000000003 : Text;
+    BEGIN
+      //DOC NA2015.2 - Returning field name (old version)
+      //  -> pTableID: Table ID
+      //  -> pFieldType: Field type
+      //  -> pFieldID: Field ID
+      //  <- The name
+
+      pFieldType := pFieldType + 1;
+      lName := GetFieldNameAdv(pTableID, pFieldType, pFieldID);
+      pFieldType := pFieldType - 1;
+
+      EXIT(lName);
+    END;
+
+    PROCEDURE ValidateFieldIdOld@1000000032(pTableID@1000000001 : Integer;VAR pFieldType@1000000002 : '0';pFieldID@1000000000 : Integer);
+    VAR
+      eUnknownField@1000000003 : TextConst 'ENU=Field %1 doesn''t exist in table %2.;ENG=Field %1 doesn''t exist in table %2.';
+    BEGIN
+      //DOC NA2015.2 - Validating field ID (old version)
+      //  -> pTableID: Table ID
+      //  <> pFieldType: Source / target field type
+      //  -> pFieldID: Field ID
+
+      pFieldType := pFieldType + 1;
+      ValidateFieldIdAdv(pTableID, pFieldType, pFieldID);
+      pFieldType := pFieldType - 1;
+    END;
+
+    PROCEDURE TryToValidateFieldIdOld@1000000027(pTableID@1000000001 : Integer;VAR pFieldType@1000000002 : '0';pFieldID@1000000000 : Integer) : Boolean;
+    VAR
+      lResult@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Trying to validate field ID (old version)
+      //  -> pTableID: Table ID
+      //  <> pFieldType: Source / target field type
+      //  -> pFieldID: Field ID
+      //  <- Result
+
+      pFieldType := pFieldType + 1;
+      lResult := TryToValidateFieldIdAdv(pTableID, pFieldType, pFieldID);
+      pFieldType := pFieldType - 1;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE ValidateFieldNameOld@1000000020(pTableID@1000000001 : Integer;VAR pFieldType@1000000003 : '0';VAR pFieldID@1000000000 : Integer;VAR pFieldName@1000000002 : Text);
+    BEGIN
+      //DOC NA2015.2 - Validating field name (old version)
+      //  -> pTableID: Table ID
+      //  <> pFieldType: Target field type
+      //  <> pFieldID: Target field ID
+      //  <> pFieldName: Source / target field name
+
+      pFieldType := pFieldType + 1;
+      ValidateFieldNameAdv(pTableID, pFieldType, pFieldID, pFieldName);
+      pFieldType := pFieldType - 1;
+    END;
+
+    PROCEDURE TryToValidateFieldNameOld@1000000019(pTableID@1000000001 : Integer;VAR pFieldType@1000000003 : '0';VAR pFieldID@1000000000 : Integer;VAR pFieldName@1000000002 : Text[50]) : Boolean;
+    VAR
+      lResult@1000000004 : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Trying to validating field name (old version)
+      //  -> pTableID: Table ID
+      //  <> pFieldType: Source / target field ID
+      //  <> pFieldID: Target field ID
+      //  <> pFieldName: Source / target field name
+      //  <- TRUE = Field found (or field blank), FALSE = No such field
+
+      pFieldType := pFieldType + 1;
+      lResult := TryToValidateFieldNameAdv(pTableID, pFieldType, pFieldID, pFieldName);
+      pFieldType := pFieldType - 1;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE FieldLookupOld@1000000007(pTableID@1000000000 : Integer;VAR pFieldType@1000000003 : '0';VAR pFieldID@1000000001 : Integer) : Boolean;
+    VAR
+      lTableFields@1000000004 : Page 9062237;
+      lResult@1000000002 : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Lookup for field (advanced version)
+      //  -> pTableID: Table ID
+      //  <> pFieldType: Target field type
+      //  <> pFieldID: Target field ID
+      //  <- Lookup result
+
+      pFieldType := pFieldType + 1;
+      lResult := FieldLookupAdv(pTableID, pFieldType, pFieldID);
+      pFieldType := pFieldType - 1;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE "--- Object ID Filter ---"@1000000004();
+    BEGIN
+    END;
+
+    PROCEDURE GetObjectIdFilter@1000000005() : Code[1024];
+    BEGIN
+      //DOC NA2015.1 - Returning object filter
+      //  <- The filter
+
+      EXIT(ObjectIdFilter);
+    END;
+
+    PROCEDURE SetObjectIdFilter@1000000010(pObjectIdFilter@1000000000 : Code[1024]);
+    BEGIN
+      //DOC NA2015.1 - Setting object filter
+      //  -> pObjectIdFilter: The filter to set
+
+      ObjectIdFilter := pObjectIdFilter;
+    END;
+
+    PROCEDURE SetNullObjectIdFilter@1000000069();
+    BEGIN
+      //DOC NA2015.1 - Setting null object filter
+
+      SetNullFilter(ObjectIdFilter);
+    END;
+
+    PROCEDURE ClearObjectIdFilter@1000000030();
+    BEGIN
+      //DOC NA2015.1 - Clearing object filter
+
+      CLEAR(ObjectIdFilter);
+    END;
+
+    PROCEDURE AddToObjectIdFilter@1000000036(pObjectId@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Adding to object filter
+      //  -> pObjectId: Object ID to add to the filter
+
+      AddToFilter(ObjectIdFilter, pObjectId);
+    END;
+
+    PROCEDURE "--- Field ID Filter ---"@1000000017();
+    BEGIN
+    END;
+
+    PROCEDURE GetFieldIdFilter@1000000015() : Code[1024];
+    BEGIN
+      //DOC NA2015.1 - Returning field filter
+      //  <- The filter
+
+      EXIT(FieldIdFilter);
+    END;
+
+    PROCEDURE SetFieldIdFilter@1000000016(pFieldFilter@1000000000 : Code[1024]);
+    BEGIN
+      //DOC NA2015.1 - Setting field filter
+      //  -> pFieldFilter: The filter
+
+      FieldFilter := pFieldFilter;
+    END;
+
+    PROCEDURE SetNullFieldIdFilter@1000000024();
+    BEGIN
+      //DOC NA2015.1 - Setting null field filter
+
+      SetNullFilter(FieldIdFilter);
+    END;
+
+    PROCEDURE ClearFieldIdFilter@1000000046();
+    BEGIN
+      //DOC NA2015.1 - Clearing field filter
+
+      CLEAR(FieldIdFilter);
+    END;
+
+    PROCEDURE AddToFieldIdFilter@1000000057(pFieldId@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Adding to field filter
+      //  -> pFieldId: Field ID
+
+      AddToFilter(FieldIdFilter, pFieldId);
+    END;
+
+    LOCAL PROCEDURE "--- Field Class Filter ---"@1000000070();
+    BEGIN
+    END;
+
+    PROCEDURE GetFieldClass@1000000072() : Integer;
+    BEGIN
+      //DOC NA2016.12 - Returning current field class
+      //  <- The field class
+
+      EXIT(FieldClass);
+    END;
+
+    PROCEDURE SetFieldClass@1000000071(pFieldClass@1000000000 : Integer);
+    BEGIN
+      //DOC NA2016.12 - Setting field class
+      //  -> pFieldClass: The field class to set
+
+      FieldClass := pFieldClass;
+    END;
+
+    PROCEDURE "--- Filter Application ---"@1000000058();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ApplyObjectIdFilter@1000000061(pObjectId@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Setting object ID filter
+      //  -> pObjectId: Object ID (if 0 - set only object filter if not empty)
+
+      IF (pObjectId <> 0) THEN
+      BEGIN
+        IF (ObjectIdFilter <> '') THEN
+          AllObj.SETFILTER("Object ID", STRSUBSTNO('(%1)&(%2)', pObjectId, ObjectIdFilter))
+        ELSE
+          AllObj.SETRANGE("Object ID", pObjectId);
+      END
+      ELSE
+        IF (ObjectIdFilter <> '') THEN
+          AllObj.SETFILTER("Object ID", ObjectIdFilter);
+    END;
+
+    LOCAL PROCEDURE ApplyFieldTableIdFilter@1000000064(pTableId@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Setting field table ID filter
+      //  -> pTableId: Table ID (if 0 - set only object filter if not empty)
+
+      IF (pTableId <> 0) THEN
+      BEGIN
+        IF (ObjectIdFilter <> '') THEN
+          Field.SETFILTER(TableNo, STRSUBSTNO('(%1)&(%2)', pTableId, ObjectIdFilter))
+        ELSE
+          Field.SETRANGE(TableNo, pTableId);
+      END
+      ELSE
+        IF (ObjectIdFilter <> '') THEN
+          Field.SETFILTER(TableNo, ObjectIdFilter);
+    END;
+
+    LOCAL PROCEDURE ApplyFieldIdFilter@1000000063(pFieldId@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Setting field ID filter
+      //  -> pFieldId: Field ID (if 0 - set only field filter if not empty)
+
+      IF (pFieldId <> 0) THEN
+      BEGIN
+        IF (FieldIdFilter <> '') THEN
+          Field.SETFILTER("No.", STRSUBSTNO('(%1)&(%2)', pFieldId, FieldIdFilter))
+        ELSE
+          Field.SETRANGE("No.", pFieldId);
+      END
+      ELSE
+        IF (FieldIdFilter <> '') THEN
+          Field.SETFILTER("No.", FieldIdFilter);
+    END;
+
+    LOCAL PROCEDURE ApplyEnhancedFieldTableIdFilter@1000000078(pTableId@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.2 - Setting enhanced field table ID filter
+      //  -> pTableId: Table ID (if 0 - set only object filter if not empty)
+
+      IF (pTableId <> 0) THEN
+      BEGIN
+        IF (ObjectIdFilter <> '') THEN
+          EnhancedFieldDefinition.SETFILTER("Table No.", STRSUBSTNO('(%1)&(%2)', pTableId, ObjectIdFilter))
+        ELSE
+          EnhancedFieldDefinition.SETRANGE("Table No.", pTableId);
+      END
+      ELSE
+        IF (ObjectIdFilter <> '') THEN
+          EnhancedFieldDefinition.SETFILTER("Table No.", ObjectIdFilter);
+    END;
+
+    LOCAL PROCEDURE ApplyEnhancedFieldIdFilter@1000000054(pFieldId@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.2 - Setting enhanced field ID filter
+      //  -> pFieldId: Field ID (if 0 - set only field filter if not empty)
+
+      IF (pFieldId <> 0) THEN
+      BEGIN
+        IF (FieldIdFilter <> '') THEN
+          EnhancedFieldDefinition.SETFILTER("Enhanced Field No.", STRSUBSTNO('(%1)&(%2)', pFieldId, FieldIdFilter))
+        ELSE
+          EnhancedFieldDefinition.SETRANGE("Enhanced Field No.", pFieldId);
+      END
+      ELSE
+        IF (FieldIdFilter <> '') THEN
+          EnhancedFieldDefinition.SETFILTER("Enhanced Field No.", FieldIdFilter);
+    END;
+
+    LOCAL PROCEDURE ApplyTableFieldTableIdFilter@1000000112(pTableId@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Setting table field table ID filter
+      //  -> pTableId: Table ID (if 0 - set only object filter if not empty)
+
+      IF (pTableId <> 0) THEN
+      BEGIN
+        IF (ObjectIdFilter <> '') THEN
+          TableFieldBuffer.SETFILTER("Table ID", STRSUBSTNO('(%1)&(%2)', pTableId, ObjectIdFilter))
+        ELSE
+          TableFieldBuffer.SETRANGE("Table ID", pTableId);
+      END
+      ELSE
+        IF (ObjectIdFilter <> '') THEN
+          TableFieldBuffer.SETFILTER("Table ID", ObjectIdFilter);
+    END;
+
+    LOCAL PROCEDURE ApplyTableFieldIdFilter@1000000110(pFieldId@1000000000 : Integer;pRequireField@1000000001 : Boolean);
+    BEGIN
+      //DOC NA2015.4 - Setting table field ID filter
+      //  -> pFieldId: Field ID (if 0 - set only field filter if not empty)
+      //  -> pRequireField: Require field flag
+
+      IF (pFieldId <> 0) THEN
+      BEGIN
+        IF (FieldIdFilter <> '') THEN
+          TableFieldBuffer.SETFILTER("Field ID", STRSUBSTNO('(%1)&(%2)', pFieldId, FieldIdFilter))
+        ELSE
+          TableFieldBuffer.SETRANGE("Field ID", pFieldId);
+      END
+      ELSE
+        IF (pRequireField) THEN
+          TableFieldBuffer.SETFILTER("Field ID", '0&1')
+        ELSE
+          IF (FieldIdFilter <> '') THEN
+            TableFieldBuffer.SETFILTER("Field ID", FieldIdFilter);
+    END;
+
+    PROCEDURE "--- Name Filtering ---"@1000000093();
+    BEGIN
+    END;
+
+    PROCEDURE PrepareNameFilters@1000000087(pName@1000000000 : Text[50];pExactMatch@1000000001 : Boolean);
+    BEGIN
+      //DOC NA2015.2 - Preparing name filters
+      //  -> pName: The name
+      //  -> pExactMatch: Exact match flag (TRUE = Prepare filters for matching only entire name, FALSE = Prepare fitlers for matching any part of name)
+
+      CLEAR(NameFilter);
+      NameFilter[1] := pName;
+      IF ( NOT (pExactMatch)) THEN
+      BEGIN
+        NameFilter[2] := '@' + pName;
+        NameFilter[3] := '@' + pName + '*';
+        NameFilter[4] := '@*' + pName + '*';
+      END;
+
+      NameFound := FALSE;
+      NameFilterIndex := 0;
+    END;
+
+    PROCEDURE NextNameFilter@1000000089() : Boolean;
+    VAR
+      lNextNameFilter@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Going into next name filter
+      //  <- TRUE: Next name filter found, FALSE: No next name filter or name found already
+
+      IF (NameFound) THEN
+        lNextNameFilter := FALSE
+      ELSE
+        IF (NameFilterIndex < ARRAYLEN(NameFilter)) THEN
+        BEGIN
+          NameFilterIndex += 1;
+          lNextNameFilter := (NameFilter[NameFilterIndex] <> '');
+        END
+        ELSE
+          lNextNameFilter := FALSE;
+
+      EXIT(lNextNameFilter);
+    END;
+
+    PROCEDURE CurrentNameFilter@1000000097() : Text[250];
+    BEGIN
+      //DOC NA2015.1 - Returning current name filter
+      //  <- The filter
+
+      EXIT(NameFilter[NameFilterIndex]);
+    END;
+
+    PROCEDURE SetNameFound@1000000098(pNameFound@1000000000 : Boolean);
+    BEGIN
+      //DOC NA2015.1 - Setting name found flag
+      //  -> pNameFound: The flag
+
+      NameFound := pNameFound;
+    END;
+
+    PROCEDURE HasNameBeenFound@1000000013() : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Returning if name has been found
+      //  <- The value
+
+      EXIT(NameFound);
+    END;
+
+    PROCEDURE CheckIfNameFound@1000000096(pErrorMessage@1000000000 : Text[1024]);
+    BEGIN
+      //DOC NA2015.1 - Checking if name found; if not - showing the error message
+      //  -> pErrorMessage: The error message
+
+      IF ( NOT (NameFound)) THEN
+        ERROR(pErrorMessage);
+    END;
+
+    PROCEDURE "--- Tools ---"@1000000055();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE AddToFilter@1000000062(VAR pFilter@1000000000 : Code[1024];pId@1000000001 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Adding another (object / field) ID to (object / field) filter
+      //  <> pFilter: The filter
+      //  -> pId: ID to add
+
+      IF (STRPOS('|' + pFilter + '|', '|' + FORMAT(pId) + '|') > 0) THEN
+        EXIT;
+
+      IF (pFilter <> '') THEN
+        pFilter := pFilter + '|';
+      pFilter := pFilter + FORMAT(pId);
+    END;
+
+    LOCAL PROCEDURE SetNullFilter@1000000066(VAR pFilter@1000000000 : Code[1024]);
+    BEGIN
+      //DOC NA2015.1 - Setting null filter
+      //  <> pFilter: The filter
+
+      pFilter := '0&1';
+    END;
+
+    PROCEDURE FieldFilter@1000000000(pFilter@1000000000 : Text[1024]) : Text[1024];
+    VAR
+      eFromCharacters@1000000001 : TextConst 'ENU=()[];ENG=()[]';
+      eToCharacters@1000000002 : TextConst 'ENU=????;ENG=????';
+    BEGIN
+      //DOC NA2015.1 - Turning a filter into field filter
+      //  -> pFilter: Filter
+      //  <- Field filter
+
+      EXIT(CONVERTSTR(pFilter, eFromCharacters, eToCharacters));
+    END;
+
+    LOCAL PROCEDURE CollectTableFields@1000000067(pTableId@1000000002 : Integer;pFieldType@1000000001 : Integer;pFieldClass@1000000000 : Integer);
+    BEGIN
+      //DOC NA2016.12 - Collecting table fields
+      //  -> pTableId: Table ID to collect fields for
+      //  -> pFieldType: Field type (::" " = Collect all fields, ::Field = Collect fields, ::"Enhanced Field" = Collect enhanced fields)
+      //  -> pFieldClass: Field class(
+
+      TableFieldBuffer.RESET();
+      IF ((pTableId <> TableFieldTableId) OR (pFieldType <> TableFieldFieldType) OR (pFieldClass <> TableFieldFieldClass)) THEN
+      BEGIN
+        TableFieldBuffer.DELETEALL();
+        TableFieldManagement.CollectTableFieldsAdv(pTableId, pFieldType, pFieldClass, TableFieldBuffer);
+        TableFieldTableId := pTableId;
+        TableFieldFieldType := pFieldType;
+        TableFieldFieldClass := pFieldClass;
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1  JH 29/09/2013 - Created
+      //DOC NA2015.2  JH 06/05/2014 - Enhanced fields added
+      //DOC NA2015.3  JH 18/09/2014 - Table fields introduced
+      //DOC NA2015.4  JH 24/11/2014 - Fixes
+      //DOC NA2016.10 JH 28/08/2015 - Upgraded to 2016
+      //DOC NA2016.12 JH 05/01/2016 - "Table Field" table renamed to "Table Field Buffer"
+      //DOC NA2016.12 JH 11/01/2016 - "SelectFields..." functions added
+      //DOC NA2016.12 JH 19/01/2016 - Fixes to field lookup, field class filtering added
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit used
+      //DOC NA2016.14 AZ 22/02/2016 - FieldInPrimaryKey functions added
+      //DOC NA2016.16.1 PC 17/08/2016 - Replaced used of "Fields" page with "Standard Fields" page
+    }
+    END.
+  }
+}
+

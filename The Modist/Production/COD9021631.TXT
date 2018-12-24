@@ -1,0 +1,347 @@
+OBJECT Codeunit 9021631 Promotion History Processing
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:19 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            TxtWindowTitle@1000000000 : TextConst 'ENU=Rebuilding for Promotion %1;ENG=Rebuilding for Promotion %1';
+          BEGIN
+            //DOC EC2015.5.02 -
+            IF NOT CONFIRM(Text004) THEN
+              ERROR(Text001);
+
+            Window.OPEN(STRSUBSTNO(TxtWindowTitle, PADSTR('#1', 20)));
+            Promo.RESET;
+            Promo.SETFILTER("End Date",'>=%1',WORKDATE);
+            Promo.SETFILTER("Label Code",'<>%1','');
+            IF Promo.FIND('-') THEN
+            REPEAT
+              Window.UPDATE(1,Promo."No.");
+              TotalReBuildPromoHistorySum(Promo."Threshold Applies-To Who",Promo."No.",Promo."Label Code");
+            UNTIL Promo.NEXT = 0;
+            Window.CLOSE;
+            //DOC EC2015.5.02 +
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      PromoHistSum@1190000006 : Record 9021679;
+      PromoLedEnt@1190000005 : Record 9021678;
+      Text000@1190000009 : TextConst 'ENU=Promotion History Summary entries exist.  Are you sure you wish to recreate them?;ENG=Promotion History Summary entries exist.  Are you sure you wish to recreate them?';
+      Text001@1190000007 : TextConst 'ENU=Change Abandoned.;ENG=Change Abandoned.';
+      PromoLedEnt1@1190000010 : Record 9021678;
+      IntCust@1190000011 : Record 9021642;
+      Text002@1190000013 : TextConst 'ENU="The following Promotion(s) have exceeded their Threshold(s): ";ENG="The following Promotion(s) have exceeded their Threshold(s): "';
+      InjectPromoEntry@1190000015 : Record 9021677;
+      InjectPromoEntry1@1190000014 : Record 9021677;
+      IntOrderHead@1190000016 : Record 9021666;
+      InternetSetup@1000000000 : Record 9021609;
+      Cust@1000000001 : Record 18;
+      Promo@1000000003 : Record 9021656;
+      ErrorText@1190000012 : Text[199];
+      InOrderGuID1@1040000 : Text[38];
+      Text003@1040001 : TextConst 'ENU=Cannot get Internet Customer on Promotion Ledger Entry No. %1. You must investigate and correct or change the Promotion Ledger Entry Status to Error.;ENG=Cannot get Internet Customer on Promotion Ledger Entry No. %1. You must investigate and correct or change the Promotion Ledger Entry Status to Error.';
+      Text004@1000000002 : TextConst 'ENU=This will rebuild the Promotion History Summary.  \\Are you sure you want to do this?;ENG=This will rebuild the Promotion History Summary.  \\Are you sure you want to do this?';
+      Window@1000000004 : Dialog;
+
+    PROCEDURE TotalReBuildPromoHistorySum@1190000005(AppliesToWho@1190000008 : ' ,Each Customer,Each Contact,All Customers';PromoNo@1190000007 : Code[20];LabelCode@1040000 : Code[10]);
+    VAR
+      LCycleContactNo@1190000006 : Code[20];
+      LCycleCustNo@1190000005 : Code[20];
+    BEGIN
+      PromoHistSum.RESET;
+      PromoHistSum.SETRANGE("Promotion No.",PromoNo);
+      //DOC EC2015.5.02 IF PromoHistSum.FINDFIRST THEN
+      //DOC EC2015.5.02  IF NOT CONFIRM(Text000) THEN
+      //DOC EC2015.5.02    ERROR(Text001);
+      PromoHistSum.DELETEALL;
+
+      LCycleContactNo := '';
+      LCycleCustNo := '';
+
+      PromoLedEnt.RESET;
+      PromoLedEnt.SETCURRENTKEY("Promotion No.","Contact No.","Customer No.");
+      PromoLedEnt.SETRANGE("Promotion No.",PromoNo);
+      IF AppliesToWho IN [AppliesToWho::" ",AppliesToWho::"All Customers"] THEN BEGIN
+        IF PromoLedEnt.FINDFIRST THEN
+          IncrementBuildPromoHistorySum(AppliesToWho,PromoNo,'','',LabelCode);
+      END ELSE BEGIN
+        IF PromoLedEnt.FIND('-') THEN
+        REPEAT
+          CASE AppliesToWho OF
+            AppliesToWho::"Each Customer" :
+            BEGIN
+              IF LCycleCustNo <> PromoLedEnt."Customer No." THEN BEGIN
+                LCycleCustNo := PromoLedEnt."Customer No.";
+                IncrementBuildPromoHistorySum(AppliesToWho,PromoNo,'',LCycleCustNo,LabelCode);
+              END;
+            END;
+            AppliesToWho::"Each Contact" :
+            BEGIN
+              IF LCycleContactNo <> PromoLedEnt."Contact No." THEN BEGIN
+                LCycleContactNo := PromoLedEnt."Contact No.";
+                IncrementBuildPromoHistorySum(AppliesToWho,PromoNo,LCycleContactNo,'',LabelCode);
+              END;
+            END;
+          END;
+        UNTIL PromoLedEnt.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE IncrementBuildPromoHistorySum@1190000006(AppliesToWho@1190000008 : ' ,Each Customer,Each Contact,All Customers';PromoNo@1190000005 : Code[20];ContactNo@1190000006 : Code[20];CustNo@1190000007 : Code[20];LabelCode@1040000 : Code[10]);
+    BEGIN
+      CASE AppliesToWho OF
+        AppliesToWho::" ",AppliesToWho::"All Customers" :
+        BEGIN
+          IF NOT PromoHistSum.GET(PromoNo,'','') THEN BEGIN
+            PromoHistSum.INIT;
+            PromoHistSum."Label Code":=LabelCode;
+            PromoHistSum."Promotion No." := PromoNo;
+            PromoHistSum."Contact No." := '';
+            PromoHistSum."Customer No." := '';
+            PromoHistSum.INSERT;
+          END;
+        END;
+        AppliesToWho::"Each Customer" :
+        BEGIN
+          IF NOT PromoHistSum.GET(PromoNo,'',CustNo) THEN BEGIN
+            PromoHistSum.INIT;
+            PromoHistSum."Label Code":=LabelCode;
+            PromoHistSum."Promotion No." := PromoNo;
+            PromoHistSum.VALIDATE("Contact No.",'');
+            PromoHistSum.VALIDATE("Customer No.",CustNo);
+            PromoHistSum.INSERT;
+          END;
+        END;
+        AppliesToWho::"Each Contact" :
+        BEGIN
+          IF NOT PromoHistSum.GET(PromoNo,ContactNo,'') THEN BEGIN
+            PromoHistSum.INIT;
+            PromoHistSum."Label Code":=LabelCode;
+            PromoHistSum."Promotion No." := PromoNo;
+            PromoHistSum.VALIDATE("Contact No.",ContactNo);
+            PromoHistSum.VALIDATE("Customer No.",'');
+            PromoHistSum.INSERT;
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE PromoLedEntriesExist@1190000007(PromoNo@1190000005 : Code[20]) : Boolean;
+    BEGIN
+      PromoLedEnt.RESET;
+      PromoLedEnt.SETCURRENTKEY("Promotion No.");
+      PromoLedEnt.SETRANGE("Promotion No.",PromoNo);
+      IF PromoLedEnt.FINDFIRST THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE Process@1190000010(InOrderGuID@1190000006 : Text[38]) : Text[199];
+    VAR
+      LocalOrderGuID@1190000005 : Text[38];
+      ContBusRel@1000000000 : Record 5054;
+      UpdateContFromCust@1000000001 : Codeunit 5056;
+    BEGIN
+      //DOC EC2009.2.74 New function to Process differently
+      InOrderGuID1 := InOrderGuID;
+      ErrorText := '';
+
+      InjectPromoEntry.RESET;
+      InjectPromoEntry.SETCURRENTKEY("Processed by NAV");
+      InjectPromoEntry.SETRANGE("Processed by NAV",FALSE);
+      IF InjectPromoEntry.FIND('-') THEN
+      REPEAT
+        PromoLedEnt.INIT;
+        PromoLedEnt.TRANSFERFIELDS(InjectPromoEntry);
+        PromoLedEnt.INSERT(TRUE);
+        InjectPromoEntry1 := InjectPromoEntry;
+        InjectPromoEntry1."Processed by NAV" := TRUE;
+        InjectPromoEntry1.MODIFY;
+      UNTIL InjectPromoEntry.NEXT = 0;
+
+      COMMIT; //DOC EC2015.5.02 Add this line so at least the entries are in the Promotion Ledger Entry table.
+
+      LocalOrderGuID := '';
+
+      InternetSetup.GET;
+
+      PromoLedEnt.RESET;
+      PromoLedEnt.SETCURRENTKEY("NAV Processing Status","Order GuID","Promotion No.");
+      IF InOrderGuID <> '' THEN
+        PromoLedEnt.SETRANGE("Order GuID",InOrderGuID);
+      PromoLedEnt.SETRANGE("NAV Processing Status",PromoLedEnt."NAV Processing Status"::" ");
+      IF PromoLedEnt.FIND('-') THEN
+      REPEAT
+        IF LocalOrderGuID = PromoLedEnt."Order GuID" THEN BEGIN
+          IF (IntCust."Customer No." <> '') AND (IntCust."Contact No." <> '') THEN BEGIN
+            DetailedProcess;
+            IF ErrorText <> '' THEN BEGIN
+              CreateIPI1;
+              ErrorText := '';
+            END;
+          END;
+        END ELSE BEGIN
+          LocalOrderGuID := PromoLedEnt."Order GuID";
+          IF NOT IntCust.GET(PromoLedEnt."User GuID") THEN BEGIN
+            //DOC EC2015.5.02 -
+            //DOC EC2015.5.02 Original ERROR(Text003,PromoLedEnt."Entry No.");
+            Cust.RESET;
+            Cust.SETRANGE("User GUID",PromoLedEnt."Customer GuID");
+            IF NOT Cust.FINDFIRST THEN BEGIN
+              IF STRLEN(PromoLedEnt."Customer GuID") < 21 THEN BEGIN
+                IF NOT Cust.GET(PromoLedEnt."Customer GuID") THEN
+                  ERROR(Text003,PromoLedEnt."Entry No.");
+              END ELSE
+                ERROR(Text003,PromoLedEnt."Entry No.");
+            END;
+            ContBusRel.SETCURRENTKEY("Link to Table","No.");
+            ContBusRel.SETRANGE("Link to Table",ContBusRel."Link to Table"::Customer);
+            ContBusRel.SETRANGE("No.",Cust."No.");
+            IF NOT ContBusRel.FIND('-') THEN BEGIN
+              UpdateContFromCust.InsertNewContact(Cust,FALSE);
+              ContBusRel.FIND('-');
+            END;
+
+            //Note: only using IntCust as a variable, should not INSERT or MODIFY
+            CLEAR(IntCust);
+            IntCust.INIT;
+            IntCust."No." := PromoLedEnt."User GuID";
+            IntCust."Customer No." := Cust."No.";
+            IntCust."Contact No." := ContBusRel."Contact No.";
+            //DOC EC2015.5.02 +
+          END;
+          IF (IntCust."Customer No." <> '') AND (IntCust."Contact No." <> '') THEN BEGIN
+            DetailedProcess;
+            IF ErrorText <> '' THEN BEGIN
+              CreateIPI1;
+              ErrorText := '';
+            END;
+          END;
+        END;
+      UNTIL PromoLedEnt.NEXT = 0;
+    END;
+
+    PROCEDURE DetailedProcess@1190000013();
+    VAR
+      LPromoHead@1190000006 : Record 9021656;
+    BEGIN
+      PromoLedEnt1 := PromoLedEnt;
+      PromoLedEnt1."Customer No." := IntCust."Customer No.";
+      PromoLedEnt1."Contact No." := IntCust."Contact No.";
+      IF PromoLedEnt."Label Code" = '' THEN
+        PromoLedEnt1."Label Code" := IntOrderHead."Label Code";
+      PromoLedEnt1."NAV Processing Status" := PromoLedEnt1."NAV Processing Status"::Processed;
+      PromoLedEnt1."Date Processed" := TODAY;
+      PromoLedEnt1.MODIFY;
+
+      LPromoHead.GET(PromoLedEnt."Promotion No.");
+      IncrementBuildPromoHistorySum(LPromoHead."Threshold Applies-To Who",PromoLedEnt."Promotion No.",
+                    IntCust."Contact No.",IntCust."Customer No.",LPromoHead."Label Code");
+      CASE LPromoHead."Threshold Applies-To Who" OF
+        LPromoHead."Threshold Applies-To Who"::"All Customers" :
+          PromoHistSum.GET(PromoLedEnt."Promotion No.",'','');
+        LPromoHead."Threshold Applies-To Who"::"Each Contact" :
+          PromoHistSum.GET(PromoLedEnt."Promotion No.",IntCust."Contact No.",'');
+        LPromoHead."Threshold Applies-To Who"::"Each Customer" :
+          PromoHistSum.GET(PromoLedEnt."Promotion No.",'',IntCust."Customer No.");
+      END;
+      CASE LPromoHead."Threshold Type" OF
+        LPromoHead."Threshold Type"::Value :
+        BEGIN
+          //DOC EC2013.3.60 PromoHistSum.CALCFIELDS("Total Amt. Used");
+          PromoHistSum.CALCFIELDS("Total Discount Amount");  //DOC EC2013.3.60
+          //DOC EC2013.3.60 IF PromoHistSum."Total Amt. Used" > LPromoHead.Threshold THEN BEGIN
+          IF PromoHistSum."Total Discount Amount" > LPromoHead.Threshold THEN BEGIN  //DOC EC2013.3.60
+            IF ErrorText = '' THEN
+              ErrorText := Text002 + FORMAT(PromoLedEnt."Promotion No.")
+            ELSE
+              ErrorText := ErrorText + ', ' + FORMAT(PromoLedEnt."Promotion No.");
+          END;
+        END;
+        LPromoHead."Threshold Type"::"Qualified Item Quantity",
+          LPromoHead."Threshold Type"::"Benefit Item Quantity" :
+        BEGIN
+          PromoHistSum.CALCFIELDS("No. of Items Used");
+          IF PromoHistSum."No. of Items Used" > LPromoHead.Threshold THEN BEGIN
+            IF ErrorText = '' THEN
+              ErrorText := Text002 + FORMAT(PromoLedEnt."Promotion No.")
+            ELSE
+              ErrorText := ErrorText + ', ' + FORMAT(PromoLedEnt."Promotion No.");
+          END;
+        END;
+        LPromoHead."Threshold Type"::"Usage Count" :
+        BEGIN
+          PromoHistSum.CALCFIELDS("No. of Times Used");
+          IF PromoHistSum."No. of Times Used" > LPromoHead.Threshold THEN BEGIN
+            IF ErrorText = '' THEN
+              ErrorText := Text002 + FORMAT(PromoLedEnt."Promotion No.")
+            ELSE
+              ErrorText := ErrorText + ', ' + FORMAT(PromoLedEnt."Promotion No.");
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE CreateIPI1@1190000012();
+    BEGIN
+      IF InOrderGuID1 = '' THEN
+        //CreateLIP2(8,PromoLedEnt."Order GuID",'','',
+        CreateLIP2(8,PromoLedEnt."Order GuID",PromoLedEnt."Promotion No.",'',
+          PromoLedEnt."User GuID",ErrorText,FALSE,FALSE,PromoLedEnt."Customer No.")
+      ELSE
+        MESSAGE(ErrorText);
+    END;
+
+    PROCEDURE CreateLIP2@1040005(Type@1040000 : 'Internet Order,Cust. Subscription,Customer,Subscription,Questionnaire Answer,Sales,Payment,Web Update,Promo Warning';Code1@1040001 : Text[50];Code2@1040002 : Text[50];Code3@1040003 : Text[50];IntCustNo@1040005 : Text[38];ErrorDescription@1040004 : Text[250];AutoClear@1190000005 : Boolean;MakeHidden@1190000006 : Boolean;CustNo@1000000000 : Code[20]);
+    VAR
+      IntProcessIssue@1190000007 : Record 9021669;
+    BEGIN
+      //Function copied from Internet Automation
+      IntProcessIssue.RESET;
+      IntProcessIssue.SETCURRENTKEY(Type,"Code 1","Code 2","Code 3");
+      IntProcessIssue.SETRANGE(Type,Type);
+      IntProcessIssue.SETRANGE("Code 1",Code1);
+      IntProcessIssue.SETRANGE("Code 2",Code2);
+      IntProcessIssue.SETRANGE("Code 3",Code3);
+      IntProcessIssue.SETRANGE(Status,IntProcessIssue.Status::Open);
+      IF IntProcessIssue.FINDFIRST THEN
+        IntProcessIssue.DELETEALL;
+
+      IntProcessIssue.INIT;
+      IntProcessIssue.Type := Type;
+      EVALUATE(IntProcessIssue."Code 1",Code1);
+      EVALUATE(IntProcessIssue."Code 2",Code2);
+      EVALUATE(IntProcessIssue."Code 3",Code3);
+      IntProcessIssue."Internet Customer No." := IntCustNo;
+      IntProcessIssue.Description := ErrorDescription;
+      IntProcessIssue."Date Time Created" := CURRENTDATETIME;
+      IntProcessIssue."Auto Clear" := AutoClear;
+      IntProcessIssue.Hide := MakeHidden;
+      IntProcessIssue."Customer No." := CustNo;  //DOC EC2013.3.40
+      IntProcessIssue.INSERT(TRUE);
+    END;
+
+    BEGIN
+    {
+      //DOC EC2013.3.50 MQ 03/03/2013 - GW130303 Add code for In Dev Safe Mode
+      //DOC EC2013.3.50 MQ 02/04/2013 - GW130402 Add Customer No. when create IPIs
+      //DOC EC2013.3.60 MQ 15/05/2013 - GW130515 Small correction where processing multiple Promo Entries for same Promo
+      //DOC EC2013.3.60 MQ 04/07/2013 - GW130704 Threshold
+      //DOC EC2013.4.00 MQ 18/01/2014 - GW140118 DermAUB2B
+      //DOC EC2015.5.02 MQ 04/02/2015 - GW150204 Add a COMMIT and other stuff to process Promos calculated on Web; Code in OnRun to run TotalBuildPromoHistory
+      //DOC EC2015.5.02 MQ 16/04/2015 - GW150416 Add support for DERMUK2015 x1
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,95 @@
+OBJECT Codeunit 11102063 OM - Check C/AL History
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            Object@1000 : Record 2000000001;
+            SourceControl@1001 : Codeunit 11102050;
+          BEGIN
+            Object.SETFILTER(Type, '<>%1', Object.Type::TableData);
+            Object.SETFILTER("BLOB Size", '>0');
+
+            CASE CheckType OF
+              CheckType::Full :
+                RunWithObjectRange(Object);
+
+              CheckType::"Only Headers" :
+                SourceControl.UpdateCALHistory(Object, FALSE, FALSE);
+
+              CheckType::"With Ask SQL Trigger" :
+                SourceControl.UpdateCALHistory(Object, FALSE, TRUE);
+
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      CheckType@1000 : 'Full,Only Headers,With Ask SQL Trigger';
+
+    PROCEDURE RunWithObjectRange@1(VAR Object@1000 : Record 2000000001) ExitValue : Boolean;
+    VAR
+      CALHistoryObject@1001 : Record 11102052;
+      WhereUsedObject@1002 : Record 11102057;
+      KnownObjectExportError@1003 : Record 11102073;
+      Progressbar@1004 : Codeunit 11102044;
+      SourceControl@1005 : Codeunit 11102050;
+      ctUpdatingCALHistory@1006 : TextConst 'DEU=Checking C/AL history...;ENU=Checking C/AL history...;ESP=Checking C/AL history...;FRA=Checking C/AL history...;NLD=C/AL Historie controleren...;DEA=Checking C/AL history...';
+    BEGIN
+      ExitValue := TRUE;
+
+      Progressbar.Open(ctUpdatingCALHistory, 1);
+      Progressbar.BarSize := Object.COUNT;
+
+      IF Object.FINDSET THEN
+        REPEAT
+
+          Progressbar.AddToBar(1);
+          Progressbar.Text1Object := Object;
+
+          COMMIT;
+
+          IF NOT KnownObjectExportError.GET(Object.Type, Object.ID) THEN BEGIN
+
+            IF SourceControl.LatestHistoryIsOutdated(Object) THEN BEGIN
+              SourceControl.AddObject(Object, 0, FALSE, TRUE, 0, FALSE);
+              ExitValue := FALSE;
+            END;
+
+            IF CALHistoryObject.TryGoToLastRecord(Object.Type, Object.ID) THEN
+              IF WhereUsedObject.GET(Object.Type, Object.ID) THEN
+                IF WhereUsedObject."C/AL Code Entry No." <> CALHistoryObject."Entry No." THEN
+                  IF SourceControl.HistoryObjectsEqual(WhereUsedObject."C/AL Code Entry No.", CALHistoryObject."Entry No.") THEN BEGIN
+                    WhereUsedObject."C/AL Code Entry No." := CALHistoryObject."Entry No.";
+                    WhereUsedObject.MODIFY;
+                  END ELSE BEGIN
+                    WhereUsedObject.Status := WhereUsedObject.Status::" ";
+                    WhereUsedObject."Variable Usage Calculated" := FALSE;
+                    WhereUsedObject.MODIFY;
+                    ExitValue := FALSE;
+                  END;
+
+          END;
+
+        UNTIL Object.NEXT = 0;
+
+      Progressbar.Close;
+    END;
+
+    PROCEDURE SetCheckType@2(NewCheckType@1000 : Integer);
+    BEGIN
+      CheckType := NewCheckType;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

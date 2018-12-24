@@ -1,0 +1,584 @@
+OBJECT Codeunit 9062621 Quick Report Page Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      QuickReportHeader@9062232 : Record 9062697;
+      CriteriaManagement@1000000002 : Codeunit 9062462;
+      EnhancedFieldAssist@9062230 : Codeunit 9062622;
+      EnhancedPermissionsMgt@1000000006 : Codeunit 9062277;
+      QuickReportToolkit@1000000000 : Codeunit 9062538;
+      RunWithRecordRef@1000000003 : Codeunit 9062239;
+      TableRelationToolkit@1000000001 : Codeunit 9062257;
+      TNPUtils@9062231 : Codeunit 9062229;
+      tGroupedBy@9062229 : TextConst 'ENU="Grouped By - ";ENG="Grouped By - "';
+      tShowDetails@9062236 : TextConst 'ENU=Show Details;ENG=Show Details';
+      tHideDetails@9062235 : TextConst 'ENU=Hide Details;ENG=Hide Details';
+      CompactMode@1000000005 : Boolean;
+      CompactModeSet@1000000004 : Boolean;
+
+    PROCEDURE "--- General ---"@9062235();
+    BEGIN
+    END;
+
+    PROCEDURE LoadQuickReport@1000000005(VAR pQuickReportData@9062229 : Record 9062699;VAR pQuickReportDataTotals@9062231 : Record 9062699;VAR pQuickReportPageContext@9062230 : Record 9062755;VAR pQuickReportFieldContext@9062232 : ARRAY [20] OF Record 9062756) : Boolean;
+    VAR
+      lQuickReportEngine@1000000003 : Codeunit 9062539;
+      lFilterGroup@1000000000 : Integer;
+      eQuickReportToLoadNotSpecified@1000000001 : TextConst 'ENU=No quick report to load has been specified;ENG=No quick report to load has been specified';
+      lResult@1000000002 : Boolean;
+    BEGIN
+      //DOC NA2016.14 - Loading quick report
+      //  <> pQuickReportData: Quick report data
+      //  <> pQuickReportDataTotals: Quick report data totals
+      //  <> pQuickReportPageContext: Quick report page context
+      //  <> pQuickReportFieldContext: Quick report field context
+
+      IF (pQuickReportPageContext."Data is Set") THEN
+        EXIT;
+
+      CLEAR(pQuickReportPageContext."Quick Report Code");
+      CLEAR(pQuickReportPageContext."Delete Record on Close");
+      FOR lFilterGroup := 5 DOWNTO 0 DO
+      BEGIN
+        pQuickReportData.FILTERGROUP(lFilterGroup);
+        IF (pQuickReportData.GETFILTER("Quick Report Code") <> '') THEN
+          pQuickReportPageContext."Quick Report Code" := pQuickReportData.GETRANGEMIN("Quick Report Code");
+        IF (pQuickReportData.GETFILTER("Delete Record on Close") <> '') THEN
+          pQuickReportPageContext."Delete Record on Close" := pQuickReportData.GETRANGEMIN("Delete Record on Close");
+      END;
+      pQuickReportData.FILTERGROUP(0);
+
+      IF (pQuickReportPageContext."Quick Report Code" = '') THEN
+        ERROR(eQuickReportToLoadNotSpecified);
+
+      pQuickReportData.RESET();
+      pQuickReportData.DELETEALL();
+
+      IF (CompactModeSet) THEN
+        lQuickReportEngine.SetCompactMode(CompactMode);
+      pQuickReportPageContext."Quick Report Code" := lQuickReportEngine.GenerateQuickReportData(pQuickReportPageContext."Quick Report Code", pQuickReportData);
+      lResult := SetData(pQuickReportData, pQuickReportDataTotals, pQuickReportPageContext, pQuickReportFieldContext);
+      IF (lResult) THEN
+        IF (pQuickReportData.FINDFIRST()) THEN;
+      EXIT(lResult);
+    END;
+
+    PROCEDURE ClearQuickReportData@1000000006(pQuickReportPageContext@1000000000 : Record 9062755);
+    BEGIN
+      //DOC NA2016.14 - Clearing quick report data
+      //  -> pQuickReportPageContext: Quick report context
+
+      IF (( NOT (pQuickReportPageContext."Delete Record on Close")) OR (pQuickReportPageContext."Quick Report Code" = '')) THEN
+        EXIT;
+      QuickReportHeader.GET(pQuickReportPageContext."Quick Report Code");
+      IF (QuickReportHeader."Temporary") THEN
+        QuickReportHeader.DELETE(TRUE);
+    END;
+
+    PROCEDURE IsShowDetailsEnabled@9062234(VAR pQuickReportData@9062230 : Record 9062699) : Boolean;
+    BEGIN
+      //DOC NA2016.14 - Returning if "Show Details" is enabled
+      //  -> pQuickReportData: The current record
+      //  <- Answer
+
+      EXIT(pQuickReportData."Row Type" = pQuickReportData."Row Type"::Record);
+    END;
+
+    PROCEDURE IsShowCardEnabled@1000000020(VAR pQuickReportData@1000000000 : Record 9062699) : Boolean;
+    BEGIN
+      //DOC NA2016.14 - Returning if "Show Card" is enabled
+      //  -> pQuickReportData: The current record
+      //  <- Answer
+
+      EXIT((pQuickReportData."Row Type" = pQuickReportData."Row Type"::Record) AND (pQuickReportData."Table ID" <> 0) AND
+           (pQuickReportData."Table Position" <> ''));
+    END;
+
+    PROCEDURE GetStyle@1000000021(VAR pQuickReportData@9062230 : Record 9062699) : Text;
+    BEGIN
+      //DOC NA2016.14 - Returning style
+      //  -> pQuickReportData: The current record
+      //  <- The style
+
+      IF (pQuickReportData."Row Type" = pQuickReportData."Row Type"::Header) THEN
+        EXIT('Strong')
+      ELSE
+        EXIT('Standard');
+    END;
+
+    PROCEDURE "--- Actions ---"@9062236();
+    BEGIN
+    END;
+
+    PROCEDURE EditQuickReport@1000000023(pQuickReportPageContext@9062229 : Record 9062755);
+    BEGIN
+      //DOC NA2016.14 - Editing the quick report
+      //  -> pQuickReportPageContext: The current context
+
+      QuickReportHeader.GET(pQuickReportPageContext."Quick Report Code");
+      QuickReportHeader.SETRECFILTER();
+
+      EnhancedPermissionsMgt.CheckQuickReportModifyPermission(QuickReportHeader, USERID());
+
+      PAGE.RUN(PAGE::"Quick Report Card", QuickReportHeader);
+    END;
+
+    PROCEDURE ShowDetails@1000000022(VAR pQuickReportData@9062229 : Record 9062699;pQuickReportPageContext@9062230 : Record 9062755;pQuickReportFieldContext@1000000002 : ARRAY [20] OF Record 9062756);
+    VAR
+      lQuickReportDetailsPage@1000000001 : Page 9063020;
+      lQuickReportDetailsCompactPage@1000000000 : Page 9063145;
+    BEGIN
+      //DOC NA2016.14 - Showing details (quick report card page)
+      //  -> pQuickReportData: The current record
+      //  -> pQuickReportPageContext: The current context
+      //  -> pQuickReportFieldContext: The current field context
+
+      IF (QuickReportToolkit.CompactMode) THEN
+      BEGIN
+        lQuickReportDetailsCompactPage.Initialise(pQuickReportData, pQuickReportPageContext, pQuickReportFieldContext);
+        lQuickReportDetailsCompactPage.RUN();
+        lQuickReportDetailsCompactPage.GETRECORD(pQuickReportData);
+      END
+      ELSE
+      BEGIN
+        lQuickReportDetailsPage.Initialise(pQuickReportData, pQuickReportPageContext, pQuickReportFieldContext);
+        lQuickReportDetailsPage.RUN();
+        lQuickReportDetailsPage.GETRECORD(pQuickReportData);
+      END;
+    END;
+
+    PROCEDURE ShowCard@1000000025(pQuickReportData@1000000000 : Record 9062699);
+    VAR
+      lRunWithRecordRef@1000000001 : Codeunit 9062239;
+      lRecordRef@1000000002 : RecordRef;
+    BEGIN
+      //DOC NA2016.14 - Showing card
+      //  -> pQuickReportData: The current record
+
+      IF ((pQuickReportData."Table ID" = 0) OR (pQuickReportData."Table Position" = '')) THEN
+        EXIT;
+
+      lRecordRef.OPEN(pQuickReportData."Table ID");
+      lRecordRef.SETPOSITION(pQuickReportData."Table Position");
+      lRunWithRecordRef.RunCardPage(lRecordRef, FALSE);
+      lRecordRef.CLOSE();
+    END;
+
+    PROCEDURE UpdateTotals@1000000018(VAR pQuickReportData@9062229 : Record 9062699;VAR pQuickReportDataTotals@9062230 : Record 9062699);
+    VAR
+      lQuickReportData@1000000003 : Record 9062699;
+      lQuickReportGrouping@1000000000 : Codeunit 9062542;
+      lQuickReportDataView@1000000001 : Text;
+    BEGIN
+      //DOC NA2016.14 - Updating totals of the quick report
+      //  <> pQuickReportData: The quick report data
+      //  <> pQuickReportDataTotals: Target quick report data totals
+
+      lQuickReportData := pQuickReportData;
+      lQuickReportDataView := pQuickReportData.GETVIEW(FALSE);
+
+      lQuickReportGrouping.ReGroupAndTotalQuickReport(pQuickReportData, FALSE, TRUE);
+
+      pQuickReportData.RESET();
+      pQuickReportData.SETRANGE("Row Type", pQuickReportData."Row Type"::Totals);
+      IF (pQuickReportData.FINDFIRST()) THEN
+        pQuickReportDataTotals := pQuickReportData
+      ELSE
+        CLEAR(pQuickReportDataTotals);
+      pQuickReportData.RESET();
+
+      pQuickReportData.SETVIEW(lQuickReportDataView);
+      IF ( NOT (pQuickReportData.GET(lQuickReportData."Quick Report Code", lQuickReportData.ID))) THEN
+        IF (pQuickReportData.FINDFIRST()) THEN;
+    END;
+
+    LOCAL PROCEDURE "--- Loading Data ---"@9062237();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE SetData@1000000002(VAR Rec@9062233 : Record 9062699;VAR TotalsRec@9062231 : TEMPORARY Record 9062699;VAR Context@9062229 : Record 9062755;VAR FieldContext@9062234 : ARRAY [20] OF Record 9062756) : Boolean;
+    VAR
+      ClosePageImmediately@9062232 : Boolean;
+    BEGIN
+      Context."Data is Set" := TRUE;
+
+      ClosePageImmediately := FALSE;
+      IF Rec.COUNT = 1 THEN BEGIN
+        ShowDetails(Rec, Context, FieldContext);
+        ClosePageImmediately := TRUE;
+      END;
+
+      SetHeaderProperties(Rec, Context, FieldContext);
+
+      EXIT( NOT (ClosePageImmediately));
+    END;
+
+    LOCAL PROCEDURE SetHeaderProperties@1000000010(VAR QuickReportData@9062230 : Record 9062699;VAR Context@9062229 : Record 9062755;VAR FieldContext@9062231 : ARRAY [20] OF Record 9062756);
+    VAR
+      QuickReportHeader@1000000000 : Record 9062697;
+    BEGIN
+      IF NOT QuickReportHeader.GET(Context."Quick Report Code") THEN EXIT;
+
+      Context."Page Caption" := QuickReportHeader.Name;
+      Context."Page Editable" := TRUE;
+
+      IF QuickReportData.GetGroupingFieldRelatedColumnID(1) <= 0 THEN
+        SetGroupedMode(QuickReportData, Context, FieldContext, Context."Grouped Mode"::UnGrouped)
+      ELSE
+        SetGroupedMode(QuickReportData, Context, FieldContext, Context."Grouped Mode"::Grouped);
+    END;
+
+    PROCEDURE "--- Grouping ---"@9062238();
+    BEGIN
+    END;
+
+    PROCEDURE SelectGroupByField@9062242(VAR QuickReportData@9062229 : Record 9062699;VAR Context@9062231 : Record 9062755;VAR FieldContext@9062230 : ARRAY [20] OF Record 9062756) : Boolean;
+    VAR
+      FieldBuffer@9062233 : TEMPORARY Record 9062730;
+      FieldIndex@9062232 : Integer;
+      Result@9062234 : Boolean;
+    BEGIN
+      Result := FALSE;
+      FOR FieldIndex := 1 TO ARRAYLEN(FieldContext) DO
+        IF (FieldContext[FieldIndex]."Field Caption" <> '') THEN
+        BEGIN
+          FieldBuffer.ID := FieldIndex;
+          FieldBuffer.Name := FieldContext[FieldIndex]."Field Caption";
+          FieldBuffer.INSERT();
+        END;
+      IF (FieldBuffer.FINDFIRST()) THEN;
+      IF (PAGE.RUNMODAL(PAGE::"Name Value Buffer", FieldBuffer) = ACTION::LookupOK) THEN
+      BEGIN
+        GroupByField(QuickReportData, Context, FieldContext, FieldBuffer.ID);
+        Result := TRUE;
+      END;
+      EXIT(Result);
+    END;
+
+    PROCEDURE GroupByField@1000000016(VAR QuickReportData@9062229 : Record 9062699;VAR Context@9062230 : Record 9062755;VAR FieldContext@9062231 : ARRAY [20] OF Record 9062756;FieldIndex@9062232 : Integer);
+    VAR
+      QuickReportField@1000000001 : Record 9062698;
+      QuickReportGrouping@1000000002 : Codeunit 9062542;
+    BEGIN
+      IF QuickReportData.GetGroupingFieldRelatedColumnID(1) = FieldIndex THEN BEGIN
+        IF Context."Grouped Mode" = Context."Grouped Mode"::UnGrouped THEN
+          SetGroupedMode(QuickReportData, Context, FieldContext, Context."Grouped Mode"::Grouped)
+        ELSE
+          SetGroupedMode(QuickReportData, Context, FieldContext, Context."Grouped Mode"::UnGrouped);
+      END ELSE BEGIN
+        QuickReportGrouping.SetQuickReportGroupingFields(QuickReportData, FieldIndex, 0, 0);
+        QuickReportGrouping.ReGroupAndTotalQuickReport(QuickReportData,TRUE,TRUE);
+        SetGroupedMode(QuickReportData, Context, FieldContext, Context."Grouped Mode"::Grouped);
+      END;
+    END;
+
+    PROCEDURE SetGroupedMode@1000000003(VAR Rec@9062229 : Record 9062699;VAR Context@9062230 : Record 9062755;VAR FieldContext@9062232 : ARRAY [20] OF Record 9062756;GroupedMode@9062231 : 'UnGrouped,Grouped,GroupedWithDetails');
+    BEGIN
+      Context."Grouped Mode" := GroupedMode;
+      CASE Context."Grouped Mode" OF
+        Context."Grouped Mode"::Grouped :
+          BEGIN
+            Rec.SETRANGE("Row Type", Rec."Row Type"::Header);
+            Rec.SETFILTER("Grouping Field 1",'');
+            Rec.SETFILTER("Grouping Field 2",'');
+            Rec.SETFILTER("Grouping Field 3",'');
+            Context."Group By Visible" := FALSE;
+            Context."Show Group Details Visible" := TRUE;
+            Context."Hide Group Details Visible" := FALSE;
+            Context."UnGroup Visible" := TRUE;
+            Context."No of Records Visible" := TRUE;
+          END;
+        Context."Grouped Mode"::UnGrouped :
+          BEGIN
+            Rec.SETRANGE("Row Type", Rec."Row Type"::Record);
+            Rec.SETFILTER("Grouping Field 1",'');
+            Rec.SETFILTER("Grouping Field 2",'');
+            Rec.SETFILTER("Grouping Field 3",'');
+            Context."Group By Visible" := TRUE;
+            Context."Show Group Details Visible" := FALSE;
+            Context."Hide Group Details Visible" := FALSE;
+            Context."UnGroup Visible" := FALSE;
+            Context."No of Records Visible" := FALSE;
+          END;
+        Context."Grouped Mode"::GroupedWithDetails :
+          BEGIN
+            Rec.SETFILTER("Row Type",'');
+            Rec.SETRANGE("Grouping Field 1", Rec."Grouping Field 1");
+            Rec.SETRANGE("Grouping Field 2", Rec."Grouping Field 2");
+            Rec.SETRANGE("Grouping Field 3", Rec."Grouping Field 3");
+            Context."Group By Visible" := FALSE;
+            Context."Show Group Details Visible" := FALSE;
+            Context."Hide Group Details Visible" := TRUE;
+            Context."UnGroup Visible" := TRUE;
+            Context."No of Records Visible" := TRUE;
+          END;
+      END;
+
+      IF Context."Grouped Mode" <> Context."Grouped Mode"::UnGrouped THEN BEGIN
+        Context."Grouping Field 1 Visible" := Rec.GetGroupingFieldRelatedColumnID(1) > 0;
+        Context."Grouping Field 2 Visible" := Rec.GetGroupingFieldRelatedColumnID(2) > 0;
+        Context."Grouping Field 3 Visible" := Rec.GetGroupingFieldRelatedColumnID(3) > 0;
+      END ELSE BEGIN
+        Context."Grouping Field 1 Visible" := FALSE;
+        Context."Grouping Field 2 Visible" := FALSE;
+        Context."Grouping Field 3 Visible" := FALSE;
+      END;
+
+      UpdatePageLayout(Context."Page Editable", Context, FieldContext);
+    END;
+
+    PROCEDURE GetGroupingFieldCaption@1000000007(Rec@9062229 : Record 9062699;Context@9062230 : Record 9062755;GroupingFieldIndex@1000000000 : Integer) : Text;
+    VAR
+      QuickReportField@1000000003 : Record 9062698;
+      NoCaption@1000000002 : Boolean;
+      Caption@1000000004 : Text;
+    BEGIN
+      QuickReportField.SETRANGE("Quick Report Code", Context."Quick Report Code");
+      QuickReportField.SETRANGE(Index,Rec.GetGroupingFieldRelatedColumnID(GroupingFieldIndex));
+      IF QuickReportField.FINDFIRST THEN
+        EXIT(tGroupedBy + QuickReportField."Field Name")
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE "--- Page Layout ---"@9062240();
+    BEGIN
+    END;
+
+    PROCEDURE UpdatePageLayout@1000000004(CurrPageEditable@9062230 : Boolean;Context@9062231 : Record 9062755;VAR FieldContext@9062229 : ARRAY [20] OF Record 9062756);
+    VAR
+      QuickReportField@9062232 : Record 9062698;
+      FieldIndex@1000000000 : Integer;
+    BEGIN
+      CLEAR(FieldContext);
+
+      IF NOT Context."Data is Set" THEN EXIT;
+
+      FOR FieldIndex := 1 TO ARRAYLEN(FieldContext) DO
+      BEGIN
+        FieldContext[FieldIndex]."Quick Report Code" := Context."Quick Report Code";
+        QuickReportField.RESET();
+        QuickReportField.SETRANGE("Quick Report Code", Context."Quick Report Code");
+        QuickReportField.SETRANGE(Index,FieldIndex);
+        IF (QuickReportField.FINDFIRST()) THEN
+        BEGIN
+          FieldContext[FieldIndex]."Quick Report Field ID" := QuickReportField.ID;
+          FieldContext[FieldIndex]."Field Editable" := ((CurrPageEditable) AND (QuickReportField.Editable));
+          SetFieldProperty_Visible(QuickReportField, Context, FieldIndex, FieldContext[FieldIndex]);
+          SetFieldProperty_Caption(QuickReportField, Context, FieldIndex, FieldContext[FieldIndex]);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE SetFieldProperty_Visible@1000000000(QuickReportField@9062231 : Record 9062698;Context@9062230 : Record 9062755;FieldIndex@1000000000 : Integer;VAR FieldContext@9062229 : Record 9062756);
+    VAR
+      AllowVisible@1000000003 : Boolean;
+    BEGIN
+      AllowVisible := ((Context."Grouped Mode" <> Context."Grouped Mode"::Grouped) OR (QuickReportField.Grouping <> QuickReportField.Grouping::" "));
+      FieldContext."Decimal Field Visible" := AllowVisible AND (QuickReportField."Quick Report Data Type" = QuickReportField."Quick Report Data Type"::Decimal);
+      FieldContext."Text Field Visible" := AllowVisible AND (QuickReportField."Quick Report Data Type" = QuickReportField."Quick Report Data Type"::Text);
+      FieldContext."Date Field Visible" := AllowVisible AND (QuickReportField."Quick Report Data Type" = QuickReportField."Quick Report Data Type"::Date);
+      FieldContext."DateTime Field Visible" := AllowVisible AND (QuickReportField."Quick Report Data Type" = QuickReportField."Quick Report Data Type"::DateTime);
+      FieldContext."Code Field Visible" := AllowVisible AND (QuickReportField."Quick Report Data Type" = QuickReportField."Quick Report Data Type"::Code);
+      FieldContext.UpdateFieldVisible();
+    END;
+
+    PROCEDURE SetFieldVariables_Visible@9062229(QuickReportFieldLayout@1000000000 : Record 9062756;VAR DecimalField_Visible@9062235 : Boolean;VAR TextField_Visible@9062234 : Boolean;VAR DateField_Visible@9062233 : Boolean;VAR DateTimeField_Visible@9062231 : Boolean;VAR CodeField_Visible@9062230 : Boolean);
+    VAR
+      QuickReportField@1000000002 : Record 9062698;
+      AllowVisible@1000000003 : Boolean;
+    BEGIN
+      DecimalField_Visible := QuickReportFieldLayout."Decimal Field Visible";
+      TextField_Visible := QuickReportFieldLayout."Text Field Visible";
+      DateField_Visible := QuickReportFieldLayout."Date Field Visible";
+      DateTimeField_Visible := QuickReportFieldLayout."DateTime Field Visible";
+      CodeField_Visible := QuickReportFieldLayout."Code Field Visible";
+    END;
+
+    LOCAL PROCEDURE SetFieldProperty_Caption@1000000001(QuickReportField@9062231 : Record 9062698;Context@9062230 : Record 9062755;FieldIndex@9062232 : Integer;VAR FieldContext@9062229 : Record 9062756);
+    VAR
+      NoCaption@1000000002 : Boolean;
+      Caption@1000000004 : Text;
+    BEGIN
+      IF (QuickReportField.Caption <> '') THEN
+        FieldContext."Field Caption" := QuickReportField.Caption
+      ELSE
+        FieldContext."Field Caption" := QuickReportField."Field Name";
+      IF ((Context."Grouped Mode" <> Context."Grouped Mode"::UnGrouped) AND (QuickReportField.Grouping <> QuickReportField.Grouping::" ")) THEN
+        FieldContext."Field Caption" := FORMAT(QuickReportField.Grouping) + ' - ' + FieldContext."Field Caption";
+    END;
+
+    LOCAL PROCEDURE "--- Field Triggers ---"@9062241();
+    BEGIN
+    END;
+
+    PROCEDURE ValidateField@1000000026(VAR QuickReportData@9062236 : Record 9062699;VAR Context@9062229 : Record 9062755;VAR FieldContext@9062237 : ARRAY [20] OF Record 9062756;pFieldId@1000000008 : Integer);
+    VAR
+      EnhFieldMgt@1000000003 : Codeunit 9062298;
+      QuickReportField@1000000001 : Record 9062698;
+      RecRef@1000000002 : RecordRef;
+      FieldRef@1000000004 : FieldRef;
+      eValidateNonRecord@9062230 : TextConst 'ENU=You can only change the value of records, not headers;ENG=You can only change the value of records, not headers';
+      eNoRelatedTable@9062232 : TextConst 'ENU=There is no related table for this Quick Report Record;ENG=There is no related table for this Quick Report Record';
+      eNoRelatedPosText@9062231 : TextConst 'ENU=There is no related NAV Record for this Quick Report Record;ENG=There is no related NAV Record for this Quick Report Record';
+      eNoQuickReportField@9062233 : TextConst 'ENU=The Quick Report Field Definition for Column %1 could not be found;ENG=The Quick Report Field Definition for Column %1 could not be found';
+      eNoFieldType@9062235 : TextConst 'ENU=No Field Type was found for the column %1;ENG=No Field Type was found for the column %1';
+      eValueNotSet@9062234 : TextConst 'ENU=The value "%1" could not be set for the column %2;ENG=The value "%1" could not be set for the column %2';
+      lRecordRef@1000000006 : RecordRef;
+      lFieldRef@1000000007 : FieldRef;
+      lFieldIndex@1000000000 : Integer;
+      lFieldValue@1000000005 : Variant;
+    BEGIN
+      lFieldIndex := QuickReportToolkit.DataFieldIdToFieldIndex(pFieldId);
+      lRecordRef.OPEN(DATABASE::"Quick Report Data");
+      lRecordRef.GETTABLE(QuickReportData);
+      lFieldRef := lRecordRef.FIELD(pFieldId);
+      lFieldValue := lFieldRef.VALUE();
+      lRecordRef.CLOSE();
+
+      IF QuickReportData."Row Type" <> QuickReportData."Row Type"::Record THEN ERROR(eValidateNonRecord);
+
+      IF QuickReportData."Table ID" = 0 THEN ERROR(eNoRelatedTable);
+      IF QuickReportData."Table Position" = '' THEN ERROR(eNoRelatedPosText);
+
+      QuickReportField.SETRANGE("Quick Report Code", Context."Quick Report Code");
+      QuickReportField.SETRANGE(Index, lFieldIndex);
+      IF NOT QuickReportField.FINDFIRST THEN
+        ERROR(STRSUBSTNO(eNoQuickReportField, lFieldIndex));
+
+      CASE QuickReportField."Field Type" OF
+        QuickReportField."Field Type"::" " : ERROR(STRSUBSTNO(eNoFieldType,QuickReportField."Field Name"));
+        QuickReportField."Field Type"::Field :
+          BEGIN
+            RecRef.OPEN(QuickReportData."Table ID");
+            RecRef.SETPOSITION(QuickReportData."Table Position");
+            RecRef.SETRECFILTER;
+            RecRef.FINDFIRST;
+            FieldRef := RecRef.FIELD(QuickReportField."Field ID");
+
+            IF NOT TNPUtils.SetFieldValueFromText(FieldRef,lFieldValue,TRUE) THEN ERROR(STRSUBSTNO(eValueNotSet,lFieldValue,QuickReportField."Field Name"));
+            RecRef.MODIFY(TRUE);
+            RecRef.CLOSE;
+          END;
+        QuickReportField."Field Type"::"Enhanced Field" : EnhFieldMgt.SetFieldValue(QuickReportData."Table ID",QuickReportField."Field ID",
+          QuickReportData."Table Position",lFieldValue);
+      END;
+    END;
+
+    PROCEDURE FieldAssist@1000000012(VAR pQuickReportData@1000000000 : Record 9062699;VAR pQuickReportPageContext@9062229 : Record 9062755;VAR pQuickReportFieldContext@9062231 : ARRAY [20] OF Record 9062756;pFieldId@1000000002 : Integer) : Boolean;
+    VAR
+      lQuickReportFieldContext@1000000004 : Record 9062756;
+      lQuickReportHeader@1000000005 : Record 9062697;
+      lQuickReportField@1000000001 : Record 9062698;
+      lEnhancedFieldManagement@1000000008 : Codeunit 9062298;
+      lRunWithRecordRef@1000000009 : Codeunit 9062239;
+      lFieldIndex@1000000003 : Integer;
+      lFieldTextValue@9062232 : Text;
+      lFieldValue@1000000011 : Variant;
+      lTableId@1000000006 : Integer;
+      lTablePosition@1000000007 : Text;
+      lRecordRef@1000000010 : RecordRef;
+    BEGIN
+      //DOC NH2016.10 - Performing field assist
+      //  <> pQuickReportData: The current record
+      //  <> pQuickReportPageContext: The current context
+      //  <> pQuickReportFieldContext: The current field context
+      //  -> pFieldId: Field ID
+      //  <- Assist result
+
+      IF (pQuickReportData."Row Type" <> pQuickReportData."Row Type"::Record) THEN
+        EXIT;
+
+      lFieldIndex := QuickReportToolkit.DataFieldIdToFieldIndex(pFieldId);
+      lQuickReportFieldContext := pQuickReportFieldContext[lFieldIndex];
+
+      lQuickReportHeader.GET(lQuickReportFieldContext."Quick Report Code");
+      lQuickReportField.GET(lQuickReportFieldContext."Quick Report Code", lQuickReportFieldContext."Quick Report Field ID");
+      IF ((lQuickReportHeader."Data From" = lQuickReportHeader."Data From"::Table) AND
+          (lQuickReportField."Field From" = lQuickReportField."Field From"::Data)) THEN
+      BEGIN
+        lTableId := pQuickReportData."Table ID";
+        lTablePosition := pQuickReportData."Table Position";
+      END
+      ELSE IF (lQuickReportField."Field From" = lQuickReportField."Field From"::"Report Table") THEN
+      BEGIN
+        lTableId := pQuickReportData."Report Table ID";
+        lTablePosition := pQuickReportData."Report Table Position";
+      END;
+      IF ((lTableId = 0) OR (lTablePosition = '') OR (lQuickReportField."Field ID" = 0)) THEN
+        EXIT;
+
+      lRecordRef.OPEN(lTableId);
+      lRecordRef.SETPOSITION(lTablePosition);
+      lRecordRef.SETRECFILTER();
+      IF (lRecordRef.FINDFIRST()) THEN;
+
+      CASE (lQuickReportField."Field Type") OF
+        lQuickReportField."Field Type"::Field:
+          IF (lQuickReportField.FlowField) THEN
+          BEGIN
+            CriteriaManagement.ApplyCriteriaToRecRef(lQuickReportField."Field Filter ID", lRecordRef);
+            TableRelationToolkit.DrillDownForRecRef(lRecordRef, lQuickReportField."Field ID");
+          END
+          ELSE
+            IF (TableRelationToolkit.LookupForRecRef(lRecordRef, lQuickReportField."Field ID", lQuickReportFieldContext."Field Editable", lFieldValue)) THEN
+            BEGIN
+              pQuickReportData.SetField(lFieldIndex, lQuickReportField."Quick Report Data Type", lFieldValue);
+              pQuickReportData.MODIFY(TRUE);
+            END;
+        lQuickReportField."Field Type"::"Enhanced Field":
+          IF (lEnhancedFieldManagement.LookupField(lTableId, lQuickReportField."Field ID", lTablePosition, lFieldValue)) THEN
+          BEGIN
+            pQuickReportData.SetField(lFieldIndex, lQuickReportField."Quick Report Data Type", lFieldValue);
+            pQuickReportData.MODIFY(TRUE);
+          END;
+      END;
+
+      lRecordRef.CLOSE();
+    END;
+
+    LOCAL PROCEDURE "--- Compact Mode ---"@1000000038();
+    BEGIN
+    END;
+
+    PROCEDURE ClearCompactMode@1000000053();
+    BEGIN
+      //DOC NA2016.15 - Clearing compact mode
+
+      CompactMode := FALSE;
+      CompactModeSet := FALSE;
+    END;
+
+    PROCEDURE SetCompactMode@1000000037(pCompactMode@1000000000 : Boolean);
+    BEGIN
+      //DOC NA2016.15 - Setting compact mode
+      //  -> pCompactMode: The compact mode flag
+
+      CompactMode := pCompactMode;
+      CompactModeSet := TRUE;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.10 AZ 21/10/2015 - SetFieldVariables_VisibleWeb and SetFieldVariables_EditableWeb functions for web version of Quick Report Page
+      //DOC NA2016.12 JH 27/01/2016 - Bugfixes
+      //DOC NA2016.14 JH 21/02/2016 - Simplified data types
+      //DOC NA2016.15 JH 05/05/2016 - Enhanced permissions
+    }
+    END.
+  }
+}
+

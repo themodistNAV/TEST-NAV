@@ -1,0 +1,576 @@
+OBJECT Codeunit 11102096 OM - Translation File Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            TmpCALHistoryObject@1000 : TEMPORARY Record 11102052;
+            TmpCALHistoryLine@1001 : TEMPORARY Record 11102053;
+            Buffer@1002 : TEMPORARY Record 11102068;
+            TmpWindowsLanguage@1003 : TEMPORARY Record 2000000045;
+            WindowsLanguage2@1004 : Record 2000000045;
+            ImExportMgt@1005 : Codeunit 11102043;
+            Progressbar@1006 : Codeunit 11102044;
+            TranslationMgt@1007 : Codeunit 11102051;
+            FileHandler@1008 : Codeunit 11102097;
+            ServerFileName@1009 : Text;
+            ctGettingLanguages@1010 : TextConst 'DEU=Getting languages...;ENU=Getting languages...;ESP=Getting languages...;FRA=Getting languages...;NLD=Talen bepalen...;DEA=Getting languages...';
+          BEGIN
+            LanguageFilter := '';
+
+            Progressbar.Open(ctGettingLanguages, 1);
+
+            ServerFileName := FileHandler.UploadToServer(gClientFileName, '');
+
+            IF ImExportMgt.IsObjectFile(ServerFileName) THEN
+              GetCaptionsFromObjectFile(ServerFileName, Buffer, TmpCALHistoryObject, TmpCALHistoryLine, Progressbar, 0, 75)
+            ELSE
+              GetCaptionsFromTranslationFile(ServerFileName, Buffer, Progressbar, 0, 75);
+
+            Progressbar.BarSize := Buffer.COUNT;
+            Progressbar.UseRange(75, 100);
+            IF Buffer.FINDSET THEN
+              REPEAT
+
+                IF NOT TmpWindowsLanguage.GET(TranslationMgt.LanguageIdOfLine(Buffer."Translate File Line")) THEN
+                  IF WindowsLanguage2.GET(TranslationMgt.LanguageIdOfLine(Buffer."Translate File Line")) THEN BEGIN
+                    TmpWindowsLanguage := WindowsLanguage2;
+                    TmpWindowsLanguage.INSERT;
+                  END;
+
+              UNTIL Buffer.NEXT = 0;
+
+            IF TmpWindowsLanguage.FINDSET THEN
+              REPEAT
+                IF LanguageFilter = '' THEN
+                  LanguageFilter := TmpWindowsLanguage."Abbreviated Name"
+                ELSE
+                  LanguageFilter += '|' + TmpWindowsLanguage."Abbreviated Name";
+              UNTIL TmpWindowsLanguage.NEXT = 0;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      gClientFileName@1000 : Text;
+      LanguageFilter@1001 : Text;
+
+    PROCEDURE SetFileName@1(NewClientFileName@1000 : Text);
+    VAR
+      FileHandler@1001 : Codeunit 11102097;
+      ctFileNotExist@1002 : TextConst 'DEU=File ''%1'' not found.;ENU=File ''%1'' not found.;ESP=File ''%1'' not found.;FRA=File ''%1'' not found.;NLD=Bestand ''%1'' niet gevonden.;DEA=File ''%1'' not found.';
+    BEGIN
+      IF NOT FileHandler.ClientFileNameExists(NewClientFileName) THEN
+        ERROR(ctFileNotExist, NewClientFileName);
+      gClientFileName := NewClientFileName;
+    END;
+
+    PROCEDURE GetLanguageFilter@2() : Text;
+    BEGIN
+      EXIT(LanguageFilter);
+    END;
+
+    PROCEDURE FileAddCaptions@3(VAR FileName@1000 : Text;VAR CaptionsFileName@1001 : Text;VAR LanguageFilter@1002 : Code[1024];VAR AddMethod@1003 : 'AddAndOverwrite,Add,Overwrite';VAR SetModifiedFlag@1004 : Boolean;VAR NewFileName@1005 : Text);
+    VAR
+      ImExportMgt@1006 : Codeunit 11102043;
+    BEGIN
+      IF ImExportMgt.IsObjectFile(FileName) THEN
+        ObjectFileAddCaptions(FileName, CaptionsFileName, LanguageFilter, AddMethod, SetModifiedFlag, NewFileName)
+      ELSE
+        TranslationFileAddCaptions(FileName, CaptionsFileName, LanguageFilter, AddMethod, NewFileName);
+    END;
+
+    LOCAL PROCEDURE ObjectFileAddCaptions@4(VAR FileName@1000 : Text;VAR CaptionsFileName@1001 : Text;VAR LanguageFilter@1002 : Code[1024];VAR AddMethod@1003 : 'AddAndOverwrite,Add,Overwrite';VAR SetModifiedFlag@1004 : Boolean;VAR NewFileName@1005 : Text);
+    VAR
+      TmpCALHistoryObject@1006 : TEMPORARY Record 11102052;
+      TmpCALHistoryLine@1007 : TEMPORARY Record 11102053;
+      TmpCALHistoryLine2@1008 : ARRAY [2] OF TEMPORARY Record 11102053;
+      Buffer@1009 : TEMPORARY Record 11102068;
+      CaptionsBuffer@1010 : TEMPORARY Record 11102068;
+      TmpCaption@1011 : ARRAY [2] OF TEMPORARY Record 11102068;
+      TmpLine@1012 : ARRAY [2] OF TEMPORARY Record 11102068;
+      TmpObject@1013 : TEMPORARY Record 2000000001;
+      Progressbar@1014 : Codeunit 11102044;
+      SourceControl@1015 : Codeunit 11102050;
+      TranslationMgt@1016 : Codeunit 11102051;
+      oFile@1017 : File;
+      StartDate@1018 : Date;
+      StartTime@1019 : Time;
+      ctAddingCaptions@1020 : TextConst 'DEU=Adding captions...;ENU=Adding captions...;ESP=Adding captions...;FRA=Adding captions...;NLD=Captions toevoegen...;DEA=Adding captions...';
+    BEGIN
+      Progressbar.Open(ctAddingCaptions, 1);
+      GetCaptionsFromObjectFile(FileName, Buffer, TmpCALHistoryObject, TmpCALHistoryLine, Progressbar, 0, 50);
+      GetCaptionsFromCaptionsFile(CaptionsFileName, CaptionsBuffer, Progressbar, 50, 75);
+      KeepLanguagesFromBuffer(CaptionsBuffer, LanguageFilter);
+
+      StartDate := WORKDATE;
+      StartTime := TIME;
+
+      oFile.TEXTMODE(TRUE);
+      oFile.CREATE(NewFileName);
+
+      Progressbar.BarSize := TmpCALHistoryObject.COUNT;
+      Progressbar.UseRange(75, 100);
+
+      IF TmpCALHistoryObject.FINDSET THEN
+        REPEAT
+
+          TmpCALHistoryObject.FillObjectFields(TmpObject);
+          Progressbar.Text1Object := TmpObject;
+          Progressbar.AddToBar(1);
+
+          TmpLine[1].RESET;
+          TmpLine[1].DELETEALL;
+          TmpCaption[1].RESET;
+          TmpCaption[1].DELETEALL;
+
+          TranslationMgt.FinalizeBuffer(Buffer, TmpLine, TmpCALHistoryObject."Object Type", TmpCALHistoryObject."Object No.");
+          TranslationMgt.FinalizeBuffer(
+            CaptionsBuffer, TmpCaption, TmpCALHistoryObject."Object Type", TmpCALHistoryObject."Object No.");
+
+          TmpCaption[1].RESET;
+          TmpCaption[1].SETCURRENTKEY("Object Type", "Object No.");
+          TmpCaption[1].SETRANGE("Object Type", TmpCALHistoryObject."Object Type");
+          TmpCaption[1].SETRANGE("Object No.", TmpCALHistoryObject."Object No.");
+          TranslationMgt.MergeCaptionBuffers(TmpLine[1], TmpCaption[1], AddMethod);
+
+          TranslationMgt.FillCALLineBuffer(TmpCALHistoryLine, TmpCALHistoryLine2[1], TmpCALHistoryObject."Entry No.");
+
+          TmpLine[1].RESET;
+          TmpLine[1].SETCURRENTKEY("Object Type", "Object No.", "Caption Entry No.");
+          TmpLine[1].SETRANGE("Object Type", TmpCALHistoryObject."Object Type");
+          TmpLine[1].SETRANGE("Object No.", TmpCALHistoryObject."Object No.");
+          TmpLine[1].SETRANGE(Captions, TRUE);
+          IF TmpLine[1].FINDSET THEN
+            REPEAT
+              TranslationMgt.WriteLineToCAL(TmpLine, TmpCALHistoryLine2);
+              TmpLine[1].SETFILTER("Caption Entry No.", '>%1', TmpLine[1]."Caption Entry No.");
+            UNTIL TmpLine[1].NEXT = 0;
+
+          TmpCALHistoryLine2[1].RESET;
+          IF SetModifiedFlag THEN
+            SourceControl.SetModifyFlagInHistoryLines(TmpCALHistoryLine2[1], StartDate, StartTime);
+          SourceControl.AppendHistoryLinesToFile(oFile, TmpCALHistoryLine2[1]);
+
+        UNTIL TmpCALHistoryObject.NEXT = 0;
+
+      Progressbar.Close;
+      oFile.CLOSE;
+    END;
+
+    LOCAL PROCEDURE TranslationFileAddCaptions@5(VAR FileName@1000 : Text;VAR CaptionsFileName@1001 : Text;VAR LanguageFilter@1002 : Code[1024];VAR AddMethod@1003 : 'AddAndOverwrite,Add,Overwrite';VAR NewFileName@1004 : Text);
+    VAR
+      Buffer@1005 : TEMPORARY Record 11102068;
+      CaptionsBuffer@1006 : TEMPORARY Record 11102068;
+      TmpCaption@1007 : ARRAY [2] OF TEMPORARY Record 11102068;
+      TmpLine@1008 : ARRAY [2] OF TEMPORARY Record 11102068;
+      Progressbar@1009 : Codeunit 11102044;
+      TranslationMgt@1010 : Codeunit 11102051;
+      ctAddingCaptions@1011 : TextConst 'DEU=Adding captions...;ENU=Adding captions...;ESP=Adding captions...;FRA=Adding captions...;NLD=Captions toevoegen...;DEA=Adding captions...';
+    BEGIN
+      Progressbar.Open(ctAddingCaptions, 1);
+
+      GetCaptionsFromTranslationFile(FileName, Buffer, Progressbar, 0, 25);
+      GetCaptionsFromCaptionsFile(CaptionsFileName, CaptionsBuffer, Progressbar, 25, 50);
+      KeepLanguagesFromBuffer(CaptionsBuffer, LanguageFilter);
+
+      TranslationMgt.FinalizeBuffer(Buffer, TmpLine, 0, 0);
+      TranslationMgt.FinalizeBuffer(CaptionsBuffer, TmpCaption, 0, 0);
+
+      TranslationMgt.MergeCaptionBuffers(TmpLine[1], TmpCaption[1], AddMethod);
+
+      TmpLine[1].SETCURRENTKEY("Caption Entry No.");
+      WriteBufferToFile(NewFileName, TmpLine[1], Progressbar, 75);
+    END;
+
+    PROCEDURE FileDeleteCaptions@6(VAR FileName@1000 : Text;VAR LanguageFilter@1001 : Code[1024];VAR SetModifiedFlag@1002 : Boolean;VAR NewFileName@1003 : Text);
+    VAR
+      ImExportMgt@1004 : Codeunit 11102043;
+    BEGIN
+      IF ImExportMgt.IsObjectFile(FileName) THEN
+        ObjectFileDeleteCaptions(FileName, LanguageFilter, SetModifiedFlag, NewFileName)
+      ELSE
+        TranslationFileDeleteCaptions(FileName, LanguageFilter, NewFileName);
+    END;
+
+    LOCAL PROCEDURE ObjectFileDeleteCaptions@7(VAR FileName@1000 : Text;VAR LanguageFilter@1001 : Code[1024];VAR SetModifiedFlag@1002 : Boolean;VAR NewFileName@1003 : Text);
+    VAR
+      TmpCALHistoryObject@1004 : TEMPORARY Record 11102052;
+      TmpCALHistoryLine@1005 : TEMPORARY Record 11102053;
+      TmpCALHistoryLine2@1006 : ARRAY [2] OF TEMPORARY Record 11102053;
+      Buffer@1007 : TEMPORARY Record 11102068;
+      TmpLine@1008 : ARRAY [2] OF TEMPORARY Record 11102068;
+      TmpObject@1009 : TEMPORARY Record 2000000001;
+      Progressbar@1010 : Codeunit 11102044;
+      SourceControl@1011 : Codeunit 11102050;
+      TranslationMgt@1012 : Codeunit 11102051;
+      oFile@1013 : File;
+      StartDate@1014 : Date;
+      StartTime@1015 : Time;
+      ctDeletingCaptions@1016 : TextConst 'DEU=Deleting captions...;ENU=Deleting captions...;ESP=Deleting captions...;FRA=Deleting captions...;NLD=Captions verwijderen...;DEA=Deleting captions...';
+    BEGIN
+      Progressbar.Open(ctDeletingCaptions, 1);
+      GetCaptionsFromObjectFile(FileName, Buffer, TmpCALHistoryObject, TmpCALHistoryLine, Progressbar, 0, 80);
+      RemoveLanguagesFromBuffer(Buffer, LanguageFilter);
+
+      StartDate := WORKDATE;
+      StartTime := TIME;
+
+      oFile.WRITEMODE(TRUE);
+      oFile.TEXTMODE(TRUE);
+      oFile.CREATE(NewFileName);
+
+      Progressbar.BarSize := TmpCALHistoryObject.COUNT;
+      Progressbar.UseRange(80, 100);
+
+      IF TmpCALHistoryObject.FINDSET THEN
+        REPEAT
+
+          TmpCALHistoryObject.FillObjectFields(TmpObject);
+          Progressbar.Text1Object := TmpObject;
+          Progressbar.AddToBar(1);
+
+          TmpLine[1].RESET;
+          TmpLine[1].DELETEALL;
+          TranslationMgt.FinalizeBuffer(Buffer, TmpLine, TmpCALHistoryObject."Object Type", TmpCALHistoryObject."Object No.");
+          TranslationMgt.FillCALLineBuffer(TmpCALHistoryLine, TmpCALHistoryLine2[1], TmpCALHistoryObject."Entry No.");
+
+          TmpLine[1].RESET;
+          TmpLine[1].SETCURRENTKEY("Object Type", "Object No.", "Caption Entry No.");
+          TmpLine[1].SETRANGE("Object Type", TmpCALHistoryObject."Object Type");
+          TmpLine[1].SETRANGE("Object No.", TmpCALHistoryObject."Object No.");
+          TmpLine[1].SETRANGE(Captions, TRUE);
+          IF TmpLine[1].FINDSET THEN
+            REPEAT
+              TranslationMgt.WriteLineToCAL(TmpLine, TmpCALHistoryLine2);
+              TmpLine[1].SETFILTER("Caption Entry No.", '>%1', TmpLine[1]."Caption Entry No.");
+            UNTIL TmpLine[1].NEXT = 0;
+
+          TmpCALHistoryLine2[1].RESET;
+          IF SetModifiedFlag THEN
+            SourceControl.SetModifyFlagInHistoryLines(TmpCALHistoryLine2[1], StartDate, StartTime);
+          SourceControl.AppendHistoryLinesToFile(oFile, TmpCALHistoryLine2[1]);
+
+        UNTIL TmpCALHistoryObject.NEXT = 0;
+
+      Progressbar.Close;
+
+      oFile.CLOSE;
+    END;
+
+    LOCAL PROCEDURE TranslationFileDeleteCaptions@8(VAR FileName@1000 : Text;VAR LanguageFilter@1001 : Code[1024];VAR NewFileName@1002 : Text);
+    VAR
+      Buffer@1003 : TEMPORARY Record 11102068;
+      Progressbar@1004 : Codeunit 11102044;
+      ctDeletingCaptions@1005 : TextConst 'DEU=Deleting captions...;ENU=Deleting captions...;ESP=Deleting captions...;FRA=Deleting captions...;NLD=Captions verwijderen...;DEA=Deleting captions...';
+    BEGIN
+      Progressbar.Open(ctDeletingCaptions, 1);
+
+      GetCaptionsFromTranslationFile(FileName, Buffer, Progressbar, 0, 50);
+      RemoveLanguagesFromBuffer(Buffer, LanguageFilter);
+      WriteBufferToFile(NewFileName, Buffer, Progressbar, 50);
+
+      Progressbar.Close;
+    END;
+
+    PROCEDURE FileCreateTranslationFile@9(VAR FileName@1000 : Text;VAR LanguageFilter@1001 : Code[1024];VAR NewFileName@1002 : Text);
+    VAR
+      TmpCALHistoryObject@1003 : TEMPORARY Record 11102052;
+      TmpCALHistoryLine@1004 : TEMPORARY Record 11102053;
+      Buffer@1005 : TEMPORARY Record 11102068;
+      Progressbar@1006 : Codeunit 11102044;
+      ctCreatingTranslationFile@1007 : TextConst 'DEU=Creating translation file...;ENU=Creating translation file...;ESP=Creating translation file...;FRA=Creating translation file...;NLD=Vertaalbestand aanmaken...;DEA=Creating translation file...';
+    BEGIN
+      Progressbar.Open(ctCreatingTranslationFile, 1);
+
+      GetCaptionsFromObjectFile(FileName, Buffer, TmpCALHistoryObject, TmpCALHistoryLine, Progressbar, 0, 90);
+      KeepLanguagesFromBuffer(Buffer, LanguageFilter);
+      WriteBufferToFile(NewFileName, Buffer, Progressbar, 90);
+
+      Progressbar.Close;
+    END;
+
+    LOCAL PROCEDURE GetCaptionsFromCaptionsFile@10(VAR FileName@1000 : Text;VAR CaptionsBuffer@1001 : TEMPORARY Record 11102068;Progressbar@1002 : Codeunit 11102044;ProgressFrom@1003 : Integer;ProgressTill@1004 : Integer);
+    VAR
+      TmpCALHistoryObject@1005 : TEMPORARY Record 11102052;
+      TmpCALHistoryLine@1006 : TEMPORARY Record 11102053;
+      ImExportMgt@1007 : Codeunit 11102043;
+    BEGIN
+      IF ImExportMgt.IsObjectFile(FileName) THEN
+        GetCaptionsFromObjectFile(
+          FileName, CaptionsBuffer, TmpCALHistoryObject, TmpCALHistoryLine, Progressbar, ProgressFrom, ProgressTill)
+      ELSE
+        GetCaptionsFromTranslationFile(FileName, CaptionsBuffer, Progressbar, ProgressFrom, ProgressTill);
+    END;
+
+    LOCAL PROCEDURE GetCaptionsFromObjectFile@11(VAR FileName@1000 : Text;VAR Buffer@1001 : TEMPORARY Record 11102068;VAR TmpCALHistoryObject@1002 : TEMPORARY Record 11102052;VAR TmpCALHistoryLine@1003 : TEMPORARY Record 11102053;VAR Progressbar@1004 : Codeunit 11102044;ProgressFrom@1005 : Integer;ProgressTill@1006 : Integer);
+    VAR
+      TmpCALHistoryLine2@1007 : TEMPORARY Record 11102053;
+      TmpObject@1008 : TEMPORARY Record 2000000001;
+      ImExportMgt@1009 : Codeunit 11102043;
+      SourceControl@1010 : Codeunit 11102050;
+      TranslationMgt@1011 : Codeunit 11102051;
+    BEGIN
+      Progressbar.BarSize := ImExportMgt.LengthOfFile(FileName);
+      Progressbar.UseRange(ProgressFrom, ProgressFrom + ProgressTill * 0.75);
+
+      SourceControl.ImportTextFile2(FileName, 1, Progressbar, 0, TmpCALHistoryObject, TmpCALHistoryLine, TRUE);
+
+      Progressbar.BarSize := TmpCALHistoryObject.COUNT;
+      Progressbar.UseRange(ProgressFrom + ProgressTill * 0.75, ProgressTill);
+      IF TmpCALHistoryObject.FINDSET THEN
+        REPEAT
+
+          TmpCALHistoryObject.FillObjectFields(TmpObject);
+          Progressbar.Text1Object := TmpObject;
+          Progressbar.AddToBar(1);
+
+          TmpCALHistoryLine2.RESET;
+          TmpCALHistoryLine2.DELETEALL;
+
+          TmpCALHistoryLine.RESET;
+          TmpCALHistoryLine.SETRANGE("Entry No.", TmpCALHistoryObject."Entry No.");
+          IF TmpCALHistoryLine.FINDSET THEN
+            REPEAT
+              TmpCALHistoryLine2 := TmpCALHistoryLine;
+              TmpCALHistoryLine2.INSERT;
+            UNTIL TmpCALHistoryLine.NEXT = 0;
+
+          TranslationMgt.ImportCALLines(TmpObject, TmpCALHistoryLine2, Buffer, TRUE);
+
+        UNTIL TmpCALHistoryObject.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE GetCaptionsFromTranslationFile@12(VAR FileName@1000 : Text;VAR Buffer@1001 : TEMPORARY Record 11102068;VAR Progressbar@1002 : Codeunit 11102044;ProgressFrom@1003 : Integer;ProgressTill@1004 : Integer);
+    VAR
+      oFile@1005 : File;
+      TranslationLine@1006 : Text[1024];
+      SplitPos@1007 : Integer;
+    BEGIN
+      oFile.TEXTMODE(TRUE);
+      oFile.OPEN(FileName);
+
+      Progressbar.BarSize := oFile.LEN;
+      Progressbar.UseRange(ProgressFrom, ProgressTill);
+
+      WHILE oFile.POS < oFile.LEN DO BEGIN
+
+        oFile.READ(TranslationLine);
+
+        Progressbar.AddToBar(STRLEN(TranslationLine));
+
+        SplitPos := STRPOS(TranslationLine, ':');
+        Buffer."Entry No." += 1;
+        Buffer."Translate File Line" := COPYSTR(TranslationLine, 1, SplitPos);
+        Buffer.FillCaption(COPYSTR(TranslationLine, SplitPos + 1));
+        Buffer.INSERT;
+
+      END;
+
+      oFile.CLOSE;
+    END;
+
+    LOCAL PROCEDURE WriteBufferToFile@13(VAR FileName@1000 : Text;VAR Buffer@1001 : TEMPORARY Record 11102068;VAR Progressbar@1002 : Codeunit 11102044;ProgressbarFrom@1003 : Integer);
+    VAR
+      oFile@1004 : File;
+    BEGIN
+      oFile.WRITEMODE(TRUE);
+      oFile.TEXTMODE(TRUE);
+      oFile.CREATE(FileName);
+
+      Buffer.SETFILTER("Caption 1", '<>%1', '');
+
+      Progressbar.BarSize := Buffer.COUNT;
+      Progressbar.UseRange(ProgressbarFrom, 100);
+
+      IF Buffer.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+          IF COPYSTR(Buffer."Translate File Line", STRLEN(Buffer."Translate File Line") - 5) = '-L999:' THEN
+            oFile.WRITE(Buffer."Translate File Line" + Buffer.TotalCaption);
+        UNTIL Buffer.NEXT = 0;
+
+      oFile.CLOSE;
+    END;
+
+    LOCAL PROCEDURE RemoveLanguagesFromBuffer@14(VAR Buffer@1000 : TEMPORARY Record 11102068;VAR LanguageFilter@1001 : Code[1024]);
+    VAR
+      WindowsLanguage2@1002 : Record 2000000045;
+    BEGIN
+      IF LanguageFilter = '' THEN BEGIN
+        Buffer.SETFILTER("Translate File Line", '*-A*');
+        Buffer.SETFILTER("Caption 1", '<>%1', '');
+        IF Buffer.FINDSET THEN
+          REPEAT
+            Buffer.FillCaption('');
+            Buffer.MODIFY;
+          UNTIL Buffer.NEXT = 0;
+      END ELSE BEGIN
+        WindowsLanguage2.SETFILTER("Abbreviated Name", LanguageFilter);
+        IF WindowsLanguage2.FINDSET THEN
+          REPEAT
+            Buffer.SETFILTER("Translate File Line", '*-A' + FORMAT(WindowsLanguage2."Language ID") + '-*');
+            Buffer.SETFILTER("Caption 1", '<>%1', '');
+            IF Buffer.FINDSET THEN
+              REPEAT
+                Buffer.FillCaption('');
+                Buffer.MODIFY;
+              UNTIL Buffer.NEXT = 0;
+          UNTIL WindowsLanguage2.NEXT = 0;
+      END;
+      Buffer.RESET;
+    END;
+
+    LOCAL PROCEDURE KeepLanguagesFromBuffer@15(VAR Buffer@1000 : TEMPORARY Record 11102068;VAR LanguageFilter@1001 : Code[1024]);
+    VAR
+      TmpWindowsLanguage@1002 : TEMPORARY Record 2000000045;
+      WindowsLanguage2@1003 : Record 2000000045;
+      TranslationMgt@1004 : Codeunit 11102051;
+    BEGIN
+      IF LanguageFilter <> '' THEN BEGIN
+        WindowsLanguage2.SETFILTER("Abbreviated Name", LanguageFilter);
+        IF WindowsLanguage2.FINDSET THEN
+          REPEAT
+            TmpWindowsLanguage := WindowsLanguage2;
+            TmpWindowsLanguage.INSERT;
+          UNTIL WindowsLanguage2.NEXT = 0;
+
+        IF Buffer.FINDSET THEN
+          REPEAT
+            IF NOT TmpWindowsLanguage.GET(TranslationMgt.LanguageIdOfLine(Buffer."Translate File Line")) THEN BEGIN
+              Buffer.FillCaption('');
+              Buffer.MODIFY;
+            END;
+          UNTIL Buffer.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE AddMissingCaptions@16(VAR FileName@1000 : Text;VAR NewFileName@1001 : Text;SetModifiedFlag@1002 : Boolean);
+    VAR
+      Setup@1003 : Record 11102035;
+      TmpCALHistoryObject@1004 : TEMPORARY Record 11102052;
+      TmpCALHistoryLine@1005 : TEMPORARY Record 11102053;
+      TmpCALHistoryLine2@1006 : ARRAY [2] OF TEMPORARY Record 11102053;
+      Buffer@1007 : TEMPORARY Record 11102068;
+      TmpCaption@1008 : ARRAY [2] OF TEMPORARY Record 11102068;
+      TmpLine@1009 : ARRAY [2] OF TEMPORARY Record 11102068;
+      TmpObject@1010 : TEMPORARY Record 2000000001;
+      TmpWindowsLanguage@1011 : TEMPORARY Record 2000000045;
+      WindowsLanguage2@1012 : Record 2000000045;
+      Progressbar@1013 : Codeunit 11102044;
+      SourceControl@1014 : Codeunit 11102050;
+      TranslationMgt@1015 : Codeunit 11102051;
+      oFile@1016 : File;
+      StartDate@1017 : Date;
+      StartTime@1018 : Time;
+      EntryNo@1019 : Integer;
+      ctAddMissingCaptions@1020 : TextConst 'DEU=Add missing captions...;ENU=Add missing captions...;ESP=Add missing captions...;FRA=Add missing captions...;NLD=Ontbrekende captions toevoegen...;DEA=Add missing captions...';
+    BEGIN
+      Progressbar.Open(ctAddMissingCaptions, 1);
+      GetCaptionsFromObjectFile(FileName, Buffer, TmpCALHistoryObject, TmpCALHistoryLine, Progressbar, 0, 60);
+
+      Setup.CustomGet;
+      Setup.TESTFIELD("Mandatory Languages");
+      WindowsLanguage2.SETFILTER("Abbreviated Name", Setup."Mandatory Languages");
+
+      IF UPPERCASE(Setup.PersonalCode) = 'REIJER' THEN
+        WindowsLanguage2.SETFILTER("Abbreviated Name", 'DEU|ESP|FRA|DEA');
+
+      IF WindowsLanguage2.FINDSET THEN
+        REPEAT
+          TmpWindowsLanguage := WindowsLanguage2;
+          TmpWindowsLanguage.INSERT;
+        UNTIL WindowsLanguage2.NEXT = 0;
+
+      Progressbar.BarSize := TmpCALHistoryObject.COUNT;
+      Progressbar.UseRange(60, 80);
+      IF TmpCALHistoryObject.FINDSET THEN
+        REPEAT
+          TmpCALHistoryObject.FillObjectFields(TmpObject);
+          Progressbar.Text1Object := TmpObject;
+          Progressbar.AddToBar(1);
+
+          TmpLine[1].RESET;
+          TmpLine[1].DELETEALL;
+          TranslationMgt.FinalizeBuffer(Buffer, TmpLine, TmpCALHistoryObject."Object Type", TmpCALHistoryObject."Object No.");
+
+          TmpLine[1].SETRANGE("Object Type", TmpCALHistoryObject."Object Type");
+          TmpLine[1].SETRANGE("Object No.", TmpCALHistoryObject."Object No.");
+          TmpLine[1].SETRANGE("Language Id", TranslationMgt.BaseLanguage);
+          IF TmpLine[1].FINDSET THEN
+            REPEAT
+              IF TmpWindowsLanguage.FINDSET THEN
+                REPEAT
+                  EntryNo += 1;
+                  TmpCaption[1] := TmpLine[1];
+                  TmpCaption[1]."Entry No." := EntryNo;
+                  TmpCaption[1]."Language Id" := TmpWindowsLanguage."Language ID";
+                  TmpCaption[1].INSERT;
+                UNTIL TmpWindowsLanguage.NEXT = 0;
+
+            UNTIL TmpLine[1].NEXT = 0;
+
+        UNTIL TmpCALHistoryObject.NEXT = 0;
+
+      StartDate := WORKDATE;
+      StartTime := TIME;
+
+      oFile.TEXTMODE(TRUE);
+      oFile.CREATE(NewFileName);
+
+      Progressbar.BarSize := TmpCALHistoryObject.COUNT;
+      Progressbar.UseRange(80, 100);
+
+      IF TmpCALHistoryObject.FINDSET THEN
+        REPEAT
+
+          TmpCALHistoryObject.FillObjectFields(TmpObject);
+          Progressbar.Text1Object := TmpObject;
+          Progressbar.AddToBar(1);
+
+          TmpLine[1].RESET;
+          TmpLine[1].DELETEALL;
+
+          TranslationMgt.FinalizeBuffer(Buffer, TmpLine, TmpCALHistoryObject."Object Type", TmpCALHistoryObject."Object No.");
+
+          TmpCaption[1].RESET;
+          TmpCaption[1].SETCURRENTKEY("Object Type", "Object No.");
+          TmpCaption[1].SETRANGE("Object Type", TmpCALHistoryObject."Object Type");
+          TmpCaption[1].SETRANGE("Object No.", TmpCALHistoryObject."Object No.");
+          TranslationMgt.MergeCaptionBuffers(TmpLine[1], TmpCaption[1], 1);
+
+          TranslationMgt.FillCALLineBuffer(TmpCALHistoryLine, TmpCALHistoryLine2[1], TmpCALHistoryObject."Entry No.");
+
+          TmpLine[1].RESET;
+          TmpLine[1].SETCURRENTKEY("Object Type", "Object No.", "Caption Entry No.");
+          TmpLine[1].SETRANGE("Object Type", TmpCALHistoryObject."Object Type");
+          TmpLine[1].SETRANGE("Object No.", TmpCALHistoryObject."Object No.");
+          TmpLine[1].SETRANGE(Captions, TRUE);
+          IF TmpLine[1].FINDSET THEN
+            REPEAT
+              TranslationMgt.WriteLineToCAL(TmpLine, TmpCALHistoryLine2);
+              TmpLine[1].SETFILTER("Caption Entry No.", '>%1', TmpLine[1]."Caption Entry No.");
+            UNTIL TmpLine[1].NEXT = 0;
+
+          TmpCALHistoryLine2[1].RESET;
+          IF SetModifiedFlag THEN
+            SourceControl.SetModifyFlagInHistoryLines(TmpCALHistoryLine2[1], StartDate, StartTime);
+          SourceControl.AppendHistoryLinesToFile(oFile, TmpCALHistoryLine2[1]);
+
+        UNTIL TmpCALHistoryObject.NEXT = 0;
+
+      Progressbar.Close;
+      oFile.CLOSE;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,360 @@
+OBJECT Report 50012 Import Transfer Order
+{
+  OBJECT-PROPERTIES
+  {
+    Date=29/03/18;
+    Time=[ 9:21:54 AM];
+    Modified=Yes;
+    Version List=TM0001;
+  }
+  PROPERTIES
+  {
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  IF ServerFileName = '' THEN
+                    ERROR(Text001);
+
+                  IF ((FromLocation = '') OR (ToLocation = '')) AND
+                     (TransferOrderNo = '')
+                  THEN
+                    ERROR(Text003);
+
+                  ModistSetup.GET;
+                  ModistSetup.TESTFIELD("No Inventory Reason Code");
+                  ModistSetup.TESTFIELD("Inventory Exist Reason Code");
+                  ModistSetup.TESTFIELD("Pending Trans. Recpt. Reason");
+                  ModistSetup.TESTFIELD("Pending Trans. Ship. Reason");
+                  ModistSetup.TESTFIELD("GAC No Inv. Reason Code");
+                  InventorySetup.GET;
+
+                  ExcelBuffer.RESET;
+                  ExcelBuffer.DELETEALL;
+                  ExcelBuffer.LOCKTABLE;
+                  ExcelBuffer.OpenBook(ServerFileName,SheetName);
+                  ExcelBuffer.ReadSheet;
+
+                  TmpTransferLine.RESET;
+                  TmpTransferLine.DELETEALL;
+                  TmpUnavailableStock.RESET;
+                  TmpUnavailableStock.DELETEALL;
+                  EntryNo := 1;
+
+                  ColNo := 1;
+                  RowNo := 2;
+
+                  Window.OPEN(
+                    'Analyzing Data..............' + '@1@@@@@@@@@@@@@@@@@@@@@@@@@\' +
+                    'Creating Transfers Header...' + '@2@@@@@@@@@@@@@@@@@@@@@@@@@\' +
+                    'Creating Transfers Lines....' + '@3@@@@@@@@@@@@@@@@@@@@@@@@@\');
+
+                  Window.UPDATE(1,0);
+                  Window.UPDATE(2,0);
+                  Window.UPDATE(3,0);
+                  TotalRecNo := ExcelBuffer.COUNT;
+                  ProgressBar := 0;
+                  ProgressBar2 := 0;
+                  ProgressBar3 := 0;
+
+                  IF TransferOrderNo <> '' THEN
+                    GetTransferOrder
+                  ELSE
+                    CreateTransferOrder;
+
+                  ExcelBuffer.RESET;
+                  ExcelBuffer.SETFILTER("Row No.",'>=%1',RowNo);
+                  IF ExcelBuffer.FINDSET THEN BEGIN
+                    REPEAT
+                      ProgressBar += 1;
+                      Window.UPDATE(1,ROUND(ProgressBar / TotalRecNo * 10000,1));
+                      CASE TRUE OF
+                        ExcelBuffer."Column No." = 1: //SKU
+                          BEGIN
+                            ClearVars;
+                            TransferLine.INIT;
+                            TransferLine."Line No." := LineNo;
+                            TransferLine."Document No." := TransferHeader."No.";
+                            TransferLine.VALIDATE(SKU,ExcelBuffer."Cell Value as Text");
+                            GetItemStatus(TransferLine,InventoryFrom,InventoryTo,PendingTransferShipment,PendingTransferReceipt,GACInventory);
+                          END;
+                        ExcelBuffer."Column No." = 2: //Quantity
+                          BEGIN
+                            EVALUATE(Qty,ExcelBuffer."Cell Value as Text");
+                            IF Qty > InventoryFrom THEN
+                              CreateUnavailableStock(Qty,ModistSetup."No Inventory Reason Code",'',TransferLine."Transfer-from Code");
+                            IF Qty > GACInventory THEN
+                              CreateUnavailableStock(Qty,ModistSetup."GAC No Inv. Reason Code",'',TransferLine."Transfer-from Code");
+                            IF InventoryTo > 0 THEN
+                              CreateUnavailableStock(InventoryTo,ModistSetup."Inventory Exist Reason Code",'',TransferLine."Transfer-to Code");
+                            IF PendingTransferShipment > 0 THEN
+                              CreateUnavailableStock(PendingTransferShipment,ModistSetup."Pending Trans. Ship. Reason",PendingTransferShipmentDocNo,TransferLine."Transfer-from Code");
+                            IF PendingTransferReceipt > 0 THEN
+                              CreateUnavailableStock(PendingTransferReceipt,ModistSetup."Pending Trans. Recpt. Reason",PendingTransferReceiptDocNo,TransferLine."Transfer-to Code");
+                            IF NOT UnavailabeStockCreated THEN BEGIN
+                              TransferLine.VALIDATE(Quantity,Qty);
+                              TransferLine.INSERT(TRUE);
+                              LineNo += 10000;
+                            END;
+                          END;
+                      END;
+                    UNTIL ExcelBuffer.NEXT=0;
+                  END;
+                END;
+
+    OnPostReport=BEGIN
+                   Window.CLOSE;
+                   TmpUnavailableStock.RESET;
+                   IF NOT TmpUnavailableStock.ISEMPTY THEN
+                     PAGE.RUN(0,TmpUnavailableStock);
+                   MESSAGE(Text007,TransferHeader."No.");
+                 END;
+
+  }
+  DATASET
+  {
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+      { 1000000005;;Container;
+                  Name=ContentArea1;
+                  ContainerType=ContentArea }
+
+      { 1000000004;1;Group  ;
+                  Name=Options;
+                  GroupType=Group }
+
+      { 1000000002;2;Field  ;
+                  CaptionML=ENU=From Location;
+                  SourceExpr=FromLocation;
+                  TableRelation=Location;
+                  OnValidate=BEGIN
+                               VerifyLocations;
+                             END;
+                              }
+
+      { 1000000006;2;Field  ;
+                  CaptionML=ENU=To Location;
+                  SourceExpr=ToLocation;
+                  TableRelation=Location;
+                  OnValidate=BEGIN
+                               VerifyLocations;
+                             END;
+                              }
+
+      { 1000000003;2;Field  ;
+                  CaptionML=ENU=File Name;
+                  SourceExpr=ServerFileName;
+                  OnAssistEdit=BEGIN
+                                 ServerFileName := FileMgt.UploadFile(Text006,ExcelFileExtensionTok);
+                               END;
+                                }
+
+      { 1000000001;2;Field  ;
+                  CaptionML=ENU=Sheet Name;
+                  SourceExpr=SheetName;
+                  OnAssistEdit=BEGIN
+                                 IF ServerFileName = '' THEN
+                                   ERROR(Text001);
+                                 SheetName := ExcelBuffer.SelectSheetsName(ServerFileName);
+                               END;
+                                }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      TransferHeader@1000000019 : Record 5740;
+      TransferLine@1000000020 : Record 5741;
+      TransferLine2@1000000035 : Record 5741;
+      TmpTransferLine@1000000025 : TEMPORARY Record 5741;
+      Item@1000000004 : Record 27;
+      ExcelBuffer@1000000003 : TEMPORARY Record 370;
+      InventorySetup@1000000023 : Record 313;
+      TmpUnavailableStock@1000000030 : TEMPORARY Record 9087037;
+      ModistSetup@1000000032 : Record 50000;
+      ReasonCode@1000000033 : Record 231;
+      Location@1000000040 : Record 14;
+      FileMgt@1000000002 : Codeunit 419;
+      NoSeriesManagement@1000000022 : Codeunit 396;
+      AvailabletoPromise@1000000027 : Codeunit 5790;
+      GACWebServiceMgmt@1000000041 : Codeunit 50027;
+      ServerFileName@1000000007 : Text;
+      SheetName@1000000008 : Text;
+      FromLocation@1000000005 : Code[10];
+      ToLocation@1000000006 : Code[10];
+      TransferOrderNo@1000000021 : Code[20];
+      PendingTransferShipmentDocNo@1000000038 : Code[20];
+      PendingTransferReceiptDocNo@1000000039 : Code[20];
+      Qty@1000000026 : Decimal;
+      GACInventory@1000000042 : Decimal;
+      InventoryFrom@1000000028 : Decimal;
+      InventoryTo@1000000029 : Decimal;
+      PendingTransferShipment@1000000036 : Decimal;
+      PendingTransferReceipt@1000000037 : Decimal;
+      RowNo@1000000001 : Integer;
+      ColNo@1000000000 : Integer;
+      Text001@1000000011 : TextConst 'ENU=Please select Excel file to import.';
+      Text002@1000000012 : TextConst 'ENU=From & To Locations cannot be same';
+      Text003@1000000018 : TextConst 'ENU=From Location & To Location Must be specified';
+      Text006@1000000010 : TextConst 'ENU=Import Excel File';
+      Text007@1000000043 : TextConst 'ENU=Transfer Order No. %1 is created';
+      ExcelFileExtensionTok@1000000009 : TextConst '@@@={Locked};ENU=.xlsx';
+      ProgressBar@1000000014 : Integer;
+      ProgressBar2@1000000015 : Integer;
+      ProgressBar3@1000000016 : Integer;
+      TotalRecNo@1000000017 : Integer;
+      LineNo@1000000024 : Integer;
+      EntryNo@1000000034 : Integer;
+      UnavailabeStockCreated@1000000031 : Boolean;
+      Window@1000000013 : Dialog;
+
+    LOCAL PROCEDURE VerifyLocations@1000000000();
+    BEGIN
+      IF ((FromLocation <> '') AND (ToLocation <> '')) AND
+         (FromLocation = ToLocation)
+      THEN
+        ERROR(Text002);
+    END;
+
+    PROCEDURE SetTransferOrder@1000000008(pTransferHeader@1000000000 : Record 5740);
+    BEGIN
+      TransferOrderNo := pTransferHeader."No.";
+      FromLocation := pTransferHeader."Transfer-from Code";
+      ToLocation := pTransferHeader."Transfer-to Code";
+    END;
+
+    LOCAL PROCEDURE GetTransferOrder@1000000001();
+    BEGIN
+      TransferHeader.GET(TransferOrderNo);
+      TransferLine.RESET;
+      TransferLine.SETRANGE("Document No.",TransferHeader."No.");
+      IF TransferLine.FINDLAST THEN
+        LineNo := TransferLine."Line No." + 10000
+      ELSE
+        LineNo := 10000;
+    END;
+
+    LOCAL PROCEDURE CreateTransferOrder@1000000012();
+    BEGIN
+      TransferHeader.INIT;
+      TransferHeader.ClearTransferRoute;
+      TransferHeader."No." := NoSeriesManagement.GetNextNo3(InventorySetup."Transfer Order Nos.",TODAY,TRUE,FALSE);
+      TransferHeader.INSERT(TRUE);
+      TransferHeader.VALIDATE("Transfer-from Code",FromLocation);
+      TransferHeader.VALIDATE("Transfer-to Code",ToLocation);
+      TransferHeader.MODIFY(TRUE);
+
+      LineNo := 10000;
+    END;
+
+    LOCAL PROCEDURE InitItem@1000000004();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE GetItemInInventory@1043(pTransferLine@1000000000 : Record 5741;pFrom@1000000001 : Boolean) : Decimal;
+    VAR
+      Item@1001 : Record 27;
+    BEGIN
+      WITH Item DO BEGIN
+        GET(pTransferLine."Item No.");
+        IF TransferLine."Variant Code" <> '' THEN
+          SETFILTER("Variant Filter",pTransferLine."Variant Code");
+        IF pFrom THEN
+          SETFILTER("Location Filter",pTransferLine."Transfer-from Code")
+        ELSE
+          SETFILTER("Location Filter",pTransferLine."Transfer-to Code");
+        CALCFIELDS(Inventory);
+        EXIT(Inventory);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetItemStatus@1000000007(pTransferLine@1000000000 : Record 5741;VAR pInventoryFrom@1000000001 : Decimal;VAR pInventoryTo@1000000002 : Decimal;VAR pPendingTransferShipment@1000000003 : Decimal;VAR pPendingTransferReceipt@1000000004 : Decimal;VAR pGACInventory@1000000005 : Decimal);
+    BEGIN
+      WITH Item DO BEGIN
+        GET(pTransferLine."Item No.");
+        SETFILTER("Variant Filter",pTransferLine."Variant Code");
+        SETFILTER("Location Filter",pTransferLine."Transfer-from Code");
+        CALCFIELDS(Inventory,"Trans. Ord. Shipment (Qty.)");
+        pInventoryFrom := Inventory;
+        pPendingTransferShipment := "Trans. Ord. Shipment (Qty.)";
+        IF pPendingTransferShipment <> 0 THEN BEGIN
+          TransferLine2.SETCURRENTKEY("Transfer-from Code",Status,"Derived From Line No.","Item No.","Variant Code","Shortcut Dimension 1 Code","Shortcut Dimension 2 Code","Shipment Date","In-Transit Code");
+          TransferLine2.SETRANGE("Derived From Line No.",0);
+          TransferLine2.SETRANGE("Item No.","No.");
+          TransferLine2.SETRANGE("Variant Code",pTransferLine."Variant Code");
+          TransferLine2.SETRANGE("Transfer-from Code",pTransferLine."Transfer-from Code");
+          IF TransferLine2.FINDFIRST THEN
+            PendingTransferShipmentDocNo := TransferLine2."Document No.";
+        END;
+
+        SETFILTER("Location Filter",pTransferLine."Transfer-to Code");
+        CALCFIELDS(Inventory);
+        pInventoryTo := Inventory;
+        pPendingTransferReceipt := "Trans. Ord. Receipt (Qty.)";
+        IF pPendingTransferReceipt <> 0 THEN BEGIN
+          TransferLine2.SETCURRENTKEY("Transfer-to Code",Status,"Derived From Line No.","Item No.","Variant Code","Shortcut Dimension 1 Code","Shortcut Dimension 2 Code","Receipt Date","In-Transit Code");
+          TransferLine2.SETRANGE("Derived From Line No.",0);
+          TransferLine2.SETRANGE("Item No.","No.");
+          TransferLine2.SETRANGE("Variant Code",pTransferLine."Variant Code");
+          TransferLine2.SETRANGE("Transfer-to Code",pTransferLine."Transfer-from Code");
+          IF TransferLine2.FINDFIRST THEN
+            PendingTransferShipmentDocNo := TransferLine2."Document No.";
+          END;
+
+        CLEAR(GACWebServiceMgmt);
+        pGACInventory := GACWebServiceMgmt.GetGACItemInventory(pTransferLine."Item No.",pTransferLine."Variant Code",pTransferLine."Transfer-from Code");
+      END;
+    END;
+
+    PROCEDURE CreateUnavailableStock@1000000005(pQty@1000000000 : Decimal;pReasonCode@1000000001 : Code[10];pDocNo@1000000002 : Code[20];pLocationCode@1000000003 : Code[10]);
+    BEGIN
+      IF ReasonCode.Code <> pReasonCode THEN
+        ReasonCode.GET(pReasonCode);
+      TmpUnavailableStock.INIT;
+      TmpUnavailableStock."Entry No." := EntryNo;
+      TmpUnavailableStock."Item No." := TransferLine."Item No.";
+      TmpUnavailableStock."Variant Code" := TransferLine."Variant Code";
+      TmpUnavailableStock."Location Code" := pLocationCode;
+      TmpUnavailableStock.Quantity := pQty;
+      TmpUnavailableStock."Reason Code" := ReasonCode.Code;
+      TmpUnavailableStock.Remarks := ReasonCode.Description;
+      TmpUnavailableStock."Document Type" := TmpUnavailableStock."Document Type"::"Transfer Order";
+      TmpUnavailableStock."Document No." := pDocNo;
+      TmpUnavailableStock.INSERT;
+      EntryNo += 1;
+
+      IF NOT UnavailabeStockCreated THEN
+        UnavailabeStockCreated := ReasonCode."Transfer Upload Skip";
+    END;
+
+    LOCAL PROCEDURE ClearVars@1000000011();
+    BEGIN
+      InventoryFrom := 0;
+      InventoryTo := 0;
+      PendingTransferReceipt := 0;
+      PendingTransferShipment := 0;
+      GACInventory := 0;
+      PendingTransferReceiptDocNo := '';
+      PendingTransferShipmentDocNo := '';
+      UnavailabeStockCreated := FALSE;
+    END;
+
+    BEGIN
+    {
+      //DOC
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

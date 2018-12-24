@@ -1,0 +1,342 @@
+OBJECT Codeunit 9062591 AutoNAV Task Queue Dispatcher
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            NoOfAttempts@1000000001 : Integer;
+            MaxNoOfAttempts@1000000000 : Integer;
+          BEGIN
+            AutoNavTaskQueue.SETRANGE("Server Instance ID",SERVICEINSTANCEID);
+            AutoNavTaskQueue.SETRANGE("Session ID",SESSIONID);
+            AutoNavTaskQueue.LOCKTABLE;
+            MaxNoOfAttempts := 10;
+            WHILE (NoOfAttempts < MaxNoOfAttempts) AND NOT TryFindFirstAutoNavTaskQueue(AutoNavTaskQueue) DO BEGIN
+              COMMIT;
+              NoOfAttempts := NoOfAttempts + 1;
+              SLEEP(2000);
+              AutoNavTaskQueue.LOCKTABLE;
+            END;
+            IF NoOfAttempts >= MaxNoOfAttempts THEN BEGIN
+              COMMIT;
+              EXIT;
+            END;
+            AutoNavTaskQueue.UpdateHeartbeat;
+            COMMIT;
+
+            IF AdjustAutoNavTasks THEN; // May encounter a (dead-)lock.
+            COMMIT;
+
+            AutoNavTaskQueueLoop;
+
+            AutoNavTaskQueue.LOCKTABLE;
+            IF AutoNavTaskQueue.GET(AutoNavTaskQueue.Code) THEN BEGIN
+              AutoNavTaskQueue.ResetServiceValues;
+              AutoNavTaskQueue.MODIFY;
+              COMMIT;
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AutoNavTaskQueue@1000000000 : Record 9062733;
+      Text001@1000000003 : TextConst 'ENU=The job has been cancelled.;ENG=The job has been cancelled.';
+      Text002@1000000002 : TextConst 'ENU=The user process has terminated unexpectedly. Check the Windows Event Viewer or the Session Event table for more information.;ENG=The user process has terminated unexpectedly. Check the Windows Event Viewer or the Session Event table for more information.';
+      Text003@1000000001 : TextConst 'ENU=The job has timed out.;ENG=The job has timed out.';
+      AutoNavTaskLogEntry@1000000004 : Record 9062736;
+      AutoNavTaskLogToolkit@1000000005 : Codeunit 9062602;
+      tQueueLoopStarted@1000000006 : TextConst 'ENU=Queue loop has been started in company "%1".;ENG=Queue loop has been started in company "%1".';
+      tQueueLoopTriggered@1000000009 : TextConst 'ENU=Queue loop has been triggered in company "%1".;ENG=Queue loop has been triggered in company "%1".';
+      tTaskToHandleSearched@1000000007 : TextConst 'ENU=Search for task to handle returned: %1. Company: "%2".;ENG=Search for task to handle returned: %1. Company: "%2".';
+      tExecutingTask@1000000008 : TextConst 'ENU=Executing task. Company: "%1".;ENG=Executing task. Company: "%1".';
+
+    LOCAL PROCEDURE TryFindFirstAutoNavTaskQueue@14(VAR AutoNavTaskQueue@1000 : Record 9062733) : Boolean;
+    BEGIN
+      EXIT(AutoNavTaskQueue.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE AutoNavTaskQueueLoop@10();
+    BEGIN
+      AutoNavTaskLogToolkit.AddEntryForQueue(AutoNavTaskQueue, STRSUBSTNO(tQueueLoopStarted, COMPANYNAME()), AutoNavTaskLogEntry.Status::Debug);
+      WHILE AutoNavTaskQueue.Started DO BEGIN
+        AutoNavTaskLogToolkit.AddEntryForQueue(AutoNavTaskQueue, STRSUBSTNO(tQueueLoopTriggered, COMPANYNAME()), AutoNavTaskLogEntry.Status::Debug);
+        HandleRequest;
+        COMMIT;
+        AutoNavTaskQueue.LOCKTABLE;
+        IF NOT AutoNavTaskQueue.GET(AutoNavTaskQueue.Code) THEN
+          EXIT;
+        IF NOT AutoNavTaskQueue.Started THEN
+          EXIT;
+        IF NOT (AutoNavTaskQueue."Session ID" = SESSIONID) THEN
+          EXIT;
+        AutoNavTaskQueue.UpdateHeartbeat;
+        COMMIT;
+        SLEEP(10000);
+      END;
+    END;
+
+    LOCAL PROCEDURE HandleRequest@6();
+    VAR
+      AutoNavTask@1000 : Record 9062734;
+      AutoNavTaskLogEntryNo@1002 : Integer;
+      MoreRequests@1006 : Boolean;
+    BEGIN
+      MoreRequests := GetNextRequest(AutoNavTask);  // locks table
+      AutoNavTaskLogToolkit.AddEntryForTask(AutoNavTask, STRSUBSTNO(tTaskToHandleSearched, MoreRequests, COMPANYNAME()), AutoNavTaskLogEntry.Status::Debug);
+
+      WHILE AutoNavTaskQueue.Started AND MoreRequests DO BEGIN
+        AutoNavTaskLogEntryNo := InsertLogEntry(AutoNavTask);
+
+        IF RunRequest(AutoNavTask) THEN
+          AutoNavTask.CleanupAfterExecution
+        ELSE
+          IF AutoNavTask.Status = AutoNavTask.Status::Error THEN
+            AutoNavTask.HandleExecutionError;
+        COMMIT;
+        UpdateLogEntry(AutoNavTaskLogEntryNo,AutoNavTask);
+        COMMIT;
+
+        AutoNavTaskQueue.UpdateHeartbeat;
+        COMMIT;
+        MoreRequests := GetNextRequest(AutoNavTask);  // locks table
+      END;
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE GetNextRequest@5(VAR AutoNavTask@1000 : Record 9062734) : Boolean;
+    VAR
+      Found@1001 : Boolean;
+    BEGIN
+      AutoNavTask.LOCKTABLE;
+      AutoNavTask.SETCURRENTKEY("AutoNAV Task Queue Code", Priority);
+      AutoNavTask.SETRANGE("AutoNAV Task Queue Code", AutoNavTaskQueue.Code);
+      AutoNavTask.SETFILTER("Expiration Date/Time",'>%1|%2',CURRENTDATETIME,CREATEDATETIME(0D,0T));
+      AutoNavTask.SETFILTER("Earliest Start Date/Time",'<=%1',CURRENTDATETIME);
+      AutoNavTask.SETRANGE(Status,AutoNavTask.Status::Ready);
+      AutoNavTask.LOCKTABLE;
+      Found := TryFindNextAutoNavTask(AutoNavTask) AND (AutoNavTask.Status = AutoNavTask.Status::Ready);
+      IF Found THEN BEGIN
+        IF AutoNavTask."Recurring Job" THEN
+          AutoNavTask."Earliest Start Date/Time" := CalcNextRunTimeForRecurringTask(AutoNavTask,CURRENTDATETIME);
+        AutoNavTask.Status := AutoNavTask.Status::"In Process";
+        AutoNavTask.MODIFY;
+      END;
+      EXIT(Found);
+    END;
+
+    LOCAL PROCEDURE TryFindNextAutoNavTask@9(VAR AutoNavTask@1000 : Record 9062734) : Boolean;
+    BEGIN
+      EXIT(AutoNavTask.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE RunRequest@2(VAR AutoNavTask@1000 : Record 9062734) : Boolean;
+    VAR
+      EntryExists@1005 : Boolean;
+      SessionExists@1004 : Boolean;
+      TimedOut@1003 : Boolean;
+      T0@1002 : DateTime;
+      T1@1001 : DateTime;
+      WasSuccess@1006 : Boolean;
+    BEGIN
+      AutoNavTaskLogToolkit.AddEntryForTask(AutoNavTask, STRSUBSTNO(tExecutingTask, COMPANYNAME()), AutoNavTaskLogEntry.Status::Debug);
+      WORKDATE := TODAY;
+      STARTSESSION(AutoNavTask."User Session ID",CODEUNIT::"AutoNAV Task User Session",COMPANYNAME,AutoNavTask);
+      AutoNavTask.MODIFY;
+      COMMIT;
+      EntryExists := TRUE;
+      SessionExists := TRUE;
+      TimedOut := FALSE;
+      T0 := CURRENTDATETIME;
+      T1 := T0;
+      WHILE NOT TimedOut AND EntryExists AND SessionExists AND (AutoNavTask.Status = AutoNavTask.Status::"In Process") DO BEGIN
+        COMMIT;
+        SLEEP(1000);
+        AutoNavTask.LOCKTABLE;
+        EntryExists := AutoNavTask.GET(AutoNavTask."AutoNAV Task Queue Code", AutoNavTask.ID);
+        TimedOut := (CURRENTDATETIME - T1) DIV 1000 > AutoNavTask.GetTimeout;
+        IF NOT TimedOut AND
+           EntryExists AND (AutoNavTask.Status = AutoNavTask.Status::"In Process") AND (CURRENTDATETIME - T0 > 60000)
+        THEN BEGIN
+          SessionExists := UserSessionExists(AutoNavTask);
+          T0 := CURRENTDATETIME;
+        END;
+      END;
+      IF NOT TimedOut AND EntryExists AND SessionExists THEN
+        WasSuccess := AutoNavTask.Status <> AutoNavTask.Status::Error
+      ELSE BEGIN
+        WasSuccess := FALSE;
+        AutoNavTask.Status := AutoNavTask.Status::Error;
+        IF TimedOut THEN BEGIN
+          STOPSESSION(AutoNavTask."User Session ID",Text003);
+          AutoNavTask.SetErrorMessage(Text003)
+        END ELSE
+          IF NOT EntryExists THEN
+            AutoNavTask.SetErrorMessage(Text001)
+          ELSE
+            AutoNavTask.SetErrorMessage(Text002);
+      END;
+      IF (AutoNavTask.Status = AutoNavTask.Status::Error) AND (AutoNavTask."No. of Failures for Error" > 0) THEN
+      BEGIN
+        AutoNavTask."No. of Failures" += 1;
+        IF AutoNavTask."No. of Failures" < AutoNavTask."No. of Failures for Error" THEN
+          AutoNavTask.Status := AutoNavTask.Status::Ready;
+      END
+      ELSE
+        AutoNavTask."No. of Failures" := 0;
+      EXIT(WasSuccess);
+    END;
+
+    LOCAL PROCEDURE InsertLogEntry@7(VAR AutoNavTask@1000 : Record 9062734) : Integer;
+    VAR
+      AutoNavTaskLogEntry@1001 : Record 9062736;
+    BEGIN
+      CLEAR(AutoNavTaskLogEntry);
+      AutoNavTaskLogEntry.INIT;
+      AutoNavTaskLogEntry."AutoNAV Task ID" := AutoNavTask.ID;
+      AutoNavTaskLogEntry."User ID" := USERID;
+      AutoNavTaskLogEntry."Start Date/Time" := CURRENTDATETIME;
+      AutoNavTaskLogEntry."Object Type to Run" := AutoNavTask."Object Type to Run";
+      AutoNavTaskLogEntry."Object ID to Run" := AutoNavTask."Object ID to Run";
+      AutoNavTaskLogEntry.Description := AutoNavTask.Description;
+      AutoNavTaskLogEntry."AutoNAV Task Queue Code" := AutoNavTaskQueue.Code;
+      AutoNavTaskLogEntry.Status := AutoNavTaskLogEntry.Status::"In Process";
+      AutoNavTaskLogEntry."Processed by User ID" := USERID;
+      AutoNavTaskLogEntry.INSERT(TRUE);
+      EXIT(AutoNavTaskLogEntry."Entry No.");
+    END;
+
+    LOCAL PROCEDURE UpdateLogEntry@8(LogEntryNo@1000 : Integer;VAR AutoNavTask@1002 : Record 9062734);
+    VAR
+      AutoNavTaskLogEntry@1003 : Record 9062736;
+    BEGIN
+      AutoNavTaskLogEntry.LOCKTABLE;
+      IF AutoNavTaskLogEntry.GET(LogEntryNo) THEN BEGIN
+        AutoNavTaskLogEntry."End Date/Time" := CURRENTDATETIME;
+        IF AutoNavTask.Status = AutoNavTask.Status::Error THEN BEGIN
+          AutoNavTaskLogEntry.Status := AutoNavTaskLogEntry.Status::Error;
+          AutoNavTaskLogEntry.SetErrorMessage(AutoNavTask.GetErrorMessage);
+        END ELSE
+          AutoNavTaskLogEntry.Status := AutoNavTaskLogEntry.Status::Success;
+        AutoNavTaskLogEntry.MODIFY;
+      END;
+    END;
+
+    PROCEDURE CalcNextRunTimeForRecurringTask@1(VAR AutoNavTask@1000 : Record 9062734;StartingDateTime@1008 : DateTime) : DateTime;
+    VAR
+      NewRunDateTime@1002 : DateTime;
+    BEGIN
+      IF AutoNavTask."No. of Minutes between Runs" > 0 THEN
+        NewRunDateTime := StartingDateTime + 60000 * AutoNavTask."No. of Minutes between Runs"
+      ELSE
+        NewRunDateTime := CREATEDATETIME(DT2DATE(StartingDateTime) + 1,0T);
+
+      EXIT(CalcRunTimeForRecurringTask(AutoNavTask,NewRunDateTime));
+    END;
+
+    PROCEDURE CalcInitialRunTime@4(VAR AutoNavTask@1000 : Record 9062734;StartingDateTime@1008 : DateTime) : DateTime;
+    VAR
+      EarliestPossibleRunTime@1001 : DateTime;
+    BEGIN
+      IF (AutoNavTask."Earliest Start Date/Time" <> 0DT) AND (AutoNavTask."Earliest Start Date/Time" > StartingDateTime) THEN
+        EarliestPossibleRunTime := AutoNavTask."Earliest Start Date/Time"
+      ELSE
+        EarliestPossibleRunTime := StartingDateTime;
+
+      IF AutoNavTask."Recurring Job" THEN
+        EXIT(CalcRunTimeForRecurringTask(AutoNavTask,EarliestPossibleRunTime));
+
+      EXIT(EarliestPossibleRunTime);
+    END;
+
+    LOCAL PROCEDURE CalcRunTimeForRecurringTask@11(VAR AutoNavTask@1000 : Record 9062734;StartingDateTime@1008 : DateTime) : DateTime;
+    VAR
+      NewRunDateTime@1001 : DateTime;
+      RunOnDate@1003 : ARRAY [7] OF Boolean;
+      StartingWeekDay@1005 : Integer;
+      NoOfExtraDays@1004 : Integer;
+      NoOfDays@1007 : Integer;
+      Found@1006 : Boolean;
+    BEGIN
+      AutoNavTask.TESTFIELD("Recurring Job");
+      RunOnDate[7] := AutoNavTask."Run on Sundays";
+      RunOnDate[1] := AutoNavTask."Run on Mondays";
+      RunOnDate[2] := AutoNavTask."Run on Tuesdays";
+      RunOnDate[3] := AutoNavTask."Run on Wednesdays";
+      RunOnDate[4] := AutoNavTask."Run on Thursdays";
+      RunOnDate[5] := AutoNavTask."Run on Fridays";
+      RunOnDate[6] := AutoNavTask."Run on Saturdays";
+
+      NewRunDateTime := StartingDateTime;
+      NoOfDays := 0;
+      IF (AutoNavTask."Ending Time" <> 0T) AND (NewRunDateTime > AutoNavTask.GetEndingDateTime(NewRunDateTime)) THEN BEGIN
+        NewRunDateTime := AutoNavTask.GetStartingDateTime(NewRunDateTime);
+        NoOfDays := NoOfDays + 1;
+      END;
+
+      StartingWeekDay := DATE2DWY(DT2DATE(StartingDateTime),1);
+      Found := RunOnDate[(StartingWeekDay - 1 + NoOfDays) MOD 7 + 1];
+      WHILE NOT Found AND (NoOfExtraDays < 7) DO BEGIN
+        NoOfExtraDays := NoOfExtraDays + 1;
+        NoOfDays := NoOfDays + 1;
+        Found := RunOnDate[(StartingWeekDay - 1 + NoOfDays) MOD 7 + 1];
+      END;
+
+      IF (AutoNavTask."Starting Time" <> 0T) AND (NewRunDateTime < AutoNavTask.GetStartingDateTime(NewRunDateTime)) THEN
+        NewRunDateTime := AutoNavTask.GetStartingDateTime(NewRunDateTime);
+
+      IF (NoOfDays > 0) AND (NewRunDateTime > AutoNavTask.GetStartingDateTime(NewRunDateTime)) THEN
+        NewRunDateTime := AutoNavTask.GetStartingDateTime(NewRunDateTime);
+
+      IF (AutoNavTask."Starting Time" = 0T) AND (NoOfExtraDays > 0) AND (AutoNavTask."No. of Minutes between Runs" <> 0) THEN
+        NewRunDateTime := CREATEDATETIME(DT2DATE(NewRunDateTime),0T);
+
+      IF Found THEN
+        NewRunDateTime := CREATEDATETIME(DT2DATE(NewRunDateTime) + NoOfDays,DT2TIME(NewRunDateTime));
+
+      EXIT(NewRunDateTime);
+    END;
+
+    LOCAL PROCEDURE UserSessionExists@13(VAR AutoNavTask@1000 : Record 9062734) : Boolean;
+    VAR
+      ActiveSession@1001 : Record 2000000110;
+    BEGIN
+      ActiveSession.SETRANGE("Server Instance ID",AutoNavTaskQueue."Server Instance ID");
+      ActiveSession.SETRANGE("Session ID",AutoNavTask."User Session ID");
+      ActiveSession.SETRANGE("Client Type",ActiveSession."Client Type"::Background);
+      EXIT(NOT ActiveSession.ISEMPTY);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE AdjustAutoNavTasks@3();
+    VAR
+      AutoNavTask@1000 : Record 9062734;
+    BEGIN
+      WITH AutoNavTask DO BEGIN
+        SETFILTER("Expiration Date/Time",'>%1|%2',CURRENTDATETIME,CREATEDATETIME(0D,0T));
+        SETFILTER("Earliest Start Date/Time",'<=%1',CURRENTDATETIME);
+        SETFILTER("Ending Time",'<%1',DT2TIME(CURRENTDATETIME));
+        SETRANGE("Recurring Job",TRUE);
+        IF FINDSET(TRUE) THEN
+          REPEAT
+            "Earliest Start Date/Time" := CalcNextRunTimeForRecurringTask(AutoNavTask,CURRENTDATETIME);
+            MODIFY;
+          UNTIL NEXT = 0;
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.12 JH 17/12/2015 - Updated from standard
+      //DOC NA2016.15 JH 09/05/2016 - CfMD modifications
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,875 @@
+OBJECT Codeunit 11102082 OM - Change Field Options
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ExportFileName@1000 : Text;
+      SourceFileName@1001 : Text;
+      NoOfObjects@1002 : Integer;
+      RunType@1003 : 'Update in DB,Export,Update File';
+      UpdateData@1004 : Boolean;
+
+    PROCEDURE ChangeFieldOptions@1(VAR TableNo@1000 : Integer;VAR FieldNo2@1001 : Integer;OldOptions@1002 : Text;NewOptions@1003 : Text);
+    VAR
+      Setup@1004 : Record 11102035;
+      TmpSourceObject@1005 : TEMPORARY Record 11102052;
+      TmpCALHistoryLine@1006 : TEMPORARY Record 11102053;
+      TmpSourceLine@1007 : TEMPORARY Record 11102053;
+      ObjectLock@1008 : Record 11102054;
+      Object@1009 : Record 2000000001;
+      TmpObject@1010 : TEMPORARY Record 2000000001;
+      Progressbar@1011 : Codeunit 11102044;
+      WhereUsedMgt@1012 : Codeunit 11102045;
+      ObjectMgt@1013 : Codeunit 11102046;
+      SourceControl@1014 : Codeunit 11102050;
+      CheckCALHistory@1015 : Codeunit 11102063;
+      FileHandler@1016 : Codeunit 11102097;
+      oFile@1017 : File;
+      oSourceFile@1018 : File;
+      StartDate@1019 : Date;
+      StartTime@1020 : Time;
+      Directory@1021 : Text;
+      FileName@1022 : Text;
+      ctCALNotUpToDate@1023 : TextConst 'DEU=The where used objects are not up to date.\Update now?;ENU=The where used objects are not up to date.\Update now?;ESP=The where used objects are not up to date.\Update now?;FRA=The where used objects are not up to date.\Update now?;NLD=De waar-gebruikt objecten zijn niet bijgewerkt.\Nu bijwerken?;DEA=The where used objects are not up to date.\Update now?';
+      ctCheckingObjects@1024 : TextConst 'DEU=Checking objects...;ENU=Checking objects...;ESP=Checking objects...;FRA=Checking objects...;NLD=Objecten controleren...;DEA=Checking objects...';
+      ctCompilingObjects@1025 : TextConst 'DEU=Compiling objects...;ENU=Compiling objects...;ESP=Compiling objects...;FRA=Compiling objects...;NLD=Objecten compileren...;DEA=Compiling objects...';
+      ctExportingObjects@1026 : TextConst 'DEU=Exporting objects...;ENU=Exporting objects...;ESP=Exporting objects...;FRA=Exporting objects...;NLD=Objecten exporteren...;DEA=Exporting objects...';
+      ctNoFileNameSpecified@1027 : TextConst 'DEU=No file name specified.;ENU=No file name specified.;ESP=No file name specified.;FRA=No file name specified.;NLD=Geen bestandsnaam opgegeven.;DEA=No file name specified.';
+      ctSettingTimestamps@1028 : TextConst 'DEU=Setting timestamps...;ENU=Setting timestamps...;ESP=Setting timestamps...;FRA=Setting timestamps...;NLD=Tijdstempels zetten...;DEA=Setting timestamps...';
+      ctUpdateFileName@1029 : TextConst 'DEU=ChangeOptions.txt;ENU=ChangeOptions.txt;ESP=ChangeOptions.txt;FRA=ChangeOptions.txt;NLD=ChangeOptions.txt;DEA=ChangeOptions.txt';
+      ctUpdatingData@1030 : TextConst 'DEU=Updating data...;ENU=Updating data...;ESP=Updating data...;FRA=Updating data...;NLD=Data bijwerken...;DEA=Updating data...';
+      ctUpdatingObjects@1031 : TextConst 'DEU=Updating objects...;ENU=Updating objects...;ESP=Updating objects...;FRA=Updating objects...;NLD=Objecten bijwerken...;DEA=Updating objects...';
+      ctUpdatingOptions@1032 : TextConst 'DEU=Updating options...;ENU=Updating options...;ESP=Updating options...;FRA=Updating options...;NLD=Opties bijwerken...;DEA=Updating options...';
+    BEGIN
+      Setup.CustomGet;
+
+      StartDate := TODAY;
+      StartTime := TIME;
+
+      GetInvolvedObjects(TableNo, FieldNo2, TmpObject);
+
+      IF NOT CheckCALHistory.RunWithObjectRange(TmpObject) THEN BEGIN
+        IF NOT CONFIRM(ctCALNotUpToDate, TRUE) THEN
+          EXIT;
+        COMMIT;
+        WhereUsedMgt.UpdateObjects;
+      END;
+
+      NoOfObjects := TmpObject.COUNT;
+
+      CASE RunType OF
+
+        RunType::"Update in DB" :
+          BEGIN
+
+            Progressbar.Open(ctUpdatingOptions, 2);
+            IF UpdateData THEN
+              Progressbar.BarSize := (TmpObject.COUNT * 7) * 100
+            ELSE
+              Progressbar.BarSize := (TmpObject.COUNT * 4) * 100;
+
+            Directory := FileHandler.TempDirectory;
+            FileName := Directory + ctUpdateFileName;
+
+            Progressbar.Text1 := ctCheckingObjects;
+            IF TmpObject.FINDSET THEN
+              REPEAT
+
+                Progressbar.AddToBar(100);
+                Progressbar.Text2Object := TmpObject;
+
+                IF Object.GET(TmpObject.Type, '', TmpObject.ID) THEN
+                  IF NOT SourceControl.CheckObjectBeforeChanging(Object, Progressbar) THEN
+                    EXIT;
+
+                IF Setup."Lock Object at Design" THEN
+                  ObjectLock.InsertLock(TmpObject);
+
+              UNTIL TmpObject.NEXT = 0;
+
+            Progressbar.Text1 := ctUpdatingObjects;
+            IF TmpObject.FINDSET THEN
+              REPEAT
+
+                Progressbar.AddToBar(100);
+                Progressbar.Text2Object := TmpObject;
+
+                SourceControl.FillCALLineBufferWithLatest(TmpCALHistoryLine, TmpObject.Type, TmpObject.ID);
+
+                IF (TmpObject.Type = TmpObject.Type::Table) AND (TmpObject.ID = TableNo) THEN
+                  ChangeObject(TmpCALHistoryLine, FieldNo2, OldOptions, NewOptions);
+
+                IF EXISTS(FileName) THEN
+                  ERASE(FileName);
+                oFile.TEXTMODE(TRUE);
+                oFile.CREATE(FileName);
+
+                SourceControl.AppendHistoryLinesToFile(oFile, TmpCALHistoryLine);
+
+                oFile.CLOSE;
+
+                ObjectMgt.ImportObject(FileName);
+
+              UNTIL TmpObject.NEXT = 0;
+
+            Progressbar.Text1 := ctCompilingObjects;
+            IF TmpObject.FINDSET THEN
+              REPEAT
+                Progressbar.AddToBar(100);
+                Progressbar.Text2Object := TmpObject;
+                ObjectMgt.CompileObject(TmpObject);
+              UNTIL TmpObject.NEXT = 0;
+
+            Progressbar.Text1 := ctSettingTimestamps;
+            IF TmpObject.FINDSET THEN
+              REPEAT
+                Progressbar.AddToBar(100);
+                Progressbar.Text2Object := TmpObject;
+                Object.GET(TmpObject.Type, '', TmpObject.ID);
+                Object.Modified := TRUE;
+                Object.Date := StartDate;
+                Object.Time := StartTime;
+                ObjectMgt.UpdateObject(Object, FALSE);
+              UNTIL TmpObject.NEXT = 0;
+
+            IF UpdateData THEN BEGIN
+              Progressbar.Text1 := ctUpdatingData;
+              UpdateTableData(TableNo, FieldNo2, OldOptions, NewOptions, Progressbar);
+            END;
+
+            Progressbar.Close;
+
+          END;
+
+        RunType::Export :
+          BEGIN
+            IF ExportFileName = '' THEN
+              ERROR(ctNoFileNameSpecified);
+
+            oFile.TEXTMODE(TRUE);
+            oFile.CREATE(ExportFileName);
+
+            Progressbar.Open(ctExportingObjects, 2);
+            Progressbar.Text1 := ctUpdatingOptions;
+            Progressbar.BarSize := TmpObject.COUNT;
+
+            IF TmpObject.FINDSET THEN
+              REPEAT
+
+                Progressbar.Text2Object := TmpObject;
+                Progressbar.AddToBar(1);
+
+                IF NOT SourceControl.ConfirmObjectLock(Object) THEN
+                  EXIT;
+
+                COMMIT;
+                IF SourceControl.LatestHistoryIsOutdated(TmpObject) THEN
+                  SourceControl.AddObject(TmpObject, 0, FALSE, FALSE, 1, FALSE);
+
+                SourceControl.FillCALLineBufferWithLatest(TmpCALHistoryLine, TmpObject.Type, TmpObject.ID);
+
+                IF TmpObject.ID = TableNo THEN
+                  ChangeObject(TmpCALHistoryLine, FieldNo2, OldOptions, NewOptions);
+
+                SourceControl.AppendHistoryLinesToFile(oFile, TmpCALHistoryLine);
+
+              UNTIL TmpObject.NEXT = 0;
+            Progressbar.Close;
+            oFile.CLOSE;
+
+          END;
+
+        RunType::"Update File" :
+          BEGIN
+
+            IF SourceFileName = '' THEN
+              ERROR(ctNoFileNameSpecified);
+
+            IF ExportFileName = '' THEN
+              ERROR(ctNoFileNameSpecified);
+
+            oFile.TEXTMODE(TRUE);
+            oFile.CREATE(ExportFileName);
+
+            Progressbar.Open(ctExportingObjects, 1);
+            Progressbar.Text1 := ctUpdatingOptions;
+
+            oSourceFile.OPEN(SourceFileName);
+            Progressbar.BarSize := oSourceFile.LEN * 2;
+            oSourceFile.CLOSE;
+
+            SourceControl.ImportTextFile2(SourceFileName, 1, Progressbar, 0, TmpSourceObject, TmpSourceLine, TRUE);
+
+            Progressbar.BarSize := TmpSourceObject.COUNT * 2;
+            Progressbar.BarPosition := TmpSourceObject.COUNT;
+
+            IF TmpSourceObject.FINDSET THEN
+              REPEAT
+
+                TmpSourceObject.FillObjectFields(TmpObject);
+                Progressbar.Text1Object := TmpObject;
+                Progressbar.AddToBar(1);
+
+                TmpSourceLine.SETRANGE("Entry No.", TmpSourceObject."Entry No.");
+
+                IF TmpObject.ID = TableNo THEN
+                  ChangeObject(TmpSourceLine, FieldNo2, OldOptions, NewOptions);
+
+                TmpSourceLine.SETRANGE("Entry No.", TmpSourceObject."Entry No.");
+
+                SourceControl.AppendHistoryLinesToFile(oFile, TmpSourceLine);
+
+              UNTIL TmpSourceObject.NEXT = 0;
+            Progressbar.Close;
+            oFile.CLOSE;
+
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ChangeObject@2(VAR CALHistoryLine@1000 : Record 11102053;VAR FieldNo2@1001 : Integer;OldOptions@1002 : Text;NewOptions@1003 : Text);
+    VAR
+      CodeLine@1004 : Text;
+      FieldNoString@1005 : Text;
+      NewCaptionArray@1006 : ARRAY [1000] OF Text[250];
+      NewCaptionString@1007 : Text;
+      NewCodeLine@1008 : Text;
+      NewOptionArray@1009 : ARRAY [1000] OF Text[250];
+      OldCaptionArray@1010 : ARRAY [1000] OF Text[250];
+      OldOptionArray@1011 : ARRAY [1000] OF Text[250];
+      LanguageCode@1012 : Code[10];
+      CaptionsPos@1013 : Integer;
+      CurrFieldNo@1014 : Integer;
+      i@1015 : Integer;
+      NewOptionCounter@1016 : Integer;
+      OldCaptionCounter@1017 : Integer;
+      OldOptionCounter@1018 : Integer;
+      OldOptionDest@1019 : ARRAY [1000] OF Integer;
+      NewOptionAction@1020 : ARRAY [1000] OF ' ,Same,Moved,Deleted,Inserted,Renamed';
+      OldOptionAction@1021 : ARRAY [1000] OF ' ,Same,Moved,Deleted,Inserted,Renamed';
+      FieldOpen@1022 : Boolean;
+      FirstLine@1023 : Boolean;
+      LastLine@1024 : Boolean;
+    BEGIN
+      CalculateActionToApply(OldOptions, NewOptions, OldOptionAction, NewOptionAction, OldOptionDest);
+
+      FillOptionArray(OldOptions, OldOptionCounter, OldOptionArray);
+      FillOptionArray(NewOptions, NewOptionCounter, NewOptionArray);
+
+      IF SetRangeOnSection(CALHistoryLine, 'FIELDS') THEN BEGIN
+        CALHistoryLine.SETRANGE("Sub Line No.", 1);
+
+        IF CALHistoryLine.FINDSET THEN
+          REPEAT
+            IF CALHistoryLine.Code[5] = '{' THEN BEGIN
+              FieldOpen := FALSE;
+              FieldNoString := COPYSTR(CALHistoryLine.Code, 7);
+              IF STRPOS(FieldNoString, ';') > 0 THEN BEGIN
+                FieldNoString := DELCHR(DELSTR(FieldNoString, STRPOS(FieldNoString, ';')));
+                IF EVALUATE(CurrFieldNo, FieldNoString) THEN
+                  IF CurrFieldNo = FieldNo2 THEN
+                    FieldOpen := TRUE;
+              END;
+            END;
+
+            IF (CaptionsPos > 0) AND (FORMAT(CALHistoryLine.Code[53]) <> ' ') THEN
+              CaptionsPos := 0;
+
+            IF FieldOpen THEN BEGIN
+
+              IF COPYSTR(CALHistoryLine.Code, 52, 15) = 'OptionCaptionML' THEN
+                IF CALHistoryLine.Code[68] = '[' THEN
+                  CaptionsPos := 73
+                ELSE
+                  CaptionsPos := 72;
+
+              IF CaptionsPos > 0 THEN BEGIN
+
+                CodeLine := GetCodeLine(CALHistoryLine);
+
+                FirstLine := COPYSTR(CodeLine, 52, 15) = 'OptionCaptionML';
+                LanguageCode := COPYSTR(CodeLine, CaptionsPos - 4, 3);
+
+                IF (CodeLine[STRLEN(CodeLine)] = '}') OR (CaptionsPos = 72) THEN
+                  LastLine := TRUE
+                ELSE
+                  LastLine := COPYSTR(CodeLine, STRLEN(CodeLine) - 1) = '];';
+
+                NewCodeLine := COPYSTR(CodeLine, CaptionsPos);
+                NewCodeLine := DELCHR(NewCodeLine, '>', '];');
+                NewCodeLine := RemoveDoubleCharacters(NewCodeLine, ']');
+                IF NewCodeLine[1] = '"' THEN BEGIN
+                  NewCodeLine := DELCHR(NewCodeLine, '<>', '"');
+                  NewCodeLine := RemoveDoubleCharacters(NewCodeLine, '"');
+                END;
+
+                FillOptionArray(NewCodeLine, OldCaptionCounter, OldCaptionArray);
+                CLEAR(NewCaptionArray);
+
+                FOR i := 1 TO OldOptionCounter DO
+
+                  CASE OldOptionAction[i] OF
+
+                    OldOptionAction[i]::Same,
+                    OldOptionAction[i]::Renamed :
+                      IF OldCaptionArray[i] = OldOptionArray[i] THEN
+                        NewCaptionArray[i] := NewOptionArray[i]
+                      ELSE
+                        NewCaptionArray[i] := OldCaptionArray[i];
+
+                    OldOptionAction[i]::Moved :
+                      NewCaptionArray[i + OldOptionDest[i]] := OldCaptionArray[i];
+
+                  END;
+
+                NewCaptionString := '';
+                FOR i := 1 TO NewOptionCounter DO BEGIN
+                  CASE NewOptionAction[i] OF
+
+                    NewOptionAction[i]::Inserted :
+                      NewCaptionArray[i] := NewOptionArray[i];
+
+                  END;
+                  IF DELSTR(NewCaptionArray[i], 7) = '<empty' THEN
+                    NewCaptionArray[i] := '';
+
+                  IF i = 1 THEN
+                    NewCaptionString := NewCaptionArray[i]
+                  ELSE
+                    NewCaptionString += ',' + NewCaptionArray[i];
+                END;
+
+                NewCodeLine := DELSTR(CodeLine, 68);
+
+                IF FirstLine THEN
+                  NewCodeLine += '['
+                ELSE
+                  NewCodeLine += ' ';
+                NewCodeLine += LanguageCode + '="';
+
+                NewCaptionString := AddDoubleCharacters(NewCaptionString, '"');
+                NewCaptionString := AddDoubleCharacters(NewCaptionString, ']');
+                NewCodeLine += NewCaptionString + '"';
+                IF LastLine THEN
+                  NewCodeLine += ']';
+                IF CodeLine[STRLEN(CodeLine)] = '}' THEN
+                  NewCodeLine += ' }'
+                ELSE
+                  NewCodeLine += ';';
+
+                SetCodeLine(CALHistoryLine, NewCodeLine);
+
+              END;
+
+              IF COPYSTR(CALHistoryLine.Code, 52, 12) = 'OptionString' THEN BEGIN
+
+                CodeLine := GetCodeLine(CALHistoryLine);
+                NewCodeLine := DELSTR(CodeLine, 52) + 'OptionString=[' + AddDoubleCharacters(NewOptions, ']') + ']';
+                IF CodeLine[STRLEN(CodeLine)] = '}' THEN
+                  NewCodeLine += ' }'
+                ELSE
+                  NewCodeLine += ';';
+
+                SetCodeLine(CALHistoryLine, NewCodeLine);
+              END;
+
+            END;
+
+          UNTIL CALHistoryLine.NEXT = 0;
+
+      END;
+
+      CALHistoryLine.SETRANGE("Sub Line No.");
+    END;
+
+    LOCAL PROCEDURE UpdateTableData@3(VAR TableNo@1000 : Integer;VAR FieldNo2@1001 : Integer;OldOptions@1002 : Text;NewOptions@1003 : Text;VAR Progressbar@1004 : Codeunit 11102044);
+    VAR
+      TableMgt@1005 : Codeunit 11102053;
+    BEGIN
+      IF TableMgt.IsPrimaryKeyField(TableNo, FieldNo2) THEN
+        UpdateDataWithPrimaryKey(TableNo, FieldNo2, OldOptions, NewOptions)
+      ELSE
+        UpdateDataWithoutPrimaryKey(TableNo, FieldNo2, OldOptions, NewOptions, Progressbar);
+    END;
+
+    LOCAL PROCEDURE UpdateDataWithoutPrimaryKey@4(VAR TableNo@1000 : Integer;VAR FieldNo2@1001 : Integer;OldOptions@1002 : Text;NewOptions@1003 : Text;VAR Progressbar@1004 : Codeunit 11102044);
+    VAR
+      TableInformation@1005 : Record 2000000028;
+      Field@1006 : Record 2000000041;
+      RecRef@1007 : RecordRef;
+      FldRef@1008 : FieldRef;
+      FldRefValueInt@1009 : Integer;
+      i@1010 : Integer;
+      NoOfRecords@1011 : Integer;
+      OldOptionDest@1012 : ARRAY [1000] OF Integer;
+      RecordCounter@1013 : Integer;
+      NewOptionAction@1014 : ARRAY [1000] OF ' ,Same,Moved,Deleted,Inserted,Renamed';
+      OldOptionAction@1015 : ARRAY [1000] OF ' ,Same,Moved,Deleted,Inserted,Renamed';
+      LoopData@1016 : Boolean;
+    BEGIN
+      Field.GET(TableNo, FieldNo2);
+      IF Field.Class <> Field.Class::Normal THEN
+        EXIT;
+
+      CalculateActionToApply(OldOptions, NewOptions, OldOptionAction, NewOptionAction, OldOptionDest);
+
+      FOR i := 1 TO ARRAYLEN(OldOptionAction) DO
+        IF OldOptionAction[i] IN [OldOptionAction[i]::Deleted, OldOptionAction[i]::Moved] THEN
+          LoopData := TRUE;
+
+      IF LoopData THEN BEGIN
+
+        TableInformation.SETRANGE("Table No.", TableNo);
+        IF TableInformation.FINDSET THEN
+          REPEAT
+            RecRef.OPEN(TableNo, FALSE, TableInformation."Company Name");
+            NoOfRecords += RecRef.COUNT;
+            RecRef.CLOSE;
+          UNTIL TableInformation.NEXT = 0;
+
+        TableInformation.SETRANGE("Table No.", TableNo);
+        IF TableInformation.FINDSET THEN
+          REPEAT
+            RecRef.OPEN(TableNo, FALSE, TableInformation."Company Name");
+            IF RecRef.FINDSET THEN
+              REPEAT
+                RecordCounter += 1;
+                Progressbar.BarPosition(300 + ROUND((RecordCounter / NoOfRecords) * 300, 1));
+
+                FldRef := RecRef.FIELD(FieldNo2);
+
+                FldRefValueInt := FldRef.VALUE;
+
+                CASE OldOptionAction[FldRefValueInt + 1] OF
+
+                  OldOptionAction[FldRefValueInt + 1]::Moved :
+                    BEGIN
+                      FldRef.VALUE := FldRefValueInt + OldOptionDest[FldRefValueInt + 1];
+                      RecRef.MODIFY;
+                    END;
+
+                  OldOptionAction[FldRefValueInt + 1]::Deleted :
+                    BEGIN
+                      FldRef.VALUE := 0;
+                      RecRef.MODIFY;
+                    END;
+
+                END;
+
+              UNTIL RecRef.NEXT = 0;
+            RecRef.CLOSE;
+
+          UNTIL TableInformation.NEXT = 0;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateDataWithPrimaryKey@5(VAR TableNo@1000 : Integer;VAR FieldNo2@1001 : Integer;OldOptions@1002 : Text;NewOptions@1003 : Text);
+    VAR
+      TmpAction@1004 : TEMPORARY Record 11102048;
+      TmpActionField@1005 : TEMPORARY Record 11102049;
+      ActionMgt@1006 : Codeunit 11102038;
+    BEGIN
+      FillUpdateActions(TmpAction, TmpActionField, TableNo, FieldNo2, OldOptions, NewOptions);
+      ActionMgt.SetSkipConfirm(TRUE);
+      IF NOT TmpAction.ISEMPTY THEN
+        ActionMgt.Start(TmpAction, TmpActionField);
+    END;
+
+    PROCEDURE FillUpdateActions@6(VAR Actions@1000 : Record 11102048;VAR ActionField@1001 : Record 11102049;VAR TableNo@1002 : Integer;VAR FieldNo2@1003 : Integer;OldOptions@1004 : Text;NewOptions@1005 : Text);
+    VAR
+      Field@1006 : Record 2000000041;
+      TableMgt@1007 : Codeunit 11102053;
+      FldRefValueInt@1008 : Integer;
+      i@1009 : Integer;
+      OldOptionDest@1010 : ARRAY [1000] OF Integer;
+      NewOptionAction@1011 : ARRAY [1000] OF ' ,Same,Moved,Deleted,Inserted,Renamed';
+      OldOptionAction@1012 : ARRAY [1000] OF ' ,Same,Moved,Deleted,Inserted,Renamed';
+    BEGIN
+      Field.GET(TableNo, FieldNo2);
+      IF Field.Class <> Field.Class::Normal THEN
+        EXIT;
+
+      CalculateActionToApply(OldOptions, NewOptions, OldOptionAction, NewOptionAction, OldOptionDest);
+
+      FOR i := 1 TO ARRAYLEN(OldOptionAction) DO
+        IF OldOptionAction[i] IN [OldOptionAction[i]::Deleted, OldOptionAction[i]::Moved] THEN BEGIN
+
+          Actions.Type := Actions.Type::"Temporary";
+          Actions."Line No." += 10000;
+          IF TableMgt.IsPrimaryKeyField(TableNo, FieldNo2) THEN
+            Actions.VALIDATE("Action Type", Actions."Action Type"::"Rename Data")
+          ELSE
+            Actions.VALIDATE("Action Type", Actions."Action Type"::"Fill Fields");
+
+          Actions.VALIDATE("Object No.", TableNo);
+
+          Actions.Evaluate1FieldFilter(FieldNo2, FORMAT(i - 1));
+
+          Actions.Fields := Actions.Fields::Selected;
+          Actions.INSERT;
+
+          ActionField.Type := Actions.Type;
+          ActionField."Line No." := Actions."Line No.";
+          ActionField."Field No." := FieldNo2;
+          ActionField."Field Name" := Field.FieldName;
+          ActionField."Type Name" := Field."Type Name";
+          ActionField.Selected := TRUE;
+
+          CASE OldOptionAction[i] OF
+
+            OldOptionAction[FldRefValueInt + 1]::Moved :
+              ActionField.Value := FORMAT(i - 1 + OldOptionDest[i] + 1000);
+
+            OldOptionAction[FldRefValueInt + 1]::Deleted :
+              ActionField.Value := FORMAT(0);
+
+          END;
+
+          ActionField.INSERT;
+
+        END;
+
+      FOR i := 1 TO ARRAYLEN(OldOptionAction) DO
+        IF OldOptionAction[i] = OldOptionAction[i]::Moved THEN BEGIN
+
+          Actions.Type := Actions.Type::"Temporary";
+          Actions."Line No." += 10000;
+          IF TableMgt.IsPrimaryKeyField(TableNo, FieldNo2) THEN
+            Actions.VALIDATE("Action Type", Actions."Action Type"::"Rename Data")
+          ELSE
+            Actions.VALIDATE("Action Type", Actions."Action Type"::"Fill Fields");
+          Actions.VALIDATE("Object No.", TableNo);
+
+          Actions.Evaluate1FieldFilter(FieldNo2, FORMAT(i - 1 + OldOptionDest[i] + 1000));
+
+          Actions.Fields := Actions.Fields::Selected;
+          Actions.INSERT;
+
+          ActionField.Type := Actions.Type;
+          ActionField."Line No." := Actions."Line No.";
+          ActionField."Field No." := FieldNo2;
+          ActionField."Field Name" := Field.FieldName;
+          ActionField."Type Name" := Field."Type Name";
+          ActionField.Selected := TRUE;
+          ActionField.Value := FORMAT(i - 1 + OldOptionDest[i]);
+          ActionField.INSERT;
+
+        END;
+    END;
+
+    LOCAL PROCEDURE GetCodeLine@8(VAR CALHistoryLine@1000 : Record 11102053) ExitValue : Text;
+    BEGIN
+      CALHistoryLine.SETRANGE("Line No.", CALHistoryLine."Line No.");
+      CALHistoryLine.SETRANGE("Sub Line No.");
+      IF CALHistoryLine.FINDSET THEN
+        REPEAT
+          ExitValue += CALHistoryLine.Code;
+        UNTIL CALHistoryLine.NEXT = 0;
+
+      CALHistoryLine.SETRANGE("Line No.");
+      CALHistoryLine.SETRANGE("Sub Line No.", 1);
+    END;
+
+    LOCAL PROCEDURE SetCodeLine@9(VAR CALHistoryLine@1000 : Record 11102053;CodeLine@1001 : Text);
+    VAR
+      SubLineCounter@1002 : Integer;
+    BEGIN
+      CALHistoryLine.SETRANGE("Line No.", CALHistoryLine."Line No.");
+      CALHistoryLine.SETRANGE("Sub Line No.");
+      CALHistoryLine.DELETEALL;
+
+      WHILE CodeLine <> '' DO BEGIN
+        SubLineCounter += 1;
+        CALHistoryLine."Sub Line No." := SubLineCounter;
+        CALHistoryLine.Code := DELSTR(CodeLine, 251);
+        CALHistoryLine.INSERT;
+        CodeLine := COPYSTR(CodeLine, 251);
+      END;
+
+      CALHistoryLine.SETRANGE("Line No.");
+      CALHistoryLine.SETRANGE("Sub Line No.", 1);
+    END;
+
+    LOCAL PROCEDURE SetRangeOnSection@10(VAR CALHistoryLine@1000 : Record 11102053;SectionName@1001 : Text) : Boolean;
+    VAR
+      SectionEnd@1002 : Integer;
+      SectionStart@1003 : Integer;
+    BEGIN
+      CALHistoryLine.RESET;
+      CALHistoryLine.SETRANGE(Code, '  ' + SectionName);
+      CALHistoryLine.SETRANGE("Sub Line No.", 1);
+      IF CALHistoryLine.FINDFIRST THEN BEGIN
+        SectionStart := CALHistoryLine."Line No." + 2;
+        CALHistoryLine.SETFILTER("Line No.", '>%1', CALHistoryLine."Line No.");
+        CALHistoryLine.SETRANGE("Sub Line No.", 1);
+        CALHistoryLine.SETRANGE(Code, '  }');
+        IF CALHistoryLine.FINDFIRST THEN
+          SectionEnd := CALHistoryLine."Line No." - 1;
+        IF (SectionStart <> 0) AND (SectionEnd <> 0) THEN BEGIN
+          CALHistoryLine.RESET;
+          CALHistoryLine.SETRANGE("Line No.", SectionStart, SectionEnd);
+          EXIT(TRUE);
+        END;
+      END;
+    END;
+
+    PROCEDURE SetRunType@11(NewValue@1000 : Integer);
+    BEGIN
+      RunType := NewValue;
+    END;
+
+    PROCEDURE SetSourceFileName@12(NewValue@1000 : Text);
+    BEGIN
+      SourceFileName := NewValue;
+    END;
+
+    PROCEDURE SetExportFileName@13(NewValue@1000 : Text);
+    BEGIN
+      ExportFileName := NewValue;
+    END;
+
+    PROCEDURE SetUpdateData@14(NewValue@1000 : Boolean);
+    BEGIN
+      UpdateData := NewValue;
+    END;
+
+    PROCEDURE NoOfInvolvedObjects@15(TableNo@1000 : Integer;FieldNo2@1001 : Integer) : Integer;
+    VAR
+      TmpObject@1002 : TEMPORARY Record 2000000001;
+    BEGIN
+      GetInvolvedObjects(TableNo, FieldNo2, TmpObject);
+      EXIT(TmpObject.COUNT);
+    END;
+
+    PROCEDURE DrillDownNoOfInvolvedObjects@16(TableNo@1000 : Integer;FieldNo2@1001 : Integer);
+    VAR
+      TmpObject@1002 : TEMPORARY Record 2000000001;
+    BEGIN
+      GetInvolvedObjects(TableNo, FieldNo2, TmpObject);
+
+      IF TmpObject.FINDFIRST THEN
+        ;
+      PAGE.RUNMODAL(PAGE::"OM - Object List", TmpObject);
+    END;
+
+    LOCAL PROCEDURE GetInvolvedObjects@17(VAR TableNo@1000 : Integer;VAR FieldNo2@1001 : Integer;VAR Object@1002 : Record 2000000001);
+    VAR
+      WhereUsedObjectLine@1003 : Record 11102058;
+      WhereUsedCrossTable@1004 : Record 11102061;
+      Object2@1005 : Record 2000000001;
+    BEGIN
+      WhereUsedObjectLine.SETCURRENTKEY("Object Type", "Object No.", Type, Id);
+      WhereUsedObjectLine.SETRANGE("Object Type", WhereUsedObjectLine."Object Type"::Table);
+      WhereUsedObjectLine.SETRANGE("Object No.", TableNo);
+      WhereUsedObjectLine.SETRANGE(Type, WhereUsedObjectLine.Type::Field);
+      WhereUsedObjectLine.SETRANGE(Id, FieldNo2);
+
+      IF WhereUsedObjectLine.FINDFIRST THEN BEGIN
+        WhereUsedCrossTable.SETCURRENTKEY("Object Entry No.");
+        WhereUsedCrossTable.SETRANGE("Object Entry No.", WhereUsedObjectLine."Entry No.");
+        IF WhereUsedCrossTable.FINDSET THEN
+          REPEAT
+            WhereUsedCrossTable.CALCFIELDS("Object Type", "Object No.");
+            IF NOT Object.GET(WhereUsedCrossTable."Object Type", '', WhereUsedCrossTable."Object No.") THEN
+              IF Object2.GET(WhereUsedCrossTable."Object Type", '', WhereUsedCrossTable."Object No.") THEN BEGIN
+                Object := Object2;
+                Object.INSERT;
+              END;
+
+          UNTIL WhereUsedCrossTable.NEXT = 0;
+      END;
+
+      IF NOT Object.GET(Object.Type::Table, '', TableNo) THEN
+        IF Object2.GET(Object.Type::Table, '', TableNo) THEN BEGIN
+          Object := Object2;
+          Object.INSERT;
+        END;
+    END;
+
+    PROCEDURE NoOfTimesUsed@18(VAR TableNo@1000 : Integer;VAR FieldNo2@1001 : Integer) : Integer;
+    VAR
+      WhereUsedObjectLine@1002 : Record 11102058;
+    BEGIN
+      WhereUsedObjectLine.SETCURRENTKEY("Object Type", "Object No.", Type, Id);
+      WhereUsedObjectLine.SETRANGE("Object Type", WhereUsedObjectLine."Object Type"::Table);
+      WhereUsedObjectLine.SETRANGE("Object No.", TableNo);
+      WhereUsedObjectLine.SETRANGE(Type, WhereUsedObjectLine.Type::Field);
+      WhereUsedObjectLine.SETRANGE(Id, FieldNo2);
+      IF WhereUsedObjectLine.FINDFIRST THEN BEGIN
+        WhereUsedObjectLine.CALCFIELDS("No. of Times Used");
+        EXIT(WhereUsedObjectLine."No. of Times Used");
+      END;
+    END;
+
+    PROCEDURE DrillDownNoOfTimesUsed@19(VAR TableNo@1000 : Integer;VAR FieldNo2@1001 : Integer);
+    VAR
+      WhereUsedObjectLine@1002 : Record 11102058;
+    BEGIN
+      WhereUsedObjectLine.SETCURRENTKEY("Object Type", "Object No.", Type, Id);
+      WhereUsedObjectLine.SETRANGE("Object Type", WhereUsedObjectLine."Object Type"::Table);
+      WhereUsedObjectLine.SETRANGE("Object No.", TableNo);
+      WhereUsedObjectLine.SETRANGE(Type, WhereUsedObjectLine.Type::Field);
+      WhereUsedObjectLine.SETRANGE(Id, FieldNo2);
+      WhereUsedObjectLine.FINDFIRST;
+      WhereUsedObjectLine.DrillDownNoOfTimesUsed(0);
+    END;
+
+    PROCEDURE CalculateActionToApply@20(OldOptions@1000 : Text;NewOptions@1001 : Text;VAR OldOptionAction@1002 : ARRAY [1000] OF ' ,Same,Moved,Deleted,Inserted,Renamed';VAR NewOptionAction@1003 : ARRAY [1000] OF ' ,Same,Moved,Deleted,Inserted,Renamed';VAR OldOptionDest@1004 : ARRAY [1000] OF Integer);
+    VAR
+      NewOptionArray@1005 : ARRAY [1000] OF Text[250];
+      OldOptionArray@1006 : ARRAY [1000] OF Text[250];
+      i@1007 : Integer;
+      j@1008 : Integer;
+      NewOptionCounter@1009 : Integer;
+      OldOptionCounter@1010 : Integer;
+    BEGIN
+      FillOptionArray(OldOptions, OldOptionCounter, OldOptionArray);
+      FillOptionArray(NewOptions, NewOptionCounter, NewOptionArray);
+      CheckUniqueOptions(NewOptionCounter, NewOptionArray);
+
+      FOR i := 1 TO OldOptionCounter DO
+        FOR j := 1 TO NewOptionCounter DO
+          IF OldOptionArray[i] = NewOptionArray[j] THEN
+            IF i = j THEN BEGIN
+              OldOptionAction[i] := OldOptionAction[i]::Same;
+              NewOptionAction[j] := NewOptionAction[j]::Same;
+            END ELSE BEGIN
+              OldOptionAction[i] := OldOptionAction[i]::Moved;
+              OldOptionDest[i] := j - i;
+              NewOptionAction[j] := NewOptionAction[j]::Moved;
+            END;
+
+      FOR i := 1 TO OldOptionCounter DO
+        IF (OldOptionAction[i] = OldOptionAction[i]::" ") AND
+           (NewOptionCounter >= OldOptionCounter) AND
+           (NewOptionAction[i] = NewOptionAction[i]::" ")
+        THEN
+          IF OldOptionArray[i] = NewOptionArray[i] THEN BEGIN
+            OldOptionAction[i] := OldOptionAction[i]::Same;
+            NewOptionAction[i] := NewOptionAction[j]::Same;
+          END ELSE
+            IF (DELSTR(OldOptionArray[i], 7) <> '<empty') AND (DELSTR(NewOptionArray[j], 7) <> '<empty') THEN BEGIN
+              OldOptionAction[i] := OldOptionAction[i]::Renamed;
+              NewOptionAction[i] := NewOptionAction[j]::Renamed;
+            END;
+
+      FOR i := 1 TO OldOptionCounter DO
+        IF (OldOptionAction[i] = OldOptionAction[i]::" ") AND
+           (DELSTR(OldOptionArray[i], 7) <> '<empty')
+        THEN
+          OldOptionAction[i] := OldOptionAction[i]::Deleted;
+
+      FOR i := 1 TO NewOptionCounter DO
+        IF (NewOptionAction[i] = NewOptionAction[i]::" ") AND
+           (DELSTR(NewOptionArray[i], 7) <> '<empty')
+        THEN
+          NewOptionAction[i] := NewOptionAction[i]::Inserted;
+    END;
+
+    LOCAL PROCEDURE FillOptionArray@21(OptionString@1000 : Text;VAR OptionCounter@1001 : Integer;VAR OptionArray@1002 : ARRAY [1000] OF Text[250]);
+    VAR
+      EmptyCounter@1003 : Integer;
+      i@1004 : Integer;
+    BEGIN
+      CLEAR(OptionArray);
+      OptionCounter := 1;
+      FOR i := 1 TO STRLEN(OptionString) DO
+        IF OptionString[i] = ',' THEN
+          OptionCounter += 1
+        ELSE
+          OptionArray[OptionCounter] += FORMAT(OptionString[i]);
+
+      FOR i := 1 TO OptionCounter DO
+        IF OptionArray[i] = '' THEN BEGIN
+          EmptyCounter += 1;
+          OptionArray[i] := '<empty' + FORMAT(EmptyCounter) + '>';
+        END;
+    END;
+
+    LOCAL PROCEDURE CheckUniqueOptions@22(VAR OptionCounter@1000 : Integer;VAR OptionArray@1001 : ARRAY [1000] OF Text[250]);
+    VAR
+      i@1002 : Integer;
+      j@1003 : Integer;
+      ctOptionsUnique@1004 : TextConst 'DEU=Options has to be unique.;ENU=Options has to be unique.;ESP=Options has to be unique.;FRA=Options has to be unique.;NLD=Opties moeten uniek zijn.;DEA=Options has to be unique.';
+    BEGIN
+      FOR i := 1 TO OptionCounter DO
+        FOR j := 1 TO OptionCounter DO
+          IF (i <> j) AND
+             (OptionArray[i] <> '') AND
+             (OptionArray[j] <> '') AND
+             (LOWERCASE(OptionArray[i]) = LOWERCASE(OptionArray[j]))
+          THEN
+            ERROR(ctOptionsUnique);
+    END;
+
+    LOCAL PROCEDURE RemoveDoubleCharacters@23(Text@1000 : Text;CharacterToRemove@1001 : Char) ExitValue : Text;
+    VAR
+      i@1002 : Integer;
+    BEGIN
+      FOR i := 1 TO STRLEN(Text) DO BEGIN
+
+        IF (Text[i] = Text[i + 1]) AND (Text[i] = CharacterToRemove) THEN
+          i += 1;
+
+        ExitValue += FORMAT(Text[i]);
+      END;
+    END;
+
+    LOCAL PROCEDURE AddDoubleCharacters@24(Text@1000 : Text;CharacterToDouble@1001 : Char) ExitValue : Text;
+    VAR
+      i@1002 : Integer;
+    BEGIN
+      FOR i := 1 TO STRLEN(Text) DO BEGIN
+
+        IF Text[i] = CharacterToDouble THEN
+          ExitValue += FORMAT(Text[i]);
+
+        ExitValue += FORMAT(Text[i]);
+      END;
+    END;
+
+    PROCEDURE ShowSucceedMessage@25();
+    VAR
+      ObjectText@1000 : Text;
+      ctObject@1001 : TextConst 'DEU=object;ENU=object;ESP=object;FRA=object;NLD=object;DEA=object';
+      ctObjects@1002 : TextConst 'DEU=objects;ENU=objects;ESP=objects;FRA=objects;NLD=objecten;DEA=objects';
+      ctObjectsExported@1003 : TextConst 'DEU=%1 %2 exported.;ENU=%1 %2 exported.;ESP=%1 %2 exported.;FRA=%1 %2 exported.;NLD=%1 %2 ge‰xporteerd.;DEA=%1 %2 exported.';
+      ctObjectsUpdated@1004 : TextConst 'DEU=%1 %2 updated.;ENU=%1 %2 updated.;ESP=%1 %2 updated.;FRA=%1 %2 updated.;NLD=%1 %2 bijgewerkt.;DEA=%1 %2 updated.';
+      ctTextFileRenumbered@1005 : TextConst 'DEU=Text file is renumbered.;ENU=Text file is renumbered.;ESP=Text file is renumbered.;FRA=Text file is renumbered.;NLD=Tekstbestand is omgenummerd.;DEA=Text file is renumbered.';
+    BEGIN
+      IF NoOfObjects = 1 THEN
+        ObjectText := ctObject
+      ELSE
+        ObjectText := ctObjects;
+
+      CASE RunType OF
+
+        RunType::"Update in DB" :
+          MESSAGE(ctObjectsUpdated, NoOfObjects, ObjectText);
+
+        RunType::Export :
+          MESSAGE(ctObjectsExported, NoOfObjects, ObjectText);
+
+        RunType::"Update File" :
+          MESSAGE(ctTextFileRenumbered);
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

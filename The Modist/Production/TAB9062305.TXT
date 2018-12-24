@@ -1,0 +1,1808 @@
+OBJECT Table 9062305 Incident
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.15;
+  }
+  PROPERTIES
+  {
+    DataCaptionFields=No.,Description;
+    OnInsert=VAR
+               DefIncidentType@1000000000 : Code[20];
+               NoSeries@1000000001 : Record 308;
+               "Incident Status"@1000000002 : Record 9062304;
+               i@1000000004 : Integer;
+               lUserContactNo@9062230 : Code[20];
+             BEGIN
+               IF (Rec."No." = '') THEN
+               BEGIN
+                 Rec.VALIDATE("No. Series", IncidentManagement.GetIncidentNoSeries());
+                 Rec.VALIDATE("No.", NoSeriesManagement.GetNextNo(Rec."No. Series", WORKDATE(), TRUE));
+               END;
+
+               lUserContactNo := TnpUtils.GetUserContactNo(USERID());
+
+               Rec.VALIDATE("Incident Date", WORKDATE());
+               Rec.VALIDATE("Incident Time", TIME());
+               Rec.VALIDATE("Created By Contact No.", lUserContactNo);
+               Rec.VALIDATE("Owned By Contact No.", lUserContactNo);
+               Rec.VALIDATE("Assigned To Contact No.", lUserContactNo);
+               Rec.VALIDATE(Type, IncidentManagement.GetIncidentDefaultType());
+
+               InitialiseContactsFromFilters();
+               InitialiseRelatedToFromFilters();
+
+               TnpToolkit.UpdateCreatedBy(Rec."Created By", Rec."Created Date Time");
+             END;
+
+    OnModify=BEGIN
+               TnpToolkit.UpdateModifiedBy(Rec."Modified By", Rec."Modified Date Time");
+             END;
+
+    OnDelete=BEGIN
+               IncidentLink.RESET();
+               IncidentLink.SETRANGE("Incident No.", Rec."No.");
+               IncidentLink.DELETEALL(TRUE);
+             END;
+
+    CaptionML=[ENU=Incident;
+               ENG=Incident];
+    LookupPageID=Page9062367;
+    DrillDownPageID=Page9062367;
+  }
+  FIELDS
+  {
+    { 1   ;   ;No.                 ;Code20        ;TableRelation=Incident;
+                                                   ValidateTableRelation=No;
+                                                   TestTableRelation=No;
+                                                   CaptionML=[ENU=No.;
+                                                              ENG=No.] }
+    { 10  ;   ;Description         ;Text250       ;CaptionML=[ENU=Description;
+                                                              ENG=Description] }
+    { 11  ;   ;Notes               ;BLOB          ;CaptionML=[ENU=Notes;
+                                                              ENG=Notes];
+                                                   SubType=Memo }
+    { 20  ;   ;Incident Date       ;Date          ;OnValidate=BEGIN
+                                                                IF (Rec."Incident Date" <> xRec."Incident Date") THEN
+                                                                BEGIN
+                                                                  TestOpen();
+                                                                  UpdateTargetDateTimes();
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Incident Date;
+                                                              ENG=Incident Date] }
+    { 21  ;   ;Incident Time       ;Time          ;OnValidate=BEGIN
+                                                                IF (Rec."Incident Time" <> xRec."Incident Time") THEN
+                                                                BEGIN
+                                                                  TestOpen();
+                                                                  UpdateTargetDateTimes();
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Incident Time;
+                                                              ENG=Incident Time] }
+    { 30  ;   ;Company Contact No. ;Code20        ;TableRelation=Contact WHERE (Type=CONST(Company));
+                                                   OnValidate=VAR
+                                                                lContact@9062231 : Record 5050;
+                                                                lPersonContactNo@9062232 : Code[20];
+                                                              BEGIN
+                                                                IF (Rec."Company Contact No." <> xRec."Company Contact No.") THEN
+                                                                BEGIN
+                                                                  TestOpen();
+                                                                  CLEAR(lPersonContactNo);
+                                                                  IF (Rec."Company Contact No." <> '') THEN
+                                                                  BEGIN
+                                                                    lContact.RESET();
+                                                                    lContact.SETCURRENTKEY("Company No.");
+                                                                    lContact.SETRANGE("Company No.", Rec."Company Contact No.");
+                                                                    lContact.SETRANGE(Type, lContact.Type::Person);
+                                                                    IF (lContact.COUNT() = 1) THEN
+                                                                    BEGIN
+                                                                      lContact.FINDFIRST();
+                                                                      lPersonContactNo := lContact."No.";
+                                                                    END;
+                                                                  END;
+                                                                  Rec.VALIDATE("Person Contact No.", lPersonContactNo);
+                                                                  Rec.VALIDATE("Customer No.", FindContactBusinessRelation(DATABASE::Customer));
+                                                                  Rec.VALIDATE("Vendor No.", FindContactBusinessRelation(DATABASE::Vendor));
+                                                                END;
+                                                                Rec.CALCFIELDS("Company Contact Name", "Company Salesperson Code");
+                                                              END;
+
+                                                   CaptionML=[ENU=Contact No.;
+                                                              ENG=Contact No.] }
+    { 31  ;   ;Company Contact Name;Text50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Contact.Name WHERE (No.=FIELD(Company Contact No.)));
+                                                   CaptionML=[ENU=Contact Name;
+                                                              ENG=Contact Name];
+                                                   Editable=No }
+    { 32  ;   ;Company Salesperson Code;Code20    ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Contact."Salesperson Code" WHERE (No.=FIELD(Company Contact No.)));
+                                                   CaptionML=[ENU=Company Salesperson Code;
+                                                              ENG=Company Salesperson Code] }
+    { 40  ;   ;Person Contact No.  ;Code20        ;TableRelation=IF (Company Contact No.=FILTER(<>'')) Contact WHERE (Company No.=FIELD(Company Contact No.),
+                                                                                                                      Type=CONST(Person))
+                                                                                                                      ELSE IF (Company Contact No.=FILTER('')) Contact WHERE (Type=CONST(Person),
+                                                                                                                                                                              Company No.=FILTER(<>''));
+                                                   OnValidate=VAR
+                                                                lContact@1000000000 : Record 5050;
+                                                              BEGIN
+                                                                IF (Rec."Person Contact No." <> xRec."Person Contact No.") THEN
+                                                                BEGIN
+                                                                  TestOpen();
+                                                                  IF ( NOT (lContact.GET(Rec."Person Contact No."))) THEN
+                                                                    CLEAR(lContact);
+                                                                  Rec.VALIDATE("Person Name", lContact.Name);
+                                                                  Rec.VALIDATE("Person Phone No.", lContact."Phone No.");
+                                                                  Rec.VALIDATE("Person E-Mail", lContact."E-Mail");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Person Contact No.;
+                                                              ENG=Person Contact No.] }
+    { 41  ;   ;Person Name         ;Text50        ;CaptionML=[ENU=Person Name;
+                                                              ENG=Person Name] }
+    { 42  ;   ;Person Phone No.    ;Text50        ;CaptionML=[ENU=Person Phone No.;
+                                                              ENG=Person Phone No.] }
+    { 43  ;   ;Person E-Mail       ;Text50        ;ExtendedDatatype=E-Mail;
+                                                   CaptionML=[ENU=Person E-Mail;
+                                                              ENG=Person E-Mail] }
+    { 50  ;   ;Customer No.        ;Code20        ;TableRelation=Customer;
+                                                   OnValidate=VAR
+                                                                Cust@1000000000 : Record 18;
+                                                              BEGIN
+                                                                IF (Rec."Customer No." <> xRec."Customer No.") THEN
+                                                                  TestOpen();
+                                                                Rec.CALCFIELDS("Customer Name");
+                                                              END;
+
+                                                   CaptionML=[ENU=Customer No.;
+                                                              ENG=Customer No.];
+                                                   Editable=No }
+    { 51  ;   ;Customer Name       ;Text50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Customer.Name WHERE (No.=FIELD(Customer No.)));
+                                                   CaptionML=[ENU=Customer Name;
+                                                              ENG=Customer Name];
+                                                   Editable=No }
+    { 60  ;   ;Type                ;Code20        ;TableRelation="Incident Type".Code;
+                                                   OnValidate=VAR
+                                                                lIncidentType@1000000000 : Record 9062303;
+                                                                lIncidentStatus@9062230 : Record 9062304;
+                                                              BEGIN
+                                                                IF (Rec.Type <> xRec.Type) THEN
+                                                                BEGIN
+                                                                  TestOpen();
+                                                                  Rec.VALIDATE(Status, '');
+                                                                  IF (lIncidentType.GET(Rec.Type)) THEN
+                                                                  BEGIN
+                                                                    IF (lIncidentType.SLA <> '') THEN
+                                                                      Rec.VALIDATE(SLA, lIncidentType.SLA);
+                                                                    Rec.VALIDATE("Owned By Area", lIncidentType."Owned By Area");
+                                                                    lIncidentStatus.RESET();
+                                                                    lIncidentStatus.SETRANGE(Type, lIncidentType.Code);
+                                                                    lIncidentStatus.SETRANGE(Initial, TRUE);
+                                                                    IF (lIncidentStatus.FINDFIRST()) THEN
+                                                                      Rec.VALIDATE(Status, lIncidentStatus.Code);
+                                                                  END;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Type;
+                                                              ENG=Type] }
+    { 61  ;   ;SLA                 ;Code20        ;TableRelation="Incident SLA";
+                                                   OnValidate=VAR
+                                                                lIncidentSla@9062230 : Record 9062306;
+                                                              BEGIN
+                                                                IF (Rec.SLA <> xRec.SLA) THEN
+                                                                BEGIN
+                                                                  TestOpen();
+                                                                  IF ( NOT (lIncidentSla.GET(Rec.SLA))) THEN
+                                                                    CLEAR(lIncidentSla);
+                                                                  DontUpdateTargetDateTimes := TRUE;
+                                                                  Rec.VALIDATE("Target Resolution Duration", lIncidentSla."Resolution Duration");
+                                                                  Rec.VALIDATE("Target Closure Duration", lIncidentSla."Closure Duration");
+                                                                  Rec.VALIDATE("Day Start Time", lIncidentSla."Day Start Time");
+                                                                  Rec.VALIDATE("Day End Time", lIncidentSla."Day End Time");
+                                                                  Rec.VALIDATE("Include Weekends", lIncidentSla."Include Weekends");
+                                                                  DontUpdateTargetDateTimes := FALSE;
+                                                                  UpdateTargetDateTimes();
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=SLA;
+                                                              ENG=SLA] }
+    { 62  ;   ;Status              ;Code20        ;TableRelation="Incident Status".Code WHERE (Type=FIELD(Type));
+                                                   OnValidate=VAR
+                                                                lIncidentStatus@9062230 : Record 9062304;
+                                                                lIncidentType@9062231 : Record 9062303;
+                                                                eStatusChanged@9062232 : TextConst 'ENU=Status has been changed from "%1" to "%2";ENG=Status has been changed from "%1" to "%2"';
+                                                              BEGIN
+                                                                IF (Rec.Status <> xRec.Status) THEN
+                                                                BEGIN
+                                                                  TestOpen();
+                                                                  IF (lIncidentStatus.GET(Rec.Type, Rec.Status)) THEN
+                                                                  BEGIN
+                                                                    Rec.VALIDATE("Currently With", lIncidentStatus."Sets Currently With to");
+                                                                    IF (lIncidentStatus."Resolves Incident") THEN
+                                                                      IncidentManagement.ResolveIncident(Rec, FALSE, FALSE, TRUE);
+                                                                    IF (lIncidentStatus."Closes Incident") THEN
+                                                                      IncidentManagement.CloseIncident(Rec, FALSE, FALSE, TRUE);
+                                                                    IF ( NOT (lIncidentType.GET(Rec.Type))) THEN
+                                                                      CLEAR(lIncidentType);
+                                                                    IF (lIncidentType."Log Status Change") THEN
+                                                                      IncidentToolkit.AddIncidentLog(Rec, 0D, 0T, STRSUBSTNO(eStatusChanged, xRec.Status, Rec.Status),
+                                                                        lIncidentType."Status Change Log Type", Rec."Owned By Area", 0D, 0T, TRUE);
+                                                                  END;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Status;
+                                                              ENG=Status] }
+    { 63  ;   ;Priority            ;Code20        ;TableRelation="Incident Priority";
+                                                   CaptionML=[ENU=Priority;
+                                                              ENG=Priority] }
+    { 70  ;   ;Amendment Mode      ;Option        ;CaptionML=[ENU=Amendment Mode;
+                                                              ENG=Amendment Mode];
+                                                   OptionCaptionML=[ENU=Open for Amendment,Released;
+                                                                    ENG=Open for Amendment,Released];
+                                                   OptionString=Open for Amendment,Released }
+    { 80  ;   ;Created By Contact No.;Code20      ;TableRelation=Contact;
+                                                   OnValidate=BEGIN
+                                                                IF (Rec."Created By Contact No." <> xRec."Created By Contact No.") THEN
+                                                                  TestOpen();
+                                                              END;
+
+                                                   CaptionML=[ENU=Created By Contact No.;
+                                                              ENG=Created By Contact No.];
+                                                   Editable=No }
+    { 81  ;   ;Owned By Contact No.;Code20        ;TableRelation=Contact;
+                                                   OnValidate=BEGIN
+                                                                IF (Rec."Owned By Contact No." <> xRec."Owned By Contact No.") THEN
+                                                                  TestOpen();
+                                                              END;
+
+                                                   CaptionML=[ENU=Owned By Contact No.;
+                                                              ENG=Owned By Contact No.] }
+    { 82  ;   ;Assigned To Contact No.;Code20     ;TableRelation=Contact;
+                                                   OnValidate=BEGIN
+                                                                IF (Rec."Assigned To Contact No." <> xRec."Assigned To Contact No.") THEN
+                                                                  TestOpen();
+                                                              END;
+
+                                                   CaptionML=[ENU=Assigned To Contact No.;
+                                                              ENG=Assigned To Contact No.] }
+    { 90  ;   ;Classification 1 Code;Code20       ;TableRelation="General Lookup".Code WHERE (Type=CONST(INCIDENT CLASS 1));
+                                                   CaptionML=[ENU=Classification 1 Code;
+                                                              ENG=Classification 1 Code];
+                                                   CaptionClass='3,' + IncidentToolkit.GetIncidentClass1Caption() }
+    { 92  ;   ;Classification 2 Code;Code20       ;TableRelation="General Lookup".Code WHERE (Type=CONST(INCIDENT CLASS 2));
+                                                   CaptionML=[ENU=Classification 2 Code;
+                                                              ENG=Classification 2 Code];
+                                                   CaptionClass='3,' + IncidentToolkit.GetIncidentClass2Caption() }
+    { 94  ;   ;Classification 3 Code;Code20       ;TableRelation="General Lookup".Code WHERE (Type=CONST(INCIDENT CLASS 3));
+                                                   CaptionML=[ENU=Classification 3 Code;
+                                                              ENG=Classification 3 Code];
+                                                   CaptionClass='3,' + IncidentToolkit.GetIncidentClass3Caption() }
+    { 100 ;   ;Owned By Area       ;Option        ;CaptionML=[ENU=Owned By Area;
+                                                              ENG=Owned By Area];
+                                                   OptionCaptionML=[ENU=" ,Credit Control,Sales,Customer Services,Purchasing";
+                                                                    ENG=" ,Credit Control,Sales,Customer Services,Purchasing"];
+                                                   OptionString=[ ,Credit Control,Sales,Customer Services,Purchasing] }
+    { 101 ;   ;Currently With      ;Option        ;InitValue=Us;
+                                                   CaptionML=[ENU=Currently With;
+                                                              ENG=Currently With];
+                                                   OptionCaptionML=[ENU=" ,Us,Contact,3rd Party";
+                                                                    ENG=" ,Us,Contact,3rd Party"];
+                                                   OptionString=[ ,Us,Contact,3rd Party] }
+    { 110 ;   ;Target Resolution Duration;Duration;OnValidate=BEGIN
+                                                                IF (Rec."Target Resolution Duration" <> xRec."Target Resolution Duration") THEN
+                                                                  UpdateTargetDateTimes();
+                                                              END;
+
+                                                   CaptionML=[ENU=Target Resolution Duration;
+                                                              ENG=Target Resolution Duration] }
+    { 111 ;   ;Resolution Duration ;Duration      ;CaptionML=[ENU=Resolution Duration;
+                                                              ENG=Resolution Duration] }
+    { 112 ;   ;Target Closure Duration;Duration   ;OnValidate=BEGIN
+                                                                IF (Rec."Target Closure Duration" <> xRec."Target Closure Duration") THEN
+                                                                  UpdateTargetDateTimes();
+                                                              END;
+
+                                                   CaptionML=[ENU=Target Closure Duration;
+                                                              ENG=Target Closure Duration] }
+    { 113 ;   ;Closure Duration    ;Duration      ;CaptionML=[ENU=Closure Duration;
+                                                              ENG=Closure Duration] }
+    { 120 ;   ;Target Closure Date Time;DateTime  ;CaptionML=[ENU=Target Closure Date Time;
+                                                              ENG=Target Closure Date Time] }
+    { 121 ;   ;Target Resolution Date Time;DateTime;
+                                                   CaptionML=[ENU=Target Resolution Date Time;
+                                                              ENG=Target Resolution Date Time] }
+    { 131 ;   ;Latest Activity - Cust. Vers.;Text250;
+                                                   CaptionML=[ENU=Latest Activity - Customer Version;
+                                                              ENG=Latest Activity - Customer Version] }
+    { 140 ;   ;No. Series          ;Code10        ;TableRelation="No. Series";
+                                                   CaptionML=[ENU=No. Series;
+                                                              ENG=No. Series] }
+    { 150 ;   ;Closed              ;Boolean       ;OnValidate=VAR
+                                                                lIncidentDateTime@9062230 : DateTime;
+                                                              BEGIN
+                                                                IF (Rec.Closed <> xRec.Closed) THEN
+                                                                  IF (Rec.Closed) THEN
+                                                                  BEGIN
+                                                                    Rec.VALIDATE("Closed By", TnpUtils.GetUserContactNo(USERID()));
+                                                                    Rec.VALIDATE("Closed Date Time", CURRENTDATETIME());
+                                                                    lIncidentDateTime := CalculateIncidentDateTime();
+                                                                    IF (lIncidentDateTime <> 0DT) THEN
+                                                                      Rec.VALIDATE("Closure Duration", Rec."Closed Date Time" - lIncidentDateTime);
+                                                                    IF (Rec."Target Closure Date Time" <> 0DT) THEN
+                                                                      Rec.VALIDATE("Closed Within SLA", Rec."Closed Date Time" <= Rec."Target Closure Date Time");
+                                                                  END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Closed;
+                                                              ENG=Closed] }
+    { 151 ;   ;Closed By           ;Code20        ;CaptionML=[ENU=Closed By;
+                                                              ENG=Closed By] }
+    { 152 ;   ;Closed Date Time    ;DateTime      ;CaptionML=[ENU=Closed Date/Time;
+                                                              ENG=Closed Date/Time];
+                                                   Editable=No }
+    { 153 ;   ;Closed Within SLA   ;Boolean       ;CaptionML=[ENU=Closed Within SLA;
+                                                              ENG=Closed Within SLA] }
+    { 160 ;   ;Resolved            ;Boolean       ;OnValidate=VAR
+                                                                lIncidentDateTime@9062230 : DateTime;
+                                                              BEGIN
+                                                                IF (Rec.Resolved <> xRec.Resolved) THEN
+                                                                  IF (Rec.Resolved) THEN
+                                                                  BEGIN
+                                                                    Rec.VALIDATE("Resolved By", TnpUtils.GetUserContactNo(USERID()));
+                                                                    Rec.VALIDATE("Resolved Date Time", CURRENTDATETIME());
+                                                                    lIncidentDateTime := CalculateIncidentDateTime();
+                                                                    IF (lIncidentDateTime <> 0DT) THEN
+                                                                      Rec.VALIDATE("Resolution Duration", Rec."Resolved Date Time" - lIncidentDateTime);
+                                                                    IF (Rec."Target Resolution Date Time" <> 0DT) THEN
+                                                                      Rec.VALIDATE("Resolved Within SLA", Rec."Resolved Date Time" <= Rec."Target Resolution Date Time");
+                                                                  END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Resolved;
+                                                              ENG=Resolved] }
+    { 161 ;   ;Resolved By         ;Code20        ;CaptionML=[ENU=Closed By;
+                                                              ENG=Closed By] }
+    { 162 ;   ;Resolved Date Time  ;DateTime      ;CaptionML=[ENU=Closed Date/Time;
+                                                              ENG=Closed Date/Time];
+                                                   Editable=No }
+    { 163 ;   ;Resolved Within SLA ;Boolean       ;CaptionML=[ENU=Resolved Within SLA;
+                                                              ENG=Resolved Within SLA] }
+    { 170 ;   ;Needs Attention     ;Boolean       ;CaptionML=[ENU=Needs Attention;
+                                                              ENG=Needs Attention] }
+    { 180 ;   ;Related-to          ;Option        ;OnValidate=BEGIN
+                                                                IF (Rec."Related-to" <> xRec."Related-to") THEN
+                                                                BEGIN
+                                                                  TestOpen();
+                                                                  Rec.VALIDATE("Related-to Sales Doc. Type", Rec."Related-to Sales Doc. Type"::" ");
+                                                                  Rec.VALIDATE("Related-to Purch. Doc. Type", Rec."Related-to Purch. Doc. Type"::" ");
+                                                                  Rec.VALIDATE("Related-to Service Item No.", '');
+                                                                  UpdateRelatedToLink();
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Related-to;
+                                                              ENG=Related-to];
+                                                   OptionCaptionML=[ENU=" ,Sales Document,Purchase Document,Service Item";
+                                                                    ENG=" ,Sales Document,Purchase Document,Service Item"];
+                                                   OptionString=[ ,Sales Document,Purchase Document,Service Item] }
+    { 190 ;   ;Related-to Sales Doc. Type;Option  ;OnValidate=BEGIN
+                                                                IF (Rec."Related-to Sales Doc. Type" <> xRec."Related-to Sales Doc. Type") THEN
+                                                                BEGIN
+                                                                  TestOpen();
+                                                                  Rec.VALIDATE("Related-to Sales Doc. No.", '');
+                                                                  UpdateRelatedToLink();
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Related-to Sales Doc. Type;
+                                                              ENG=Related-to Sales Doc. Type];
+                                                   OptionCaptionML=[ENU=" ,Quote,Order,Invoice,Credit Memo,,Return Order,,,,,Posted Shipment,Posted Invoice,Posted Return Receipt,Posted Credit Memo";
+                                                                    ENG=" ,Quote,Order,Invoice,Credit Memo,,Return Order,,,,,Posted Shipment,Posted Invoice,Posted Return Receipt,Posted Credit Memo"];
+                                                   OptionString=[ ,Quote,Order,Invoice,Credit Memo,,Return Order,,,,,Posted Shipment,Posted Invoice,Posted Return Receipt,Posted Credit Memo] }
+    { 191 ;   ;Related-to Sales Doc. No.;Code20   ;OnValidate=VAR
+                                                                lSalesHeader@9062230 : Record 36;
+                                                                lSalesShipmentHeader@9062231 : Record 110;
+                                                                lSalesInvoiceHeader@9062232 : Record 112;
+                                                                lReturnReceiptHeader@9062234 : Record 6660;
+                                                                lSalesCrMemoHeader@9062233 : Record 114;
+                                                              BEGIN
+                                                                IF (Rec."Related-to Sales Doc. No." <> xRec."Related-to Sales Doc. No.") THEN
+                                                                BEGIN
+                                                                  TestOpen();
+                                                                  Rec.VALIDATE("Related-to Sales Doc. Line No.", 0);
+                                                                  IF (Rec."Related-to Sales Doc. No." <> '') THEN
+                                                                  BEGIN
+                                                                    Rec.TESTFIELD("Related-to Sales Doc. Type");
+                                                                    CASE (Rec."Related-to Sales Doc. Type") OF
+                                                                      Rec."Related-to Sales Doc. Type"::"Posted Shipment":
+                                                                        BEGIN
+                                                                          lSalesShipmentHeader.GET(Rec."Related-to Sales Doc. No.");
+                                                                          IF (Rec."Customer No." <> '') THEN
+                                                                            lSalesShipmentHeader.TESTFIELD("Sell-to Customer No.", Rec."Customer No.");
+                                                                        END;
+                                                                      Rec."Related-to Sales Doc. Type"::"Posted Invoice":
+                                                                        BEGIN
+                                                                          lSalesInvoiceHeader.GET(Rec."Related-to Sales Doc. No.");
+                                                                          IF (Rec."Customer No." <> '') THEN
+                                                                            lSalesInvoiceHeader.TESTFIELD("Sell-to Customer No.", Rec."Customer No.");
+                                                                        END;
+                                                                      Rec."Related-to Sales Doc. Type"::"Posted Return Receipt":
+                                                                        BEGIN
+                                                                          lReturnReceiptHeader.GET(Rec."Related-to Sales Doc. No.");
+                                                                          IF (Rec."Customer No." <> '') THEN
+                                                                            lReturnReceiptHeader.TESTFIELD("Sell-to Customer No.", Rec."Customer No.");
+                                                                        END;
+                                                                      Rec."Related-to Sales Doc. Type"::"Posted Credit Memo":
+                                                                        BEGIN
+                                                                          lSalesCrMemoHeader.GET(Rec."Related-to Sales Doc. No.");
+                                                                          IF (Rec."Customer No." <> '') THEN
+                                                                            lSalesCrMemoHeader.TESTFIELD("Sell-to Customer No.", Rec."Customer No.");
+                                                                        END;
+                                                                      ELSE
+                                                                        BEGIN
+                                                                          lSalesHeader.GET(Rec."Related-to Sales Doc. Type" - 1, Rec."Related-to Sales Doc. No.");
+                                                                          IF (Rec."Customer No." <> '') THEN
+                                                                            lSalesHeader.TESTFIELD("Sell-to Customer No.", Rec."Customer No.");
+                                                                        END;
+                                                                    END;
+                                                                  END;
+                                                                  UpdateRelatedToSalesDocDesc();
+                                                                  UpdateRelatedToLink();
+                                                                END;
+                                                              END;
+
+                                                   OnLookup=VAR
+                                                              lSalesHeader@9062234 : Record 36;
+                                                              lSalesShipmentHeader@9062233 : Record 110;
+                                                              lSalesInvoiceHeader@9062232 : Record 112;
+                                                              lReturnReceiptHeader@9062231 : Record 6660;
+                                                              lSalesCrMemoHeader@9062230 : Record 114;
+                                                            BEGIN
+                                                              Rec.TESTFIELD("Related-to Sales Doc. Type");
+                                                              CASE (Rec."Related-to Sales Doc. Type") OF
+                                                                Rec."Related-to Sales Doc. Type"::"Posted Shipment":
+                                                                  BEGIN
+                                                                    lSalesShipmentHeader.FILTERGROUP(2);
+                                                                    IF (Rec."Customer No." <> '') THEN
+                                                                      lSalesShipmentHeader.SETRANGE("Sell-to Customer No.", Rec."Customer No.");
+                                                                    lSalesShipmentHeader.FILTERGROUP(0);
+                                                                    IF (lSalesShipmentHeader.GET(Rec."Related-to Sales Doc. No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lSalesShipmentHeader) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Sales Doc. No.", lSalesShipmentHeader."No.");
+                                                                  END;
+                                                                Rec."Related-to Sales Doc. Type"::"Posted Invoice":
+                                                                  BEGIN
+                                                                    lSalesInvoiceHeader.FILTERGROUP(2);
+                                                                    IF (Rec."Customer No." <> '') THEN
+                                                                      lSalesInvoiceHeader.SETRANGE("Sell-to Customer No.", Rec."Customer No.");
+                                                                    lSalesInvoiceHeader.FILTERGROUP(0);
+                                                                    IF (lSalesInvoiceHeader.GET(Rec."Related-to Sales Doc. No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lSalesInvoiceHeader) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Sales Doc. No.", lSalesInvoiceHeader."No.");
+                                                                  END;
+                                                                Rec."Related-to Sales Doc. Type"::"Posted Return Receipt":
+                                                                  BEGIN
+                                                                    lReturnReceiptHeader.FILTERGROUP(2);
+                                                                    IF (Rec."Customer No." <> '') THEN
+                                                                      lReturnReceiptHeader.SETRANGE("Sell-to Customer No.", Rec."Customer No.");
+                                                                    lReturnReceiptHeader.FILTERGROUP(0);
+                                                                    IF (lReturnReceiptHeader.GET(Rec."Related-to Sales Doc. No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lReturnReceiptHeader) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Sales Doc. No.", lReturnReceiptHeader."No.");
+                                                                  END;
+                                                                Rec."Related-to Sales Doc. Type"::"Posted Credit Memo":
+                                                                  BEGIN
+                                                                    lSalesCrMemoHeader.FILTERGROUP(2);
+                                                                    IF (Rec."Customer No." <> '') THEN
+                                                                      lSalesCrMemoHeader.SETRANGE("Sell-to Customer No.", Rec."Customer No.");
+                                                                    lSalesCrMemoHeader.FILTERGROUP(0);
+                                                                    IF (lSalesCrMemoHeader.GET(Rec."Related-to Sales Doc. No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lSalesCrMemoHeader) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Sales Doc. No.", lSalesCrMemoHeader."No.");
+                                                                  END;
+                                                                ELSE
+                                                                  BEGIN
+                                                                    lSalesHeader.FILTERGROUP(2);
+                                                                    lSalesHeader.SETRANGE("Document Type", Rec."Related-to Sales Doc. Type" - 1);
+                                                                    IF (Rec."Customer No." <> '') THEN
+                                                                      lSalesHeader.SETRANGE("Sell-to Customer No.", Rec."Customer No.");
+                                                                    lSalesHeader.FILTERGROUP(0);
+                                                                    IF (lSalesHeader.GET(Rec."Related-to Sales Doc. Type" - 1, Rec."Related-to Sales Doc. No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lSalesHeader) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Sales Doc. No.", lSalesHeader."No.");
+                                                                  END;
+                                                              END;
+                                                            END;
+
+                                                   CaptionML=[ENU=Related-to Sales Doc. No.;
+                                                              ENG=Related-to Sales Doc. No.] }
+    { 192 ;   ;Related-to Sales Doc. Line No.;Integer;
+                                                   OnValidate=VAR
+                                                                lSalesLine@9062234 : Record 37;
+                                                                lSalesShipmentLine@9062230 : Record 111;
+                                                                lSalesInvoiceLine@9062231 : Record 113;
+                                                                lReturnReceiptLine@9062233 : Record 6661;
+                                                                lSalesCrMemoLine@9062232 : Record 115;
+                                                              BEGIN
+                                                                IF (Rec."Related-to Sales Doc. Line No." <> xRec."Related-to Sales Doc. Line No.") THEN
+                                                                BEGIN
+                                                                  TestOpen();
+                                                                  IF (Rec."Related-to Sales Doc. Line No." <> 0) THEN
+                                                                  BEGIN
+                                                                    Rec.TESTFIELD("Related-to Sales Doc. Type");
+                                                                    Rec.TESTFIELD("Related-to Sales Doc. No.");
+                                                                    CASE (Rec."Related-to Sales Doc. Type") OF
+                                                                      Rec."Related-to Sales Doc. Type"::"Posted Shipment":
+                                                                        lSalesShipmentLine.GET(Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.");
+                                                                      Rec."Related-to Sales Doc. Type"::"Posted Invoice":
+                                                                        lSalesInvoiceLine.GET(Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.");
+                                                                      Rec."Related-to Sales Doc. Type"::"Posted Return Receipt":
+                                                                        lReturnReceiptLine.GET(Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.");
+                                                                      Rec."Related-to Sales Doc. Type"::"Posted Credit Memo":
+                                                                        lSalesCrMemoLine.GET(Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.");
+                                                                      ELSE
+                                                                        lSalesLine.GET(Rec."Related-to Sales Doc. Type" - 1, Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.");
+                                                                    END;
+                                                                  END;
+                                                                  UpdateRelatedToSalesDocDesc();
+                                                                  UpdateRelatedToLink();
+                                                                END;
+                                                              END;
+
+                                                   OnLookup=VAR
+                                                              lSalesLine@9062234 : Record 37;
+                                                              lSalesShipmentLine@9062233 : Record 111;
+                                                              lSalesInvoiceLine@9062232 : Record 113;
+                                                              lReturnReceiptLine@9062231 : Record 6661;
+                                                              lSalesCrMemoLine@9062230 : Record 115;
+                                                            BEGIN
+                                                              Rec.TESTFIELD("Related-to Sales Doc. Type");
+                                                              Rec.TESTFIELD("Related-to Sales Doc. No.");
+                                                              CASE (Rec."Related-to Sales Doc. Type") OF
+                                                                Rec."Related-to Sales Doc. Type"::"Posted Shipment":
+                                                                  BEGIN
+                                                                    lSalesShipmentLine.FILTERGROUP(2);
+                                                                    lSalesShipmentLine.SETRANGE("Document No.", Rec."Related-to Sales Doc. No.");
+                                                                    lSalesShipmentLine.FILTERGROUP(0);
+                                                                    IF (lSalesShipmentLine.GET(Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lSalesShipmentLine) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Sales Doc. Line No.", lSalesShipmentLine."Line No.");
+                                                                  END;
+                                                                Rec."Related-to Sales Doc. Type"::"Posted Invoice":
+                                                                  BEGIN
+                                                                    lSalesInvoiceLine.FILTERGROUP(2);
+                                                                    lSalesInvoiceLine.SETRANGE("Document No.", Rec."Related-to Sales Doc. No.");
+                                                                    lSalesInvoiceLine.FILTERGROUP(0);
+                                                                    IF (lSalesInvoiceLine.GET(Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lSalesInvoiceLine) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Sales Doc. Line No.", lSalesInvoiceLine."Line No.");
+                                                                  END;
+                                                                Rec."Related-to Sales Doc. Type"::"Posted Return Receipt":
+                                                                  BEGIN
+                                                                    lReturnReceiptLine.FILTERGROUP(2);
+                                                                    lReturnReceiptLine.SETRANGE("Document No.", Rec."Related-to Sales Doc. No.");
+                                                                    lReturnReceiptLine.FILTERGROUP(0);
+                                                                    IF (lReturnReceiptLine.GET(Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lReturnReceiptLine) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Sales Doc. Line No.", lReturnReceiptLine."Line No.");
+                                                                  END;
+                                                                Rec."Related-to Sales Doc. Type"::"Posted Credit Memo":
+                                                                  BEGIN
+                                                                    lSalesCrMemoLine.FILTERGROUP(2);
+                                                                    lSalesCrMemoLine.SETRANGE("Document No.", Rec."Related-to Sales Doc. No.");
+                                                                    lSalesCrMemoLine.FILTERGROUP(0);
+                                                                    IF (lSalesCrMemoLine.GET(Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lSalesCrMemoLine) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Sales Doc. Line No.", lSalesCrMemoLine."Line No.");
+                                                                  END;
+                                                                ELSE
+                                                                  BEGIN
+                                                                    lSalesLine.FILTERGROUP(2);
+                                                                    lSalesLine.SETRANGE("Document Type", Rec."Related-to Sales Doc. Type" - 1);
+                                                                    lSalesLine.SETRANGE("Document No.", Rec."Related-to Sales Doc. No.");
+                                                                    lSalesLine.FILTERGROUP(0);
+                                                                    IF (lSalesLine.GET(Rec."Related-to Sales Doc. Type" - 1, Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lSalesLine) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Sales Doc. Line No.", lSalesLine."Line No.");
+                                                                  END;
+                                                              END;
+                                                            END;
+
+                                                   CaptionML=[ENU=Related-to Sales Doc. Line No.;
+                                                              ENG=Related-to Sales Doc. Line No.];
+                                                   BlankZero=Yes }
+    { 193 ;   ;Related-to Sales Doc. Desc.;Text250;CaptionML=[ENU=Related-to Sales Doc. Desc.;
+                                                              ENG=Related-to Sales Doc. Desc.] }
+    { 200 ;   ;Related-to Purch. Doc. Type;Option ;OnValidate=BEGIN
+                                                                IF (Rec."Related-to Purch. Doc. Type" <> xRec."Related-to Purch. Doc. Type") THEN
+                                                                BEGIN
+                                                                  TestOpen();
+                                                                  Rec.VALIDATE("Related-to Purch. Doc. No.", '');
+                                                                  UpdateRelatedToLink();
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Related-to Purch. Doc. Type;
+                                                              ENG=Related-to Purch. Doc. Type];
+                                                   OptionCaptionML=[ENU=" ,Quote,Order,Invoice,Credit Memo,,Return Order,,,,,Posted Receipt,Posted Invoice,Posted Return Shipment,Posted Credit Memo";
+                                                                    ENG=" ,Quote,Order,Invoice,Credit Memo,,Return Order,,,,,Posted Receipt,Posted Invoice,Posted Return Shipment,Posted Credit Memo"];
+                                                   OptionString=[ ,Quote,Order,Invoice,Credit Memo,,Return Order,,,,,Posted Receipt,Posted Invoice,Posted Return Shipment,Posted Credit Memo] }
+    { 201 ;   ;Related-to Purch. Doc. No.;Code20  ;OnValidate=VAR
+                                                                lPurchaseHeader@9062234 : Record 38;
+                                                                lPurchRcptHeader@9062230 : Record 120;
+                                                                lPurchInvHeader@9062231 : Record 122;
+                                                                lReturnShipmentHeader@9062232 : Record 6650;
+                                                                lPurchCrMemoHdr@9062233 : Record 124;
+                                                              BEGIN
+                                                                IF (Rec."Related-to Purch. Doc. No." <> xRec."Related-to Purch. Doc. No.") THEN
+                                                                BEGIN
+                                                                  TestOpen();
+                                                                  Rec.VALIDATE("Related-to Purch. Doc. Ln. No.", 0);
+                                                                  IF (Rec."Related-to Purch. Doc. No." <> '') THEN
+                                                                  BEGIN
+                                                                    Rec.TESTFIELD("Related-to Purch. Doc. Type");
+                                                                    CASE (Rec."Related-to Purch. Doc. Type") OF
+                                                                      Rec."Related-to Purch. Doc. Type"::"Posted Receipt":
+                                                                        BEGIN
+                                                                          lPurchRcptHeader.GET(Rec."Related-to Purch. Doc. No.");
+                                                                          IF (Rec."Vendor No." <> '') THEN
+                                                                            lPurchRcptHeader.TESTFIELD("Buy-from Vendor No.", Rec."Vendor No.");
+                                                                        END;
+                                                                      Rec."Related-to Purch. Doc. Type"::"Posted Invoice":
+                                                                        BEGIN
+                                                                          lPurchInvHeader.GET(Rec."Related-to Purch. Doc. No.");
+                                                                          IF (Rec."Vendor No." <> '') THEN
+                                                                            lPurchInvHeader.TESTFIELD("Buy-from Vendor No.", Rec."Vendor No.");
+                                                                        END;
+                                                                      Rec."Related-to Purch. Doc. Type"::"Posted Return Shipment":
+                                                                        BEGIN
+                                                                          lReturnShipmentHeader.GET(Rec."Related-to Purch. Doc. No.");
+                                                                          IF (Rec."Vendor No." <> '') THEN
+                                                                            lReturnShipmentHeader.TESTFIELD("Buy-from Vendor No.", Rec."Vendor No.");
+                                                                        END;
+                                                                      Rec."Related-to Purch. Doc. Type"::"Posted Credit Memo":
+                                                                        BEGIN
+                                                                          lPurchCrMemoHdr.GET(Rec."Related-to Purch. Doc. No.");
+                                                                          IF (Rec."Vendor No." <> '') THEN
+                                                                            lPurchCrMemoHdr.TESTFIELD("Buy-from Vendor No.", Rec."Vendor No.");
+                                                                        END;
+                                                                      ELSE
+                                                                        BEGIN
+                                                                          lPurchaseHeader.GET(Rec."Related-to Purch. Doc. Type" - 1, Rec."Related-to Purch. Doc. No.");
+                                                                          IF (Rec."Vendor No." <> '') THEN
+                                                                            lPurchaseHeader.TESTFIELD("Buy-from Vendor No.", Rec."Vendor No.");
+                                                                        END;
+                                                                    END;
+                                                                  END;
+                                                                  UpdateRelatedToPurchDocDesc();
+                                                                  UpdateRelatedToLink();
+                                                                END;
+                                                              END;
+
+                                                   OnLookup=VAR
+                                                              lPurchaseHeader@9062234 : Record 38;
+                                                              lPurchRcptHeader@9062233 : Record 120;
+                                                              lPurchInvHeader@9062232 : Record 122;
+                                                              lReturnShipmentHeader@9062231 : Record 6650;
+                                                              lPurchCrMemoHdr@9062230 : Record 124;
+                                                            BEGIN
+                                                              Rec.TESTFIELD("Related-to Purch. Doc. Type");
+                                                              CASE (Rec."Related-to Purch. Doc. Type") OF
+                                                                Rec."Related-to Purch. Doc. Type"::"Posted Receipt":
+                                                                  BEGIN
+                                                                    lPurchRcptHeader.FILTERGROUP(2);
+                                                                    IF (Rec."Vendor No." <> '') THEN
+                                                                      lPurchRcptHeader.SETRANGE("Buy-from Vendor No.", Rec."Vendor No.");
+                                                                    lPurchRcptHeader.FILTERGROUP(0);
+                                                                    IF (lPurchRcptHeader.GET(Rec."Related-to Purch. Doc. No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lPurchRcptHeader) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Purch. Doc. No.", lPurchRcptHeader."No.");
+                                                                  END;
+                                                                Rec."Related-to Purch. Doc. Type"::"Posted Invoice":
+                                                                  BEGIN
+                                                                    lPurchInvHeader.FILTERGROUP(2);
+                                                                    IF (Rec."Vendor No." <> '') THEN
+                                                                      lPurchInvHeader.SETRANGE("Buy-from Vendor No.", Rec."Vendor No.");
+                                                                    lPurchInvHeader.FILTERGROUP(0);
+                                                                    IF (lPurchInvHeader.GET(Rec."Related-to Purch. Doc. No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lPurchInvHeader) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Purch. Doc. No.", lPurchInvHeader."No.");
+                                                                  END;
+                                                                Rec."Related-to Purch. Doc. Type"::"Posted Return Shipment":
+                                                                  BEGIN
+                                                                    lReturnShipmentHeader.FILTERGROUP(2);
+                                                                    IF (Rec."Vendor No." <> '') THEN
+                                                                      lReturnShipmentHeader.SETRANGE("Buy-from Vendor No.", Rec."Vendor No.");
+                                                                    lReturnShipmentHeader.FILTERGROUP(0);
+                                                                    IF (lReturnShipmentHeader.GET(Rec."Related-to Purch. Doc. No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lReturnShipmentHeader) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Purch. Doc. No.", lReturnShipmentHeader."No.");
+                                                                  END;
+                                                                Rec."Related-to Purch. Doc. Type"::"Posted Credit Memo":
+                                                                  BEGIN
+                                                                    lPurchCrMemoHdr.FILTERGROUP(2);
+                                                                    IF (Rec."Vendor No." <> '') THEN
+                                                                      lPurchCrMemoHdr.SETRANGE("Buy-from Vendor No.", Rec."Vendor No.");
+                                                                    lPurchCrMemoHdr.FILTERGROUP(0);
+                                                                    IF (lPurchCrMemoHdr.GET(Rec."Related-to Purch. Doc. No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lPurchCrMemoHdr) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Purch. Doc. No.", lPurchCrMemoHdr."No.");
+                                                                  END;
+                                                                ELSE
+                                                                  BEGIN
+                                                                    lPurchaseHeader.FILTERGROUP(2);
+                                                                    lPurchaseHeader.SETRANGE("Document Type", Rec."Related-to Purch. Doc. Type" - 1);
+                                                                    IF (Rec."Vendor No." <> '') THEN
+                                                                      lPurchaseHeader.SETRANGE("Buy-from Vendor No.", Rec."Vendor No.");
+                                                                    lPurchaseHeader.FILTERGROUP(0);
+                                                                    IF (lPurchaseHeader.GET(Rec."Related-to Purch. Doc. Type" - 1, Rec."Related-to Purch. Doc. No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lPurchaseHeader) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Purch. Doc. No.", lPurchaseHeader."No.");
+                                                                  END;
+                                                              END;
+                                                            END;
+
+                                                   CaptionML=[ENU=Related-to Purch. Doc. No.;
+                                                              ENG=Related-to Purch. Doc. No.] }
+    { 202 ;   ;Related-to Purch. Doc. Ln. No.;Integer;
+                                                   OnValidate=VAR
+                                                                lPurchaseLine@9062234 : Record 39;
+                                                                lPurchRcptLine@9062230 : Record 121;
+                                                                lPurchInvLine@9062231 : Record 123;
+                                                                lReturnShipmentLine@9062232 : Record 6651;
+                                                                lPurchCrMemoLine@9062233 : Record 125;
+                                                              BEGIN
+                                                                IF (Rec."Related-to Purch. Doc. Ln. No." <> xRec."Related-to Purch. Doc. Ln. No.") THEN
+                                                                BEGIN
+                                                                  TestOpen();
+                                                                  IF (Rec."Related-to Purch. Doc. Ln. No." <> 0) THEN
+                                                                  BEGIN
+                                                                    Rec.TESTFIELD("Related-to Purch. Doc. Type");
+                                                                    Rec.TESTFIELD("Related-to Purch. Doc. No.");
+                                                                    CASE (Rec."Related-to Purch. Doc. Type") OF
+                                                                      Rec."Related-to Purch. Doc. Type"::"Posted Receipt":
+                                                                        lPurchRcptLine.GET(Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.");
+                                                                      Rec."Related-to Purch. Doc. Type"::"Posted Invoice":
+                                                                        lPurchInvLine.GET(Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.");
+                                                                      Rec."Related-to Purch. Doc. Type"::"Posted Return Shipment":
+                                                                        lReturnShipmentLine.GET(Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.");
+                                                                      Rec."Related-to Purch. Doc. Type"::"Posted Credit Memo":
+                                                                        lPurchCrMemoLine.GET(Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.");
+                                                                      ELSE
+                                                                        lPurchaseLine.GET(Rec."Related-to Purch. Doc. Type" - 1, Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.");
+                                                                    END;
+                                                                  END;
+                                                                  UpdateRelatedToPurchDocDesc();
+                                                                  UpdateRelatedToLink();
+                                                                END;
+                                                              END;
+
+                                                   OnLookup=VAR
+                                                              lPurchaseLine@9062234 : Record 39;
+                                                              lPurchRcptLine@9062233 : Record 121;
+                                                              lPurchInvLine@9062232 : Record 123;
+                                                              lReturnShipmentLine@9062231 : Record 6651;
+                                                              lPurchCrMemoLine@9062230 : Record 125;
+                                                            BEGIN
+                                                              Rec.TESTFIELD("Related-to Purch. Doc. Type");
+                                                              Rec.TESTFIELD("Related-to Purch. Doc. No.");
+                                                              CASE (Rec."Related-to Purch. Doc. Type") OF
+                                                                Rec."Related-to Purch. Doc. Type"::"Posted Receipt":
+                                                                  BEGIN
+                                                                    lPurchRcptLine.FILTERGROUP(2);
+                                                                    lPurchRcptLine.SETRANGE("Document No.", Rec."Related-to Purch. Doc. No.");
+                                                                    lPurchRcptLine.FILTERGROUP(0);
+                                                                    IF (lPurchRcptLine.GET(Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lPurchRcptLine) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Purch. Doc. Ln. No.", lPurchRcptLine."Line No.");
+                                                                  END;
+                                                                Rec."Related-to Purch. Doc. Type"::"Posted Invoice":
+                                                                  BEGIN
+                                                                    lPurchInvLine.FILTERGROUP(2);
+                                                                    lPurchInvLine.SETRANGE("Document No.", Rec."Related-to Purch. Doc. No.");
+                                                                    lPurchInvLine.FILTERGROUP(0);
+                                                                    IF (lPurchInvLine.GET(Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lPurchInvLine) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Purch. Doc. Ln. No.", lPurchInvLine."Line No.");
+                                                                  END;
+                                                                Rec."Related-to Purch. Doc. Type"::"Posted Return Shipment":
+                                                                  BEGIN
+                                                                    lReturnShipmentLine.FILTERGROUP(2);
+                                                                    lReturnShipmentLine.SETRANGE("Document No.", Rec."Related-to Purch. Doc. No.");
+                                                                    lReturnShipmentLine.FILTERGROUP(0);
+                                                                    IF (lReturnShipmentLine.GET(Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lReturnShipmentLine) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Purch. Doc. Ln. No.", lReturnShipmentLine."Line No.");
+                                                                  END;
+                                                                Rec."Related-to Purch. Doc. Type"::"Posted Credit Memo":
+                                                                  BEGIN
+                                                                    lPurchCrMemoLine.FILTERGROUP(2);
+                                                                    lPurchCrMemoLine.SETRANGE("Document No.", Rec."Related-to Purch. Doc. No.");
+                                                                    lPurchCrMemoLine.FILTERGROUP(0);
+                                                                    IF (lPurchCrMemoLine.GET(Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lPurchCrMemoLine) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Purch. Doc. Ln. No.", lPurchCrMemoLine."Line No.");
+                                                                  END;
+                                                                ELSE
+                                                                  BEGIN
+                                                                    lPurchaseLine.FILTERGROUP(2);
+                                                                    lPurchaseLine.SETRANGE("Document Type", Rec."Related-to Purch. Doc. Type" - 1);
+                                                                    lPurchaseLine.SETRANGE("Document No.", Rec."Related-to Purch. Doc. No.");
+                                                                    lPurchaseLine.FILTERGROUP(0);
+                                                                    IF (lPurchaseLine.GET(Rec."Related-to Purch. Doc. Type" - 1, Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.")) THEN;
+                                                                    IF (PAGE.RUNMODAL(0, lPurchaseLine) = ACTION::LookupOK) THEN
+                                                                      Rec.VALIDATE("Related-to Purch. Doc. Ln. No.", lPurchaseLine."Line No.");
+                                                                  END;
+                                                              END;
+                                                            END;
+
+                                                   CaptionML=[ENU=Related-to Purch. Doc. Ln. No.;
+                                                              ENG=Related-to Purch. Doc. Ln. No.];
+                                                   BlankZero=Yes }
+    { 203 ;   ;Related-to Purch. Doc. Desc.;Text250;
+                                                   CaptionML=[ENU=Related-to Purch. Doc. Desc.;
+                                                              ENG=Related-to Purch. Doc. Desc.] }
+    { 210 ;   ;Related-to Service Item No.;Code20 ;TableRelation="Service Item" WHERE (Customer No.=FIELD(Customer No.));
+                                                   OnValidate=BEGIN
+                                                                IF (Rec."Related-to Service Item No." <> xRec."Related-to Service Item No.") THEN
+                                                                  UpdateRelatedToLink();
+                                                              END;
+
+                                                   CaptionML=[ENU=Related-to Service Item No.;
+                                                              ENG=Related-to Service Item No.] }
+    { 211 ;   ;Related-to Service Item Desc.;Text30;
+                                                   FieldClass=FlowField;
+                                                   CalcFormula=Lookup("Service Item".Description WHERE (No.=FIELD(Related-to Service Item No.)));
+                                                   CaptionML=[ENU=Related-to Service Item Desc.;
+                                                              ENG=Related-to Service Item Desc.];
+                                                   Editable=No }
+    { 220 ;   ;Day Start Time      ;Time          ;OnValidate=BEGIN
+                                                                IF (Rec."Day Start Time" <> xRec."Day Start Time") THEN
+                                                                BEGIN
+                                                                  TestOpen();
+                                                                  VerifyDayStartEndTime();
+                                                                  UpdateTargetDateTimes();
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Day Start Time;
+                                                              ENG=Day Start Time] }
+    { 221 ;   ;Day End Time        ;Time          ;OnValidate=BEGIN
+                                                                IF (Rec."Day End Time" <> xRec."Day End Time") THEN
+                                                                BEGIN
+                                                                  TestOpen();
+                                                                  VerifyDayStartEndTime();
+                                                                  UpdateTargetDateTimes();
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Day End Time;
+                                                              ENG=Day End Time] }
+    { 222 ;   ;Include Weekends    ;Boolean       ;OnValidate=BEGIN
+                                                                IF (Rec."Include Weekends" <> xRec."Include Weekends") THEN
+                                                                BEGIN
+                                                                  TestOpen();
+                                                                  UpdateTargetDateTimes();
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Include Weekends;
+                                                              ENG=Include Weekends] }
+    { 230 ;   ;Time Spent          ;Duration      ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("CRM Log Entry"."Time Spent" WHERE (Incident No.=FIELD(No.)));
+                                                   CaptionML=[ENU=Time Spent;
+                                                              ENG=Time Spent];
+                                                   Editable=No }
+    { 240 ;   ;Vendor No.          ;Code20        ;TableRelation=Vendor;
+                                                   OnValidate=VAR
+                                                                Cust@1000000000 : Record 18;
+                                                              BEGIN
+                                                                IF (Rec."Vendor No." <> xRec."Vendor No.") THEN
+                                                                  TestOpen();
+                                                                Rec.CALCFIELDS("Customer Name");
+                                                              END;
+
+                                                   CaptionML=[ENU=Vendor No.;
+                                                              ENG=Vendor No.];
+                                                   Editable=No }
+    { 241 ;   ;Vendor Name         ;Text50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Vendor.Name WHERE (No.=FIELD(Vendor No.)));
+                                                   CaptionML=[ENU=Vendor Name;
+                                                              ENG=Vendor Name];
+                                                   Editable=No }
+    { 1000;   ;Created By          ;Code50        ;OnLookup=BEGIN
+                                                              TnpToolkit.UserLookup(Rec."Created By", FALSE);
+                                                            END;
+
+                                                   CaptionML=[ENU=Created By;
+                                                              ENG=Created By] }
+    { 1001;   ;Created Date Time   ;DateTime      ;CaptionML=[ENU=Created Date Time;
+                                                              ENG=Created Date Time] }
+    { 1002;   ;Modified By         ;Code50        ;OnLookup=BEGIN
+                                                              TnpToolkit.UserLookup(Rec."Modified By", FALSE);
+                                                            END;
+
+                                                   CaptionML=[ENU=Modified By;
+                                                              ENG=Modified By] }
+    { 1003;   ;Modified Date Time  ;DateTime      ;CaptionML=[ENU=Modified Date Time;
+                                                              ENG=Modified Date Time] }
+  }
+  KEYS
+  {
+    {    ;No.                                     ;Clustered=Yes }
+    {    ;Type,Resolved,Closed,Owned By Contact No.,Incident Date }
+    {    ;Priority,Resolved,Closed,Owned By Contact No.,Incident Date }
+    {    ;SLA,Resolved,Closed,Owned By Contact No.,Incident Date }
+    {    ;Status,Resolved,Closed,Owned By Contact No.,Incident Date }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      IncidentLink@1000000002 : Record 9062307;
+      IncidentManagement@9062230 : Codeunit 9062652;
+      IncidentToolkit@9062235 : Codeunit 9062654;
+      NoSeriesManagement@9062231 : Codeunit 396;
+      TnpToolkit@9062233 : Codeunit 9062230;
+      TnpUtils@9062232 : Codeunit 9062229;
+      DontUpdateTargetDateTimes@9062234 : Boolean;
+      tNoRelated@1000000003 : TextConst 'ENU=Related document / entry can''t be found.;ENG=Related document / entry can''t be found.';
+
+    LOCAL PROCEDURE "--- General ---"@9062232();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE InitialiseContactsFromFilters@9062230();
+    VAR
+      lCompanyContactNo@9062230 : Code[20];
+      lPersonContactNo@9062231 : Code[20];
+      lFilterGroup@9062232 : Integer;
+    BEGIN
+      //DOC NA2016.11 - Initialising record from filters
+
+      lCompanyContactNo := Rec."Company Contact No.";
+      lPersonContactNo := Rec."Person Contact No.";
+
+      FOR lFilterGroup := 5 DOWNTO 0 DO
+      BEGIN
+        Rec.FILTERGROUP(lFilterGroup);
+        IF (lCompanyContactNo = '') THEN
+          IF (Rec.GETFILTER("Company Contact No.") <> '') THEN
+            lCompanyContactNo := Rec.GETRANGEMIN("Company Contact No.");
+        IF (lPersonContactNo = '') THEN
+          IF (Rec.GETFILTER("Person Contact No.") <> '') THEN
+            lPersonContactNo := Rec.GETRANGEMIN("Person Contact No.");
+      END;
+      Rec.FILTERGROUP(0);
+
+      IF (Rec."Company Contact No." <> lCompanyContactNo) THEN
+        Rec.VALIDATE("Company Contact No.", lCompanyContactNo);
+      IF (Rec."Person Contact No." <> lPersonContactNo) THEN
+        Rec.VALIDATE("Person Contact No.", lPersonContactNo);
+    END;
+
+    LOCAL PROCEDURE InitialiseRelatedToFromFilters@9062231();
+    BEGIN
+      //DOC NH2016.11 - Initialising related-to from filters
+    END;
+
+    LOCAL PROCEDURE FindContactBusinessRelation@9062242(pTableId@9062232 : Integer) : Code[20];
+    VAR
+      lContactBusinessRelation@9062231 : Record 5054;
+      lMarketingSetup@9062230 : Record 5079;
+      lNo@9062233 : Code[20];
+      lBusinessRelationCode@9062234 : Code[20];
+    BEGIN
+      //DOC NH2016.11 - Trying to find contact business relation
+      //  -> pTableId: Table ID (only "Customer" and "Vendor" allowed)
+      //  <- Customer / vendor no. found (or empty if not found)
+
+      CLEAR(lNo);
+
+      IF (lMarketingSetup.GET()) THEN
+      BEGIN
+        CASE (pTableId) OF
+          DATABASE::Customer: lBusinessRelationCode := lMarketingSetup."Bus. Rel. Code for Customers";
+          DATABASE::Vendor: lBusinessRelationCode := lMarketingSetup."Bus. Rel. Code for Vendors";
+        END;
+        IF (lBusinessRelationCode <> '') THEN
+          IF (lContactBusinessRelation.GET(Rec."Company Contact No.", lBusinessRelationCode)) THEN
+            lNo := lContactBusinessRelation."No.";
+      END;
+
+      EXIT(lNo);
+    END;
+
+    LOCAL PROCEDURE CalculateIncidentDateTime@9062248() : DateTime;
+    VAR
+      lIncidentDateTime@9062230 : DateTime;
+      lIncidentTime@9062231 : Time;
+    BEGIN
+      //DOC NH2016.11 - Calculating and returning incident datetime
+      //  <- The datetime
+
+      CLEAR(lIncidentDateTime);
+      IF (Rec."Incident Date" <> 0D) THEN
+      BEGIN
+        IF (Rec."Incident Time" <> 0T) THEN
+          lIncidentTime := Rec."Incident Time"
+        ELSE
+          lIncidentTime := 000000T;
+        lIncidentDateTime := CREATEDATETIME(Rec."Incident Date", lIncidentTime);
+      END;
+      EXIT(lIncidentDateTime);
+    END;
+
+    LOCAL PROCEDURE UpdateTargetDateTimes@9062233();
+    VAR
+      lIncidentDateTime@9062233 : DateTime;
+      lTargetResolutionDateTime@9062231 : DateTime;
+      lTargetClosureDateTime@9062232 : DateTime;
+    BEGIN
+      //DOC NH2016.11 - Updating target dates
+
+      IF (DontUpdateTargetDateTimes) THEN
+        EXIT;
+
+      CLEAR(lTargetResolutionDateTime);
+      CLEAR(lTargetClosureDateTime);
+
+      lIncidentDateTime := CalculateIncidentDateTime();
+      IF (lIncidentDateTime <> 0DT) THEN
+      BEGIN
+        lTargetResolutionDateTime := CalcualteTargetDateTime(lIncidentDateTime, Rec."Target Resolution Duration");
+        lTargetClosureDateTime := CalcualteTargetDateTime(lIncidentDateTime, Rec."Target Closure Duration");
+      END;
+
+      Rec.VALIDATE("Target Resolution Date Time", lTargetResolutionDateTime);
+      Rec.VALIDATE("Target Closure Date Time", lTargetClosureDateTime);
+    END;
+
+    LOCAL PROCEDURE CalcualteTargetDateTime@9062237(pIncidentDateTime@9062233 : DateTime;pDuration@9062234 : Duration) : DateTime;
+    VAR
+      lTargetDateTime@9062235 : DateTime;
+      lTargetDate@9062236 : Date;
+      lTargetTime@9062230 : Time;
+      lTargetTimeLeft@9062237 : Integer;
+      lWeekDay@9062232 : Integer;
+      lDaysToAdd@9062231 : Integer;
+    BEGIN
+      //DOC NH2016.11 - Calculating target datetime
+      //  -> pIncidentDateTime: Incident datetime
+      //  -> pDuration: Duration
+      //  <- Calculated target datetime
+
+      CLEAR(lTargetDateTime);
+      IF ((pIncidentDateTime <> 0DT) AND (pDuration <> 0)) THEN
+      BEGIN
+        lTargetDateTime := pIncidentDateTime + pDuration;
+        lTargetDate := DT2DATE(lTargetDateTime);
+        lTargetTime := DT2TIME(lTargetDateTime);
+
+        IF ((Rec."Day Start Time" <> 0T) AND (lTargetTime < Rec."Day Start Time")) THEN
+          lTargetTime := Rec."Day Start Time";
+        IF ((Rec."Day End Time" <> 0T) AND (lTargetTime > Rec."Day End Time")) THEN
+        BEGIN
+          lTargetTimeLeft := lTargetTime - Rec."Day End Time";
+          lTargetDate := lTargetDate + 1;
+          lTargetTime := Rec."Day Start Time" + lTargetTimeLeft;
+        END;
+
+        IF ( NOT (Rec."Include Weekends")) THEN
+        BEGIN
+          lWeekDay := DATE2DWY(lTargetDate, 1);
+          IF (lWeekDay >= 6) THEN
+          BEGIN
+            lDaysToAdd := 8 - lWeekDay;
+            lTargetDate := lTargetDate + lDaysToAdd;
+          END;
+        END;
+
+        lTargetDateTime := CREATEDATETIME(lTargetDate, lTargetTime);
+      END;
+
+      EXIT(lTargetDateTime);
+    END;
+
+    LOCAL PROCEDURE VerifyDayStartEndTime@9062235();
+    VAR
+      lTimeBuffer@9062230 : Time;
+    BEGIN
+      //DOC NH2016.11 - Verifying day start / end time
+
+      IF ((Rec."Day Start Time" <> 0T) AND (Rec."Day End Time" <> 0T) AND
+          (Rec."Day Start Time" > Rec."Day End Time")) THEN
+      BEGIN
+        lTimeBuffer := Rec."Day Start Time";
+        Rec."Day Start Time" := Rec."Day End Time";
+        Rec."Day End Time" := lTimeBuffer;
+      END;
+    END;
+
+    PROCEDURE GetLatestActivity@9062234() : Text;
+    VAR
+      lCrmLogEntry@9062230 : Record 9062392;
+    BEGIN
+      //DOC NH2016.11 - Returning latest activity (from CRM Log)
+      //  <- The activity
+
+      lCrmLogEntry.RESET();
+      lCrmLogEntry.SETCURRENTKEY("Incident No.", "Log Date", "Log Time");
+      lCrmLogEntry.SETRANGE("Incident No.", Rec."No.");
+      IF (lCrmLogEntry.FINDLAST()) THEN
+        EXIT(lCrmLogEntry.Subject)
+      ELSE
+        EXIT('');
+    END;
+
+    LOCAL PROCEDURE "--- Relations ---"@9062238();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE UpdateRelatedToSalesDocDesc@9062239();
+    VAR
+      lDocumentDesc@9062231 : Text;
+      lDocumentLineDesc@9062230 : Text;
+    BEGIN
+      //DOC NH2016.11 - Updating "Related-to Sales Doc. Desc."
+      //  -> pDocumentDescription: Document description
+      //  -> pLineDescription: Line desription
+
+      lDocumentDesc := GetRelatedToSalesDocDesc();
+      lDocumentLineDesc := GetRelatedToSalesDocLineDesc();
+
+      Rec.VALIDATE("Related-to Sales Doc. Desc.", JoinDescriptions(lDocumentDesc, lDocumentLineDesc));
+    END;
+
+    LOCAL PROCEDURE GetRelatedToSalesDocDesc@9062236() : Text;
+    VAR
+      lSalesHeader@9062235 : Record 36;
+      lSalesShipmentHeader@9062234 : Record 110;
+      lSalesInvoiceHeader@9062233 : Record 112;
+      lReturnReceiptHeader@9062232 : Record 6660;
+      lSalesCrMemoHeader@9062231 : Record 114;
+    BEGIN
+      //DOC NH2016.11 - Returning related-to sales document description
+      //  <- The description
+
+      IF ((Rec."Related-to Sales Doc. Type" = Rec."Related-to Sales Doc. Type"::" ") OR (Rec."Related-to Sales Doc. No." = '')) THEN
+        EXIT('');
+
+      CASE (Rec."Related-to Sales Doc. Type") OF
+        Rec."Related-to Sales Doc. Type"::"Posted Shipment":
+          IF (lSalesShipmentHeader.GET(Rec."Related-to Sales Doc. No.")) THEN
+            EXIT(lSalesShipmentHeader."Posting Description");
+        Rec."Related-to Sales Doc. Type"::"Posted Invoice":
+          IF (lSalesInvoiceHeader.GET(Rec."Related-to Sales Doc. No.")) THEN
+            EXIT(lSalesInvoiceHeader."Posting Description");
+        Rec."Related-to Sales Doc. Type"::"Posted Return Receipt":
+          IF (lReturnReceiptHeader.GET(Rec."Related-to Sales Doc. No.")) THEN
+            EXIT(lReturnReceiptHeader."Posting Description");
+        Rec."Related-to Sales Doc. Type"::"Posted Credit Memo":
+          IF (lSalesCrMemoHeader.GET(Rec."Related-to Sales Doc. No.")) THEN
+            EXIT(lSalesCrMemoHeader."Posting Description");
+        ELSE
+          IF (lSalesHeader.GET(Rec."Related-to Sales Doc. Type" - 1, Rec."Related-to Sales Doc. No.")) THEN
+            EXIT(lSalesHeader."Posting Description");
+      END;
+
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE GetRelatedToSalesDocLineDesc@9062241() : Text;
+    VAR
+      lSalesLine@9062240 : Record 37;
+      lSalesShipmentLine@9062238 : Record 111;
+      lSalesInvoiceLine@9062236 : Record 113;
+      lReturnReceiptLine@9062234 : Record 6661;
+      lSalesCrMemoLine@9062232 : Record 115;
+    BEGIN
+      //DOC NH2016.11 - Returning related-to sales document line description
+      //  <- The description
+
+      IF ((Rec."Related-to Sales Doc. Type" = Rec."Related-to Sales Doc. Type"::" ") OR (Rec."Related-to Sales Doc. No." = '') OR
+          (Rec."Related-to Sales Doc. Line No." = 0)) THEN
+        EXIT('');
+
+      CASE (Rec."Related-to Sales Doc. Type") OF
+        Rec."Related-to Sales Doc. Type"::"Posted Shipment":
+          IF (lSalesShipmentLine.GET(Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.")) THEN
+            EXIT(lSalesShipmentLine.Description);
+        Rec."Related-to Sales Doc. Type"::"Posted Invoice":
+          IF (lSalesInvoiceLine.GET(Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.")) THEN
+            EXIT(lSalesInvoiceLine.Description);
+        Rec."Related-to Sales Doc. Type"::"Posted Return Receipt":
+          IF (lReturnReceiptLine.GET(Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.")) THEN
+            EXIT(lReturnReceiptLine.Description);
+        Rec."Related-to Sales Doc. Type"::"Posted Credit Memo":
+          IF (lSalesCrMemoLine.GET(Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.")) THEN
+            EXIT(lSalesCrMemoLine.Description);
+        ELSE
+          IF (lSalesLine.GET(Rec."Related-to Sales Doc. Type" - 1, Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.")) THEN
+            EXIT(lSalesLine.Description);
+      END;
+
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE UpdateRelatedToPurchDocDesc@9062240();
+    VAR
+      lDocumentDesc@9062231 : Text;
+      lDocumentLineDesc@9062230 : Text;
+    BEGIN
+      //DOC NH2016.11 - Updating "Related-to Purch. Doc. Desc."
+      //  -> pDocumentDescription: Document description
+      //  -> pLineDescription: Line desription
+
+      lDocumentDesc := GetRelatedToPurchDocDesc();
+      lDocumentLineDesc := GetRelatedToPurchDocLineDesc();
+
+      Rec.VALIDATE("Related-to Purch. Doc. Desc.", JoinDescriptions(lDocumentDesc, lDocumentLineDesc));
+    END;
+
+    LOCAL PROCEDURE GetRelatedToPurchDocDesc@9062249() : Text;
+    VAR
+      lPurchaseHeader@9062234 : Record 38;
+      lPurchRcptHeader@9062233 : Record 120;
+      lPurchInvHeader@9062232 : Record 122;
+      lReturnShipmentHeader@9062231 : Record 6650;
+      lPurchCrMemoHdr@9062230 : Record 124;
+    BEGIN
+      //DOC NH2016.11 - Returning related-to purchase document description
+      //  <- The description
+
+      IF ((Rec."Related-to Purch. Doc. Type" = Rec."Related-to Purch. Doc. Type"::" ") OR (Rec."Related-to Purch. Doc. No." = '')) THEN
+        EXIT('');
+
+      CASE (Rec."Related-to Purch. Doc. Type") OF
+        Rec."Related-to Purch. Doc. Type"::"Posted Receipt":
+          IF (lPurchRcptHeader.GET(Rec."Related-to Purch. Doc. No.")) THEN
+            EXIT(lPurchRcptHeader."Posting Description");
+        Rec."Related-to Purch. Doc. Type"::"Posted Invoice":
+          IF (lPurchInvHeader.GET(Rec."Related-to Purch. Doc. No.")) THEN
+            EXIT(lPurchInvHeader."Posting Description");
+        Rec."Related-to Purch. Doc. Type"::"Posted Return Shipment":
+          IF (lReturnShipmentHeader.GET(Rec."Related-to Purch. Doc. No.")) THEN
+            EXIT(lReturnShipmentHeader."Posting Description");
+        Rec."Related-to Purch. Doc. Type"::"Posted Credit Memo":
+          IF (lPurchCrMemoHdr.GET(Rec."Related-to Purch. Doc. No.")) THEN
+            EXIT(lPurchCrMemoHdr."Posting Description");
+        ELSE
+          IF (lPurchaseHeader.GET(Rec."Related-to Purch. Doc. Type" - 1, Rec."Related-to Purch. Doc. No.")) THEN
+            EXIT(lPurchaseHeader."Posting Description");
+      END;
+
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE GetRelatedToPurchDocLineDesc@9062250() : Text;
+    VAR
+      lPurchaseLine@9062234 : Record 39;
+      lPurchRcptLine@9062233 : Record 121;
+      lPurchInvLine@9062232 : Record 123;
+      lReturnShipmentLine@9062231 : Record 6651;
+      lPurchCrMemoLine@9062230 : Record 125;
+    BEGIN
+      //DOC NH2016.11 - Returning related-to purchase document line description
+      //  <- The description
+
+      IF ((Rec."Related-to Purch. Doc. Type" = Rec."Related-to Purch. Doc. Type"::" ") OR (Rec."Related-to Purch. Doc. No." = '') OR
+          (Rec."Related-to Purch. Doc. Ln. No." = 0)) THEN
+        EXIT('');
+
+      CASE (Rec."Related-to Purch. Doc. Type") OF
+        Rec."Related-to Purch. Doc. Type"::"Posted Receipt":
+          IF (lPurchRcptLine.GET(Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.")) THEN
+            EXIT(lPurchRcptLine.Description);
+        Rec."Related-to Purch. Doc. Type"::"Posted Invoice":
+          IF (lPurchInvLine.GET(Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.")) THEN
+            EXIT(lPurchInvLine.Description);
+        Rec."Related-to Purch. Doc. Type"::"Posted Return Shipment":
+          IF (lReturnShipmentLine.GET(Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.")) THEN
+            EXIT(lReturnShipmentLine.Description);
+        Rec."Related-to Purch. Doc. Type"::"Posted Credit Memo":
+          IF (lPurchCrMemoLine.GET(Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.")) THEN
+            EXIT(lPurchCrMemoLine.Description);
+        ELSE
+          IF (lPurchaseLine.GET(Rec."Related-to Purch. Doc. Type" - 1, Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.")) THEN
+            EXIT(lPurchaseLine.Description);
+      END;
+
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE JoinDescriptions@9062251(pDocumentDescription@9062231 : Text;pLineDescription@9062230 : Text) : Text[250];
+    VAR
+      lDescription@9062232 : Text;
+    BEGIN
+      //DOC NH2016.11 - Joining two descriptions together
+      //  -> pDocumentDescription: Document description
+      //  -> pLineDescription: Line desription
+      //  <- Joined description
+
+      lDescription := pDocumentDescription;
+      IF ((lDescription <> '') AND (pLineDescription <> '')) THEN
+        lDescription := lDescription + ' - ';
+      lDescription := lDescription + pLineDescription;
+      EXIT(COPYSTR(lDescription, 1, 250));
+    END;
+
+    PROCEDURE ShowRelatedTo@1000000003();
+    BEGIN
+      //DOC NH2016.11 - Showing "Related-to"
+
+      CASE (Rec."Related-to") OF
+        Rec."Related-to"::"Sales Document":
+          ShowRelatedToSalesDocument();
+        Rec."Related-to"::"Purchase Document":
+          ShowRelatedToPurchaseDocument();
+        Rec."Related-to"::"Service Item":
+          ShowRelatedToServiceItem();
+        ELSE
+          ERROR(tNoRelated);
+      END;
+    END;
+
+    LOCAL PROCEDURE ShowRelatedToSalesDocument@1000000004();
+    VAR
+      lSalesHeader@1000000004 : Record 36;
+      lSalesShipmentHeader@1000000000 : Record 110;
+      lSalesInvoiceHeader@1000000001 : Record 112;
+      lReturnReceiptHeader@1000000002 : Record 6660;
+      lSalesCrMemoHeader@1000000003 : Record 114;
+    BEGIN
+      //DOC NH2016.11 - Showing "Related-to Sales Document"
+
+      IF ((Rec."Related-to Sales Doc. Type" = Rec."Related-to Sales Doc. Type"::" ") OR (Rec."Related-to Sales Doc. No." = '')) THEN
+        ERROR(tNoRelated);
+
+      CASE (Rec."Related-to Sales Doc. Type") OF
+        Rec."Related-to Sales Doc. Type"::"Posted Shipment":
+          BEGIN
+            lSalesShipmentHeader.GET(Rec."Related-to Sales Doc. No.");
+            PAGE.RUN(PAGE::"Posted Sales Shipment", lSalesShipmentHeader);
+          END;
+        Rec."Related-to Sales Doc. Type"::"Posted Invoice":
+          BEGIN
+            lSalesInvoiceHeader.GET(Rec."Related-to Sales Doc. No.");
+            PAGE.RUN(PAGE::"Posted Sales Invoice", lSalesInvoiceHeader);
+          END;
+        Rec."Related-to Sales Doc. Type"::"Posted Return Receipt":
+          BEGIN
+            lReturnReceiptHeader.GET(Rec."Related-to Sales Doc. No.");
+            PAGE.RUN(PAGE::"Posted Return Receipt", lReturnReceiptHeader);
+          END;
+        Rec."Related-to Sales Doc. Type"::"Posted Credit Memo":
+          BEGIN
+            lSalesCrMemoHeader.GET(Rec."Related-to Sales Doc. No.");
+            PAGE.RUN(PAGE::"Posted Sales Credit Memo", lSalesCrMemoHeader);
+          END;
+        ELSE
+          BEGIN
+            lSalesHeader.GET(Rec."Related-to Sales Doc. Type" - 1, Rec."Related-to Sales Doc. No.");
+            CASE (Rec."Related-to Sales Doc. Type") OF
+              Rec."Related-to Sales Doc. Type"::Quote:
+                PAGE.RUN(PAGE::"Sales Quote", lSalesHeader);
+              Rec."Related-to Sales Doc. Type"::Order:
+                PAGE.RUN(PAGE::"Sales Order", lSalesHeader);
+              Rec."Related-to Sales Doc. Type"::Invoice:
+                PAGE.RUN(PAGE::"Sales Invoice", lSalesHeader);
+              Rec."Related-to Sales Doc. Type"::"Return Order":
+                PAGE.RUN(PAGE::"Sales Return Order", lSalesHeader);
+              Rec."Related-to Sales Doc. Type"::"Credit Memo":
+                PAGE.RUN(PAGE::"Sales Credit Memo", lSalesHeader);
+            END;
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ShowRelatedToPurchaseDocument@1000000005();
+    VAR
+      lPurchaseHeader@1000000004 : Record 38;
+      lPurchRcptHeader@1000000000 : Record 120;
+      lPurchInvHeader@1000000001 : Record 122;
+      lReturnShipmentHeader@1000000002 : Record 6650;
+      lPurchCrMemoHdr@1000000003 : Record 124;
+    BEGIN
+      //DOC NH2016.11 - Showing "Related-to Purchase Document"
+
+      IF ((Rec."Related-to Purch. Doc. Type" = Rec."Related-to Purch. Doc. Type"::" ") OR (Rec."Related-to Purch. Doc. No." = '')) THEN
+        ERROR(tNoRelated);
+
+      CASE (Rec."Related-to Purch. Doc. Type") OF
+        Rec."Related-to Purch. Doc. Type"::"Posted Receipt":
+          BEGIN
+            lPurchRcptHeader.GET(Rec."Related-to Purch. Doc. No.");
+            PAGE.RUN(PAGE::"Posted Purchase Receipt", lPurchRcptHeader);
+          END;
+        Rec."Related-to Purch. Doc. Type"::"Posted Invoice":
+          BEGIN
+            lPurchInvHeader.GET(Rec."Related-to Purch. Doc. No.");
+            PAGE.RUN(PAGE::"Posted Purchase Invoice", lPurchInvHeader);
+          END;
+        Rec."Related-to Purch. Doc. Type"::"Posted Return Shipment":
+          BEGIN
+            lReturnShipmentHeader.GET(Rec."Related-to Purch. Doc. No.");
+            PAGE.RUN(PAGE::"Posted Return Shipment", lReturnShipmentHeader);
+          END;
+        Rec."Related-to Purch. Doc. Type"::"Posted Credit Memo":
+          BEGIN
+            lPurchCrMemoHdr.GET(Rec."Related-to Purch. Doc. No.");
+            PAGE.RUN(PAGE::"Posted Purchase Credit Memo", lPurchCrMemoHdr);
+          END;
+        ELSE
+          BEGIN
+            lPurchaseHeader.GET(Rec."Related-to Purch. Doc. Type" - 1, Rec."Related-to Purch. Doc. No.");
+            CASE (Rec."Related-to Purch. Doc. Type") OF
+              Rec."Related-to Purch. Doc. Type"::Quote:
+                PAGE.RUN(PAGE::"Purchase Quote", lPurchaseHeader);
+              Rec."Related-to Purch. Doc. Type"::Order:
+                PAGE.RUN(PAGE::"Purchase Order", lPurchaseHeader);
+              Rec."Related-to Purch. Doc. Type"::Invoice:
+                PAGE.RUN(PAGE::"Purchase Invoice", lPurchaseHeader);
+              Rec."Related-to Purch. Doc. Type"::"Return Order":
+                PAGE.RUN(PAGE::"Purchase Return Order", lPurchaseHeader);
+              Rec."Related-to Purch. Doc. Type"::"Credit Memo":
+                PAGE.RUN(PAGE::"Purchase Credit Memo", lPurchaseHeader);
+            END;
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ShowRelatedToServiceItem@1000000006();
+    VAR
+      lServiceItem@1000000000 : Record 5940;
+    BEGIN
+      //DOC NH2016.11 - Showing "Related-to Service Item"
+
+      IF (Rec."Related-to Service Item No." = '') THEN
+        ERROR(tNoRelated);
+
+      lServiceItem.GET(Rec."Related-to Service Item No.");
+      PAGE.RUN(PAGE::"Service Item Card", lServiceItem);
+    END;
+
+    LOCAL PROCEDURE UpdateRelatedToLink@1000000007();
+    VAR
+      lRelatedToPresent@1000000000 : Boolean;
+      lTableId@1000000001 : Integer;
+      lRecordPosition@1000000002 : Text;
+      lDescription@1000000003 : Text;
+    BEGIN
+      //DOC NH2016.11 - Updating related-to link
+
+      CLEAR(lRelatedToPresent);
+      CLEAR(lTableId);
+      CLEAR(lRecordPosition);
+      CLEAR(lDescription);
+      CASE (Rec."Related-to") OF
+        Rec."Related-to"::"Sales Document":
+          lRelatedToPresent := UpdateRelatedToSalesDocumentLink(lTableId, lRecordPosition, lDescription);
+        Rec."Related-to"::"Purchase Document":
+          lRelatedToPresent := UpdateRelatedToPurchaseDocumentLink(lTableId, lRecordPosition, lDescription);
+        Rec."Related-to"::"Service Item":
+          lRelatedToPresent := UpdateRelatedToServiceItemLink(lTableId, lRecordPosition, lDescription);
+      END;
+
+      IF (lRelatedToPresent) THEN
+        IncidentToolkit.AddOrModifyIncidentLink(Rec, lTableId, lRecordPosition, lDescription, IncidentLink.Source::"Related-to")
+      ELSE
+      BEGIN
+        IncidentLink.RESET();
+        IncidentLink.SETRANGE("Incident No.", Rec."No.");
+        IncidentLink.SETRANGE(Source, IncidentLink.Source::"Related-to");
+        IncidentLink.DELETEALL(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateRelatedToSalesDocumentLink@1000000010(VAR pTableId@1000000003 : Integer;VAR pRecordPosition@1000000004 : Text;VAR pDescription@1000000005 : Text) : Boolean;
+    VAR
+      lSalesShipmentHeader@1000000001 : Record 110;
+      lSalesShipmentLine@1000000002 : Record 111;
+      lSalesInvoiceHeader@1000000008 : Record 112;
+      lSalesInvoiceLine@1000000009 : Record 113;
+      lReturnReceiptHeader@1000000010 : Record 6660;
+      lReturnReceiptLine@1000000011 : Record 6661;
+      lSalesCrMemoHeader@1000000012 : Record 114;
+      lSalesCrMemoLine@1000000013 : Record 115;
+      lSalesHeader@1000000014 : Record 36;
+      lSalesLine@1000000015 : Record 37;
+      lRelatedToPresent@1000000000 : Boolean;
+      eSalesShipment@1000000007 : TextConst 'ENU=Posted sales shipment "%1";ENG=Posted sales shipment "%1"';
+      eSalesShipmentLine@1000000006 : TextConst 'ENU=Posted sales shipment "%1" line %2;ENG=Posted sales shipment "%1" line %2';
+      eSalesInvoice@1000000023 : TextConst 'ENU=Posted sales invoice "%1";ENG=Posted sales invoice "%1"';
+      eSalesInvoiceLine@1000000022 : TextConst 'ENU=Posted sales invoice "%1" line %2;ENG=Posted sales invoice "%1" line %2';
+      eReturnReceipt@1000000021 : TextConst 'ENU=Posted return receipt "%1";ENG=Posted return receipt "%1"';
+      eReturnReceiptLine@1000000020 : TextConst 'ENU=Posted return receipt "%1" line %2;ENG=Posted return receipt "%1" line %2';
+      eSalesCrMemo@1000000019 : TextConst 'ENU=Posted sales cr. memo "%1";ENG=Posted sales cr. memo "%1"';
+      eSalesCrMemoLine@1000000018 : TextConst 'ENU=Posted sales cr. memo "%1" line %2;ENG=Posted sales cr. memo "%1" line %2';
+      eSalesDocument@1000000017 : TextConst 'ENU=Sales %1 "%2";ENG=Sales %1 "%2"';
+      eSalesDocumentLine@1000000016 : TextConst 'ENU=Sales %1 "%2" line %3;ENG=Sales %1 "%2" line %3';
+    BEGIN
+      //DOC NH2016.11 - Updating related-to sales document link
+      //  <> pTableId: Target table ID
+      //  <> pRecordPosition: Target record position
+      //  <> pDescription: Target description
+      //  <- TRUE = Related-to present, FALSE = Not
+
+      CLEAR(pTableId);
+      CLEAR(pRecordPosition);
+      CLEAR(pDescription);
+
+      lRelatedToPresent := ((Rec."Related-to Sales Doc. Type" <> Rec."Related-to Sales Doc. Type"::" ") AND (Rec."Related-to Sales Doc. No." <> ''));
+      IF (lRelatedToPresent) THEN
+        IF (Rec."Related-to Sales Doc. Line No." <> 0) THEN
+          CASE (Rec."Related-to Sales Doc. Type") OF
+            Rec."Related-to Sales Doc. Type"::"Posted Shipment":
+              IF (lSalesShipmentLine.GET(Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Sales Shipment Line";
+                pRecordPosition := lSalesShipmentLine.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(eSalesShipmentLine, Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.");
+              END;
+            Rec."Related-to Sales Doc. Type"::"Posted Invoice":
+              IF (lSalesInvoiceLine.GET(Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Sales Invoice Line";
+                pRecordPosition := lSalesInvoiceLine.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(eSalesInvoiceLine, Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.");
+              END;
+            Rec."Related-to Sales Doc. Type"::"Posted Return Receipt":
+              IF (lReturnReceiptLine.GET(Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Return Receipt Line";
+                pRecordPosition := lReturnReceiptLine.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(eReturnReceiptLine, Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.");
+              END;
+            Rec."Related-to Sales Doc. Type"::"Posted Credit Memo":
+              IF (lSalesCrMemoLine.GET(Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Sales Cr.Memo Line";
+                pRecordPosition := lSalesCrMemoLine.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(eSalesCrMemoLine, Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.");
+              END;
+            ELSE
+              IF (lSalesLine.GET(Rec."Related-to Sales Doc. Type" - 1, Rec."Related-to Sales Doc. No.", Rec."Related-to Sales Doc. Line No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Sales Line";
+                pRecordPosition := lSalesLine.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(eSalesDocumentLine, LOWERCASE(FORMAT(lSalesLine."Document Type")), Rec."Related-to Sales Doc. No.",
+                  Rec."Related-to Sales Doc. Line No.");
+              END;
+          END
+        ELSE
+          CASE (Rec."Related-to Sales Doc. Type") OF
+            Rec."Related-to Sales Doc. Type"::"Posted Shipment":
+              IF (lSalesShipmentHeader.GET(Rec."Related-to Sales Doc. No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Sales Shipment Header";
+                pRecordPosition := lSalesShipmentHeader.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(eSalesShipment, Rec."Related-to Sales Doc. No.");
+              END;
+            Rec."Related-to Sales Doc. Type"::"Posted Invoice":
+              IF (lSalesInvoiceHeader.GET(Rec."Related-to Sales Doc. No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Sales Invoice Header";
+                pRecordPosition := lSalesInvoiceHeader.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(eSalesInvoice, Rec."Related-to Sales Doc. No.");
+              END;
+            Rec."Related-to Sales Doc. Type"::"Posted Return Receipt":
+              IF (lReturnReceiptHeader.GET(Rec."Related-to Sales Doc. No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Return Receipt Header";
+                pRecordPosition := lReturnReceiptHeader.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(eReturnReceipt, Rec."Related-to Sales Doc. No.");
+              END;
+            Rec."Related-to Sales Doc. Type"::"Posted Credit Memo":
+              IF (lSalesCrMemoHeader.GET(Rec."Related-to Sales Doc. No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Sales Cr.Memo Header";
+                pRecordPosition := lSalesCrMemoHeader.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(eSalesCrMemo, Rec."Related-to Sales Doc. No.");
+              END;
+            ELSE
+              IF (lSalesHeader.GET(Rec."Related-to Sales Doc. Type" - 1, Rec."Related-to Sales Doc. No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Sales Header";
+                pRecordPosition := lSalesHeader.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(eSalesDocument, LOWERCASE(FORMAT(lSalesHeader."Document Type")), Rec."Related-to Sales Doc. No.");
+              END;
+          END;
+
+      EXIT(lRelatedToPresent);
+    END;
+
+    LOCAL PROCEDURE UpdateRelatedToPurchaseDocumentLink@1000000018(VAR pTableId@1000000003 : Integer;VAR pRecordPosition@1000000004 : Text;VAR pDescription@1000000005 : Text) : Boolean;
+    VAR
+      lPurchRcptHeader@1000000001 : Record 120;
+      lPurchRcptLine@1000000002 : Record 121;
+      lPurchInvHeader@1000000008 : Record 122;
+      lPurchInvLine@1000000009 : Record 123;
+      lReturnShipmentHeader@1000000010 : Record 6650;
+      lReturnShipmentLine@1000000011 : Record 6651;
+      lPurchCrMemoHdr@1000000012 : Record 124;
+      lPurchCrMemoLine@1000000013 : Record 125;
+      lPurchaseHeader@1000000014 : Record 38;
+      lPurchaseLine@1000000015 : Record 39;
+      lRelatedToPresent@1000000000 : Boolean;
+      ePurchReceipt@1000000007 : TextConst 'ENU=Posted purch. receipt "%1";ENG=Posted purch. receipt "%1"';
+      ePurchReceiptLine@1000000006 : TextConst 'ENU=Posted purch. shipment "%1" line %2;ENG=Posted purch. shipment "%1" line %2';
+      ePurchInvoice@1000000023 : TextConst 'ENU=Posted purch. invoice "%1";ENG=Posted purch. invoice "%1"';
+      ePurchInvoiceLine@1000000022 : TextConst 'ENU=Posted purch. invoice "%1" line %2;ENG=Posted purch. invoice "%1" line %2';
+      eReturnShipment@1000000021 : TextConst 'ENU=Posted return shipment "%1";ENG=Posted return shipment "%1"';
+      eReturnShipmentLine@1000000020 : TextConst 'ENU=Posted return shipment "%1" line %2;ENG=Posted return shipment "%1" line %2';
+      ePurchCrMemo@1000000019 : TextConst 'ENU=Posted purch. cr. memo "%1";ENG=Posted purch. cr. memo "%1"';
+      ePurchCrMemoLine@1000000018 : TextConst 'ENU=Posted purch. cr. memo "%1" line %2;ENG=Posted purch. cr. memo "%1" line %2';
+      ePurchDocument@1000000017 : TextConst 'ENU=Purch. %1 "%2";ENG=Purch. %1 "%2"';
+      ePurchDocumentLine@1000000016 : TextConst 'ENU=Purch. %1 "%2" line %3;ENG=Purch. %1 "%2" line %3';
+    BEGIN
+      //DOC NH2016.11 - Updating related-to sales document link
+      //  <> pTableId: Target table ID
+      //  <> pRecordPosition: Target record position
+      //  <> pDescription: Target description
+      //  <- TRUE = Related-to present, FALSE = Not
+
+      CLEAR(pTableId);
+      CLEAR(pRecordPosition);
+      CLEAR(pDescription);
+
+      lRelatedToPresent := ((Rec."Related-to Purch. Doc. Type" <> Rec."Related-to Purch. Doc. Type"::" ") AND (Rec."Related-to Purch. Doc. No." <> ''));
+      IF (lRelatedToPresent) THEN
+        IF (Rec."Related-to Purch. Doc. Ln. No." <> 0) THEN
+          CASE (Rec."Related-to Purch. Doc. Type") OF
+            Rec."Related-to Purch. Doc. Type"::"Posted Receipt":
+              IF (lPurchRcptLine.GET(Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Purch. Rcpt. Line";
+                pRecordPosition := lPurchRcptLine.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(ePurchReceiptLine, Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.");
+              END;
+            Rec."Related-to Purch. Doc. Type"::"Posted Invoice":
+              IF (lPurchInvLine.GET(Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Purch. Inv. Line";
+                pRecordPosition := lPurchInvLine.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(ePurchInvoiceLine, Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.");
+              END;
+            Rec."Related-to Purch. Doc. Type"::"Posted Return Shipment":
+              IF (lReturnShipmentLine.GET(Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Return Shipment Line";
+                pRecordPosition := lReturnShipmentLine.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(eReturnShipment, Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.");
+              END;
+            Rec."Related-to Purch. Doc. Type"::"Posted Credit Memo":
+              IF (lPurchCrMemoLine.GET(Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Purch. Cr. Memo Line";
+                pRecordPosition := lPurchCrMemoLine.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(ePurchCrMemoLine, Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.");
+              END;
+            ELSE
+              IF (lPurchaseLine.GET(Rec."Related-to Purch. Doc. Type" - 1, Rec."Related-to Purch. Doc. No.", Rec."Related-to Purch. Doc. Ln. No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Purchase Line";
+                pRecordPosition := lPurchaseLine.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(ePurchDocumentLine, LOWERCASE(FORMAT(lPurchaseLine."Document Type")), Rec."Related-to Purch. Doc. No.",
+                  Rec."Related-to Purch. Doc. Ln. No.");
+              END;
+          END
+        ELSE
+          CASE (Rec."Related-to Purch. Doc. Type") OF
+            Rec."Related-to Purch. Doc. Type"::"Posted Receipt":
+              IF (lPurchRcptHeader.GET(Rec."Related-to Purch. Doc. No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Purch. Rcpt. Header";
+                pRecordPosition := lPurchRcptHeader.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(ePurchReceipt, Rec."Related-to Purch. Doc. No.");
+              END;
+            Rec."Related-to Purch. Doc. Type"::"Posted Invoice":
+              IF (lPurchInvHeader.GET(Rec."Related-to Purch. Doc. No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Purch. Inv. Header";
+                pRecordPosition := lPurchInvHeader.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(ePurchInvoice, Rec."Related-to Purch. Doc. No.");
+              END;
+            Rec."Related-to Purch. Doc. Type"::"Posted Return Shipment":
+              IF (lReturnShipmentHeader.GET(Rec."Related-to Purch. Doc. No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Return Shipment Header";
+                pRecordPosition := lReturnShipmentHeader.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(eReturnShipment, Rec."Related-to Purch. Doc. No.");
+              END;
+            Rec."Related-to Purch. Doc. Type"::"Posted Credit Memo":
+              IF (lPurchCrMemoHdr.GET(Rec."Related-to Purch. Doc. No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Purch. Cr. Memo Hdr.";
+                pRecordPosition := lPurchCrMemoHdr.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(ePurchCrMemo, Rec."Related-to Purch. Doc. No.");
+              END;
+            ELSE
+              IF (lPurchaseHeader.GET(Rec."Related-to Purch. Doc. Type" - 1, Rec."Related-to Purch. Doc. No.")) THEN
+              BEGIN
+                pTableId := DATABASE::"Purchase Header";
+                pRecordPosition := lPurchaseHeader.GETPOSITION(FALSE);
+                pDescription := STRSUBSTNO(ePurchDocument, LOWERCASE(FORMAT(lPurchaseHeader."Document Type")), Rec."Related-to Purch. Doc. No.");
+              END;
+          END;
+
+      EXIT(lRelatedToPresent);
+    END;
+
+    LOCAL PROCEDURE UpdateRelatedToServiceItemLink@1000000022(VAR pTableId@1000000003 : Integer;VAR pRecordPosition@1000000004 : Text;VAR pDescription@1000000005 : Text) : Boolean;
+    VAR
+      lServiceItem@1000000001 : Record 5940;
+      lRelatedToPresent@1000000000 : Boolean;
+      eServiceItem@1000000002 : TextConst 'ENU=Service item "%1";ENG=Service item "%1"';
+    BEGIN
+      //DOC NH2016.11 - Updating related-to service item link
+      //  <> pTableId: Target table ID
+      //  <> pRecordPosition: Target record position
+      //  <> pDescription: Target description
+      //  <- TRUE = Related-to present, FALSE = Not
+
+      CLEAR(pTableId);
+      CLEAR(pRecordPosition);
+      CLEAR(pDescription);
+
+      lRelatedToPresent := (Rec."Related-to Service Item No." <> '');
+      IF (lRelatedToPresent) THEN
+        IF (lServiceItem.GET(Rec."Related-to Service Item No.")) THEN
+        BEGIN
+          pTableId := DATABASE::"Service Item";
+          pRecordPosition := lServiceItem.GETPOSITION(FALSE);
+          pDescription := STRSUBSTNO(eServiceItem, Rec."Related-to Service Item No.");
+        END;
+
+      EXIT(lRelatedToPresent);
+    END;
+
+    LOCAL PROCEDURE "--- Miscellaneous ---"@1000000000();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE TestOpen@1000000002();
+    BEGIN
+      //DOC NH2016.11 - Testing if the incident is open
+
+      Rec.TESTFIELD("Amendment Mode", Rec."Amendment Mode"::"Open for Amendment");
+      Rec.TESTFIELD(Closed, FALSE);
+    END;
+
+    PROCEDURE GetStyle@1000000001() : Text;
+    BEGIN
+      //DOC NH2016.11 - Returning style
+      //  <- The style
+
+      IF (Rec.Closed) THEN
+        EXIT('Standard')
+      ELSE IF (Rec."Needs Attention") THEN
+        EXIT('Unfavorable')
+      ELSE IF (Rec.Resolved) THEN
+        EXIT('Favorable')
+      ELSE IF (Rec."Amendment Mode" = Rec."Amendment Mode"::Released) THEN
+        EXIT('Standard')
+      ELSE
+        EXIT('StrongAccent');
+    END;
+
+    BEGIN
+    {
+      //DOC NH2016.11 JH 10/11/2015 - Redesigned for 2016
+      //DOC NH2016.15 JH 06/05/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

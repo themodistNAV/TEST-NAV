@@ -1,0 +1,2305 @@
+OBJECT Codeunit 9062643 POS DATA Functions
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            MyVar@1000000000 : Variant;
+          BEGIN
+            StartTransaction(MyVar);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      POSGlobals@1000000000 : Codeunit 9062662;
+      String@1000000001 : Codeunit 9062236;
+
+    LOCAL PROCEDURE LoggedOnUser@1000000028() : Code[50];
+    BEGIN
+
+      IF POSGlobals.GetPOSUser<> '' THEN EXIT(POSGlobals.GetPOSUser);
+
+      EXIT(USERID);
+    END;
+
+    PROCEDURE ProcessPOSCommandInput@9062240(VAR lPosHeader@9062231 : Record 9062778;VAR PosCommand@9062233 : TEMPORARY Record 9062780;VAR pVariant@9062230 : Variant);
+    VAR
+      POSSetup@1000000000 : Record 9062777;
+      POSGlobals@1000000001 : Codeunit 9062662;
+      POSCommandTbl@1000000002 : Record 9062780;
+    BEGIN
+      POSSetup.GET();
+
+      IF lPosHeader.Status=lPosHeader.Status::Voided THEN
+        EXIT;
+
+      lPosHeader."POS Message":='';
+      lPosHeader.MODIFY;
+      COMMIT;
+
+      IF CheckManFunction(lPosHeader,PosCommand,pVariant) = FALSE THEN
+        EXIT;
+
+      CASE PosCommand.Command  OF
+       'STARTTRANS':
+         StartTransaction(pVariant);
+       'NEWORDER':
+         CreateNewPOSTrans(pVariant);
+       'LOGIN':
+         Login(lPosHeader,PosCommand,pVariant);
+       'LOGOUT':
+         Logout(lPosHeader,PosCommand,pVariant);
+       'CANCEL':
+         CancelOrder(lPosHeader,PosCommand,pVariant);
+       'ADDCUST':
+         AddCustToTrans(lPosHeader,PosCommand,pVariant);
+       'ADDITEM':
+         AddItemToTrans(lPosHeader,PosCommand,pVariant);
+       'ADDPAYMENT':
+         AddPaymentToTrans(lPosHeader,PosCommand,pVariant);
+       'TOTDISC':
+         AddTotDisc(lPosHeader,PosCommand,pVariant);
+       'POST':
+         PostPosTrans(lPosHeader,PosCommand,pVariant);
+       'SUSPEND':
+         SuspendOrder(lPosHeader,PosCommand,pVariant);
+       'FINDSUSPENDED':
+         FindSuspended(lPosHeader,PosCommand,pVariant);
+       'SETACTIVE':
+         RetrieveOrder(lPosHeader,PosCommand,pVariant);
+       'POSTANDNEW':
+         PostPosTransCreateNew(lPosHeader,PosCommand,pVariant);
+       'CONFIRM':
+         ConfirmOrder(lPosHeader,PosCommand,pVariant);
+       'REOPEN':
+         OpenOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+       'FINDITEM':
+         FindItem(lPosHeader,PosCommand,pVariant);
+       'FINDCUST':
+         FindCust(lPosHeader,PosCommand,pVariant);
+       'LINEDISCPCT':
+         AddDiscPctToLine(lPosHeader,PosCommand,pVariant);
+       'LINEDEL':
+         DeleteLine(lPosHeader,PosCommand,pVariant);
+       'LINEDISCVAL':
+         AddDiscValToLine(lPosHeader,PosCommand,pVariant);
+       'LINEPRICE':
+         ChangePriceOnLine(lPosHeader,PosCommand,pVariant);
+       'LINETOORDER':
+         SetItemToOnOrder(lPosHeader,PosCommand,pVariant);
+       'NUMPAD':
+         ProcessNumPad(lPosHeader,PosCommand,pVariant);
+       'CLEARINPUT':
+         ClearInput(lPosHeader,PosCommand,pVariant);
+       'BACKSPACE':
+         BackSpace(lPosHeader,PosCommand,pVariant);
+       'LINEQTYADD':
+         QtyAdd(lPosHeader,PosCommand,pVariant);
+       'LINEVOID':
+         VoidLine(lPosHeader,PosCommand,pVariant);
+       'LINEQTYMINUS':
+         QtyMinus(lPosHeader,PosCommand,pVariant);
+       'LINEQTY':
+         ChangeQtyOnLine(lPosHeader,PosCommand,pVariant);
+       'SETMODE':
+         SetPosMode(lPosHeader,PosCommand,pVariant);
+       'SETMODEEDIT':
+         SetModeEdit(lPosHeader,PosCommand,pVariant);
+       'SETCUSTMODE':
+         SetCustMode(lPosHeader,PosCommand,pVariant);
+       'SETITEMMODE':
+         SetItemMode(lPosHeader,PosCommand,pVariant);
+       'SETDISCMODE':
+         SetDiscMode(lPosHeader,PosCommand,pVariant);
+       'SETFINDMODE':
+         SetFindMode(lPosHeader,PosCommand,pVariant);
+       'SETPAYMODE':
+         SetPayMode(lPosHeader,PosCommand,pVariant);
+       'ENTER':
+         ProcessEnter(lPosHeader,PosCommand,pVariant);
+       'ORDERINCURR':
+         ShowOrderValInCurr(lPosHeader,PosCommand,pVariant);
+       'ITEMINCURR':
+         ShowItemInCurr(lPosHeader,PosCommand,pVariant);
+       'RESET':
+         ResetOrderMode(lPosHeader,PosCommand,pVariant);
+       'SETEMAILMODE':
+         SetEmailMode(lPosHeader,PosCommand,pVariant);
+       ELSE
+         //This is the processor for when the mode is set
+         ProcessNonPosCommand(lPosHeader,PosCommand,pVariant);
+      END;
+    END;
+
+    PROCEDURE CheckLoggedIn@1000000023(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      POSSetup@1000000003 : Record 9062777;
+      POSGlobals@1000000004 : Codeunit 9062662;
+      eMessage@1000000005 : TextConst 'ENU=User Must be logged in;ENG=User Must be logged in';
+    BEGIN
+
+      POSSetup.GET();
+
+      IF POSSetup."User Must Login"=FALSE THEN EXIT(TRUE);
+
+      IF POSSetup."User Must Login" = TRUE THEN BEGIN
+        IF POSGlobals.GetPOSUser = '' THEN BEGIN
+              lPosHeader."POS Message Type":=lPosHeader."POS Message Type"::Error;
+              lPosHeader."POS Message":=eMessage;
+              lPosHeader.MODIFY;
+              EXIT(FALSE);
+          END;
+        END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CheckManFunction@1000000027(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      POSCommands@1000000003 : Record 9062780;
+      POSUser@1000000004 : Record 9062783;
+      POSSetup@1000000005 : Record 9062777;
+      eMessage@1000000006 : TextConst 'ENU=You need a Manager persmission to use this;ENG=You need a Manager persmission to use this';
+    BEGIN
+
+      POSSetup.GET();
+
+      //Only checl if we have a logged on user.
+      IF POSSetup."User Must Login"=FALSE THEN EXIT (TRUE);
+
+      POSUser.GET(LoggedOnUser);
+
+      IF POSUser.Manager THEN EXIT(TRUE);
+
+      POSCommands.GET(PosCommand.Command);
+
+      IF POSCommands."Manager Function" THEN BEGIN
+        lPosHeader."POS Message Type":=lPosHeader."POS Message Type"::Information;
+        lPosHeader."POS Message":=eMessage;
+
+        EXIT(FALSE);
+        END;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE StartTransaction@1000000007(VAR pVariant@1000000001 : Variant) : Boolean;
+    VAR
+      PosHeader@9062231 : Record 9062778;
+      SH@9062232 : Record 36;
+      PosUser@9062233 : Record 9062783;
+      Store@9062234 : Record 9062786;
+      DimMgt@9062235 : Codeunit 408;
+      TmpDimSet@9062236 : TEMPORARY Record 480;
+      DimSetID@9062237 : Integer;
+      PosSetup@1000000000 : Record 9062777;
+    BEGIN
+      PosHeader.SETRANGE(PosHeader."User ID",USERID);
+      PosHeader.SETRANGE(PosHeader.Status,PosHeader.Status::Active);
+
+      IF POSGlobals.GetPOSUser <> '' THEN
+        PosHeader.SETRANGE(PosHeader."POS User",POSGlobals.GetPOSUser);
+
+      IF NOT PosHeader.FINDSET THEN
+        CreateNewPOSTrans(pVariant)
+      ELSE
+        pVariant:=PosHeader;
+      PosHeader.RESET;
+    END;
+
+    PROCEDURE CreateNewPOSTrans@9062231(VAR pVariant@1000000001 : Variant) : Boolean;
+    VAR
+      PosHeader@9062231 : Record 9062778;
+      SH@9062232 : Record 36;
+      PosUser@9062233 : Record 9062783;
+      Store@9062234 : Record 9062786;
+      DimMgt@9062235 : Codeunit 408;
+      TmpDimSet@9062236 : TEMPORARY Record 480;
+      DimSetID@9062237 : Integer;
+      PosSetup@1000000000 : Record 9062777;
+    BEGIN
+
+      //Adds a new POS transaction
+      PosSetup.GET();
+      PosHeader.INIT;
+      PosHeader.VALIDATE("Entry No",0);
+      PosHeader.INSERT(TRUE);
+      PosHeader.VALIDATE("Customer No",PosSetup."Default Customer");
+      PosHeader."User ID":=USERID;
+
+      IF POSGlobals.GetPOSUser <> '' THEN
+        PosHeader."POS User":=POSGlobals.GetPOSUser;
+
+      PosHeader.Status:=PosHeader.Status::Active;
+      PosHeader."Order Mode":='FINDITEM';
+
+      //Now we need to create the related sales document
+
+      SH.INIT;
+      SH.VALIDATE("Document Type",PosSetup."Sales Document Type");
+      SH.VALIDATE("No.",'');
+      SH.INSERT(TRUE);
+      SH.VALIDATE("Sell-to Customer No.",PosSetup."Default Customer");
+      SH."External Document No.":=FORMAT(PosHeader."Entry No");
+      SH.VALIDATE(SH."Document Date",TODAY);
+      SH.Ship:=TRUE;
+      SH.Invoice:=TRUE;
+      SH."Type of Supply Code":=PosSetup."Pay And Take Supply Code";
+      SH.MODIFY(TRUE);
+
+      IF PosUser.GET(LoggedOnUser) THEN BEGIN
+          IF Store.GET(PosUser.Store) THEN BEGIN
+            SH.VALIDATE(SH."Location Code",Store."Default Sales Location");
+
+            IF (Store."Dimension Code" <> '') AND (Store."Dimension Value" <> '') THEN BEGIN
+                DimMgt.GetDimensionSet(TmpDimSet,SH."Dimension Set ID");
+
+                TmpDimSet.INIT;
+                TmpDimSet.VALIDATE(TmpDimSet."Dimension Set ID",SH."Dimension Set ID");
+                TmpDimSet.VALIDATE(TmpDimSet."Dimension Code",Store."Dimension Code");
+                TmpDimSet.INSERT(TRUE);
+                TmpDimSet.VALIDATE(TmpDimSet."Dimension Value Code",Store."Dimension Value");
+                TmpDimSet.MODIFY(TRUE);
+
+                DimSetID := DimMgt.GetDimensionSetID(TmpDimSet);
+
+                SH."Dimension Set ID":=DimSetID;
+                SH.MODIFY;
+
+                END;
+            END;
+      END;
+
+      PosHeader."Sales Document Type":=PosSetup."Sales Document Type";
+      PosHeader."Sales Document No.":=SH."No.";
+      PosHeader."Sales Doc Postion Text":=SH.GETPOSITION;
+
+      PosHeader.MODIFY(TRUE);
+      pVariant:=PosHeader;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE AddItemToTrans@9062233(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      Item@9062233 : Record 27;
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      QTY@9062230 : Decimal;
+      ItemNo@9062232 : Code[20];
+      PosUser@9062237 : Record 9062783;
+      ItemCrossRef@9062238 : Record 5717;
+      pItemNo@9062239 : Text[30];
+      ItemFound@9062240 : Boolean;
+      Store@9062241 : Record 9062786;
+      CuSalesREl@1000000003 : Codeunit 414;
+      VarCode@1000000004 : Code[10];
+      ItemVariant@1000000005 : Record 5401;
+      eTrackingRequirement@1000000006 : TextConst 'ENU=One or more Items has a item tracking requirement;ENG=One or more Items has a item tracking requirement';
+    BEGIN
+
+      pItemNo:=PosCommand."Parameter 1";
+
+      IF pItemNo='' THEN BEGIN
+        ResetOrderMode(lPosHeader,PosCommand,pVariant);
+        EXIT;
+        END;
+
+      IF PosCommand."Parameter 3"<>'' THEN BEGIN
+         IF NOT EVALUATE(QTY,PosCommand."Parameter 3")
+           THEN
+           EXIT;
+        END
+      ELSE
+        QTY:=1;
+
+      ItemNo:=PosCommand."Parameter 1";
+      VarCode:=PosCommand."Parameter 2";
+
+      OpenOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+        IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+        SH.SetHideValidationDialog(TRUE);
+
+      OpenOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+        SL.SETRANGE(SL."Document Type",lPosHeader."Sales Document Type");
+        SL.SETRANGE(SL."Document No.",lPosHeader."Sales Document No.");
+        SL.INIT;
+        SL."Document Type":=lPosHeader."Sales Document Type";
+        SL."Document No.":=lPosHeader."Sales Document No.";
+
+        IF SL.FINDLAST THEN
+          SL."Line No.":=SL."Line No." +10000
+        ELSE
+            SL."Line No.":=10000;
+
+        SL.INSERT(TRUE);
+        SL.VALIDATE(Type,SL.Type::Item);
+
+        IF PosUser.GET(LoggedOnUser) THEN BEGIN
+          IF Store.GET(PosUser.Store) THEN BEGIN
+          IF Store."Default Shipment Location"<>SH."Location Code" THEN
+          SL.VALIDATE(SL."Location Code",Store."Default Shipment Location");
+          END;
+          END;
+
+        Item.GET(ItemNo);
+        IF Item."Item Tracking Code"<>'' THEN
+          lPosHeader."POS Message":=eTrackingRequirement;
+
+        SL.VALIDATE(SL."No.",ItemNo);
+        IF VarCode <> '' THEN
+          SL.VALIDATE(SL."Variant Code",VarCode);
+        SL.VALIDATE(SL.Quantity,QTY);
+
+        SL.MODIFY(TRUE);
+        lPosHeader."Current Line":=SL."Line No.";
+        lPosHeader.MODIFY;
+
+        END;
+
+      //END;
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+      ResetOrderMode(lPosHeader,PosCommand,pVariant);
+
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE PriceCheck@1000000020(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      Item@9062233 : Record 27;
+      QTY@9062230 : Decimal;
+      ItemNo@9062232 : Code[20];
+      PosUser@9062237 : Record 9062783;
+      ItemCrossRef@9062238 : Record 5717;
+      pItemNo@9062239 : Text[30];
+      ItemFound@9062240 : Boolean;
+      Store@9062241 : Record 9062786;
+      SalesPriceCalcMgt@1000000003 : Codeunit 7000;
+      TmpItemJnl@1000000005 : TEMPORARY Record 83;
+      VarCode@1000000004 : Code[10];
+      eUnitPrice@1000000006 : TextConst 'ENU="Unit Price = %1";ENG="Unit Price = %1"';
+    BEGIN
+
+      pItemNo:=PosCommand."Parameter 1";
+
+      IF PosCommand."Parameter 2"<>'' THEN BEGIN
+         IF NOT EVALUATE(QTY,PosCommand."Parameter 2")
+           THEN
+           EXIT;
+        END
+      ELSE
+        QTY:=1;
+
+      IF Item.GET(pItemNo) THEN
+        BEGIN
+          ItemFound:=TRUE;
+          ItemNo:=Item."No.";
+        END;
+
+      IF NOT ItemFound THEN BEGIN
+        ItemCrossRef.SETRANGE(ItemCrossRef."Cross-Reference Type",  ItemCrossRef."Cross-Reference Type"::"Bar Code");
+        ItemCrossRef.SETFILTER(ItemCrossRef."Cross-Reference No.",pItemNo);
+        IF ItemCrossRef.FINDFIRST THEN BEGIN
+          ItemNo:=ItemCrossRef."Item No.";
+          VarCode:=ItemCrossRef."Variant Code";
+          ItemFound:=TRUE;
+          END;
+      END;
+
+      IF ItemFound THEN BEGIN
+
+      TmpItemJnl.INIT;
+      TmpItemJnl."Item No.":=ItemNo;
+      IF VarCode <> '' THEN
+        TmpItemJnl."Variant Code" := VarCode;
+
+      SalesPriceCalcMgt.FindItemJnlLinePrice(TmpItemJnl,0);
+
+        lPosHeader."POS Message":=STRSUBSTNO(eUnitPrice, TmpItemJnl."Unit Amount");
+        lPosHeader.MODIFY;
+
+      END;
+    END;
+
+    PROCEDURE Login@1000000024(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      POSGlobals@1000000003 : Codeunit 9062662;
+    BEGIN
+    END;
+
+    PROCEDURE Logout@1000000026(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      POSGlobals@1000000003 : Codeunit 9062662;
+    BEGIN
+
+      POSGlobals.LogoffPosUser();
+    END;
+
+    PROCEDURE AddCustToTrans@9062234(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      Cust@9062232 : Record 18;
+      SH@9062233 : Record 36;
+      CustNo@9062230 : Code[20];
+      UserSetup@1000000003 : Record 9062783;
+      Store@1000000004 : Record 9062786;
+    BEGIN
+      //This needs to add a customer to the transaction.
+
+      CustNo:=PosCommand."Parameter 1";
+
+      IF Cust.GET(CustNo) THEN BEGIN
+
+      OpenOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+        lPosHeader."Customer No":=CustNo;
+        IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+        SH.SetHideValidationDialog(TRUE);
+        SH.VALIDATE("Sell-to Customer No.",CustNo);
+
+
+        //Set the location not use the customers one.
+        IF UserSetup.GET(LoggedOnUser) THEN
+            IF  Store.GET(UserSetup.Store) THEN
+                SH.VALIDATE("Location Code",Store."Default Shipment Location");
+        SH.MODIFY(TRUE);
+          END;
+          lPosHeader.MODIFY;
+        END;
+
+      ResetOrderMode(lPosHeader,PosCommand,pVariant);
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE AddPaymentToTrans@9062235(VAR lPosHeader@1000000003 : Record 9062778;VAR PosCommand@1000000002 : TEMPORARY Record 9062780;VAR pVariant@1000000001 : Variant) : Boolean;
+    VAR
+      PosPayments@9062231 : Record 9062779;
+      Value@9062234 : Decimal;
+      PaymentType@9062230 : Code[20];
+      pValue@9062232 : Code[10];
+      POSTenderType@9062236 : Record 9062781;
+      CurrExch@9062238 : Record 330;
+      ExRate@9062237 : Decimal;
+      PosSetup@1000000000 : Record 9062777;
+      TestValue@1000000004 : Decimal;
+      eMessage@1000000005 : TextConst 'ENU=Cannot over tender with this payment method;ENG=Cannot over tender with this payment method';
+    BEGIN
+
+      SetPayMode(lPosHeader,PosCommand,pVariant);
+
+      PaymentType:=PosCommand."Parameter 2";
+
+      IF PaymentType='' THEN BEGIN
+        PosSetup.GET();
+        PaymentType:=PosSetup."Default Tender";
+        END;
+
+      POSTenderType.GET(PaymentType);
+
+      pValue:=PosCommand."Parameter 1";
+
+      IF pValue= '' THEN BEGIN
+        IF lPosHeader.EntryText <> '' THEN
+           pValue := lPosHeader.EntryText;
+
+        IF PosCommand."Parameter 3"='TOTALREMAIN' THEN
+          pValue:=FORMAT(lPosHeader."Order Total"-lPosHeader."Payment Total");
+
+        //Use remaining value if blank if default currency
+        IF pValue='' THEN
+          IF POSTenderType."Currency Code"='' THEN
+            pValue:=FORMAT(lPosHeader."Order Total"-lPosHeader."Payment Total");
+
+        END;
+
+      IF NOT EVALUATE(Value,pValue) THEN BEGIN
+          EXIT(FALSE);
+        END;
+
+      OpenOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+      IF NOT POSTenderType."Over Tender Allowed" THEN BEGIN
+        IF POSTenderType."Currency Code"<>'' THEN
+          BEGIN
+            ExRate:= CurrExch.ExchangeRate(WORKDATE,POSTenderType."Currency Code");
+            TestValue:=ROUND(CurrExch.ExchangeAmtFCYToLCY(WORKDATE,POSTenderType."Currency Code",Value,ExRate),0.01);
+          END ELSE
+            TestValue:=Value;
+
+       IF TestValue > ( lPosHeader."Order Total"-lPosHeader."Payment Total")
+         THEN BEGIN
+           lPosHeader."POS Message":=eMessage;
+           EXIT(FALSE);
+           END;
+        END;
+
+      //Need to get the local value and the foreign curr value.
+
+      PosPayments.INIT;
+      PosPayments."Entry No":=0;
+      PosPayments."POS Trans Header No":=lPosHeader."Entry No";
+      PosPayments."Document Type":=lPosHeader."Sales Document Type";
+      PosPayments."Document No":=lPosHeader."Sales Document No.";
+      PosPayments.VALIDATE("Payment Method",PaymentType);
+      PosPayments."Posting Status":=PosPayments."Posting Status"::New;
+
+      IF POSTenderType."Currency Code" = '' THEN
+          BEGIN
+          PosPayments."Currency Amount":=0;
+          PosPayments."Amount LCY":=Value;
+        END ELSE
+          BEGIN
+            ExRate:= CurrExch.ExchangeRate(WORKDATE,POSTenderType."Currency Code");
+            PosPayments."Amount LCY":= ROUND(CurrExch.ExchangeAmtFCYToLCY(WORKDATE,POSTenderType."Currency Code",Value,ExRate),0.01);
+            PosPayments."Currency Amount":=ROUND(Value,0.01);
+            PosPayments.Currency:=POSTenderType."Currency Code";
+          END;
+
+      PosPayments.INSERT(TRUE);
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+
+      ClearInput(lPosHeader,PosCommand,pVariant);
+
+
+      //Now we need to post the tranaction if needed.
+      OKToPost(lPosHeader,PosCommand,pVariant);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ChangeQtyOnLine@9062239(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      Qty@9062231 : Integer;
+      NewQty@9062230 : Code[10];
+    BEGIN
+
+      IF NOT CheckLineStatus(lPosHeader,PosCommand,pVariant) THEN EXIT;
+
+      OpenOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+      lPosHeader."Order Mode":='LINEQTY';
+      lPosHeader.MODIFY;
+
+      NewQty:=PosCommand."Parameter 1";
+
+      IF NewQty='' THEN
+         NewQty:=lPosHeader.EntryText;
+
+      IF NOT EVALUATE(Qty,NewQty) THEN
+          EXIT;
+
+      IF Qty<=0 THEN
+        EXIT;
+
+      IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+        SH.SetHideValidationDialog(TRUE);
+
+      IF SL.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.",lPosHeader."Current Line") THEN BEGIN
+
+        SL.VALIDATE(SL.Quantity,Qty);
+        SL.MODIFY(TRUE);
+      END;
+      END;
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+
+      ClearInput(lPosHeader,PosCommand,pVariant);
+    END;
+
+    PROCEDURE ChangeLocOnLine@9062267(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      NewLoc@9062230 : Code[10];
+      CuSoRel@9062231 : Codeunit 414;
+    BEGIN
+      IF NOT CheckLineStatus(lPosHeader,PosCommand,pVariant) THEN EXIT;
+
+      OpenOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+      NewLoc:=PosCommand."Parameter 1";
+
+      IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+        SH.SetHideValidationDialog(TRUE);
+
+      OpenOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+      //IF SH.Status <> SH.Status::Open THEN
+        //CuSoRel.Reopen(SH);
+
+      IF SL.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.",lPosHeader."Current Line") THEN BEGIN
+          SL.VALIDATE(SL."Location Code",NewLoc);
+          SL.MODIFY(TRUE);
+          END;
+      END;
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+
+      ClearInput(lPosHeader,PosCommand,pVariant);
+    END;
+
+    PROCEDURE ChangePriceOnLine@9062268(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      Price@9062231 : Integer;
+      NewPrice@9062230 : Code[10];
+    BEGIN
+      IF NOT CheckLineStatus(lPosHeader,PosCommand,pVariant) THEN EXIT;
+
+      OpenOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+      lPosHeader."Order Mode":='LINEPRICE';
+      lPosHeader.MODIFY;
+
+      NewPrice:=PosCommand."Parameter 1";
+
+      IF NOT EVALUATE(Price,NewPrice) THEN EXIT;
+
+        IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+        SH.SetHideValidationDialog(TRUE);
+
+
+          IF SL.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.",lPosHeader."Current Line") THEN BEGIN
+            SL.VALIDATE(SL."Unit Price",Price);
+            SL.MODIFY(TRUE);
+          END;
+      END;
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+
+      ClearInput(lPosHeader,PosCommand,pVariant);
+    END;
+
+    PROCEDURE SetItemToOnOrder@9062271(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+    BEGIN
+      IF NOT CheckLineStatus(lPosHeader,PosCommand,pVariant) THEN EXIT;
+
+      IF NOT CheckCustomerIsNotDefault(lPosHeader,PosCommand,pVariant) THEN EXIT;
+
+      OpenOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+      IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+         SH.SetHideValidationDialog(TRUE);
+
+         IF SL.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.",lPosHeader."Current Line") THEN BEGIN
+           IF SL."Special Order"=FALSE THEN BEGIN
+            SL.VALIDATE(SL."Qty. to Ship",0);
+            SL.VALIDATE(SL."Special Order",TRUE);
+           END ELSE BEGIN
+            SL.VALIDATE(SL."Special Order",FALSE);
+            SL.VALIDATE(SL.Quantity);
+           END;
+            SL.MODIFY(TRUE);
+          END;
+      END;
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+    END;
+
+    PROCEDURE CheckLineStatus@1000000009(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      pDisc@9062231 : Code[10];
+      DiscPct@9062230 : Decimal;
+    BEGIN
+          IF SL.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.",lPosHeader."Current Line") THEN BEGIN
+            IF SL."Purchasing Code"='POSVOID' THEN
+            EXIT(FALSE)
+      END;
+      EXIT(TRUE);
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+    END;
+
+    PROCEDURE VoidLine@9062269(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      pDisc@9062231 : Code[10];
+      DiscPct@9062230 : Decimal;
+      eDescription@1000000003 : TextConst 'ENU=***** VOIDED *****;ENG=***** VOIDED *****';
+    BEGIN
+      IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+
+        OpenOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+        SH.SetHideValidationDialog(TRUE);
+          IF SL.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.",lPosHeader."Current Line") THEN BEGIN
+            SL.VALIDATE(SL."Special Order",FALSE);
+            SL.VALIDATE(SL.Quantity,0);
+            SL.VALIDATE(SL."Qty. to Ship",0);
+            SL.Description:=eDescription;
+            SL."Purchasing Code":='POSVOID';
+            SL.MODIFY;
+            lPosHeader."Current Line":=SL."Line No."
+        END;
+      END;
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+    END;
+
+    PROCEDURE DeleteLine@9062266(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      pDisc@9062231 : Code[10];
+      DiscPct@9062230 : Decimal;
+    BEGIN
+        IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+
+          OpenOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+        SH.SetHideValidationDialog(TRUE);
+
+          IF SL.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.",lPosHeader."Current Line") THEN BEGIN
+            SL.DELETE(TRUE);
+          IF SL.FINDFIRST THEN
+            lPosHeader."Current Line":=SL."Line No."
+          ELSE
+            lPosHeader."Current Line":=0;
+        END;
+      END;
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+    END;
+
+    PROCEDURE AddDiscPctToLine@9062244(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      pDisc@9062231 : Code[10];
+      DiscPct@9062230 : Decimal;
+    BEGIN
+
+      IF NOT CheckLineStatus(lPosHeader,PosCommand,pVariant) THEN EXIT;
+      OpenOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+      lPosHeader."Order Mode":='LINEDISCPCT';
+      lPosHeader.MODIFY;
+
+      pDisc:=PosCommand."Parameter 1";
+
+      IF pDisc='' THEN
+        pDisc:= lPosHeader.EntryText;
+
+      IF pDisc='' THEN EXIT;
+
+      IF NOT EVALUATE(DiscPct,pDisc) THEN EXIT;
+
+        IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+        SH.SetHideValidationDialog(TRUE);
+
+          IF SL.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.",lPosHeader."Current Line") THEN BEGIN
+            SL.VALIDATE(SL."Line Discount %",DiscPct);
+            SL.MODIFY(TRUE);
+        END;
+      END;
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+
+      ResetOrderMode(lPosHeader,PosCommand,pVariant);
+    END;
+
+    PROCEDURE AddDiscValToLine@9062259(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      pDisc@9062231 : Code[10];
+      DiscPct@9062230 : Decimal;
+    BEGIN
+      IF NOT CheckLineStatus(lPosHeader,PosCommand,pVariant) THEN EXIT;
+
+      OpenOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+      lPosHeader."Order Mode":='LINEDISCVAL';
+      lPosHeader.MODIFY;
+
+      pDisc:=PosCommand."Parameter 1";
+
+      IF pDisc='' THEN
+        pDisc:= lPosHeader.EntryText;
+
+      IF pDisc='' THEN EXIT;
+
+      IF NOT EVALUATE(DiscPct,pDisc) THEN EXIT;
+
+        IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+        SH.SetHideValidationDialog(TRUE);
+
+      IF SL.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.",lPosHeader."Current Line") THEN BEGIN
+            SL.VALIDATE(SL."Line Discount Amount",DiscPct);
+            SL.MODIFY(TRUE);
+        END;
+      END;
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+
+      ResetOrderMode(lPosHeader,PosCommand,pVariant);
+    END;
+
+    PROCEDURE SuspendOrder@9062238(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      CuSoRel@9062231 : Codeunit 414;
+      SH@9062232 : Record 36;
+    BEGIN
+
+      //Cannot suspend order with payments
+      CheckPaymentAreZero(lPosHeader,PosCommand,pVariant);
+
+      lPosHeader.Status:=lPosHeader.Status::Suspended;
+      lPosHeader.MODIFY;
+
+      COMMIT;
+      StartTransaction(pVariant);
+    END;
+
+    PROCEDURE RetrieveOrder@9062241(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      PosHeader@1000000003 : Record 9062778;
+    BEGIN
+
+      lPosHeader.Status:=lPosHeader.Status::Suspended;
+      lPosHeader.MODIFY;
+
+      IF PosHeader.GET(PosCommand."Parameter 1") THEN BEGIN
+        PosHeader.Status:=PosHeader.Status::Active;
+        PosHeader."Order Mode":='FINDITEM';
+        PosHeader."User ID":=USERID;
+
+      IF POSGlobals.GetPOSUser <> '' THEN
+        PosHeader."POS User":=POSGlobals.GetPOSUser;
+
+        PosHeader.MODIFY;
+        lPosHeader:=PosHeader;
+
+        pVariant:=PosHeader;
+        END;
+    END;
+
+    PROCEDURE CancelOrder@9062263(VAR lPosHeader@1000000003 : Record 9062778;VAR PosCommand@1000000002 : TEMPORARY Record 9062780;VAR pVariant@1000000001 : Variant) : Boolean;
+    VAR
+      CuSoRel@9062231 : Codeunit 414;
+      SH@9062232 : Record 36;
+      ArchiveMgt@1000000000 : Codeunit 5063;
+    BEGIN
+
+      CheckPaymentAreZero(lPosHeader,PosCommand,pVariant);
+
+      IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+        ArchiveMgt.StoreSalesDocument(SH,FALSE);
+      END;
+
+      lPosHeader.Status:=lPosHeader.Status::Voided;
+      lPosHeader."Current Line":=0;
+      lPosHeader."Customer No":='';
+      lPosHeader."Document Date":=0D;
+      lPosHeader.EntryText:='';
+      lPosHeader."Order Mode":='VOIDED';
+      lPosHeader."POS Message":='';
+      lPosHeader.MODIFY;
+    END;
+
+    PROCEDURE ConfirmOrder@9062232(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      CuSoRel@9062231 : Codeunit 414;
+      SH@9062232 : Record 36;
+      ArchiveMgt@1000000003 : Codeunit 5063;
+    BEGIN
+
+      IF lPosHeader.Status=lPosHeader.Status::Voided THEN
+        BEGIN
+          //Need to archive the sales order and then delete the header and then exit;
+          SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.");
+          CancelOrder(lPosHeader,PosCommand,pVariant);
+          StartTransaction(pVariant);
+          EXIT(TRUE);
+          END;
+
+      //If we have only voided lines we should archive the order as well
+      IF ArchiveIfAllLinesVoided(lPosHeader,PosCommand,pVariant) THEN BEGIN
+        lPosHeader.DELETE;
+        EXIT(TRUE);
+        END;
+
+      IF NOT CheckCustomerOK(lPosHeader,PosCommand,pVariant) THEN
+        EXIT;
+
+      CheckTrackedItems(lPosHeader,PosCommand,pVariant);
+
+      CalcOrderDiscounts(lPosHeader,PosCommand,pVariant);
+
+      ReleaseOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+    END;
+
+    PROCEDURE OpenOrderIfNeeded@1000000010(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      CuSoRel@9062231 : Codeunit 414;
+      SH@9062232 : Record 36;
+    BEGIN
+      IF NOT SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN
+        EXIT;
+
+      IF SH.Status <> SH.Status::Open THEN
+        CuSoRel.Reopen(SH);
+    END;
+
+    PROCEDURE ReleaseOrderIfNeeded@1000000018(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      CuSoRel@9062231 : Codeunit 414;
+      SH@9062232 : Record 36;
+      SL@1000000003 : Record 37;
+    BEGIN
+      IF NOT SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN
+        EXIT;
+
+      SL.SETRANGE(SL."Document Type",lPosHeader."Sales Document Type");
+      SL.SETRANGE(SL."Document No.",lPosHeader."Sales Document No.");
+
+      IF NOT SL.FINDSET THEN EXIT;
+
+
+      IF SH.Status <> SH.Status::Released THEN
+        CuSoRel.RUN(SH);
+    END;
+
+    PROCEDURE CheckTrackedItems@1000000015(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      Item@9062233 : Record 27;
+      SL@9062235 : Record 37;
+      eTrackingRequirement@1000000003 : TextConst 'ENU=One or more Items has a item tracking requirement;ENG=One or more Items has a item tracking requirement';
+    BEGIN
+      SL.SETRANGE(SL."Document Type",lPosHeader."Sales Document Type");
+      SL.SETRANGE(SL."Document No.",lPosHeader."Sales Document No.");
+      SL.SETRANGE(SL.Type,SL.Type::Item);
+
+      IF SL.FINDSET THEN
+      BEGIN
+        REPEAT
+          IF Item.GET(SL."No.") THEN BEGIN
+            IF Item."Item Tracking Code"<>'' THEN BEGIN
+                lPosHeader."POS Message":=eTrackingRequirement;
+                lPosHeader.MODIFY;
+                EXIT(FALSE);
+              END;
+            END;
+          UNTIL SL.NEXT=0;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE AddTotDisc@9062253(VAR lPosHeader@1000000004 : Record 9062778;VAR PosCommand@1000000003 : TEMPORARY Record 9062780;VAR pVariant@1000000002 : Variant) : Boolean;
+    VAR
+      SH@9062238 : Record 36;
+      SL@9062237 : Record 37;
+      PosSetup@9062231 : Record 9062777;
+      pValue@1000000000 : Code[10];
+      DiscValue@1000000001 : Decimal;
+      CuSalesRel@1000000005 : Codeunit 414;
+      LineNo@1000000006 : Integer;
+    BEGIN
+
+      PosSetup.GET();
+
+      pValue:=PosCommand."Parameter 1";
+
+      IF NOT EVALUATE(DiscValue,pValue) THEN EXIT;
+
+      OpenOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+      PosSetup.TESTFIELD(PosSetup."Total Disc GL Code");
+
+      IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+
+        SL.SETRANGE(SL."Document Type",SH."Document Type");
+        SL.SETRANGE(SL."Document No.",SH."No.");
+        SL.SETRANGE(Type,SL.Type::"G/L Account");
+        SL.SETRANGE(SL."No.",PosSetup."Total Disc GL Code");
+
+        IF NOT SL.FINDFIRST THEN BEGIN
+          SL.RESET;
+          SL.SETRANGE(SL."Document Type",SH."Document Type");
+          SL.SETRANGE(SL."Document No.",SH."No.");
+
+          IF SL.FINDLAST THEN
+            LineNo:=SL."Line No." +10000
+          ELSE
+            LineNo:=10000;
+
+          SL.INIT;
+          SL."Document Type":=lPosHeader."Sales Document Type";
+          SL."Document No.":=lPosHeader."Sales Document No.";
+          SL."Line No.":=LineNo;
+
+          SL.INSERT(TRUE);
+          SL.VALIDATE(Type,SL.Type::"G/L Account");
+          SL.VALIDATE(SL."No.",PosSetup."Total Disc GL Code");
+          SL.VALIDATE(SL."Unit Price",-DiscValue);
+          SL.VALIDATE(SL.Quantity,1);
+          SL.MODIFY(TRUE);
+          END ELSE BEGIN
+            IF DiscValue = 0 THEN
+              SL.DELETE(TRUE)
+            ELSE BEGIN
+              SL.VALIDATE(SL."Unit Price",-DiscValue);
+              SL.VALIDATE(SL.Quantity,1);
+              SL.MODIFY(TRUE);
+              END;
+          END;
+
+        CalcTotals(lPosHeader,PosCommand,pVariant);
+
+      END;
+
+      ResetOrderMode(lPosHeader,PosCommand,pVariant);
+    END;
+
+    PROCEDURE CheckCustomerOK@9062280(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      CuSalesPostOnQueue@9062232 : Codeunit 88;
+      SH@9062231 : Record 36;
+      GLLine@9062234 : Record 81;
+      GLPost@9062233 : Codeunit 13;
+      POSSetup@9062235 : Record 9062777;
+      SalesVariant@9062236 : Variant;
+      recRef@9062237 : RecordRef;
+      FldRef@9062238 : FieldRef;
+      CuSoRel@9062239 : Codeunit 414;
+      GlDec@9062240 : Decimal;
+      POSPayments@9062241 : Record 9062779;
+      tmpStr@9062242 : Text;
+      POSPaymentType@9062243 : Record 9062781;
+      eMessage@9062244 : TextConst 'ENU=Default Customer cannot be used for ordering. Select new customer;ENG=Default Customer cannot be used for ordering. Select new customer';
+      SL@9062245 : Record 37;
+    BEGIN
+      POSSetup.GET();
+
+      IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+        //Are there lines to order.
+          SL.SETRANGE(SL."Document Type",SH."Document Type");
+          SL.SETRANGE(SL."Document No.",SH."No.");
+          IF SL.FINDSET THEN BEGIN
+              SL.CALCSUMS(SL."Outstanding Quantity",SL."Qty. to Ship");
+              IF SL."Outstanding Quantity" > SL."Qty. to Ship" THEN BEGIN
+                IF SH."Sell-to Customer No." = POSSetup."Default Customer" THEN BEGIN
+                lPosHeader."POS Message":=eMessage;
+                lPosHeader.MODIFY;
+                pVariant:=eMessage;
+                EXIT(FALSE);
+                END;
+             END;
+          END;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CheckCustomerIsNotDefault@1000000016(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      CuSalesPostOnQueue@9062232 : Codeunit 88;
+      SH@9062231 : Record 36;
+      GLLine@9062234 : Record 81;
+      GLPost@9062233 : Codeunit 13;
+      POSSetup@9062235 : Record 9062777;
+      SalesVariant@9062236 : Variant;
+      recRef@9062237 : RecordRef;
+      FldRef@9062238 : FieldRef;
+      CuSoRel@9062239 : Codeunit 414;
+      GlDec@9062240 : Decimal;
+      POSPayments@9062241 : Record 9062779;
+      tmpStr@9062242 : Text;
+      POSPaymentType@9062243 : Record 9062781;
+      eMessage@9062244 : TextConst 'ENU=Default Customer cannot be used for ordering. Select new customer;ENG=Default Customer cannot be used for ordering. Select new customer';
+      SL@9062245 : Record 37;
+    BEGIN
+      POSSetup.GET();
+
+      IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+                IF SH."Sell-to Customer No." = POSSetup."Default Customer" THEN BEGIN
+                lPosHeader."POS Message":=eMessage;
+                lPosHeader.MODIFY;
+                pVariant:=eMessage;
+                EXIT(FALSE);
+                END;
+             END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE OKToPost@1000000014(VAR lPosHeader@1000000003 : Record 9062778;VAR PosCommand@1000000002 : TEMPORARY Record 9062780;VAR pVariant@1000000001 : Variant) : Boolean;
+    VAR
+      CuSalesPostOnQueue@9062232 : Codeunit 88;
+      SH@9062231 : Record 36;
+      GLLine@9062234 : Record 81;
+      GLPost@9062233 : Codeunit 13;
+      POSSetup@9062235 : Record 9062777;
+      SalesVariant@9062236 : Variant;
+      recRef@9062237 : RecordRef;
+      FldRef@9062238 : FieldRef;
+      CuSoRel@9062239 : Codeunit 414;
+      GlDec@9062240 : Decimal;
+      POSPayments@9062241 : Record 9062779;
+      tmpStr@9062242 : Text;
+      POSPaymentType@9062243 : Record 9062781;
+      msgtxt@9062244 : TextConst 'ENU=Default Customer cannot be used for ordering. Select new customer;ENG=Default Customer cannot be used for ordering. Select new customer';
+      ArchiveMgt@1000000000 : Codeunit 5063;
+      SalesPost@1000000004 : Codeunit 80;
+    BEGIN
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+
+      IF (lPosHeader."Payment Total">= lPosHeader."Order Total")
+        THEN  PostPosTransCreateNew(lPosHeader,PosCommand,pVariant);
+    END;
+
+    PROCEDURE CheckPaymentAreZero@1000000022(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      CuSalesPostOnQueue@9062232 : Codeunit 88;
+      SH@9062231 : Record 36;
+      GLLine@9062234 : Record 81;
+      GLPost@9062233 : Codeunit 13;
+      POSSetup@9062235 : Record 9062777;
+      SalesVariant@9062236 : Variant;
+      recRef@9062237 : RecordRef;
+      FldRef@9062238 : FieldRef;
+      CuSoRel@9062239 : Codeunit 414;
+      GlDec@9062240 : Decimal;
+      POSPayments@9062241 : Record 9062779;
+      tmpStr@9062242 : Text;
+      POSPaymentType@9062243 : Record 9062781;
+      SL@9062245 : Record 37;
+      eMessage@1000000003 : TextConst 'ENU=You cannot cancel this order as the customer has payments totalling %1.\\Please refund the payments before voiding the transaction;ENG=You cannot cancel this order as the customer has payments totalling %1.\\Please refund the payments before voiding the transaction';
+    BEGIN
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+
+      IF lPosHeader."Payment Total" <> 0 THEN BEGIN
+        lPosHeader."POS Message":=STRSUBSTNO(eMessage, lPosHeader."Payment Total");
+        lPosHeader."POS Message Type" := lPosHeader."POS Message Type"::Error;
+        EXIT(FALSE);
+        END;
+    END;
+
+    PROCEDURE PostPosTrans@9062262(VAR lPosHeader@1000000003 : Record 9062778;VAR PosCommand@1000000002 : TEMPORARY Record 9062780;VAR pVariant@1000000001 : Variant) : Boolean;
+    VAR
+      CuSalesPostOnQueue@9062232 : Codeunit 88;
+      SH@9062231 : Record 36;
+      GLLine@9062234 : Record 81;
+      GLPost@9062233 : Codeunit 13;
+      POSSetup@9062235 : Record 9062777;
+      SalesVariant@9062236 : Variant;
+      recRef@9062237 : RecordRef;
+      FldRef@9062238 : FieldRef;
+      CuSoRel@9062239 : Codeunit 414;
+      GlDec@9062240 : Decimal;
+      POSPayments@9062241 : Record 9062779;
+      tmpStr@9062242 : Text;
+      POSPaymentType@9062243 : Record 9062781;
+      ArchiveMgt@1000000000 : Codeunit 5063;
+      SalesPost@1000000004 : Codeunit 80;
+      POSGlobals@1000000005 : Codeunit 9062662;
+      eChangeAmount@1000000006 : TextConst 'ENU=Change Amount for customer is %1;ENG=Change Amount for customer is %1';
+    BEGIN
+
+      PosSlipFromSalesDoc(lPosHeader);
+      COMMIT;
+
+      //Lets always archive the transaction at the start of the posting process
+      IF  SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+          ArchiveMgt.StoreSalesDocument(SH,FALSE);
+          END;
+
+      IF lPosHeader.Status=lPosHeader.Status::Voided THEN
+        BEGIN
+          //Need to archive the sales order and then delete the header and then exit;
+          SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.");
+          ArchiveMgt.StoreSalesDocument(SH,FALSE);
+          lPosHeader.DELETE;
+          EXIT(TRUE);
+          END;
+
+      //If we have only voided lines we should archive the order as well
+      IF ArchiveIfAllLinesVoided(lPosHeader,PosCommand,pVariant) THEN BEGIN
+        lPosHeader.DELETE;
+        EXIT(TRUE);
+        END;
+
+      CalcOrderDiscounts(lPosHeader,PosCommand,pVariant);
+
+      IF NOT CheckFunds(lPosHeader,PosCommand,pVariant) THEN BEGIN
+        EXIT(FALSE);
+        END;
+
+      IF NOT SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN
+        EXIT;
+
+      IF NOT CheckCustomerOK(lPosHeader,PosCommand,pVariant) THEN BEGIN
+        EXIT(FALSE);
+        END;
+
+      MoveNegativeLines(lPosHeader,PosCommand,pVariant);
+
+      MoveBackOrderLines(lPosHeader,PosCommand,pVariant);
+
+      ReleaseOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+
+      //Now update the payments
+      POSPayments.SETRANGE(POSPayments."Document Type",SH."Document Type");
+      POSPayments.SETRANGE(POSPayments."Document No",SH."No.");
+
+      IF POSPayments.FINDSET THEN BEGIN
+        POSPayments.MODIFYALL(POSPayments."Posting Status",POSPayments."Posting Status"::"Ready To Post");
+      END;
+
+      lPosHeader.CALCFIELDS(lPosHeader.Payments);
+      IF lPosHeader.Payments > lPosHeader."Order Total" THEN
+      lPosHeader."POS Message":=STRSUBSTNO(eChangeAmount, ROUND(lPosHeader.Payments - lPosHeader."Order Total",0.01));
+
+      lPosHeader.Status:=lPosHeader.Status::Queued;
+      lPosHeader.MODIFY;
+
+      IF  ABS(lPosHeader.Payments) - ABS(lPosHeader."Order Total")  <> 0 THEN BEGIN
+          POSSetup.GET();
+          //Insert change line here
+          POSPayments.INIT;
+          POSPayments."Entry No":=0;
+          POSPayments.INSERT(TRUE);
+          POSPayments."Document Type":=lPosHeader."Sales Document Type";
+          POSPayments."Document No":=lPosHeader."Sales Document No.";
+          POSPayments."Amount LCY":=-(lPosHeader.Payments - lPosHeader."Order Total");
+          POSPayments."Is Change Line":=TRUE;
+          POSPayments."Posting Status":=POSPayments."Posting Status"::"Ready To Post";
+          POSPayments."Payment Method":=POSSetup."Change Tender";
+          POSPayments."POS Trans Header No":=lPosHeader."Entry No";
+          POSPayments.MODIFY;
+      END;
+
+      COMMIT;
+
+      PostPayments(lPosHeader,PosCommand,pVariant);
+
+      IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN
+        EnqueueSalesDoc(SH);
+
+
+      lPosHeader.Status:=lPosHeader.Status::Posted;
+      lPosHeader.MODIFY;
+
+      EmailReceipt(lPosHeader,PosCommand,pVariant);
+
+      IF POSSetup."Logoff after Transaction" = TRUE THEN BEGIN
+        POSGlobals.LogoffPosUser();
+        END;
+    END;
+
+    PROCEDURE ArchiveIfAllLinesVoided@1000000011(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      SL2@1000000003 : Record 37;
+      POSSetup@1000000004 : Record 9062777;
+      ArchiveMgt@1000000005 : Codeunit 5063;
+    BEGIN
+      POSSetup.GET();
+
+      SL.SETRANGE("Document Type",lPosHeader."Sales Document Type");
+      SL.SETRANGE("Document No.",lPosHeader."Sales Document No.");
+      IF SL.FINDSET THEN BEGIN
+        SL2.SETRANGE("Document Type",lPosHeader."Sales Document Type");
+        SL2.SETRANGE("Document No.",lPosHeader."Sales Document No.");
+        SL2.SETRANGE("Purchasing Code",POSSetup."Voided Purchasing Code");
+        IF SL2.FINDSET THEN BEGIN
+        IF SL.COUNT = SL2.COUNT THEN BEGIN
+            SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.");
+            CancelOrder(lPosHeader,PosCommand,pVariant);
+            ResetOrderMode(lPosHeader,PosCommand,pVariant);
+            EXIT(TRUE);
+          END;
+          END;
+        END;
+
+        ResetOrderMode(lPosHeader,PosCommand,pVariant);
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE MoveNegativeLines@1000000012(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      MoveNegSalesLines@1000000003 : Report 6699;
+      RelMan@1000000004 : Codeunit 414;
+      TNPCopyDocMgt@1000000005 : Codeunit 9062660;
+      FromSalesHeader@1000000007 : Record 36;
+      ToSalesHeader@1000000006 : Record 36;
+      PosSetup@1000000008 : Record 9062777;
+    BEGIN
+
+      SL.SETRANGE("Document Type",lPosHeader."Sales Document Type");
+      SL.SETRANGE("Document No.",lPosHeader."Sales Document No.");
+      SL.SETFILTER(SL.Quantity,'<%1',0);
+      IF SL.FINDSET THEN BEGIN
+        SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.");
+        IF SH.Status<> SH.Status::Open THEN
+          RelMan.Reopen(SH);
+
+        FromSalesHeader:=SH;
+
+        TNPCopyDocMgt.SetProperties(TRUE,FALSE,TRUE,TRUE,TRUE,FALSE,FALSE);
+        ToSalesHeader."Document Type" := TNPCopyDocMgt.SalesHeaderDocType(4);  //<--- Check the types ?
+        TNPCopyDocMgt.CopySalesDoc(2,FromSalesHeader."No.",ToSalesHeader);  //<--- Check the types ?
+        ToSalesHeader.Receive:=TRUE;
+        ToSalesHeader.Invoice:=TRUE;
+        PosSetup.GET();
+        ToSalesHeader.VALIDATE(ToSalesHeader."Type of Supply Code",PosSetup."Pay And Take Supply Code");
+        ToSalesHeader.MODIFY;
+        EnqueueSalesDoc(ToSalesHeader);
+        //Now we need to post the return on the queue
+
+      END;
+    END;
+
+    PROCEDURE MoveBackOrderLines@1000000013(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      RelMan@1000000004 : Codeunit 414;
+      TNPCopyDoc@1000000003 : Codeunit 9062660;
+      FromSalesHeader@1000000006 : Record 36;
+      ToSalesHeader@1000000005 : Record 36;
+      PosSetup@1000000007 : Record 9062777;
+    BEGIN
+
+      SL.SETRANGE("Document Type",lPosHeader."Sales Document Type");
+      SL.SETRANGE("Document No.",lPosHeader."Sales Document No.");
+      SL.SETRANGE(SL."Special Order",TRUE);
+      IF SL.FINDSET THEN BEGIN
+        SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.");
+        IF SH.Status<> SH.Status::Open THEN
+          RelMan.Reopen(SH);
+
+        FromSalesHeader:=SH;
+
+        TNPCopyDoc.SetSpecialOrderLineOnly(TRUE);
+        TNPCopyDoc.SetProperties(TRUE,FALSE,FALSE,TRUE,TRUE,FALSE,FALSE);
+        TNPCopyDoc.SetIgnoreCreditCheck();
+        ToSalesHeader."Document Type" := TNPCopyDoc.SalesHeaderDocType(2);  //<--- Check the types ?
+        TNPCopyDoc.CopySalesDoc(2,FromSalesHeader."No.",ToSalesHeader);  //<--- Check the types ?
+        //We don't want to pos this on order order
+        ToSalesHeader.Receive:=TRUE;
+        ToSalesHeader.Invoice:=TRUE;
+        PosSetup.GET();
+        ToSalesHeader.VALIDATE(ToSalesHeader."Type of Supply Code",PosSetup."Store Order Supply Code");
+        ToSalesHeader.MODIFY;
+
+        RelMan.RUN(ToSalesHeader);
+      END;
+    END;
+
+    PROCEDURE CalcOrderDiscounts@9062237(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      CuSoRel@9062234 : Codeunit 414;
+      SH@9062233 : Record 36;
+      SL@9062232 : Record 37;
+      SalesCalcDiscountByType@9062231 : Codeunit 56;
+    BEGIN
+
+      IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+
+      SL.SETRANGE(SL."Document Type",SH."Document Type");
+      SL.SETRANGE(SL."Document No.",SH."No.");
+      IF SL.FINDSET THEN BEGIN
+        CODEUNIT.RUN(CODEUNIT::"Sales-Calc. Discount",SL); //Sales Line
+        SalesCalcDiscountByType.ResetRecalculateInvoiceDisc(SH); //Sales Header
+        END;
+      END;
+
+      SL.CALCSUMS(SL."Line Discount Amount");
+      lPosHeader."Discount Value":=SL."Line Discount Amount";
+      //need to update the order header values here.
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+    END;
+
+    PROCEDURE PostPosTransCreateNew@9062230(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SalesVariant@9062236 : Variant;
+    BEGIN
+
+      IF PostPosTrans(lPosHeader,PosCommand,pVariant) THEN
+        BEGIN
+          COMMIT;
+          lPosHeader:=SalesVariant;
+         END;
+
+      COMMIT;
+      //Create  a new one
+      CreateNewPOSTrans(pVariant);
+    END;
+
+    PROCEDURE CreateCashReceiptJnl@9062236(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      GLLine@9062230 : Record 81;
+      GLPost@9062231 : Codeunit 12;
+      POSPayments@9062232 : Record 9062779;
+      SH@9062241 : Record 36;
+      POSSetup@9062238 : Record 9062777;
+      GlDec@9062233 : Decimal;
+      recRef@9062239 : RecordRef;
+      FldRef@9062237 : FieldRef;
+      SalesVariant@9062243 : Variant;
+    BEGIN
+    END;
+
+    PROCEDURE FindItem@9062242(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      Item@9062233 : Record 27;
+      ItemCrossRef@1000000010 : Record 5717;
+      pItemNo@1000000009 : Text[30];
+      ItemFound@1000000008 : Boolean;
+      VarCode@1000000005 : Code[10];
+      ItemVariant@1000000004 : Record 5401;
+      ItemNo@1000000003 : Code[20];
+      SearchText@1000000006 : Code[50];
+      TNPUtils@1000000007 : Codeunit 9062229;
+    BEGIN
+
+      pItemNo:=PosCommand."Parameter 1";
+
+      IF pItemNo='' THEN BEGIN
+        ResetOrderMode(lPosHeader,PosCommand,pVariant);
+        EXIT;
+        END;
+
+      IF NOT ItemFound THEN BEGIN
+        ItemCrossRef.SETRANGE(ItemCrossRef."Cross-Reference Type",  ItemCrossRef."Cross-Reference Type"::"Bar Code");
+        ItemCrossRef.SETRANGE(ItemCrossRef."Cross-Reference No.",pItemNo);
+        IF ItemCrossRef.FINDFIRST THEN BEGIN
+          ItemNo:=ItemCrossRef."Item No.";
+          VarCode:=ItemCrossRef."Variant Code";
+          ItemFound:=TRUE;
+          END;
+      END;
+
+      IF NOT ItemFound THEN BEGIN
+        IF Item.GET(pItemNo) THEN
+          BEGIN
+            ItemNo:=pItemNo;
+            //Do we have variants
+            ItemVariant.SETRANGE(ItemVariant."Item No.",ItemNo);
+            IF ItemVariant.FINDSET THEN BEGIN
+              //There are variants we need to ask for variant ?
+              pVariant:=ItemVariant;
+              EXIT;
+              END ELSE BEGIN
+                ItemFound:=TRUE;
+              END;
+          END;
+      END;
+
+      IF NOT ItemFound THEN BEGIN
+          Item.RESET;
+            //need to make this passed parameter into a search string.
+          SearchText:= '@*' + pItemNo+'*';
+          SearchText:=String.Replace(pItemNo,' ','*|@*');
+          SearchText:='@*'+SearchText+'*';
+          SearchText:=COPYSTR(SearchText,1,50);
+
+          Item.SETCURRENTKEY("Search Description");
+          Item.SETFILTER(Item."Search Description",SearchText);
+          Item.SETFILTER(Item."Serial Nos.",'%1','');
+          Item.SETFILTER(Item."Lot Nos.",'%1','');
+          Item.SETFILTER(Item."Item Tracking Code",'%1','');
+          IF Item.FINDSET THEN BEGIN
+              pVariant :=Item;
+              //EXIT;
+            END;
+      END;
+
+      IF ItemFound THEN BEGIN
+      PosCommand."Parameter 1":=ItemNo;
+      PosCommand."Parameter 2":=VarCode;
+      AddItemToTrans(lPosHeader,PosCommand,pVariant);
+      END;
+    END;
+
+    PROCEDURE FindCust@9062243(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      Cust@9062233 : Record 18;
+      CustNo@9062231 : Code[20];
+    BEGIN
+
+      SetCustMode(lPosHeader,PosCommand,pVariant);
+
+
+      CustNo:=PosCommand."Parameter 1";
+
+      IF CustNo<>'' THEN BEGIN
+        IF Cust.GET(CustNo) THEN BEGIN
+          Cust.SETRECFILTER;
+          pVariant:=Cust;
+          EXIT;
+        END ;
+      END;
+
+      Cust.SETCURRENTKEY("Search Name");
+      Cust.SETFILTER("Search Name",'%1','@*'+ CustNo +'*');
+
+      IF Cust.FINDSET THEN BEGIN
+        pVariant :=Cust;
+        EXIT;
+        END;
+    END;
+
+    PROCEDURE FindSuspended@9062264(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      PosHeader@9062231 : Record 9062778;
+      EntryNo@9062233 : Integer;
+    BEGIN
+      IF EVALUATE(EntryNo,PosCommand."Parameter 1") THEN BEGIN
+
+        IF PosHeader.GET(EntryNo) THEN BEGIN
+          PosHeader.SETRECFILTER;
+          pVariant:=PosHeader;
+          EXIT;
+        END ;
+      END;
+
+      PosHeader.SETRANGE(PosHeader.Status,PosHeader.Status::Suspended);
+
+      IF PosHeader.FINDSET THEN BEGIN
+        //lPosHeader."POS Message":= FORMAT(PosHeader.COUNT) +' records found';
+        pVariant :=PosHeader;
+        //lPosHeader.MODIFY;
+        EXIT;
+        END;
+    END;
+
+    PROCEDURE ProcessNumPad@9062245(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      Item@9062233 : Record 27;
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      Qty@9062231 : Integer;
+      LineNo@9062237 : Integer;
+      NewQty@9062230 : Code[10];
+    BEGIN
+      lPosHeader.EntryText:=lPosHeader.EntryText+PosCommand."Parameter 1";
+      lPosHeader.MODIFY(TRUE);
+    END;
+
+    PROCEDURE ProcessEnter@9062265(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      Item@9062233 : Record 27;
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      Qty@9062231 : Integer;
+      LineNo@9062237 : Integer;
+      NewQty@9062230 : Code[10];
+    BEGIN
+      //Assume we are pressing Enter and we need to deal with the mode we are in
+
+      PosCommand."Parameter 1":=lPosHeader.EntryText;
+      ProcessNonPosCommand(lPosHeader,PosCommand,pVariant);
+    END;
+
+    PROCEDURE BackSpace@9062273(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      Item@9062233 : Record 27;
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      Qty@9062231 : Integer;
+      LineNo@9062237 : Integer;
+      NewQty@9062230 : Code[10];
+    BEGIN
+
+      lPosHeader.EntryText:=COPYSTR(lPosHeader.EntryText,1,STRLEN(lPosHeader.EntryText)-1);
+      lPosHeader.MODIFY(TRUE);
+    END;
+
+    PROCEDURE ClearInput@9062246(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      Item@9062233 : Record 27;
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      Qty@9062231 : Integer;
+      LineNo@9062237 : Integer;
+      NewQty@9062230 : Code[10];
+    BEGIN
+      lPosHeader.EntryText:='';
+      lPosHeader.MODIFY(TRUE);
+    END;
+
+    PROCEDURE QtyAdd@9062248(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      Item@9062233 : Record 27;
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      NewQty@9062231 : Integer;
+      pQty@9062230 : Code[10];
+    BEGIN
+
+      IF NOT CheckLineStatus(lPosHeader,PosCommand,pVariant) THEN EXIT;
+
+      OpenOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+      pQty:=PosCommand."Parameter 1";
+
+      IF NOT EVALUATE(NewQty,pQty) THEN
+        NewQty:=1;
+
+      IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+      SH.SetHideValidationDialog(TRUE);
+
+      IF SL.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.",lPosHeader."Current Line") THEN BEGIN
+      SL.VALIDATE(SL.Quantity,SL.Quantity+NewQty);
+      SL.MODIFY(TRUE);
+      END;
+        END;
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+
+      ResetOrderMode(lPosHeader,PosCommand,pVariant);
+    END;
+
+    PROCEDURE QtyMinus@9062252(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      Item@9062233 : Record 27;
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      NewQty@9062231 : Integer;
+      pQty@9062230 : Code[10];
+    BEGIN
+      //update the line qty +1 or parameter passed
+      IF NOT CheckLineStatus(lPosHeader,PosCommand,pVariant) THEN EXIT;
+
+      OpenOrderIfNeeded(lPosHeader,PosCommand,pVariant);
+
+      pQty:=PosCommand."Parameter 1";
+
+      IF NOT EVALUATE(NewQty,pQty) THEN
+        NewQty:=1;
+
+        IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+        SH.SetHideValidationDialog(TRUE);
+      IF SL.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.",lPosHeader."Current Line") THEN BEGIN
+      SL.VALIDATE(SL.Quantity,SL.Quantity-NewQty);
+      SL.MODIFY(TRUE);
+      END;
+      END;
+
+        CalcTotals(lPosHeader,PosCommand,pVariant);
+    END;
+
+    PROCEDURE CalcTotals@9062249(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      TempCurrentSalesLine@9062236 : TEMPORARY Record 37;
+      VATAmount@9062235 : Decimal;
+      TempTotalSalesLine@9062234 : TEMPORARY Record 37;
+      "##"@9062237 : Integer;
+      TempSalesLine@9062245 : TEMPORARY Record 37;
+      TempTotalSalesLineLCY@9062244 : TEMPORARY Record 37;
+      SalesHeader@9062243 : Record 36;
+      SalesPost@9062242 : Codeunit 80;
+      VATAmountText@9062241 : Text[30];
+      ProfitLCY@9062240 : Decimal;
+      ProfitPct@9062239 : Decimal;
+      TotalAdjCostLCY@9062238 : Decimal;
+    BEGIN
+      IF NOT SalesHeader.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN
+        EXIT;
+
+      SalesPost.GetSalesLines(SalesHeader,TempSalesLine,0);
+        CLEAR(SalesPost);
+
+        SalesPost.SumSalesLinesTemp(
+          SalesHeader,TempSalesLine,0,TempTotalSalesLine,TempTotalSalesLineLCY,
+          VATAmount,VATAmountText,ProfitLCY,ProfitPct,TotalAdjCostLCY);
+
+      SalesHeader.CALCFIELDS(Amount,"Amount Including VAT");
+      lPosHeader.CALCFIELDS(Payments);
+
+      lPosHeader."Order Total":=SalesHeader."Amount Including VAT";
+      lPosHeader."Payment Total":=lPosHeader.Payments;
+
+      lPosHeader.MODIFY;
+    END;
+
+    PROCEDURE CheckFunds@9062251(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      TempCurrentSalesLine@9062236 : TEMPORARY Record 37;
+      VATAmount@9062235 : Decimal;
+      TempTotalSalesLine@9062234 : TEMPORARY Record 37;
+      TempSalesLine@9062245 : TEMPORARY Record 37;
+      TempTotalSalesLineLCY@9062244 : TEMPORARY Record 37;
+      SalesHeader@9062243 : Record 36;
+      SalesPost@9062242 : Codeunit 80;
+      VATAmountText@9062241 : Text[30];
+      ProfitLCY@9062240 : Decimal;
+      ProfitPct@9062239 : Decimal;
+      TotalAdjCostLCY@9062238 : Decimal;
+      eDocumentNotFound@1000000003 : TextConst 'ENU=Sales document not found;ENG=Sales document not found';
+      eNotEnoughFunds@1000000004 : TextConst 'ENU=Not enough funds to release;ENG=Not enough funds to release';
+    BEGIN
+      IF NOT SalesHeader.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.")
+        THEN BEGIN
+        lPosHeader."POS Message":=eDocumentNotFound;
+        lPosHeader.MODIFY;
+        EXIT(FALSE);
+        END;
+
+      SalesPost.GetSalesLines(SalesHeader,TempSalesLine,0);
+        CLEAR(SalesPost);
+
+        SalesPost.SumSalesLinesTemp(
+          SalesHeader,TempSalesLine,0,TempTotalSalesLine,TempTotalSalesLineLCY,
+          VATAmount,VATAmountText,ProfitLCY,ProfitPct,TotalAdjCostLCY);
+
+      SalesHeader.CALCFIELDS(Amount,"Amount Including VAT");
+      lPosHeader.CALCFIELDS(Payments);
+
+      lPosHeader."Order Total":=SalesHeader."Amount Including VAT";
+      lPosHeader."Payment Total":=lPosHeader.Payments;
+      lPosHeader.MODIFY;
+
+      IF SalesHeader."Amount Including VAT" > lPosHeader."Payment Total" THEN BEGIN
+          pVariant:=eNotEnoughFunds;
+          EXIT(FALSE);
+        END
+        ELSE
+          EXIT(TRUE);
+    END;
+
+    PROCEDURE ProcessNonPosCommand@9062247(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062232 : Record 36;
+    BEGIN
+      //This is the entry point for when we have no command
+
+      IF PosCommand."Run Codeunit ID" <> 0 THEN BEGIN
+        IF NOT CODEUNIT.RUN(PosCommand."Run Codeunit ID") THEN
+          EXIT(FALSE);
+        END;
+
+      CASE lPosHeader."Order Mode" OF
+        'LINEDISCPCT':
+          BEGIN
+            AddDiscPctToLine(lPosHeader,PosCommand,pVariant);
+          END;
+
+        'LINEDISCVAL':
+          BEGIN
+            AddDiscValToLine(lPosHeader,PosCommand,pVariant);
+          END;
+
+        'LINEPRICE':
+          BEGIN
+            ChangePriceOnLine(lPosHeader,PosCommand,pVariant);
+          END;
+
+        'LINEQTY':
+          BEGIN
+            ChangeQtyOnLine(lPosHeader,PosCommand,pVariant);
+          END;
+
+        'CUSTOMERS':
+          BEGIN
+            AddCustToTrans(lPosHeader,PosCommand,pVariant);
+          END;
+
+        'ITEMS':
+          BEGIN
+            AddItemToTrans(lPosHeader,PosCommand,pVariant);
+          END;
+
+        'FINDITEM':
+          BEGIN
+            FindItem(lPosHeader,PosCommand,pVariant);
+          END;
+
+        'PAYMENTS':
+          BEGIN
+            AddPaymentToTrans(lPosHeader,PosCommand,pVariant);
+          END;
+
+        'SETEMAIL':
+          BEGIN
+            SetEmail(lPosHeader,PosCommand,pVariant);
+          END;
+
+        'TOTALDISC':
+          BEGIN
+            AddTotDisc(lPosHeader,PosCommand,pVariant);
+          END;
+
+        'PRICECHECK':
+          BEGIN
+            PriceCheck(lPosHeader,PosCommand,pVariant);
+          END;
+
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE SetPosMode@9062250(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062232 : Record 36;
+    BEGIN
+      lPosHeader."Order Mode":=PosCommand."Parameter 1";
+      lPosHeader.MODIFY;
+    END;
+
+    PROCEDURE SetModeEdit@9062261(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      CuSoRel@9062231 : Codeunit 414;
+      SH@9062232 : Record 36;
+    BEGIN
+
+      SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.");
+      IF SH.Status <> SH.Status::"Pending Approval" THEN
+        CuSoRel.Reopen(SH);
+
+      CalcTotals(lPosHeader,PosCommand,pVariant);
+
+      lPosHeader.Status:=lPosHeader.Status::Active;
+      lPosHeader.MODIFY;
+    END;
+
+    PROCEDURE SetItemMode@1000000021(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062232 : Record 36;
+    BEGIN
+      lPosHeader."Order Mode":='FINDITEM';
+      lPosHeader.MODIFY;
+    END;
+
+    PROCEDURE SetPriceCheck@9062254(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062232 : Record 36;
+    BEGIN
+
+      lPosHeader."Order Mode":='PRICECHECK';
+      lPosHeader.MODIFY;
+    END;
+
+    PROCEDURE SetCustMode@9062255(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062232 : Record 36;
+    BEGIN
+      lPosHeader."Order Mode":='CUSTOMERS';
+      lPosHeader.MODIFY;
+      COMMIT;
+    END;
+
+    PROCEDURE SetDiscMode@1000000005(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062232 : Record 36;
+    BEGIN
+      lPosHeader."Order Mode":='TOTALDISC';
+      lPosHeader.MODIFY;
+      COMMIT;
+    END;
+
+    PROCEDURE SetFindMode@9062256(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062232 : Record 36;
+    BEGIN
+      lPosHeader."Order Mode":='FIND';
+      lPosHeader.MODIFY;
+      COMMIT;
+    END;
+
+    PROCEDURE SetPayMode@1000000003(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062232 : Record 36;
+    BEGIN
+
+      CalcOrderDiscounts(lPosHeader,PosCommand,pVariant);
+
+
+      lPosHeader."Order Mode":='PAYMENTS';
+      lPosHeader.MODIFY;
+      COMMIT;
+    END;
+
+    PROCEDURE SetEmailMode@1000000019(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062232 : Record 36;
+      eEMailSetTo@1000000003 : TextConst 'ENU=Email Address set to %1;ENG=Email Address set to %1';
+      ePleaseEnterEMail@1000000004 : TextConst 'ENU=ePleaseEnterEMail;ENG=ePleaseEnterEMail';
+    BEGIN
+
+      IF lPosHeader.EntryText <> '' THEN BEGIN
+            lPosHeader."E-Mail":=lPosHeader.EntryText;
+            lPosHeader."POS Message":=STRSUBSTNO(eEMailSetTo, lPosHeader."E-Mail");
+            lPosHeader."POS Message Type":=lPosHeader."POS Message Type"::Information;
+            lPosHeader."Order Mode":='FINDITEM';
+            lPosHeader.MODIFY;
+            COMMIT;
+          END
+        ELSE
+         BEGIN
+
+          lPosHeader."Order Mode":='SETEMAIL';
+          lPosHeader."POS Message":=ePleaseEnterEMail;
+          lPosHeader."POS Message Type":=lPosHeader."POS Message Type"::Information;
+          lPosHeader.MODIFY;
+          COMMIT;
+      END;
+    END;
+
+    PROCEDURE EnqueueSalesDoc@1(VAR SalesHeader@1000 : Record 36) : Boolean;
+    VAR
+      SalesSetup@1003 : Record 311;
+      JobQueueEntry@1002 : Record 472;
+      RecRef@1001 : RecordRef;
+      TempInvoice@1006 : Boolean;
+      TempRcpt@1005 : Boolean;
+      TempShip@1004 : Boolean;
+      PostDescription@9062233 : TextConst '@@@="%1 = document type, %2 = document number. Example: Post Sales Order 1234.";ENU=Post Sales %1 %2.;ENG=Post Sales %1 %2.';
+      PostAndPrintDescription@9062232 : TextConst '@@@="%1 = document type, %2 = document number. Example: Post Sales Order 1234.";ENU=Post and Print Sales %1 %2.;ENG=Post and Print Sales %1 %2.';
+      Confirmation@9062231 : TextConst '@@@="%1=document type, %2=number, e.g. Order 123  or Invoice 234.";ENU=%1 %2 has been scheduled for posting.;ENG=%1 %2 has been scheduled for posting.';
+      WrongJobQueueStatus@9062230 : TextConst '@@@="%1 = document type, %2 = document number. Example: Sales Order 1234 or Invoice 1234.";ENU=%1 %2 cannot be posted because it has already been scheduled for posting. Choose the Remove from Job Queue action to reset the job queue status and then post again.;ENG=%1 %2 cannot be posted because it has already been scheduled for posting. Choose the Remove from Job Queue action to reset the job queue status and then post again.';
+      CUJobQueue@9062234 : Codeunit 453;
+      SL@1000000000 : Record 37;
+    BEGIN
+
+      //Only place on queue if order has lines to post.
+      SL.SETRANGE(SL."Document Type",SalesHeader."Document Type");
+      SL.SETRANGE(SL."Document No.",SalesHeader."No.");
+      IF NOT SL.FINDSET THEN BEGIN
+        SalesHeader.SetHideValidationDialog(TRUE);
+        SalesHeader.DELETE(TRUE);
+        EXIT;
+        END;
+
+      SalesSetup.GET;
+      WITH SalesHeader DO BEGIN
+        IF NOT ("Job Queue Status" IN ["Job Queue Status"::" ","Job Queue Status"::Error]) THEN
+          ERROR(WrongJobQueueStatus,"Document Type","No.");
+        TempInvoice := Invoice;
+        TempRcpt := Receive;
+        TempShip := Ship;
+        IF Status = Status::Open THEN
+          CODEUNIT.RUN(CODEUNIT::"Release Sales Document",SalesHeader);
+        Invoice := TempInvoice;
+        Receive := TempRcpt;
+        Ship := TempShip;
+        "Job Queue Status" := "Job Queue Status"::"Scheduled for Posting";
+        "Job Queue Entry ID" := CREATEGUID;
+        MODIFY;
+        RecRef.GETTABLE(SalesHeader);
+        JobQueueEntry.ID := "Job Queue Entry ID";
+        JobQueueEntry."Object Type to Run" := JobQueueEntry."Object Type to Run"::Codeunit;
+        JobQueueEntry."Object ID to Run" := CODEUNIT::"Sales Post via Job Queue";
+        JobQueueEntry."Record ID to Process" := RecRef.RECORDID;
+        JobQueueEntry."Job Queue Category Code" := SalesSetup."Job Queue Category Code";
+        // Set Timeout to prevent the Job Queue from hanging (eg. as a result of a printer dialog).
+        JobQueueEntry."Timeout (sec.)" := 7200;
+        JobQueueEntry."Run in User Session" := TRUE;
+        IF "Print Posted Documents" THEN BEGIN
+          JobQueueEntry.Priority := SalesSetup."Job Q. Prio. for Post & Print";
+          JobQueueEntry.Description :=
+            COPYSTR(STRSUBSTNO(PostAndPrintDescription,"Document Type","No."),1,MAXSTRLEN(JobQueueEntry.Description));
+        END ELSE BEGIN
+          JobQueueEntry.Priority := SalesSetup."Job Queue Priority for Post";
+          JobQueueEntry.Description :=
+            COPYSTR(STRSUBSTNO(PostDescription,"Document Type","No."),1,MAXSTRLEN(JobQueueEntry.Description));
+        END;
+        JobQueueEntry."Notify On Success" := SalesSetup."Notify On Success";
+        CUJobQueue.EnqueueJobQueueEntry(JobQueueEntry,FALSE);
+      END;
+    END;
+
+    PROCEDURE ShowOrderValInCurr@9062279(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062234 : Record 36;
+      CurrExch@9062230 : Record 330;
+      CurrTemp@9062232 : TEMPORARY Record 4;
+      Currency@9062237 : Record 4;
+      ExRate@9062235 : Decimal;
+      RecRef@1000000003 : RecordRef;
+    BEGIN
+    END;
+
+    PROCEDURE ShowItemInCurr@9062270(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      SH@9062234 : Record 36;
+      SL@9062235 : Record 37;
+      CurrExch@9062230 : Record 330;
+      CurrTemp@9062232 : TEMPORARY Record 4;
+      Currency@9062237 : Record 4;
+      ExRate@9062238 : Decimal;
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE InsertLine@1000000001(VAR lPosHeader@9062230 : Record 9062778;InsertText@1000000000 : Text;TextType@1000000001 : 'Header,Body,Footer') : Boolean;
+    VAR
+      TNPPOSMessage@1000000002 : Record 9062785;
+    BEGIN
+      TNPPOSMessage.INIT;
+      TNPPOSMessage."Entry No":=0;
+      TNPPOSMessage."Pos Trans No":=lPosHeader."Entry No";
+      TNPPOSMessage.INSERT(TRUE);
+      TNPPOSMessage."Display Text":=COPYSTR(InsertText,1,50);
+      TNPPOSMessage."Sequence No":=FindNextSeqNo(TNPPOSMessage);
+      TNPPOSMessage."Text Type":=TextType;
+      TNPPOSMessage.MODIFY;
+    END;
+
+    LOCAL PROCEDURE FindNextSeqNo@1000000004(pTNPPOSMessage@1000000000 : Record 9062785) NextNo : Integer;
+    VAR
+      lTNPPOSMessage@1000000001 : Record 9062785;
+    BEGIN
+      lTNPPOSMessage.SETRANGE(lTNPPOSMessage."Pos Trans No",pTNPPOSMessage."Pos Trans No");
+      IF lTNPPOSMessage.FINDLAST THEN
+        EXIT(lTNPPOSMessage."Sequence No"+10)
+      ELSE
+        EXIT(10);
+    END;
+
+    LOCAL PROCEDURE GetForeignCurrVal@1000000000(pCurr@1000000001 : Code[10];pVal@1000000002 : Decimal) : Decimal;
+    VAR
+      CurrExch@1000000000 : Record 330;
+      ExRate@1000000003 : Decimal;
+    BEGIN
+
+      ExRate:= CurrExch.ExchangeRate(WORKDATE,pCurr);
+    END;
+
+    LOCAL PROCEDURE PosSlipFromSalesDoc@1000000002(VAR lPosHeader@9062230 : Record 9062778) : Boolean;
+    VAR
+      SH@1000000000 : Record 36;
+      SL@1000000001 : Record 37;
+      PosPayments@9062231 : Record 9062779;
+      eOrderNo@1000000002 : TextConst 'ENU=Order No.: %1;ENG=Order No.: %1';
+      eYourItems@1000000003 : TextConst 'ENU=Your items today are;ENG=Your items today are';
+      eDescription@1000000004 : TextConst 'ENU=%1 of %2 @ %3;ENG=%1 of %2 @ %3';
+      eTotalValue@1000000005 : TextConst 'ENU=Total Order Value today is %1;ENG=Total Order Value today is %1';
+      ePayments@1000000006 : TextConst 'ENU=Payments on this order;ENG=Payments on this order';
+      eThankYou@1000000007 : TextConst 'ENU=Thank you for your custom;ENG=Thank you for your custom';
+      eYouWereServed@1000000008 : TextConst 'ENU=You were served today by;ENG=You were served today by';
+    BEGIN
+
+      IF SH.GET(lPosHeader."Sales Document Type",lPosHeader."Sales Document No.") THEN BEGIN
+        SH.CALCFIELDS(SH."Amount Including VAT");
+        InsertLine(lPosHeader,STRSUBSTNO(eOrderNo, SH."No."),0);
+        SL.SETRANGE(SL."Document Type",SH."Document Type");
+        SL.SETRANGE(SL."Document No.",SH."No.");
+        IF SL.FINDSET THEN BEGIN
+          InsertLine(lPosHeader,eYourItems,0);
+
+          REPEAT
+          InsertLine(lPosHeader,STRSUBSTNO(eDescription, SL.Quantity, SL.Description, ROUND(SL."Unit Price",0.01)),1);
+          UNTIL SL.NEXT=0;
+          END;
+
+          //Insert Footer block
+          InsertLine(lPosHeader,'',2);
+
+          InsertLine(lPosHeader,'=================================================',2);
+          InsertLine(lPosHeader,STRSUBSTNO(eTotalValue, SH."Amount Including VAT"),2);
+
+          //Insert Payments
+
+
+          PosPayments.SETRANGE(PosPayments."Document Type",SH."Document Type");
+          PosPayments.SETRANGE(PosPayments."Document No",SH."No.");
+          IF PosPayments.FINDSET THEN BEGIN
+              InsertLine(lPosHeader,'',2);
+              InsertLine(lPosHeader,ePayments,2);
+              REPEAT
+                InsertLine(lPosHeader,PosPayments."Payment Method" + ' @ ' + FORMAT(ROUND(PosPayments."Amount LCY")),2);
+              UNTIL PosPayments.NEXT=0;
+                END;
+
+          InsertLine(lPosHeader,eThankYou,2);
+          InsertLine(lPosHeader,'',2);
+          InsertLine(lPosHeader,eYouWereServed,2);
+          InsertLine(lPosHeader,LoggedOnUser,2);
+          InsertLine(lPosHeader,'',2);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE SetEmail@1000000006(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant);
+    BEGIN
+
+      lPosHeader."E-Mail" := lPosHeader.EntryText;
+
+      ResetOrderMode(lPosHeader,PosCommand,pVariant);
+    END;
+
+    PROCEDURE ResetOrderMode@1000000008(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      PosHeader@1000000003 : Record 9062778;
+    BEGIN
+
+      lPosHeader."Order Mode":='FINDITEM';
+      lPosHeader.EntryText:='';
+      lPosHeader."POS Message":='';
+      lPosHeader."POS Message Type":=lPosHeader."POS Message Type"::Information;
+      lPosHeader.MODIFY;
+    END;
+
+    LOCAL PROCEDURE PostPayments@9062258(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant);
+    VAR
+      CuSalesPost@9062248 : Codeunit 80;
+      GLLine@9062246 : Record 81;
+      GLPost@9062245 : Codeunit 12;
+      POSSetup@9062244 : Record 9062777;
+      SalesVariant@9062243 : Variant;
+      POSPayments@9062238 : Record 9062779;
+      POSPaymentType@9062236 : Record 9062781;
+      POSPaymentTmp@1000000004 : TEMPORARY Record 9062779;
+    BEGIN
+      POSSetup.GET();
+
+      POSPayments.SETRANGE(POSPayments."POS Trans Header No",lPosHeader."Entry No");
+
+      IF POSPayments.FINDSET THEN BEGIN
+        REPEAT
+            POSPaymentTmp.INIT;
+            POSPaymentTmp.COPY(POSPayments);
+            POSPaymentType.GET(POSPayments."Payment Method");
+
+            IF POSPaymentType."Account Type"<> POSPaymentType."Account Type"::"To Account" THEN
+             BEGIN
+              GLLine.INIT;
+              GLLine.VALIDATE("Journal Template Name",POSSetup."Cash Receipt Jnl Template");
+              GLLine.VALIDATE("Journal Batch Name",POSSetup."Cash Rcpt Batch");
+              GLLine.VALIDATE("Posting Date",WORKDATE);
+              GLLine."Line No.":=POSPayments."Entry No";
+
+              IF POSPayments."Amount LCY" >0 THEN
+                GLLine.VALIDATE("Document Type",GLLine."Document Type"::Payment)
+              ELSE
+                GLLine.VALIDATE("Document Type",GLLine."Document Type"::Refund);
+
+              GLLine.VALIDATE("Document No.",FORMAT(lPosHeader."Entry No"));
+              GLLine."External Document No.":=FORMAT(lPosHeader."Entry No");
+
+              GLLine.VALIDATE("Account Type",GLLine."Account Type"::Customer);
+              GLLine.VALIDATE("Account No.",lPosHeader."Customer No");
+
+              GLLine.VALIDATE(Amount,-POSPayments."Amount LCY");
+
+              GLLine.VALIDATE("Bal. Account Type",POSPaymentType."Account Type");
+              GLLine.VALIDATE("Bal. Account No.",POSPaymentType."Account No.");
+
+              IF GLPost.RUN(GLLine) THEN
+                BEGIN
+                  POSPaymentTmp."Posting Status":=POSPayments."Posting Status"::Posted;
+                END ELSE
+                BEGIN
+                  POSPaymentTmp."Posting Status":=POSPayments."Posting Status"::Error;
+                  POSPaymentTmp."Info Text":=COPYSTR(GETLASTERRORTEXT,1,250);
+                END;
+              END;
+
+              POSPaymentTmp.INSERT;
+        UNTIL POSPayments.NEXT=0;
+
+        POSPaymentTmp.FINDFIRST;
+         REPEAT
+          POSPayments.GET(POSPaymentTmp."Entry No");
+          POSPayments."Posting Status":= POSPaymentTmp."Posting Status";
+          POSPayments."Info Text":= POSPaymentTmp."Info Text";
+          POSPayments.MODIFY;
+         UNTIL POSPaymentTmp.NEXT=0;
+      END;
+    END;
+
+    PROCEDURE EmailReceipt@1000000017(VAR lPosHeader@1000000002 : Record 9062778;VAR PosCommand@1000000001 : TEMPORARY Record 9062780;VAR pVariant@1000000000 : Variant) : Boolean;
+    VAR
+      msgtxt@9062244 : TextConst 'ENU=Default Customer cannot be used for ordering. Select new customer;ENG=Default Customer cannot be used for ordering. Select new customer';
+      ReceiptPrint@1000000003 : Report 9062341;
+      POSMessage@1000000004 : Record 9062785;
+      ErrorText@1000000005 : Text;
+      "##"@1000000008 : Integer;
+      FileManagement@1000000010 : Codeunit 419;
+      ServerAttachmentFilePath@1000000009 : Text;
+      TempEmailItem@1000000011 : TEMPORARY Record 9500;
+      Cust@1000000012 : Record 18;
+      ServerSaveAsPdfFailedErr@1000000013 : TextConst 'ENU=Cannot Save Report to Server;ENG=Cannot Save Report to Server';
+      POSSetup@1000000006 : Record 9062777;
+      EmailPage@1000000007 : Page 9063201;
+      ActionRes@1000000014 : Action;
+      eSubject@1000000015 : TextConst 'ENU=Please find attached a copy of your receipt for you recent transaction;ENG=Please find attached a copy of your receipt for you recent transaction';
+      eYourRecept@1000000016 : TextConst 'ENU=Your receipt for transaction no: %1;ENG=Your receipt for transaction no: %1';
+      EnablementSetup@1000000017 : Record 9062229;
+      EnablementUser@1000000018 : Record 9062729;
+      Contact@1000000019 : Record 5050;
+    BEGIN
+
+      IF lPosHeader."E-Mail"='' THEN EXIT;
+
+      POSSetup.GET();
+      IF POSSetup."Email Receipts" = FALSE THEN
+        EXIT;
+
+            ServerAttachmentFilePath := FileManagement.ServerTempFileName('pdf');
+
+            POSMessage.SETRANGE("Pos Trans No",lPosHeader."Entry No");
+                IF POSMessage.FINDSET THEN
+                  BEGIN
+                    CLEAR(ReceiptPrint);
+                    ReceiptPrint.SETTABLEVIEW(POSMessage);
+                    ReceiptPrint.USEREQUESTPAGE(FALSE);
+                    ReceiptPrint.SAVEASPDF(ServerAttachmentFilePath);
+                  END;
+
+            IF NOT EXISTS(ServerAttachmentFilePath) THEN
+              ERROR(ServerSaveAsPdfFailedErr);
+
+            //Create a temp email item then send it
+            EnablementSetup.GET();
+            EnablementSetup.TESTFIELD("Auto Response User ID");
+            EnablementUser.GET(EnablementSetup."Auto Response User ID");
+            EnablementUser.TESTFIELD("Contact No.");
+            Contact.GET(EnablementUser."Contact No.");
+            Contact.TESTFIELD(Name);
+            Contact.TESTFIELD("E-Mail");
+            WITH TempEmailItem DO BEGIN
+              "From Address":=Contact."E-Mail";
+              "From Name":=Contact.Name;
+              SetBodyText(eSubject);
+            "Send to" := lPosHeader."E-Mail";
+            Subject:=STRSUBSTNO(eYourRecept, lPosHeader."Entry No");
+            "Attachment File Path" := ServerAttachmentFilePath;
+            "Attachment Name" := ServerAttachmentFilePath;
+            Send(TRUE);
+            END;
+    END;
+
+    BEGIN
+    {
+      //DOC NH2016.12 BM 11/02/2016 - Created
+      //DOC NH2016.15 JH 26/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

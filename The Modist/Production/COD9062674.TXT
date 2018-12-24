@@ -1,0 +1,1355 @@
+OBJECT Codeunit 9062674 Enhanced View Calc. Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      "--- Enhanced View State ---"@1000000017 : Integer;
+      EnhView@1000000000 : TEMPORARY Record 9062804;
+      SelectedGroupByField@1000000009 : TEMPORARY Record 9062807;
+      SelectedTotalsField@1000000011 : TEMPORARY Record 9062807;
+      EnhViewCellField@1000000014 : TEMPORARY Record 9062807;
+      EnhViewGridField@1000000016 : TEMPORARY Record 9062807;
+      EnhViewGroupByField@1000000021 : TEMPORARY Record 9062807;
+      EnhViewTotalsField@1000000020 : TEMPORARY Record 9062807;
+      SelectedCellEntryNo@1000000029 : Integer;
+      CurrentCellEntryNo@1000000030 : Integer;
+      EnhViewSource@1000000025 : Codeunit 9062659;
+      "--- Data Filters ---"@1000000026 : Integer;
+      DataFilterFieldNo@1000000027 : ARRAY [5] OF Integer;
+      DataFilterFieldValue@1000000028 : ARRAY [5] OF Text;
+      "--- Calculation Variables ---"@1000000001 : Integer;
+      EnhViewColumn@1000000004 : TEMPORARY Record 9062805;
+      EnhViewCell@1000000002 : TEMPORARY Record 9062806;
+      CriteriaMgt@1000000008 : Codeunit 9062462;
+      EnhFieldMgt@1000000018 : Codeunit 9062298;
+      EnhViewMgt@1000000012 : Codeunit 9062679;
+      dlgUpdate@1000000005 : TextConst 'ENU="Updating Enhanced View \ Collecting Records @@@@@@@@@@@@@@@@@1@ \ Sorting Records @@@@@@@@@@@@@@@@@2@ ";ENG="Updating Enhanced View \ Collecting Records @@@@@@@@@@@@@@@@@1@ \ Sorting Records @@@@@@@@@@@@@@@@@2@ "';
+      ColumnEntryNo@1000000006 : Integer;
+      ColumnTotalsEntryNo@1000000013 : Integer;
+      CellEntryNo@1000000007 : Integer;
+      ProgressDlg@1000000015 : Dialog;
+      txtNoData@1000000010 : TextConst 'ENU=No Data;ENG=No Data';
+      "--- View State ---"@1000000023 : Integer;
+      _ViewReloadRequired@1000000019 : Boolean;
+      txtCount@1000000022 : TextConst 'ENU=Count;ENG=Count';
+      _CellReloadRequired@1000000024 : Boolean;
+      _ReloadError@1000000003 : Boolean;
+
+    PROCEDURE SetEnhView@1000000008(VAR NewEnhView@1000000000 : Record 9062804);
+    VAR
+      EnhViewDb@1000000002 : Record 9062804;
+      EnhViewFieldDb@1000000003 : Record 9062807;
+      EnhViewFieldTemp@1000000005 : TEMPORARY Record 9062807;
+      SelectedField@1000000001 : TEMPORARY Record 9062807;
+      GroupFound@1000000004 : Boolean;
+    BEGIN
+      //initialize enhanced view using data from database tables
+      EnhViewSource.GetData(NewEnhView, EnhViewFieldTemp);
+      SetEnhViewAdv(NewEnhView, EnhViewFieldTemp, FALSE);
+    END;
+
+    LOCAL PROCEDURE SetEnhViewAdv@1000000045(VAR NewEnhView@1000000000 : Record 9062804;VAR NewEnhViewFields@1000000001 : Record 9062807;ForceReload@1000000002 : Boolean);
+    VAR
+      SrcEnhViewGridField@1000000003 : TEMPORARY Record 9062807;
+      FilterIndex@1000000004 : Integer;
+    BEGIN
+      IF (NOT(ForceReload)) THEN
+        IF (NewEnhView.Code = EnhView.Code) THEN
+          EXIT;
+
+      //initialize EnhView calculation
+      EnhView.RESET();
+      EnhView.DELETEALL();
+      EnhView.TRANSFERFIELDS(NewEnhView);
+      IF (EnhView."Chart Type" = '') THEN
+        EnhView."Chart Type" := 'bar';
+      EnhView.INSERT();
+
+      //process parameters
+      ClearDataFilters();
+      FOR FilterIndex := 10 DOWNTO 0 DO BEGIN
+        NewEnhView.FILTERGROUP(FilterIndex);
+
+        //check view
+        IF (NewEnhView.GETFILTER("View Mode Filter") <> '') THEN
+          EnhView."View Mode" := NewEnhView.GETRANGEMIN("View Mode Filter");
+
+        //check chart type
+        IF (NewEnhView.GETFILTER("Chart Type Filter") <> '') THEN
+          EnhView."Chart Type" := NewEnhView.GETRANGEMIN("Chart Type Filter");
+
+        //hide menu
+        IF (NewEnhView.GETFILTER("Hide Menu Bar Filter") <> '') THEN
+          EnhView."Hide Menu Bar" := NewEnhView.GETRANGEMIN("Hide Menu Bar Filter");
+
+        //check filter
+        IF (NewEnhView.GETFILTER("Field 1 No. Filter") <> '') THEN
+          CheckDataFilter(1, NewEnhView.GETRANGEMIN("Field 1 No. Filter"),
+            NewEnhView.GETFILTER("Field 1 Value Filter"));
+
+        IF (NewEnhView.GETFILTER("Field 2 No. Filter") <> '') THEN
+          CheckDataFilter(2, NewEnhView.GETRANGEMIN("Field 2 No. Filter"),
+            NewEnhView.GETFILTER("Field 2 Value Filter"));
+
+        IF (NewEnhView.GETFILTER("Field 3 No. Filter") <> '') THEN
+          CheckDataFilter(3, NewEnhView.GETRANGEMIN("Field 3 No. Filter"),
+            NewEnhView.GETFILTER("Field 3 Value Filter"));
+
+        IF (NewEnhView.GETFILTER("Field 4 No. Filter") <> '') THEN
+          CheckDataFilter(4, NewEnhView.GETRANGEMIN("Field 4 No. Filter"),
+            NewEnhView.GETFILTER("Field 4 Value Filter"));
+
+        IF (NewEnhView.GETFILTER("Field 5 No. Filter") <> '') THEN
+          CheckDataFilter(5, NewEnhView.GETRANGEMIN("Field 5 No. Filter"),
+            NewEnhView.GETFILTER("Field 5 Value Filter"));
+      END;
+      NewEnhView.FILTERGROUP(0);
+
+      EnhView.MODIFY();
+
+      //load cell and grid fields
+      EnhViewMgt.GetCellFields(EnhView, NewEnhViewFields, EnhViewCellField);
+      EnhViewMgt.GetGridFields(EnhView, NewEnhViewFields, SrcEnhViewGridField);
+      ProcessGridFields(SrcEnhViewGridField);
+
+      //recalculate enhanced view
+      RefreshEnhView();
+    END;
+
+    LOCAL PROCEDURE ProcessGridFields@1000000047(VAR SrcEnhViewGridField@1000000000 : Record 9062807);
+    VAR
+      Field@1000000002 : Record 2000000041;
+      LineNo@1000000001 : Integer;
+      txtYearMonthCaption@1000000003 : TextConst 'ENU=%1 [MY];ENG=%1 [MY]';
+    BEGIN
+      //process source grid fields and add calculated fields for grid view
+      EnhViewGridField.RESET();
+      EnhViewGridField.DELETEALL();
+      LineNo := 0;
+      IF (SrcEnhViewGridField.FINDSET()) THEN BEGIN
+        REPEAT
+          //copy line
+          LineNo += 10000;
+          EnhViewGridField.TRANSFERFIELDS(SrcEnhViewGridField);
+          EnhViewGridField."Line No." := LineNo;
+          EnhViewGridField."Field Copy" := FALSE;
+          EnhViewGridField."Source Field Line No." := 0;
+          EnhViewGridField.UpdateFieldName();
+          EnhViewGridField.INSERT();
+
+          //add date field
+          IF (EnhViewGridField."Field Type" = EnhViewGridField."Field Type"::Field) THEN BEGIN
+            Field.GET(EnhViewGridField."Table No.", EnhViewGridField."Field No.");
+            IF (Field.Type IN [Field.Type::Date, Field.Type::DateTime]) THEN BEGIN
+              LineNo += 10000;
+              EnhViewGridField."Source Field Line No." := EnhViewGridField."Line No.";
+              EnhViewGridField."Field Copy" := TRUE;
+              EnhViewGridField."Format Expression" := '<Month Text> <Year4>';
+              EnhViewGridField.Caption := STRSUBSTNO(txtYearMonthCaption, SrcEnhViewGridField.Caption);
+              EnhViewGridField."Line No." := LineNo;
+              EnhViewGridField."Group By Date Function" := EnhViewGridField."Group By Date Function"::"Year Month";
+              EnhViewGridField.UpdateFieldName();
+              EnhViewGridField.INSERT();
+            END;
+          END;
+
+        UNTIL (SrcEnhViewGridField.NEXT() = 0);
+      END;
+
+      //process grid fields to create list of group by and totals fields
+      EnhViewGroupByField.RESET();
+      EnhViewGroupByField.DELETEALL();
+      EnhViewTotalsField.RESET();
+      EnhViewTotalsField.DELETEALL();
+
+      EnhViewGridField.RESET();
+      EnhViewGridField.SETRANGE("Field Copy", FALSE);
+      IF (EnhViewGridField.FINDSET(TRUE)) THEN BEGIN
+        REPEAT
+
+          IF (EnhViewGridField.Name = '') THEN BEGIN
+            EnhViewGridField.UpdateFieldName();
+            EnhViewGridField.MODIFY();
+          END;
+
+          //group by
+          IF (EnhViewGridField.Groupable) THEN BEGIN
+            EnhViewGroupByField.TRANSFERFIELDS(EnhViewGridField);
+            EnhViewGroupByField.INSERT();
+          END;
+
+          //totals
+          IF (EnhViewGridField."Number Field") THEN BEGIN
+            EnhViewTotalsField.TRANSFERFIELDS(EnhViewGridField);
+            EnhViewTotalsField.INSERT();
+          END;
+        UNTIL (EnhViewGridField.NEXT() = 0);
+      END;
+      EnhViewGridField.RESET();
+
+      //create empty "COUNT" totals field
+      EnhViewTotalsField.INIT();
+      EnhViewTotalsField."View Code" := EnhView.Code;
+      EnhViewTotalsField."Line No." := 0;
+      EnhViewTotalsField.Type := EnhViewTotalsField.Type::"Grid Column";
+      EnhViewTotalsField.Caption := txtCount;
+      EnhViewTotalsField."Number Field" := TRUE;
+      EnhViewTotalsField."Aggregate Function" := EnhViewTotalsField."Aggregate Function"::Count;
+      EnhViewTotalsField.INSERT();
+
+      //find default group by
+      EnhViewGroupByField.RESET();
+      EnhViewGroupByField.SETRANGE("Default Group", TRUE);
+      IF (NOT(EnhViewGroupByField.FINDFIRST())) THEN BEGIN
+        EnhViewGroupByField.RESET();
+        EnhViewGroupByField.FINDFIRST();
+      END;
+      SetSingleField(SelectedGroupByField, EnhViewGroupByField);
+
+      //find default totals
+      EnhViewTotalsField.RESET();
+      EnhViewTotalsField.SETRANGE("Default Totals", TRUE);
+      IF (NOT(EnhViewTotalsField.FINDFIRST())) THEN BEGIN
+        EnhViewTotalsField.RESET();
+        EnhViewTotalsField.FINDFIRST();
+      END;
+      SetSingleField(SelectedTotalsField, EnhViewTotalsField);
+    END;
+
+    LOCAL PROCEDURE "--- Get Current Data ---"@1000000055();
+    BEGIN
+    END;
+
+    PROCEDURE GetData@1000000038(VAR OutView@1000000000 : Record 9062804;VAR OutGroupByField@1000000003 : Record 9062807;VAR OutTotalsField@1000000004 : Record 9062807;VAR OutColumns@1000000005 : Record 9062805;VAR OutCells@1000000006 : Record 9062806);
+    BEGIN
+      //Returns enhanced view data
+      OutView.COPY(EnhView, TRUE);
+      OutColumns.COPY(EnhViewColumn, TRUE);
+      OutCells.COPY(EnhViewCell, TRUE);
+      OutGroupByField.COPY(SelectedGroupByField, TRUE);
+      OutTotalsField.COPY(SelectedTotalsField, TRUE);
+    END;
+
+    PROCEDURE GetCellData@1000000039(VAR OutView@1000000000 : Record 9062804;VAR OutCells@1000000006 : Record 9062806);
+    BEGIN
+      //Returns enhanced view cells data
+      OutView.COPY(EnhView, TRUE);
+      OutCells.COPY(EnhViewCell, TRUE);
+    END;
+
+    PROCEDURE GetViewData@1000000040(VAR OutView@1000000000 : Record 9062804);
+    BEGIN
+      //Returns enhanced view data
+      OutView.COPY(EnhView, TRUE);
+    END;
+
+    PROCEDURE GetCellFields@1000000006(VAR OutField@1000000000 : Record 9062807);
+    BEGIN
+      //Returns cell fields
+      OutField.COPY(EnhViewCellField, TRUE);
+    END;
+
+    PROCEDURE GetGridFields@1000000056(VAR OutField@1000000000 : Record 9062807);
+    BEGIN
+      //Returns grid fields
+      OutField.COPY(EnhViewGridField, TRUE);
+    END;
+
+    PROCEDURE GetTotalsFields@1000000057(VAR OutField@1000000000 : Record 9062807);
+    BEGIN
+      //Returns totals fields
+      OutField.COPY(EnhViewTotalsField, TRUE);
+    END;
+
+    PROCEDURE GetGroupByFields@1000000058(VAR OutField@1000000000 : Record 9062807);
+    BEGIN
+      //Returns group by fields
+      OutField.COPY(EnhViewGroupByField, TRUE);
+    END;
+
+    PROCEDURE GetViewMode@1000000046() : Integer;
+    BEGIN
+      EXIT(EnhView."View Mode");
+    END;
+
+    LOCAL PROCEDURE "--- Fields Management ---"@1000000051();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE SetSingleField@1000000052(VAR EnhViewField@1000000000 : Record 9062807;VAR NewValue@1000000001 : Record 9062807);
+    BEGIN
+      EnhViewField.RESET();
+      EnhViewField.DELETEALL();
+      EnhViewField.TRANSFERFIELDS(NewValue);
+      EnhViewField.INSERT();
+    END;
+
+    LOCAL PROCEDURE SetAndCompareSingleField@1000000029(VAR EnhViewField@1000000001 : Record 9062807;VAR NewValue@1000000000 : Record 9062807;VAR ForceReload@1000000002 : Boolean);
+    BEGIN
+      IF (NOT(ForceReload)) THEN
+        ForceReload := NOT(EnhViewField.Equals(NewValue));
+      SetSingleField(EnhViewField, NewValue);
+    END;
+
+    LOCAL PROCEDURE "--- Data Filters Functions ---"@1000000059();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ClearDataFilters@1000000060();
+    VAR
+      FieldIndex@1000000000 : Integer;
+    BEGIN
+      CLEAR(DataFilterFieldNo);
+      CLEAR(DataFilterFieldValue);
+    END;
+
+    LOCAL PROCEDURE CheckDataFilter@1000000070(FilterIndex@1000000000 : Integer;FieldNo@1000000001 : Integer;FieldValue@1000000002 : Text);
+    BEGIN
+      IF (FieldNo <> 0) AND (FieldValue <> '') THEN BEGIN
+        DataFilterFieldNo[FilterIndex] := FieldNo;
+        DataFilterFieldValue[FilterIndex] := FieldValue;
+      END;
+    END;
+
+    LOCAL PROCEDURE ApplyDataFilter@1000000071(VAR ToRecordRef@1000000000 : RecordRef);
+    VAR
+      FilterIndex@1000000001 : Integer;
+      ToFieldRef@1000000002 : FieldRef;
+    BEGIN
+      FOR FilterIndex := 1 TO ARRAYLEN(DataFilterFieldNo) DO BEGIN
+        IF (DataFilterFieldNo[FilterIndex] <> 0) THEN BEGIN
+          ToFieldRef := ToRecordRef.FIELD(DataFilterFieldNo[FilterIndex]);
+          ToFieldRef.SETFILTER(DataFilterFieldValue[FilterIndex]);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Grouping ---"@1000000034();
+    BEGIN
+    END;
+
+    PROCEDURE SetGroupByLineNo@1000000028(LineNo@1000000000 : Integer);
+    VAR
+      SelectedField@1000000001 : TEMPORARY Record 9062807;
+    BEGIN
+      EnhViewGroupByField.RESET();
+      EnhViewGroupByField.SETRANGE("Line No.", LineNo);
+      IF (EnhViewGroupByField.FINDFIRST()) THEN
+        SetGroupBy(EnhViewGroupByField, FALSE);
+    END;
+
+    PROCEDURE LookupGroupBy@1000000026();
+    BEGIN
+      EnhViewGroupByField.RESET();
+      IF (EnhViewMgt.FieldLookup(EnhViewGroupByField)) THEN
+        SetGroupBy(EnhViewGroupByField, FALSE);
+    END;
+
+    LOCAL PROCEDURE SetGroupBy@1000000012(VAR NewGroupByField@1000000000 : Record 9062807;ForceReload@1000000001 : Boolean);
+    BEGIN
+      //change group by field and reload EnhView
+      SetAndCompareSingleField(SelectedGroupByField, NewGroupByField, ForceReload);
+      IF (ForceReload) THEN
+        RefreshEnhView();
+    END;
+
+    PROCEDURE SetGroupByFuncion@1000000033(FunctionNo@1000000000 : Integer);
+    VAR
+      TempGroupByField@1000000001 : Record 9062807;
+    BEGIN
+      IF (FunctionNo >= 0) AND (FunctionNo <= SelectedGroupByField."Group By Date Function"::Year) THEN BEGIN
+        TempGroupByField.TRANSFERFIELDS(SelectedGroupByField);
+        TempGroupByField."Group By Date Function" := FunctionNo;
+        SetGroupBy(TempGroupByField, FALSE);
+      END;
+    END;
+
+    PROCEDURE SetGroupByFieldList@1000000048(FieldList@1000000000 : Text);
+    VAR
+      GroupListField@1000000004 : TEMPORARY Record 9062807;
+      NoOfFields@1000000001 : Integer;
+      FieldIndex@1000000002 : Integer;
+      FieldName@1000000003 : Text;
+    BEGIN
+      NoOfFields := 0;
+      IF (FieldList <> '') THEN BEGIN
+        EVALUATE(NoOfFields, SELECTSTR(1, FieldList));
+        FOR FieldIndex := 1 TO NoOfFields DO BEGIN
+          FieldName := SELECTSTR(1 + FieldIndex, FieldList);
+          EnhViewGridField.RESET();
+          EnhViewGridField.SETRANGE(Name, FieldName);
+          IF (EnhViewGridField.FINDFIRST()) THEN BEGIN
+            GroupListField.TRANSFERFIELDS(EnhViewGridField);
+            GroupListField.Index := FieldIndex;
+            GroupListField.INSERT();
+          END;
+        END;
+      END;
+      EnhViewGridField.RESET();
+      GroupListField.RESET();
+      GroupListField.SETCURRENTKEY(Index);
+
+      EnhViewSource.SetGroupByFieldList(GroupListField);
+    END;
+
+    LOCAL PROCEDURE "--- Totals ---"@1000000037();
+    BEGIN
+    END;
+
+    PROCEDURE SetTotalsByLineNo@1000000030(LineNo@1000000000 : Integer);
+    VAR
+      SelectedField@1000000001 : TEMPORARY Record 9062807;
+    BEGIN
+      EnhViewTotalsField.RESET();
+      EnhViewTotalsField.SETRANGE("Line No.", LineNo);
+      IF (EnhViewTotalsField.FINDFIRST()) THEN
+        SetTotalsField(EnhViewTotalsField, FALSE);
+    END;
+
+    PROCEDURE LookupTotals@1000000032();
+    BEGIN
+      EnhViewTotalsField.RESET();
+      IF (EnhViewMgt.FieldLookup(EnhViewTotalsField)) THEN
+        SetTotalsField(EnhViewTotalsField, FALSE);
+    END;
+
+    LOCAL PROCEDURE SetTotalsField@1000000027(VAR NewTotalsField@1000000001 : Record 9062807;ForceReload@1000000000 : Boolean);
+    BEGIN
+      //change totals field and reload EnhView
+      SetAndCompareSingleField(SelectedTotalsField, NewTotalsField, ForceReload);
+      IF (ForceReload) THEN
+        RefreshEnhView();
+    END;
+
+    PROCEDURE SetViewMode@1000000020(NewMode@1000000000 : Option;ForceReload@1000000001 : Boolean);
+    VAR
+      EnhViewField@1000000002 : Record 9062807;
+    BEGIN
+      //Change View Mode
+      IF (NewMode <> EnhView."View Mode") THEN BEGIN
+        EnhView."View Mode" := NewMode;
+        EnhView.MODIFY();
+        ForceReload := TRUE;
+      END;
+
+      //Rebuild View
+      IF (ForceReload) THEN
+        RefreshEnhView();
+    END;
+
+    PROCEDURE SetChartType@1000000025(NewChartType@1000000000 : Text) : Boolean;
+    VAR
+      ChartTypeChanged@1000000001 : Boolean;
+    BEGIN
+      //Change chart type
+      ChartTypeChanged := FALSE;
+
+      IF (EnhView."Chart Type" <> NewChartType) THEN BEGIN
+        EnhView."Chart Type" := NewChartType;
+        EnhView.MODIFY();
+        IF (EnhView."View Mode" = EnhView."View Mode"::Chart) THEN
+          ChartTypeChanged := TRUE;
+      END;
+
+      IF (ChartTypeChanged) THEN
+        _ViewReloadRequired := TRUE;
+
+      EXIT(ChartTypeChanged);
+    END;
+
+    LOCAL PROCEDURE LookupChartType@1000000067();
+    VAR
+      ChartType@1000000000 : Text;
+    BEGIN
+      ChartType := EnhView."Chart Type";
+      IF (EnhViewMgt.ChartTypeLookup(ChartType)) THEN
+        SetChartType(ChartType);
+    END;
+
+    PROCEDURE RefreshEnhView@1000000000();
+    BEGIN
+      _ViewReloadRequired := TRUE;
+      ClearEnhView();
+      _ReloadError := NOT(BuildEnhView());
+    END;
+
+    LOCAL PROCEDURE ClearEnhView@1000000003();
+    BEGIN
+      EnhViewCell.RESET();
+      IF (NOT(EnhViewCell.ISTEMPORARY)) THEN
+        EnhViewCell.SETRANGE("View Code", EnhView.Code);
+      EnhViewCell.DELETEALL();
+
+      EnhViewColumn.RESET();
+      IF (NOT(EnhViewColumn.ISTEMPORARY)) THEN
+        EnhViewColumn.SETRANGE("View Code", EnhView.Code);
+      EnhViewColumn.DELETEALL();
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE BuildEnhView@1000000004();
+    VAR
+      ColumnIndex@1000000002 : Integer;
+      CellIndex@1000000003 : Integer;
+      RecordCount@1000000004 : Decimal;
+      RecordIndex@1000000005 : Decimal;
+      CellValue@1000000012 : Variant;
+      GroupByValue@1000000011 : Variant;
+      MaxNoOfCells@1000000006 : Integer;
+      RecRef@1000000015 : RecordRef;
+      "-- Date Columns --"@1000000008 : Integer;
+      GroupByCaption@1000000010 : Text;
+      CreateDateColumns@1000000000 : Boolean;
+      MinDate@1000000001 : Date;
+      MaxDate@1000000007 : Date;
+      EntryDate@1000000009 : Date;
+      "--- Totals ---"@1000000013 : Integer;
+      VariantValue@1000000014 : Variant;
+    BEGIN
+      GetSourceEntries(RecRef);
+
+      RecordCount := RecRef.COUNT;
+      RecordIndex := 0;
+      IF (GUIALLOWED) THEN
+        ProgressDlg.OPEN(dlgUpdate);
+
+      CellEntryNo := 0;
+      ColumnEntryNo := 0;
+
+      MaxNoOfCells := EnhView."Max. No. of Lane/Grid Entries";
+      IF (MaxNoOfCells <= 0) THEN
+        MaxNoOfCells := -1;       //no limit
+
+      //column list based on relation
+      CreateAllColumns(RecRef);
+
+      CreateDateColumns := FALSE;
+
+      //collect entries
+      IF (RecRef.FINDSET()) THEN BEGIN
+        REPEAT
+          IF (GUIALLOWED) THEN BEGIN
+            RecordIndex += 1;
+            ProgressDlg.UPDATE(1, ROUND(10000 * RecordIndex / RecordCount, 1));
+          END;
+
+          GroupByCaption := SelectedGroupByField.GetRecRefFieldValueAdv(RecRef, CellValue, GroupByValue);
+          FindOrCreateColumn(CellValue, GroupByValue, GroupByCaption, FALSE);
+
+          IF (EnhViewCell.ISTEMPORARY) THEN //should be 0 for non temporary records
+            CellEntryNo += 1;
+
+          EnhViewCell.INIT();
+          EnhViewCell."Entry No." := CellEntryNo;
+          EnhViewCell."View Code" := EnhViewColumn."View Code";
+          EnhViewCell."View Column Entry No." := EnhViewColumn."Entry No.";
+          EnhViewCell.Caption := '';
+          EnhViewCell.Index := 0;
+          EnhViewCell."Related Record Id" := RecRef.RECORDID;
+          EnhViewCell."Cell Style Id" := FindStyle(RecRef);
+          EnhViewCell.INSERT();
+
+          MaxNoOfCells -= 1;
+
+          IF (GroupByValue.ISDATE) THEN BEGIN
+            EntryDate := GroupByValue;
+            IF (NOT(CreateDateColumns)) THEN BEGIN
+              MinDate := EntryDate;
+              MaxDate := EntryDate;
+              CreateDateColumns := TRUE;
+            END ELSE BEGIN
+              IF (EntryDate <> 0D) AND ((MinDate > EntryDate) OR (MinDate = 0D)) THEN
+                MinDate := EntryDate;
+              IF (MaxDate < EntryDate) THEN
+                MaxDate := EntryDate;
+            END;
+          END;
+
+          //Update Totals
+          IF (SelectedTotalsField."Field No." <> 0) THEN BEGIN
+            SelectedTotalsField.GetRecRefFieldValue(RecRef, VariantValue);
+            EnhViewColumn.AddAggregateValue(VariantValue);
+          END ELSE
+            EnhViewColumn.AddAggregateValue(0);
+          EnhViewColumn.MODIFY();
+
+        UNTIL ((RecRef.NEXT() = 0) OR (MaxNoOfCells = 0));
+      END;
+      RecRef.CLOSE();
+
+      //build missing dates
+      IF (CreateDateColumns) AND (SelectedGroupByField."Show All Values") AND (MinDate > 0D) THEN BEGIN
+        EntryDate := MinDate;
+        REPEAT
+          GroupByValue := EntryDate;
+          GetColumnForCellField(GroupByValue);
+          EntryDate := EntryDate + 1;
+        UNTIL (EntryDate > MaxDate);
+      END;
+
+      SortColumns();
+
+      IF (GUIALLOWED) THEN
+        ProgressDlg.CLOSE();
+    END;
+
+    LOCAL PROCEDURE "-- Columns ---"@1000000021();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CreateAllColumns@1000000023(VAR RecRef@1000000000 : RecordRef);
+    VAR
+      GroupByField@1000000003 : Record 2000000041;
+    BEGIN
+      IF (SelectedGroupByField."Show All Values") THEN BEGIN
+        IF (SelectedGroupByField."Field Type" = SelectedGroupByField."Field Type"::Field) THEN BEGIN
+          GroupByField.GET(SelectedGroupByField."Table No.", SelectedGroupByField."Field No.");
+          IF (GroupByField.Type = GroupByField.Type::Option) THEN BEGIN
+            CreateAllOptionColumns(RecRef, GroupByField.OptionString);
+            EXIT;
+          END;
+        END;
+
+        IF (SelectedGroupByField.HasRelation()) THEN BEGIN
+          CreateAllRelationColumns();
+          EXIT;
+        END;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateAllOptionColumns@1000000035(VAR RecRef@1000000006 : RecordRef;OptionString@1000000000 : Text);
+    VAR
+      NoOfOptions@1000000001 : Integer;
+      OptionValue@1000000002 : Integer;
+      TextPos@1000000003 : Integer;
+      DataFldRef@1000000004 : FieldRef;
+      OptionText@1000000005 : Text;
+    BEGIN
+      IF (OptionString = '') THEN
+        EXIT;
+
+      NoOfOptions := 1;
+      FOR TextPos := 1 TO STRLEN(OptionString) DO
+        IF (OptionString[TextPos] = ',') THEN
+          NoOfOptions += 1;
+
+      DataFldRef := RecRef.FIELD(SelectedGroupByField."Field No.");
+      FOR OptionValue := 1 TO NoOfOptions DO BEGIN
+        OptionText := SELECTSTR(OptionValue, OptionString);
+        IF (OptionText <> '') THEN BEGIN
+          DataFldRef.VALUE := (OptionValue - 1);
+          GetColumnForCellField(DataFldRef.VALUE);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateAllRelationColumns@1000000036();
+    VAR
+      RecordRefMgt@1000000004 : Codeunit 9062241;
+      ColumnRecRef@1000000005 : RecordRef;
+      CellGroupByFieldNo@1000000002 : Integer;
+      CellValue@1000000000 : Variant;
+      GroupByValue@1000000001 : Variant;
+      GroupByCaption@1000000003 : Text;
+    BEGIN
+      //Find field IDs
+      CellGroupByFieldNo := SelectedGroupByField."Relation Field No.";
+
+      //Collect column records
+      ColumnRecRef.OPEN(SelectedGroupByField."Relation Table No.");
+      ColumnRecRef.RESET();
+      CriteriaMgt.ApplyCriteriaToRecRef(SelectedGroupByField."Relation Criteria Id", ColumnRecRef);
+      IF (ColumnRecRef.FINDSET()) THEN BEGIN
+        REPEAT
+          //get values
+          CellValue := ColumnRecRef.FIELD(SelectedGroupByField."Relation Field No.").VALUE;
+          RecordRefMgt.GetFieldValue(ColumnRecRef, SelectedGroupByField."Caption Field Type",
+            SelectedGroupByField."Caption Field No.", GroupByValue);
+          //format value
+          GroupByCaption := SelectedGroupByField.ProcessFieldValues(CellValue, GroupByValue);
+
+          FindOrCreateColumn(CellValue, GroupByValue, GroupByCaption, FALSE);
+        UNTIL (ColumnRecRef.NEXT() = 0);
+      END;
+      ColumnRecRef.CLOSE();
+    END;
+
+    LOCAL PROCEDURE GetColumnForCellField@1000000001(CellGroupByValue@1000000000 : Variant);
+    VAR
+      ColumnGroupByValue@1000000004 : Variant;
+      ColumnPKFieldRef@1000000003 : FieldRef;
+      ColumnCaptionValue@1000000005 : Text;
+      FindMinRecord@1000000001 : Boolean;
+    BEGIN
+      ColumnCaptionValue := SelectedGroupByField.GetFieldValueAdv(CellGroupByValue, ColumnGroupByValue);
+      FindOrCreateColumn(CellGroupByValue, ColumnGroupByValue, ColumnCaptionValue, FindMinRecord);
+    END;
+
+    LOCAL PROCEDURE FindOrCreateColumn@1000000031(CellGroupByValue@1000000004 : Variant;ColumnGroupByValue@1000000003 : Variant;ColumnCaptionValue@1000000001 : Text;FindMinRecord@1000000000 : Boolean);
+    VAR
+      TempColumn@1000000007 : TEMPORARY Record 9062805;
+      ColumnGroupByFieldRef@1000000005 : FieldRef;
+      ColumnPKFieldRef@1000000006 : FieldRef;
+      ColumnRecRef@1000000002 : RecordRef;
+    BEGIN
+      TempColumn.INIT();
+      TempColumn.SetGroupByValueType(ColumnGroupByValue);
+      TempColumn.StoreGroupByFieldRefValue(ColumnGroupByValue);
+
+      EnhViewColumn.RESET();
+      EnhViewColumn.SETCURRENTKEY("View Code", "Group By Text Value");
+      EnhViewColumn.SETRANGE("View Code", EnhView.Code);
+      EnhViewColumn.SetGroupByValueFilter(TempColumn);
+
+      IF (NOT(EnhViewColumn.FINDFIRST())) THEN BEGIN
+
+        //find minimal cell group by value (i.e. first day of a month for grouping by months)
+        IF (FindMinRecord) AND (SelectedGroupByField.HasRelation) AND
+          (SelectedGroupByField."Caption Field Type" = SelectedGroupByField."Caption Field Type"::Field)
+        THEN BEGIN
+          ColumnRecRef.OPEN(SelectedGroupByField."Relation Table No.");
+          ColumnPKFieldRef := ColumnRecRef.FIELD(SelectedGroupByField."Relation Field No.");
+          ColumnPKFieldRef.SETRANGE();
+          ColumnGroupByFieldRef := ColumnRecRef.FIELD(SelectedGroupByField."Caption Field No.");
+          ColumnGroupByFieldRef.SETRANGE(ColumnGroupByValue);
+          ColumnRecRef.FINDFIRST();
+          CellGroupByValue := ColumnRecRef.FIELD(SelectedGroupByField."Relation Field No.").VALUE;
+          ColumnRecRef.CLOSE();
+        END;
+
+        //create column
+        IF (EnhViewColumn.ISTEMPORARY) THEN //should be 0 for non temporary records
+          ColumnEntryNo += 1;
+
+        EnhViewColumn.INIT();
+        EnhViewColumn."Entry No." := ColumnEntryNo;
+        EnhViewColumn."View Code" := EnhView.Code;
+        EnhViewColumn.SetGroupByValueType(ColumnGroupByValue);
+        EnhViewColumn.StoreGroupByFieldRefValue(ColumnGroupByValue);
+
+        EnhViewColumn.SetCellValueType(CellGroupByValue);
+        EnhViewColumn.StoreCellFieldRefValue(CellGroupByValue);
+
+        EnhViewColumn.Caption := ColumnCaptionValue;
+        EnhViewColumn."Aggregate Function" := SelectedTotalsField."Aggregate Function";
+
+        EnhViewColumn.Index := 0;
+        EnhViewColumn.INSERT();
+
+      END;
+    END;
+
+    LOCAL PROCEDURE SortColumns@1000000041();
+    VAR
+      ColumnIndex@1000000000 : Integer;
+      RecordCount@1000000001 : Integer;
+      RecordIndex@1000000002 : Integer;
+      CellIndex@1000000003 : Integer;
+    BEGIN
+      ColumnIndex := 0;
+      EnhViewColumn.RESET();
+
+      //!!!TO-DO!!!
+      //Select Key
+      //EnhViewColumn.SETCURRENTKEY("View Code", "Group By Text Value");
+      EnhViewColumn.SETCURRENTKEY("View Code", "Aggregate - Value");
+      EnhViewColumn.SETASCENDING("Aggregate - Value", FALSE);
+
+      EnhViewColumn.SETRANGE("View Code", EnhView.Code);
+      RecordCount := EnhViewColumn.COUNT;
+      RecordIndex := 0;
+      IF (EnhViewColumn.FINDSET(TRUE)) THEN BEGIN
+        REPEAT
+          IF (GUIALLOWED) THEN BEGIN
+            RecordCount += 1;
+            ProgressDlg.UPDATE(2, ROUND(10000 * RecordIndex / RecordCount, 1));
+          END;
+
+          ColumnIndex += 1;
+          EnhViewColumn.Index := ColumnIndex;
+          EnhViewColumn.MODIFY();
+
+          CellIndex := 0;
+          EnhViewCell.RESET();
+          EnhViewCell.SETRANGE("View Column Entry No.", EnhViewColumn."Entry No.");
+          IF (EnhViewCell.FINDSET(TRUE)) THEN BEGIN
+            REPEAT
+              CellIndex += 1;
+              EnhViewCell.Index := CellIndex;
+              EnhViewCell.MODIFY();
+            UNTIL (EnhViewCell.NEXT() = 0);
+          END;
+
+        UNTIL (EnhViewColumn.NEXT() = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Data ---"@1000000022();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE GetSourceEntries@1000000063(VAR SourceRecRef@1000000000 : RecordRef);
+    BEGIN
+      SourceRecRef.OPEN(EnhView."Source Table No.");
+
+      IF (EnhView."Source Filter Criteria Id" <> 0) THEN BEGIN
+        SourceRecRef.FILTERGROUP(0);
+        CriteriaMgt.ApplyCriteriaToRecRef(EnhView."Source Filter Criteria Id", SourceRecRef);
+      END;
+
+      IF (EnhView."Source View Text" <> '') THEN BEGIN
+        SourceRecRef.FILTERGROUP(6);
+        SourceRecRef.SETVIEW(EnhView."Source View Text");
+      END;
+
+      IF (SelectedGroupByField."Table Criteria Id" <> 0) THEN BEGIN
+        SourceRecRef.FILTERGROUP(7);
+        CriteriaMgt.ApplyCriteriaToRecRef(SelectedGroupByField."Table Criteria Id", SourceRecRef);
+      END;
+
+      SourceRecRef.FILTERGROUP(8);
+      ApplyDataFilter(SourceRecRef);
+
+      SourceRecRef.FILTERGROUP(0);
+    END;
+
+    PROCEDURE GetEnhViewXmlData@1000000011(VAR DataSource@1000000007 : TEMPORARY Record 9062810);
+    VAR
+      DbEnhView@1000000003 : Record 9062804;
+      EnhViewData@1000000006 : Codeunit 9062678;
+      NoDataExport@1000000000 : XMLport 9062403;
+      OutputStream@1000000001 : OutStream;
+      MessageTitle@1000000004 : Text;
+      MessageDetails@1000000002 : Text;
+    BEGIN
+      DbEnhView.RESET();
+      DbEnhView.SETRANGE(Code, EnhView.Code);
+
+      EnhViewCell.RESET();
+      EnhViewColumn.RESET();
+
+      IF (ValidData(MessageTitle, MessageDetails)) THEN BEGIN
+        CASE (EnhView."View Mode") OF
+          EnhView."View Mode"::Lane:
+            BEGIN
+              DataSource.InitNewDataSource('LaneViewData', '', OutputStream);
+              XMLPORT.EXPORT(XMLPORT::"Enhanced View - Lane Data", OutputStream, DbEnhView);
+              DataSource.INSERT();
+            END;
+          EnhView."View Mode"::Grid:
+            BEGIN
+              DataSource.InitNewDataSource('GridViewData', '', OutputStream);
+              XMLPORT.EXPORT(XMLPORT::"Enhanced View - Grid Data", OutputStream, DbEnhView);
+              DataSource.INSERT();
+            END;
+          EnhView."View Mode"::Map:
+            BEGIN
+              DataSource.InitNewDataSource('MapViewData', '', OutputStream);
+              XMLPORT.EXPORT(XMLPORT::"Enhanced View - Map Data", OutputStream, DbEnhView);
+              DataSource.INSERT();
+            END;
+          EnhView."View Mode"::Chart:
+            BEGIN
+              DataSource.InitNewDataSource('ChartViewData', '', OutputStream);
+              XMLPORT.EXPORT(XMLPORT::"Enhanced View - Chart Data", OutputStream, DbEnhView);
+              DataSource.INSERT();
+            END;
+        END;
+      END ELSE BEGIN
+        DataSource.InitNewDataSource('NoData', '', OutputStream);
+        CLEAR(NoDataExport);
+        NoDataExport.SETTABLEVIEW(DbEnhView);
+        NoDataExport.SETDESTINATION(OutputStream);
+        NoDataExport.SetData(MessageTitle, MessageDetails);
+        NoDataExport.EXPORT();
+        DataSource.INSERT();
+      END;
+
+      IF (EnhView."View Mode" IN [EnhView."View Mode"::Lane, EnhView."View Mode"::Chart]) THEN BEGIN
+        DataSource.InitNewDataSource('MenuLineData', '', OutputStream);
+        XMLPORT.EXPORT(XMLPORT::"Enhanced View - Menu Data", OutputStream, DbEnhView);
+        DataSource.INSERT();
+      END;
+
+      ClearReloadFlags();
+    END;
+
+    PROCEDURE GetCellXmlData@1000000013(VAR DataSource@1000000000 : TEMPORARY Record 9062810;CellId@1000000001 : Integer);
+    VAR
+      EnhViewData@1000000003 : Codeunit 9062678;
+      OutputStream@1000000002 : OutStream;
+    BEGIN
+      EnhViewCell.RESET();
+      EnhViewCell.GET(CellId);
+      EnhViewCell.SETRECFILTER();
+
+      DataSource.INIT();
+      DataSource."Entry No." := 1;
+      DataSource.Data.CREATEOUTSTREAM(OutputStream);
+      DataSource.Name := 'EnhViewCell';
+      DataSource."Target Part Name" := EnhViewCell.GetHtmlContainerSelector();
+
+      XMLPORT.EXPORT(XMLPORT::"Enhanced View Cell Data", OutputStream, EnhViewCell);
+      DataSource.INSERT();
+
+      _CellReloadRequired := FALSE;
+    END;
+
+    PROCEDURE ValidData@1000000019(VAR MessageTitle@1000000001 : Text;VAR MessageDetails@1000000002 : Text) : Boolean;
+    BEGIN
+      EnhViewCell.RESET();
+      EnhViewColumn.RESET();
+
+      MessageTitle := txtNoData;
+      MessageDetails := '';
+
+      IF (EnhViewCell.ISEMPTY) THEN
+        EXIT(FALSE);
+
+      EnhViewGridField.RESET();
+      IF (EnhViewGridField.ISEMPTY) THEN
+        EXIT(FALSE);
+
+      CASE (EnhView."View Mode") OF
+        EnhView."View Mode"::Lane:
+          BEGIN
+            IF (EnhViewColumn.ISEMPTY) THEN
+              EXIT(FALSE);
+          END;
+      END;
+
+      MessageTitle := '';
+      MessageDetails := '';
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Data Management ---"@1000000002();
+    BEGIN
+    END;
+
+    PROCEDURE MoveColumn@1000000018(ColId@1000000000 : Integer;ColIndex@1000000001 : Integer);
+    VAR
+      OldIndex@1000000003 : Integer;
+      Diff@1000000004 : Integer;
+    BEGIN
+      IF (EnhViewColumn.GET(ColId)) THEN BEGIN
+        IF (EnhViewColumn.Index <> ColIndex) THEN BEGIN
+          OldIndex := EnhViewColumn.Index;
+          EnhViewColumn.Index := ColIndex;
+          EnhViewColumn.MODIFY();
+
+          EnhViewColumn.RESET();
+          EnhViewColumn.SETRANGE("View Code", EnhView.Code);
+          IF (ColIndex > OldIndex) THEN BEGIN
+            EnhViewColumn.SETRANGE(Index, OldIndex, ColIndex);
+            Diff := -1;
+          END ELSE BEGIN
+            EnhViewColumn.SETRANGE(Index, ColIndex, OldIndex);
+            Diff := 1;
+          END;
+          EnhViewColumn.SETFILTER("Entry No.", '<>%1', ColId);
+          IF (EnhViewColumn.FINDSET(TRUE, TRUE)) THEN BEGIN
+            REPEAT
+              EnhViewColumn.Index := EnhViewColumn.Index + Diff;
+              EnhViewColumn.MODIFY();
+            UNTIL (EnhViewColumn.NEXT() = 0);
+          END;
+
+        END;
+      END;
+    END;
+
+    PROCEDURE MoveCell@1000000005(CellId@1000000000 : Integer;NewCellIndex@1000000001 : Integer;NewColId@1000000002 : Integer);
+    VAR
+      OldCellIndex@1000000003 : Integer;
+      OldColId@1000000004 : Integer;
+      FldRef@1000000005 : FieldRef;
+      RecRefOpen@1000000007 : Boolean;
+      ReloadRequired@1000000006 : Boolean;
+      VariantValue@1000000008 : Variant;
+      RecRef@1000000009 : RecordRef;
+    BEGIN
+      CurrentCellEntryNo := CellId;
+      ReloadRequired := FALSE;
+
+      IF (EnhViewCell.GET(CellId)) AND (EnhViewColumn.GET(NewColId)) THEN BEGIN
+        IF (EnhViewCell."View Column Entry No." <> NewColId) OR (EnhViewCell.Index <> NewCellIndex) THEN BEGIN
+          OldColId := EnhViewCell."View Column Entry No.";
+          OldCellIndex := EnhViewCell.Index;
+
+          //update related record data
+          RecRefOpen := FALSE;
+          IF (OldColId <> NewColId) AND (SelectedGroupByField.Editable) THEN BEGIN
+            EnhView.GET(EnhViewCell."View Code");
+            RecRef.OPEN(EnhView."Source Table No.");
+            RecRef.GET(EnhViewCell."Related Record Id");
+            FldRef := RecRef.FIELD(SelectedGroupByField."Field No.");
+            EnhViewColumn.GetCellFieldRefValue(VariantValue);
+            FldRef.VALIDATE(VariantValue);
+            RecRef.MODIFY();
+            ReloadRequired := TRUE;
+            RecRefOpen := TRUE;
+          END;
+
+          //update cell
+          EnhViewCell."View Column Entry No." := NewColId;
+          EnhViewCell.Index := NewCellIndex;
+          IF (RecRefOpen) THEN
+            EnhViewCell."Cell Style Id" := FindStyle(RecRef);
+          EnhViewCell.MODIFY();
+
+          //close related record data
+          IF (RecRefOpen) THEN
+            RecRef.CLOSE();
+
+          //update remaining cells
+          IF (OldColId <> NewColId) THEN BEGIN
+            UpdateCellRangeIndex(OldColId, OldCellIndex, 0, 0, -1);
+            UpdateCellRangeIndex(NewColId, NewCellIndex, 0, CellId, 1);
+          END ELSE BEGIN
+            IF (NewCellIndex > OldCellIndex) THEN
+              UpdateCellRangeIndex(OldColId, OldCellIndex, NewCellIndex, CellId, -1)
+            ELSE
+              UpdateCellRangeIndex(OldColId, NewCellIndex, OldCellIndex, CellId, 1);
+          END;
+
+        END;
+      END;
+
+      IF (ReloadRequired) THEN
+        _CellReloadRequired := TRUE;
+    END;
+
+    PROCEDURE ShowCellCard@1000000009(CellId@1000000000 : Integer);
+    VAR
+      RecRef@1000000001 : RecordRef;
+    BEGIN
+      IF (EnhViewCell.GET(CellId)) THEN BEGIN
+        CurrentCellEntryNo := CellId;
+        RecRef.GET(EnhViewCell."Related Record Id");
+        EnhViewSource.ShowRecRefCard(EnhView, RecRef);
+        RecRef.CLOSE();
+        _CellReloadRequired := TRUE;
+      END;
+    END;
+
+    PROCEDURE NewColumnEntry@1000000014(ColumnId@1000000000 : Integer);
+    VAR
+      RecRef@1000000004 : RecordRef;
+      FldRef@1000000002 : FieldRef;
+      VariantValue@1000000003 : Variant;
+      ReloadRequired@1000000005 : Boolean;
+    BEGIN
+      ReloadRequired := FALSE;
+      IF (EnhView."Read Only") THEN
+        EXIT;
+
+      EnhViewColumn.GET(ColumnId);
+
+      RecRef.OPEN(EnhView."Source Table No.");
+      RecRef.INIT();
+      RecRef.INSERT(TRUE);
+
+      IF (SelectedGroupByField."Field Type" = SelectedGroupByField."Field Type"::Field) THEN BEGIN
+        FldRef := RecRef.FIELD(SelectedGroupByField."Field No.");
+        EnhViewColumn.GetCellFieldRefValue(VariantValue);
+        FldRef.VALIDATE(VariantValue);
+
+        RecRef.MODIFY(TRUE);
+      END;
+
+      COMMIT;
+
+      IF (NOT(EnhViewSource.ShowRecRefCard(EnhView, RecRef))) THEN BEGIN
+        RecRef.DELETE(TRUE);
+      END ELSE
+        ReloadRequired := TRUE;
+
+      RecRef.CLOSE();
+
+      IF (ReloadRequired) THEN
+        RefreshEnhView();
+    END;
+
+    PROCEDURE SetSelectedEntryNo@1000000068(NewEntryNo@1000000000 : Integer);
+    BEGIN
+      SelectedCellEntryNo := NewEntryNo;
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@1000000010();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE UpdateCellRangeIndex@1000000007(ColId@1000000000 : Integer;FromIndex@1000000001 : Integer;ToIndex@1000000002 : Integer;SkipCellId@1000000003 : Integer;Value@1000000004 : Integer);
+    BEGIN
+      EnhViewCell.RESET();
+      EnhViewCell.SETCURRENTKEY("View Column Entry No.", Index);
+      EnhViewCell.SETRANGE("View Column Entry No.", ColId);
+      IF (SkipCellId > 0) THEN
+        EnhViewCell.SETFILTER("Entry No.", '<>%1', SkipCellId);
+      IF (ToIndex > 0) THEN
+        EnhViewCell.SETRANGE(Index, FromIndex, ToIndex)
+      ELSE
+        EnhViewCell.SETFILTER(Index, '>=%1', FromIndex);
+
+      IF (EnhViewCell.FINDSET(TRUE, TRUE)) THEN BEGIN
+        REPEAT
+          EnhViewCell.Index := EnhViewCell.Index + Value;
+          EnhViewCell.MODIFY();
+        UNTIL (EnhViewCell.NEXT() = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Dynamic Styles ---"@1000000015();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE FindStyle@1000000016(VAR RecRef@1000000005 : RecordRef) : Integer;
+    VAR
+      EnhViewStyle@1000000000 : Record 9062808;
+      EnhViewStyleCache@1000000003 : Record 9062812;
+      SrcRecRef@1000000001 : RecordRef;
+      SrcFldRef@1000000002 : FieldRef;
+      TextFieldValue@1000000004 : Text;
+    BEGIN
+      IF (EnhView."Cell Style Field No." <> 0) THEN BEGIN
+        IF (EnhView."Use Style Cache") THEN BEGIN
+          TextFieldValue := RecRef.FIELD(EnhView."Cell Style Field No.").VALUE;
+          IF (EnhViewStyleCache.GET(EnhView.Code, EnhViewStyleCache.Type::Cell, 0, TextFieldValue)) THEN
+            EXIT(EnhViewStyleCache.ID);
+        END;
+
+        SrcRecRef.OPEN(EnhView."Source Table No.", TRUE);
+        SrcRecRef.INIT();
+        SrcFldRef := SrcRecRef.FIELD(EnhView."Cell Style Field No.");
+        SrcFldRef.VALUE := RecRef.FIELD(EnhView."Cell Style Field No.").VALUE;
+        SrcRecRef.INSERT();
+
+        EnhViewStyle.RESET();
+        EnhViewStyle.SETCURRENTKEY("View Code", Type, "Target Type", Sequence);
+        EnhViewStyle.SETRANGE("View Code", EnhView.Code);
+        EnhViewStyle.SETRANGE(Type, EnhViewStyle.Type::Cell);
+        EnhViewStyle.SETRANGE("Target Type", 0);
+        IF (EnhViewStyle.FINDSET()) THEN BEGIN
+          REPEAT
+            SrcFldRef.SETFILTER(EnhViewStyle.Filter);
+            IF (NOT(SrcRecRef.ISEMPTY())) THEN BEGIN
+              SrcRecRef.CLOSE();
+
+              IF (EnhView."Use Style Cache") THEN BEGIN
+                EnhViewStyleCache.INIT();
+                EnhViewStyleCache.TRANSFERFIELDS(EnhViewStyle);
+                EnhViewStyleCache.Value := TextFieldValue;
+                EnhViewStyleCache.INSERT();
+              END;
+
+              EXIT(EnhViewStyle.ID);
+            END;
+          UNTIL (EnhViewStyle.NEXT() = 0);
+        END;
+
+        SrcRecRef.CLOSE();
+      END;
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE "--- View State Functions ---"@1000000042();
+    BEGIN
+    END;
+
+    PROCEDURE ViewReloadRequired@1000000043() : Boolean;
+    BEGIN
+      EXIT(_ViewReloadRequired);
+    END;
+
+    PROCEDURE CellReloadRequired@1000000024(VAR ModifiedCellNo@1000000000 : Integer) : Boolean;
+    BEGIN
+      ModifiedCellNo := CurrentCellEntryNo;
+      EXIT(_CellReloadRequired);
+    END;
+
+    PROCEDURE ClearReloadFlags@1000000044();
+    BEGIN
+      _ViewReloadRequired := FALSE;
+      _CellReloadRequired := FALSE;
+    END;
+
+    LOCAL PROCEDURE "--- Other methods ---"@1000000054();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ShowAsNavList@1000000062();
+    VAR
+      SourceRecRef@1000000000 : RecordRef;
+      RunWithRecRef@1000000001 : Codeunit 9062239;
+    BEGIN
+      GetSourceEntries(SourceRecRef);
+      EnhViewSource.ShowAsNavList(SourceRecRef);
+      SourceRecRef.CLOSE();
+    END;
+
+    LOCAL PROCEDURE EditView@1000000061();
+    VAR
+      EnhViewDb@1000000000 : Record 9062804;
+    BEGIN
+      EnhViewSource.EditView(EnhView);
+    END;
+
+    PROCEDURE HasMapView@1000000065() : Boolean;
+    VAR
+      GeolocationMgt@1000000000 : Codeunit 9062729;
+    BEGIN
+      EXIT(EnhViewSource.HasMapView(EnhView));
+      //EXIT(GeolocationMgt.HasCoordinates(EnhView."Source Table No."));
+    END;
+
+    LOCAL PROCEDURE "--- Data Source Functions ---"@1000000049();
+    BEGIN
+    END;
+
+    PROCEDURE InitDataSource@1000000053();
+    VAR
+      DefaultEnhViewSource@1000000001 : Codeunit 9062659;
+      EnhViewData@1000000000 : Codeunit 9062678;
+    BEGIN
+      EnhViewData.GetEnhViewSource(EnhViewSource);
+      EnhViewData.ClearEnhViewSource();
+      IF (EnhViewSource.IsEmpty) THEN BEGIN
+        DefaultEnhViewSource.InitializeDefault();
+        EnhViewSource := DefaultEnhViewSource;
+      END;
+    END;
+
+    PROCEDURE DisposeDataDource@1000000050();
+    BEGIN
+      EnhViewSource.DisposeData();
+      CLEAR(EnhViewSource);
+    END;
+
+    LOCAL PROCEDURE "--- Message Handling ---"@1000000064();
+    BEGIN
+    END;
+
+    PROCEDURE ProcessMessage@1000000066(VAR EventArgs@1000000000 : Record 9062811);
+    VAR
+      EnhViewConst@1000000001 : Codeunit 9062689;
+      MessageHandled@1000000002 : Boolean;
+    BEGIN
+      IF (EventArgs.Handled) THEN
+        EXIT;
+
+      //send message to data source codeunit
+      EnhViewSource.ProcessMessage(EventArgs);
+
+      //process message here if it has not been handled yet
+      IF (NOT(EventArgs.Handled)) THEN
+        InternalProcessMessage(EventArgs);
+    END;
+
+    LOCAL PROCEDURE InternalProcessMessage@1000000069(VAR EventArgs@1000000000 : Record 9062811);
+    VAR
+      EnhViewConst@1000000002 : Codeunit 9062689;
+      MessageHandled@1000000001 : Boolean;
+    BEGIN
+      IF (EventArgs.Handled) THEN
+        EXIT;
+
+      MessageHandled := TRUE;
+      CASE (EventArgs.Type) OF
+        EnhViewConst.CMD_CellMoved:
+          MoveCell(
+            EventArgs.GetParameterInt('cellid', 0),
+            EventArgs.GetParameterInt('cellindex', 0),
+            EventArgs.GetParameterInt('colid', 0));
+        EnhViewConst.CMD_ColumnMoved:
+          MoveColumn(
+            EventArgs.GetParameterInt('colid', 0),
+            EventArgs.GetParameterInt('colindex', 0));
+        EnhViewConst.CMD_ViewEntry,
+        EnhViewConst.CMD_ViewCell:
+          ShowCellCard(EventArgs.GetParameterInt('Result', 0));
+        EnhViewConst.CMD_NewColumnEntry:
+          NewColumnEntry(EventArgs.GetParameterInt('Result', 0));
+        EnhViewConst.CMD_SetGroupBy:
+          SetGroupByLineNo(EventArgs.GetParameterInt('Result', 0));
+        EnhViewConst.CMD_SetGroupByFunction:
+          SetGroupByFuncion(EventArgs.GetParameterInt('Result', 0));
+        EnhViewConst.CMD_LookupGroupBy:
+          LookupGroupBy();
+        EnhViewConst.CMD_GroupListChanged:
+          SetGroupByFieldList(EventArgs.GetParameter('Result'));
+        EnhViewConst.CMD_SetTotals:
+          SetTotalsByLineNo(EventArgs.GetParameterInt('Result', 0));
+        EnhViewConst.CMD_LookupTotals:
+          LookupTotals();
+        EnhViewConst.CMD_SetChartType:
+          SetChartType(EventArgs.GetParameter('Result'));
+        EnhViewConst.CMD_LookupChartType:
+          LookupChartType();
+        EnhViewConst.CMD_SelectEntry:
+          SetSelectedEntryNo(EventArgs.GetParameterInt('Result', 0));
+        EnhViewConst.CMD_ViewSelectedEntry:
+          ShowCellCard(SelectedCellEntryNo);
+        EnhViewConst.CMD_ShowAsNavList:
+          ShowAsNavList();
+        EnhViewConst.CMD_EditView:
+          EditView();
+        ELSE
+          MessageHandled := FALSE;
+      END;
+
+      IF (MessageHandled) THEN
+        EventArgs.Handled := TRUE;
+    END;
+
+    PROCEDURE MessageTypeSupported@1000000017(MessageType@1000000000 : Text) : Boolean;
+    VAR
+      EnhViewConst@1000000001 : Codeunit 9062689;
+    BEGIN
+      IF (EnhViewSource.MessageTypeSupported(MessageType)) THEN
+        EXIT(TRUE);
+
+      EXIT(MessageType IN [
+        EnhViewConst.CMD_CellMoved,
+        EnhViewConst.CMD_ColumnMoved,
+        EnhViewConst.CMD_ViewEntry,
+        EnhViewConst.CMD_ViewCell,
+        EnhViewConst.CMD_NewColumnEntry,
+        EnhViewConst.CMD_SetGroupBy,
+        EnhViewConst.CMD_SetGroupByFunction,
+        EnhViewConst.CMD_LookupGroupBy,
+        EnhViewConst.CMD_GroupListChanged,
+        EnhViewConst.CMD_SetTotals,
+        EnhViewConst.CMD_LookupTotals,
+        EnhViewConst.CMD_SetChartType,
+        EnhViewConst.CMD_LookupChartType,
+        EnhViewConst.CMD_SelectEntry,
+        EnhViewConst.CMD_ViewSelectedEntry,
+        EnhViewConst.CMD_ShowAsNavList,
+        EnhViewConst.CMD_EditView
+        ]);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.12 AZ 21/01/2016 - Created
+      //DOC NA2016.14 AZ 26/02/2016 - Grid View added, bugfixes
+      //DOC NA2016.15 AZ 12/04/2016 - Midifications and bugfixes, Quick Reports support added
+    }
+    END.
+  }
+}
+

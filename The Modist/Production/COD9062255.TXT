@@ -1,0 +1,1176 @@
+OBJECT Codeunit 9062255 Enablement User Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/02/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.12;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      NablementSetup@9062230 : Record 9062229;
+      NablementUser@1000000000 : Record 9062729;
+      tCreatedMultiple@1000000004 : TextConst 'ENU=%1 have been created.;ENG=%1 have been created.';
+      String@1000000002 : Codeunit 9062236;
+
+    PROCEDURE "--- Conversions ---"@1000000011();
+    BEGIN
+    END;
+
+    PROCEDURE WindowsUserNameToUserId@1000000012(pWindowsUserName@1000000000 : Text) : Code[50];
+    BEGIN
+      //DOC NA2016.10 - Converting Windows user name to user ID
+      //  -> pWindowsUserName: Windows user name
+      //  <- User ID
+
+      EXIT(COPYSTR(pWindowsUserName, 1, MAXSTRLEN(NablementUser."User ID")));
+    END;
+
+    PROCEDURE UserIdToShortUserId@1000000036(pUserId@1000000000 : Code[50]) : Code[50];
+    VAR
+      lPos@1000000001 : Integer;
+    BEGIN
+      //DOC NA2016.12 - Converting user ID to short user ID (without domain)
+      //  -> pUserId: User ID
+      //  <- Short user ID
+
+      lPos := String.LastPosition(pUserId, '\');
+      IF (lPos > 0) THEN
+        IF (STRLEN(pUserId) > lPos) THEN
+          pUserId := COPYSTR(pUserId, lPos + 1, STRLEN(pUserId) - lPos);
+
+      EXIT(pUserId);
+    END;
+
+    PROCEDURE UserIdToShortCode@1000000013(pUserId@1000000000 : Code[50]) : Code[10];
+    VAR
+      lName@1000000001 : Text;
+      lShortCode@1000000002 : Code[10];
+      lPos@1000000003 : Integer;
+    BEGIN
+      //DOC NA2016.10 - Converting user ID to short code
+      //  -> pUserId: User ID
+      //  <- Short code
+
+      lName := UserIdToName(pUserId);
+      IF (STRLEN(lName) <= MAXSTRLEN(lShortCode)) THEN
+        lShortCode := lName
+      ELSE
+      BEGIN
+        lPos := STRPOS(lName, ' ');
+        IF ((lPos > 0) AND (lPos < STRLEN(lName))) THEN
+          lShortCode := COPYSTR(COPYSTR(lName, 1, 1) + COPYSTR(lName, lPos + 1, STRLEN(lName) - lPos), 1, MAXSTRLEN(lShortCode))
+        ELSE
+          lShortCode := COPYSTR(lName, 1, MAXSTRLEN(lShortCode));
+      END;
+
+      EXIT(lShortCode);
+    END;
+
+    PROCEDURE UserIdToName@1000000022(pUserId@1000000001 : Code[50]) : Text;
+    VAR
+      lName@1000000000 : Text;
+      lPos@1000000003 : Integer;
+      lIdx@1000000004 : Integer;
+      lCharacter@1000000005 : Text[1];
+      lBufferTmp@1000000006 : TEMPORARY Record 9062730;
+    BEGIN
+      //DOC NA2016.10 - Converting user ID to name
+      //  -> pUserId: The user ID
+      //  <- Name
+
+      lPos := STRPOS(pUserId, '\');
+      IF ((lPos > 0) AND (lPos < STRLEN(pUserId))) THEN
+        pUserId := COPYSTR(pUserId, lPos + 1, STRLEN(pUserId) - lPos);
+
+      FOR lIdx := 1 TO STRLEN(pUserId) DO
+      BEGIN
+        lCharacter := COPYSTR(pUserId, lIdx, 1);
+        IF (((lCharacter >= '0') AND (lCharacter <= '9')) OR
+            ((lCharacter >= 'a') AND (lCharacter <= 'z')) OR
+            ((lCharacter >= 'A') AND (lCharacter <= 'Z'))) THEN
+          lName := lName + lCharacter
+        ELSE
+          IF ((lName <> '') AND (lName[STRLEN(lName)] <> ' ')) THEN
+            lName := lName + ' ';
+      END;
+
+      lName := String.ToTitleCase(lName);
+
+      EXIT(lName);
+    END;
+
+    PROCEDURE UserIdToNames@1000000026(pUserId@1000000001 : Code[50];VAR pNames@1000000000 : ARRAY [2] OF Text[50]);
+    VAR
+      lNames@1000000002 : Text;
+      lBufferTmp@1000000006 : TEMPORARY Record 9062730;
+    BEGIN
+      //DOC NA2016.10 - Trying to convert user ID into names
+      //  -> pUserId: The user ID
+      //  <> pNames: Target names
+
+      CLEAR(pNames);
+
+      lNames := UserIdToName(pUserId);
+
+      String.SplitPreservingWords(lNames, MAXSTRLEN(pNames[1]), lBufferTmp);
+      IF (lBufferTmp.FINDSET()) THEN
+      BEGIN
+        pNames[1] := lBufferTmp.Value;
+        IF (lBufferTmp.NEXT() <> 0) THEN
+          pNames[2] := lBufferTmp.Value;
+      END;
+    END;
+
+    PROCEDURE ShortCodeIsUnique@1000000010(pShortCode@1000000000 : Code[10];pUserId@1000000001 : Code[50]) : Boolean;
+    VAR
+      lNablementUser@1000000002 : Record 9062729;
+    BEGIN
+      //DOC NA2016.10 - Returning whether short code is unique
+      //  -> pShortCode: The short code to check
+      //  -> pUserId: User ID to check for (if non-empty, filtering out the user; if empty - checking all users)
+
+      lNablementUser.RESET();
+      lNablementUser.SETCURRENTKEY("Short Code");
+      lNablementUser.SETRANGE("Short Code", pShortCode);
+      IF (pUserId <> '') THEN
+        lNablementUser.SETFILTER("User ID", '<>%1', pUserId);
+
+      EXIT(lNablementUser.ISEMPTY());
+    END;
+
+    PROCEDURE ShortCodeToUniqueShortCode@1000000031(pShortCode@1000000000 : Code[10];pUserId@1000000008 : Code[50];pErrorIfCantBeFound@1000000006 : Boolean) : Code[20];
+    VAR
+      lShortCode@1000000001 : Code[11];
+      lShortCodeUnique@1000000003 : Boolean;
+      lShortCodeDigitsIndex@1000000011 : Integer;
+      lShortCodeIndex@1000000009 : Integer;
+      lShortCodeChar@1000000010 : Code[1];
+      lShortCodeBuffer@1000000012 : Code[11];
+      lPreviousShortCode@1000000004 : Code[21];
+      lSearching@1000000002 : Boolean;
+      eUniqueShortCodeCantBeFound@1000000007 : TextConst 'ENU=Unique "%1" can''t be found for user ''%2''.;ENG=Unique "%1" can''t be found for user ''%2''.';
+    BEGIN
+      //DOC NA2016.10 - Finding unique short code (or empty if it can't be found)
+      //  -> pShortCode: Short code
+      //  -> pUserId: User ID (not filtered if empty)
+      //  -> pErrorIfCantBeFound: TRUE = Raise error if unique code can't be found, FALSE = Make it empty if it can't be found
+      //  <- Unique short code
+
+      lShortCode := pShortCode;
+
+      lSearching := TRUE;
+      WHILE (lSearching) DO
+      BEGIN
+        lShortCodeUnique := ShortCodeIsUnique(lShortCode, pUserId);
+        IF (lShortCodeUnique) THEN
+          lSearching := FALSE
+        ELSE
+        BEGIN
+          lPreviousShortCode := lShortCode;
+          lShortCode := INCSTR(lShortCode);
+          IF (lShortCode = '') THEN
+          BEGIN
+            lShortCode := lPreviousShortCode;
+            IF (STRLEN(lShortCode) >= MAXSTRLEN(pShortCode)) THEN
+              lShortCode := COPYSTR(lShortCode, 1, STRLEN(lShortCode) - 1);
+            lShortCode := lShortCode + '1';
+          END
+          ELSE IF (STRLEN(lShortCode) > MAXSTRLEN(pShortCode)) THEN
+          BEGIN
+            CLEAR(lShortCodeDigitsIndex);
+            FOR lShortCodeIndex := STRLEN(lShortCode) DOWNTO 1 DO
+            BEGIN
+              lShortCodeChar := COPYSTR(lShortCode, lShortCodeIndex, 1);
+              IF ((lShortCodeChar >= '0') OR (lShortCodeChar <= '9')) THEN
+                lShortCodeDigitsIndex := lShortCodeIndex
+              ELSE
+                lShortCodeIndex := 1;
+            END;
+            IF (lShortCodeDigitsIndex > 0) THEN
+            BEGIN
+              CLEAR(lShortCodeBuffer);
+              IF (lShortCodeDigitsIndex > 2) THEN
+                lShortCodeBuffer := COPYSTR(lShortCode, 1, lShortCodeDigitsIndex - 2);
+              lShortCodeBuffer := lShortCodeBuffer + COPYSTR(lShortCode, lShortCodeDigitsIndex, STRLEN(lShortCode) - lShortCodeDigitsIndex + 1);
+              lShortCode := lShortCodeBuffer;
+            END
+            ELSE
+              ERROR(eUniqueShortCodeCantBeFound, NablementUser.FIELDCAPTION("Short Code"), pShortCode)
+          END;
+        END;
+      END;
+
+      EXIT(lShortCode);
+    END;
+
+    PROCEDURE NameToFirstLastNames@1000000024(pName@1000000000 : Text;VAR pFirstName@1000000001 : Text;VAR pLastName@1000000002 : Text);
+    VAR
+      lPos@1000000003 : Integer;
+    BEGIN
+      //DOC NA2016.10 - Converting name to first and last names
+      //  -> pName: Name to convert
+      //  <> pFirstName: Target first name
+      //  <> pLastName: Target last name
+
+      lPos := STRPOS(pName, ' ');
+      IF ((lPos > 0) AND (lPos < STRLEN(pName))) THEN
+      BEGIN
+        pFirstName := COPYSTR(pName, 1, lPos - 1);
+        pLastName := COPYSTR(pName, lPos + 1, STRLEN(pName) - lPos);
+      END
+      ELSE
+      BEGIN
+        pFirstName := pName;
+        pLastName := '';
+      END;
+    END;
+
+    PROCEDURE "--- Adding ---"@1000000001();
+    BEGIN
+    END;
+
+    PROCEDURE AddWindowsUserWithInteraction@1000000000();
+    VAR
+      lAddWindowsUser@1000000001 : Report 9062328;
+      lWindowsSecurityId@1000000002 : Text;
+      lWindowsUserName@1000000004 : Text;
+      lRelationships@1000000013 : ARRAY [20] OF Boolean;
+      lUserId@1000000000 : Code[50];
+      lShortCode@1000000006 : Code[10];
+      lNames@1000000007 : ARRAY [2] OF Text[50];
+      lOpenUserCardAfter@1000000005 : Boolean;
+    BEGIN
+      //DOC NA2016.11 - Adding Windows user
+      //  <- TRUE = User added, FALSE = Nope
+
+      CLEAR(lAddWindowsUser);
+      lAddWindowsUser.RUNMODAL();
+      IF (lAddWindowsUser.GetOk()) THEN
+      BEGIN
+        lWindowsSecurityId := lAddWindowsUser.GetWindowsSecurityId();
+        lWindowsUserName := lAddWindowsUser.GetWindowsUserName();
+        lShortCode := lAddWindowsUser.GetShortCode();
+        lAddWindowsUser.GetRelationships(lRelationships);
+        lOpenUserCardAfter := lAddWindowsUser.GetOpenUserCardAfter();
+
+        AddWindowsUser(lWindowsSecurityId, lWindowsUserName, lShortCode, lRelationships);
+
+        IF (lOpenUserCardAfter) THEN
+        BEGIN
+          COMMIT;
+          PAGE.RUN(PAGE::"Enablement User Card", NablementUser);
+        END;
+      END;
+    END;
+
+    PROCEDURE AddWindowsUser@1000000038(pWindowsSecurityId@1000000002 : Text;pWindowsUserName@1000000004 : Text;pShortCode@1000000005 : Code[10];pRelationships@1000000006 : ARRAY [20] OF Boolean);
+    VAR
+      lUserId@1000000000 : Code[50];
+      eEmptyUser@1000000012 : TextConst 'ENU=Please select Windows user to add.;ENG=Please select Windows user to add.';
+      eUserExistsAlready@1000000003 : TextConst 'ENU=User "%1" exists already.;ENG=User "%1" exists already.';
+      lNames@1000000007 : ARRAY [2] OF Text[50];
+    BEGIN
+      //DOC NA2016.11 - Adding Windows user
+      //  <- TRUE = User added, FALSE = Nope
+
+      pRelationships[NablementUser.Relationship::"User Setup"] := pRelationships[NablementUser.Relationship::User];
+
+      IF ((pWindowsSecurityId = '') OR (pWindowsUserName = '')) THEN
+        ERROR(eEmptyUser);
+
+      lUserId := COPYSTR(pWindowsUserName, 1, MAXSTRLEN(lUserId));
+      IF (NablementUser.GET(lUserId)) THEN
+        ERROR(eUserExistsAlready, lUserId);
+
+      IF (pShortCode = '') THEN
+        pShortCode := UserIdToShortCode(lUserId);
+      pShortCode := ShortCodeToUniqueShortCode(pShortCode, lUserId, FALSE);
+      UserIdToNames(lUserId, lNames);
+
+      CLEAR(NablementUser);
+      NablementUser.INIT();
+      NablementUser.VALIDATE("User ID", lUserId);
+      NablementUser.VALIDATE("Short Code", pShortCode);
+      NablementUser.VALIDATE(Name, lNames[1]);
+      NablementUser.VALIDATE("Name 2", lNames[2]);
+      NablementUser.VALIDATE("Windows Security ID", pWindowsSecurityId);
+      NablementUser.INSERT(TRUE);
+
+      IF (NablementUser."Short Code" <> '') THEN
+        UpdateRelationshipsInternal(NablementUser, pRelationships);
+    END;
+
+    PROCEDURE AddNavUserWithInteraction@1000000016() : Boolean;
+    VAR
+      lUser@1000000005 : Record 2000000120;
+      lAddNavUser@1000000000 : Report 9062330;
+      lUserSecurityId@1000000001 : GUID;
+      lShortCode@1000000006 : Code[10];
+      lNames@1000000007 : ARRAY [2] OF Text[50];
+      lRelationships@1000000002 : ARRAY [20] OF Boolean;
+      lOpenUserCardAfter@1000000008 : Boolean;
+      lResult@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2016.11 - Adding NAV user as nAblement user (with interaction)
+      //  <- TRUE = User added, FALSE = Nope
+
+      CLEAR(lResult);
+
+      CLEAR(lAddNavUser);
+      lAddNavUser.RUNMODAL();
+      IF (lAddNavUser.GetOk()) THEN
+      BEGIN
+        lUserSecurityId := lAddNavUser.GetUserSecurityId();
+        lShortCode := lAddNavUser.GetShortCode();
+        lAddNavUser.GetRelationships(lRelationships);
+        lOpenUserCardAfter := lAddNavUser.GetOpenUserCardAfter();
+
+        AddNavUser(lUserSecurityId, lShortCode, lRelationships);
+
+        IF (lOpenUserCardAfter) THEN
+        BEGIN
+          COMMIT;
+          PAGE.RUN(PAGE::"Enablement User Card", NablementUser);
+        END;
+
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE AddNavUser@1000000035(pUserSecurityId@1000000012 : GUID;pShortCode@1000000011 : Code[10];pRelationships@1000000009 : ARRAY [20] OF Boolean);
+    VAR
+      lUser@1000000005 : Record 2000000120;
+      lNames@1000000007 : ARRAY [2] OF Text[50];
+      eEmptyUser@1000000004 : TextConst 'ENU=Please select NAV user to add.;ENG=Please select NAV user to add.';
+      lEmptyGuid@1000000003 : GUID;
+    BEGIN
+      //DOC NA2016.11 - Adding NAV user as nAblement user (without interaction)
+      //  -> pUserSecurityId: User security ID
+      //  -> pShortCode: Short code (can be empty)
+      //  -> pRelationships: An array of relationship flags
+
+      IF (pUserSecurityId = lEmptyGuid) THEN
+        ERROR(eEmptyUser);
+
+      lUser.GET(pUserSecurityId);
+
+      IF (pShortCode = '') THEN
+        pShortCode := UserIdToShortCode(lUser."User Name");
+      pShortCode := ShortCodeToUniqueShortCode(pShortCode, lUser."User Name", FALSE);
+      UserIdToNames(lUser."User Name", lNames);
+
+      CLEAR(NablementUser);
+      NablementUser.INIT();
+      NablementUser.VALIDATE("User ID", lUser."User Name");
+      NablementUser.VALIDATE("Short Code", pShortCode);
+      NablementUser.VALIDATE(Name, lNames[1]);
+      NablementUser.VALIDATE("Name 2", lNames[2]);
+      NablementUser.VALIDATE("Windows Security ID", lUser."Windows Security ID");
+      NablementUser.INSERT(TRUE);
+
+      IF (NablementUser."Short Code" <> '') THEN
+        UpdateRelationshipsInternal(NablementUser, pRelationships);
+    END;
+
+    PROCEDURE AddAllNavUsers@1000000044(pInteraction@1000000000 : Boolean) : Boolean;
+    VAR
+      eConfirmation@1000000001 : TextConst 'ENU=Do you want to create all NAV users as nAblement users?;ENG=Do you want to create all NAV users as nAblement users?';
+      lUser@1000000002 : Record 2000000120;
+      lNablementUser@1000000003 : Record 9062729;
+      lDialogManagement@1000000005 : Codeunit 9062249;
+      lDialogIndex@1000000009 : ' ,Progress,User';
+      lRelationships@1000000004 : ARRAY [20] OF Boolean;
+      eDialogTitle@1000000007 : TextConst 'ENU=Creating NAV users...;ENG=Creating NAV users...';
+      eDialogProgress@1000000006 : TextConst 'ENU=Progress;ENG=Progress';
+      eDialogUser@1000000008 : TextConst 'ENU=User;ENG=User';
+    BEGIN
+      //DOC NA2016.11 - Adding all NAV users
+      //  -> pInteraction: Interaction flag
+      //  <- TRUE = Created, FALSE = Cancelled
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED()));
+      IF (pInteraction) THEN
+        IF ( NOT (CONFIRM(eConfirmation, TRUE))) THEN
+          EXIT(FALSE);
+
+      CLEAR(lRelationships);
+      lRelationships[NablementUser.Relationship::Contact] := TRUE;
+
+      IF (pInteraction) THEN
+      BEGIN
+        lDialogManagement.Add(eDialogProgress, 10, lDialogIndex::Progress, 20, TRUE, TRUE);
+        lDialogManagement.Add(eDialogUser, 10, lDialogIndex::User, 20, FALSE, FALSE);
+        lDialogManagement.Open(eDialogTitle);
+      END;
+
+      lUser.RESET();
+      lUser.SETRANGE(State, lUser.State::Enabled);
+      IF (pInteraction) THEN
+        lDialogManagement.SetCounterCount(lDialogIndex::Progress, lUser.COUNT());
+      IF (lUser.FINDSET()) THEN
+      REPEAT
+        IF (pInteraction) THEN
+        BEGIN
+          lDialogManagement.StepCounter(lDialogIndex::Progress);
+          lDialogManagement.SetCounterTextValue(lDialogIndex::User, lUser."User Name");
+        END;
+        lNablementUser.RESET();
+        lNablementUser.SETCURRENTKEY("User Security ID");
+        lNablementUser.SETRANGE("User Security ID", lUser."User Security ID");
+        IF (lNablementUser.ISEMPTY()) THEN
+          AddNavUser(lUser."User Security ID", '', lRelationships);
+      UNTIL (lUser.NEXT() = 0);
+
+      IF (pInteraction) THEN
+        lDialogManagement.Close();
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE "--- Relationships ---"@1000000017();
+    BEGIN
+    END;
+
+    PROCEDURE AllRelationshipsOnOff@1000000019(pOn@1000000002 : Boolean;pUser@1000000001 : Boolean;VAR pRelationships@1000000000 : ARRAY [20] OF Boolean);
+    BEGIN
+      //DOC NA2016.10 - Choosing all relationships
+      //  -> pOn: Switch on / switch off
+      //  -> pUser: Flag to mark user and user setup as well
+      //  <> pRelationships: Target array
+
+      IF (pUser) THEN
+      BEGIN
+        pRelationships[NablementUser.Relationship::User] := pOn;
+        pRelationships[NablementUser.Relationship::"User Setup"] := pOn;
+      END;
+      pRelationships[NablementUser.Relationship::Contact] := pOn;
+      pRelationships[NablementUser.Relationship::"Salesperson/Purchaser"] := pOn;
+      pRelationships[NablementUser.Relationship::Vendor] := pOn;
+      pRelationships[NablementUser.Relationship::Resource] := pOn;
+      pRelationships[NablementUser.Relationship::Employee] := pOn;
+    END;
+
+    PROCEDURE DefaultRelationshipsOnOff@1000000021(pOn@1000000002 : Boolean;pUser@1000000001 : Boolean;VAR pRelationships@1000000000 : ARRAY [20] OF Boolean);
+    BEGIN
+      //DOC NA2016.10 - Switching on / off default relationships
+      //  -> pOn: Switch on / switch off
+      //  -> pUser: Flag to mark user and user setup as well
+      //  <> pRelationships: Target array
+
+      IF (pUser) THEN
+      BEGIN
+        pRelationships[NablementUser.Relationship::User] := pOn;
+        pRelationships[NablementUser.Relationship::"User Setup"] := pOn;
+      END;
+      pRelationships[NablementUser.Relationship::Contact] := pOn;
+      pRelationships[NablementUser.Relationship::"Salesperson/Purchaser"] := pOn;
+    END;
+
+    PROCEDURE AnyRelationship@1000000023(pRelationships@1000000001 : ARRAY [20] OF Boolean) : Boolean;
+    VAR
+      lIndex@1000000000 : Integer;
+    BEGIN
+      //DOC NA2016.10 - Returning TRUE if any relationship is selected
+      //  -> pRelationships: Relationships array
+      //  <- Result
+
+      FOR lIndex := 1 TO ARRAYLEN(pRelationships) DO
+        IF (pRelationships[lIndex]) THEN
+          EXIT(TRUE);
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE "--- Updates ---"@1000000018();
+    BEGIN
+    END;
+
+    PROCEDURE UpdateRelationships@1000000020(VAR pNablementUser@1000000004 : Record 9062729;pInteraction@1000000001 : Boolean) : Boolean;
+    VAR
+      eUpdated@1000000003 : TextConst 'ENU=Relationships have been updated.;ENG=Relationships have been updated.';
+      lUpdateUserRelationships@1000000000 : Report 9062329;
+      lRelationships@1000000009 : ARRAY [20] OF Boolean;
+      eNothingToUpdate@1000000002 : TextConst 'ENU=You haven''t selected anything to update.;ENG=You haven''t selected anything to update.';
+    BEGIN
+      //DOC NA2016.10 - Updating selected relationships for nAblement user
+      //  -> pNablementUser: The user
+      //  -> pInteraction: Interaction flag
+      //  <- TRUE = Updated, FALSE = Cancelled
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+
+      IF (pInteraction) THEN
+      BEGIN
+        CLEAR(lUpdateUserRelationships);
+        lUpdateUserRelationships.RUNMODAL();
+        IF ( NOT (lUpdateUserRelationships.GetOk())) THEN
+          EXIT(FALSE);
+        lUpdateUserRelationships.GetRelationships(lRelationships);
+      END
+      ELSE
+        AllRelationshipsOnOff(TRUE, TRUE, lRelationships);
+
+      IF ( NOT (AnyRelationship(lRelationships))) THEN
+        IF (pInteraction) THEN
+          ERROR(eNothingToUpdate)
+        ELSE
+          EXIT(FALSE);
+
+      UpdateRelationshipsInternal(pNablementUser, lRelationships);
+
+      IF (pInteraction) THEN
+        MESSAGE(eUpdated);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE UpdateRelationshipsInternal@1000000032(VAR pNablementUser@1000000004 : Record 9062729;pRelationships@1000000001 : ARRAY [20] OF Boolean);
+    VAR
+      eUpdated@1000000003 : TextConst 'ENU=Relationships have been updated.;ENG=Relationships have been updated.';
+      eNothingToUpdate@1000000002 : TextConst 'ENU=You haven''t selected anything to update.;ENG=You haven''t selected anything to update.';
+    BEGIN
+      //DOC NA2016.10 - Updating selected relationships for nAblement user (internal function)
+      //  -> pNablementUser: The user
+      //  -> pRelationships: Array of relationship flags
+
+      IF (pRelationships[NablementUser.Relationship::User]) THEN
+        UpdateUser(pNablementUser, FALSE);
+      IF (pRelationships[NablementUser.Relationship::"User Setup"]) THEN
+        UpdateUserSetup(pNablementUser, FALSE);
+      IF (pRelationships[NablementUser.Relationship::Contact]) THEN
+        UpdateContact(pNablementUser, FALSE);
+      IF (pRelationships[NablementUser.Relationship::"Salesperson/Purchaser"]) THEN
+        UpdateSalespersonPurchaser(pNablementUser, FALSE);
+      IF (pRelationships[NablementUser.Relationship::Vendor]) THEN
+        UpdateVendor(pNablementUser, FALSE);
+      IF (pRelationships[NablementUser.Relationship::Resource]) THEN
+        UpdateResource(pNablementUser, FALSE);
+      IF (pRelationships[NablementUser.Relationship::Employee]) THEN
+        UpdateEmployee(pNablementUser, FALSE);
+    END;
+
+    PROCEDURE UpdateUser@1000000014(VAR pNablementUser@1000000001 : Record 9062729;pInteraction@1000000000 : Boolean);
+    VAR
+      lUser@1000000002 : Record 2000000120;
+      lExists@1000000003 : Boolean;
+      lCreated@1000000004 : Boolean;
+      lAccessControl@1000000005 : Record 2000000053;
+      lModifyNablementUser@1000000006 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Updating (or creating if necessary) user for nAblement user
+      //  -> pNablementUser: The nAblement user
+      //  -> pInteraction: Interaction flag
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+
+      lExists := lUser.GET(pNablementUser."User Security ID");
+      IF (( NOT (lExists)) AND (pNablementUser."Windows Security ID" <> '')) THEN
+      BEGIN
+        lUser.RESET();
+        lUser.SETCURRENTKEY("Windows Security ID");
+        lUser.SETRANGE("Windows Security ID", pNablementUser."Windows Security ID");
+        lExists := lUser.FINDFIRST();
+      END;
+      IF ( NOT (lExists)) THEN
+      BEGIN
+        lUser.RESET();
+        lUser.SETCURRENTKEY("User Name");
+        lUser.SETRANGE("User Name", pNablementUser."User ID");
+        lExists := lUser.FINDFIRST();
+      END;
+
+      lCreated := FALSE;
+      IF ( NOT (lExists)) THEN
+      BEGIN
+        CLEAR(lUser);
+        lUser.INIT();
+        lUser.VALIDATE("User Security ID", CREATEGUID());
+        lUser.INSERT(TRUE);
+        lCreated := TRUE;
+      END;
+
+      lUser.VALIDATE("Windows Security ID", pNablementUser."Windows Security ID");
+      lUser.VALIDATE("User Name", pNablementUser."User ID");
+      lUser.VALIDATE("Full Name", pNablementUser.Name + ' ' + pNablementUser."Name 2");
+      lUser.MODIFY(TRUE);
+
+      IF (lCreated) THEN
+      BEGIN
+        lAccessControl.RESET();
+        lAccessControl.SETRANGE("User Security ID", lUser."User Security ID");
+        lAccessControl.SETRANGE("Role ID", 'SUPER');
+        lAccessControl.SETRANGE(Scope, lAccessControl.Scope::System);
+        IF (lAccessControl.ISEMPTY()) THEN
+        BEGIN
+          CLEAR(lAccessControl);
+          lAccessControl.INIT();
+          lAccessControl.VALIDATE("User Security ID", lUser."User Security ID");
+          lAccessControl.VALIDATE("Role ID", 'SUPER');
+          lAccessControl.VALIDATE(Scope, lAccessControl.Scope::System);
+          lAccessControl.INSERT(TRUE);
+        END;
+      END;
+
+      lModifyNablementUser := FALSE;
+      IF (pNablementUser."User Security ID" <> lUser."User Security ID") THEN
+      BEGIN
+        pNablementUser.VALIDATE("User Security ID", lUser."User Security ID");
+        lModifyNablementUser := TRUE;
+      END;
+      IF (pNablementUser."Windows Security ID" <> lUser."Windows Security ID") THEN
+      BEGIN
+        pNablementUser.VALIDATE("Windows Security ID", lUser."Windows Security ID");
+        lModifyNablementUser := TRUE;
+      END;
+      IF (lModifyNablementUser) THEN
+        pNablementUser.MODIFY(TRUE);
+
+      IF (pInteraction) THEN
+        MESSAGE(UpdatedCreatedText(lCreated), lUser.TABLECAPTION, lUser."User Name");
+    END;
+
+    PROCEDURE UpdateUserSetup@1000000015(VAR pNablementUser@1000000001 : Record 9062729;pInteraction@1000000000 : Boolean);
+    VAR
+      lUserSetup@1000000002 : Record 91;
+      lCreated@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Updating (or creating if necessary) user for nAblement user
+      //  -> pNablementUser: The nAblement user
+      //  -> pInteraction: Interaction flag
+      //NOTE: The validation on "User Setup"."Salesprs./Purch.Code" is off because of M$ bugs in the table
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+      lCreated := FALSE;
+
+      IF ( NOT (lUserSetup.GET(pNablementUser."User ID"))) THEN
+      BEGIN
+        CLEAR(lUserSetup);
+        lUserSetup.INIT();
+        lUserSetup."User ID" := pNablementUser."User ID";
+        lUserSetup.INSERT(TRUE);
+        lCreated := TRUE;
+      END;
+
+      lUserSetup.VALIDATE("E-Mail", pNablementUser."E-Mail");
+      lUserSetup."Salespers./Purch. Code" := pNablementUser."Salesperson/Purchaser Code";
+      lUserSetup.MODIFY(TRUE);
+
+      IF (pInteraction) THEN
+        MESSAGE(UpdatedCreatedText(lCreated), lUserSetup.TABLECAPTION, lUserSetup."User ID");
+    END;
+
+    PROCEDURE UpdateContact@1000000007(VAR pNablementUser@1000000004 : Record 9062729;pInteraction@1000000002 : Boolean);
+    VAR
+      lContact@1000000001 : Record 5050;
+      lCreated@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Updating (or creating if necessary) contact for nAblement user
+      //  -> pNablementUser: The user
+      //  -> pInteraction: Interaction flag
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+
+      CheckShortCode(pNablementUser);
+      IF (pNablementUser."Contact No." = '') THEN
+      BEGIN
+        NablementUser := pNablementUser;
+        NablementUser."Contact No." := NablementUser."Short Code";
+        NablementUser.CheckContactNo();
+
+        IF ( NOT (lContact.GET(pNablementUser."Short Code"))) THEN
+        BEGIN
+          CLEAR(lContact);
+          lContact.INIT();
+          lContact.VALIDATE("No.", pNablementUser."Short Code");
+          lContact.INSERT(TRUE);
+
+          lCreated := TRUE;
+        END;
+      END
+      ELSE
+        lContact.GET(pNablementUser."Contact No.");
+
+      pNablementUser.CALCFIELDS(Picture);
+
+      lContact.VALIDATE(Type, lContact.Type::Company);
+      lContact.VALIDATE(Name, pNablementUser.Name);
+      lContact.VALIDATE("Name 2", pNablementUser."Name 2");
+      lContact.VALIDATE(Address, pNablementUser.Address);
+      lContact.VALIDATE("Address 2", pNablementUser."Address 2");
+      lContact.VALIDATE(City, pNablementUser.City);
+      lContact.VALIDATE(County, pNablementUser.County);
+      lContact.VALIDATE("Post Code", pNablementUser."Post Code");
+      lContact.VALIDATE("Country/Region Code", pNablementUser."Country/Region Code");
+      lContact.VALIDATE("Phone No.", pNablementUser."Phone No.");
+      lContact.VALIDATE("Mobile Phone No.", pNablementUser."Mobile Phone No.");
+      lContact.VALIDATE("Fax No.", pNablementUser."Fax No.");
+      lContact.VALIDATE("E-Mail", pNablementUser."E-Mail");
+      lContact.VALIDATE("Home Page", pNablementUser."Home Page");
+      lContact.VALIDATE("Job Title", pNablementUser."Job Title");
+      lContact.Picture := pNablementUser.Picture;
+      lContact.MODIFY(TRUE);
+
+      pNablementUser.VALIDATE("Contact No.", lContact."No.");
+      pNablementUser.MODIFY(TRUE);
+
+      IF (pInteraction) THEN
+        MESSAGE(UpdatedCreatedText(lCreated), lContact.TABLECAPTION, lContact."No.");
+    END;
+
+    PROCEDURE UpdateSalespersonPurchaser@1000000005(VAR pNablementUser@1000000004 : Record 9062729;pInteraction@1000000002 : Boolean);
+    VAR
+      lSalespersonPurchaser@1000000001 : Record 13;
+      lCreated@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Updating (or creating if necessary) salesperson/purchaser for nAblement user
+      //  -> pNablementUser: The user
+      //  -> pInteraction: Interaction flag
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+
+      CheckShortCode(pNablementUser);
+      IF (pNablementUser."Salesperson/Purchaser Code" = '') THEN
+      BEGIN
+        NablementUser := pNablementUser;
+        NablementUser."Salesperson/Purchaser Code" := NablementUser."Short Code";
+        NablementUser.CheckSalespersonPurchaserCode();
+
+        IF ( NOT (lSalespersonPurchaser.GET(pNablementUser."Short Code"))) THEN
+        BEGIN
+          CLEAR(lSalespersonPurchaser);
+          lSalespersonPurchaser.INIT();
+          lSalespersonPurchaser.VALIDATE(Code, pNablementUser."Short Code");
+          lSalespersonPurchaser.INSERT(TRUE);
+
+          lCreated := TRUE;
+        END;
+      END
+      ELSE
+        lSalespersonPurchaser.GET(pNablementUser."Salesperson/Purchaser Code");
+
+      lSalespersonPurchaser.VALIDATE(Name, pNablementUser.Name);
+      lSalespersonPurchaser.VALIDATE("E-Mail", pNablementUser."E-Mail");
+      lSalespersonPurchaser.VALIDATE("Phone No.", pNablementUser."Phone No.");
+      lSalespersonPurchaser.VALIDATE("Job Title", pNablementUser."Job Title");
+      lSalespersonPurchaser.MODIFY(TRUE);
+
+      pNablementUser.VALIDATE("Salesperson/Purchaser Code", lSalespersonPurchaser.Code);
+      pNablementUser.MODIFY(TRUE);
+
+      IF (pInteraction) THEN
+        MESSAGE(UpdatedCreatedText(lCreated), lSalespersonPurchaser.TABLECAPTION, lSalespersonPurchaser.Code);
+    END;
+
+    PROCEDURE UpdateVendor@1000000006(VAR pNablementUser@1000000004 : Record 9062729;pInteraction@1000000002 : Boolean);
+    VAR
+      lVendor@1000000001 : Record 23;
+      eFinalMessage@1000000003 : TextConst 'ENU=%1 "%2" has been updated.;ENG=%1 "%2" has been updated.';
+      lVendorTemplate@1000000005 : Record 23;
+      lCreated@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Updating (or creating if necessary) vendor for nAblement user
+      //  -> pNablementUser: The user
+      //  -> pInteraction: Interaction flag
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+
+      CheckShortCode(pNablementUser);
+      IF (pNablementUser."Vendor No." = '') THEN
+      BEGIN
+        NablementUser := pNablementUser;
+        NablementUser."Vendor No." := NablementUser."Short Code";
+        NablementUser.CheckVendorNo();
+
+        IF ( NOT (lVendor.GET(pNablementUser."Short Code"))) THEN
+        BEGIN
+          CLEAR(lVendor);
+          lVendor.INIT();
+          lVendor.VALIDATE("No.", pNablementUser."Short Code");
+          lVendor.INSERT(TRUE);
+
+          lCreated := TRUE;
+        END;
+      END
+      ELSE
+        lVendor.GET(pNablementUser."Vendor No.");
+
+      pNablementUser.CALCFIELDS(Picture);
+
+      NablementSetup.GET();
+      IF (NablementSetup."Default Vendor Template" <> '') THEN
+        IF (lVendorTemplate.GET(NablementSetup."Default Vendor Template")) THEN
+          lVendor.TRANSFERFIELDS(lVendorTemplate, FALSE);
+
+      lVendor.VALIDATE(Name, pNablementUser.Name);
+      lVendor.VALIDATE("Name 2", pNablementUser."Name 2");
+      lVendor.VALIDATE(Address, pNablementUser.Address);
+      lVendor.VALIDATE("Address 2", pNablementUser."Address 2");
+      lVendor.VALIDATE(City, pNablementUser.City);
+      lVendor.VALIDATE(County, pNablementUser.County);
+      lVendor.VALIDATE("Post Code", pNablementUser."Post Code");
+      lVendor.VALIDATE("Country/Region Code", pNablementUser."Country/Region Code");
+      lVendor.VALIDATE("Phone No.", pNablementUser."Phone No.");
+      lVendor.VALIDATE("Fax No.", pNablementUser."Fax No.");
+      lVendor.VALIDATE("E-Mail", pNablementUser."E-Mail");
+      lVendor.VALIDATE("Home Page", pNablementUser."Home Page");
+      lVendor.Picture := pNablementUser.Picture;
+      lVendor.MODIFY(TRUE);
+
+      pNablementUser.VALIDATE("Vendor No.", lVendor."No.");
+      pNablementUser.MODIFY(TRUE);
+
+      IF (pInteraction) THEN
+        MESSAGE(UpdatedCreatedText(lCreated), lVendor.TABLECAPTION, lVendor."No.");
+    END;
+
+    PROCEDURE UpdateResource@1000000004(VAR pNablementUser@1000000003 : Record 9062729;pInteraction@1000000002 : Boolean);
+    VAR
+      lResource@1000000000 : Record 156;
+      lCreated@1000000001 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Updating (or creating if necessary) resource for nAblement user
+      //  -> pNablementUser: The user
+      //  -> pInteraction: Interaction flag
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+
+      CheckShortCode(pNablementUser);
+      IF (pNablementUser."Resource No." = '') THEN
+      BEGIN
+        NablementUser := pNablementUser;
+        NablementUser."Resource No." := NablementUser."Short Code";
+        NablementUser.CheckResourceNo();
+
+        IF ( NOT (lResource.GET(pNablementUser."Short Code"))) THEN
+        BEGIN
+          CLEAR(lResource);
+          lResource.INIT();
+          lResource.VALIDATE("No.", pNablementUser."Short Code");
+          lResource.INSERT(TRUE);
+
+          lCreated := TRUE;
+        END;
+      END
+      ELSE
+        lResource.GET(pNablementUser."Contact No.");
+
+      pNablementUser.CALCFIELDS(Picture);
+
+      lResource.VALIDATE(Name, pNablementUser.Name);
+      lResource.VALIDATE("Name 2", pNablementUser."Name 2");
+      lResource.VALIDATE(Address, pNablementUser.Address);
+      lResource.VALIDATE("Address 2", pNablementUser."Address 2");
+      lResource.VALIDATE(City, pNablementUser.City);
+      lResource.VALIDATE(County, pNablementUser.County);
+      lResource.VALIDATE("Post Code", pNablementUser."Post Code");
+      lResource.VALIDATE("Country/Region Code", pNablementUser."Country/Region Code");
+      lResource.VALIDATE("Job Title", pNablementUser."Job Title");
+      lResource.Picture := pNablementUser.Picture;
+      lResource.MODIFY(TRUE);
+
+      pNablementUser.VALIDATE("Resource No.", lResource."No.");
+      pNablementUser.MODIFY(TRUE);
+
+      IF (pInteraction) THEN
+        MESSAGE(UpdatedCreatedText(lCreated), lResource.TABLECAPTION, lResource."No.");
+    END;
+
+    PROCEDURE UpdateEmployee@1000000009(VAR pNablementUser@1000000004 : Record 9062729;pInteraction@1000000002 : Boolean);
+    VAR
+      lEmployee@1000000001 : Record 5200;
+      eFinalMessage@1000000003 : TextConst 'ENU=%1 "%2" has been updated.;ENG=%1 "%2" has been updated.';
+      lCreated@1000000000 : Boolean;
+      lFirstName@1000000005 : Text;
+      lLastName@1000000006 : Text;
+    BEGIN
+      //DOC NA2016.10 - Updating (or creating if necessary) resource for nAblement user
+      //  -> pNablementUser: The user
+      //  -> pInteraction: Interaction flag
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+
+      CheckShortCode(pNablementUser);
+      IF (pNablementUser."Employee No." = '') THEN
+      BEGIN
+        NablementUser := pNablementUser;
+        NablementUser."Employee No." := NablementUser."Short Code";
+        NablementUser.CheckEmployeeNo();
+
+        IF ( NOT (lEmployee.GET(pNablementUser."Short Code"))) THEN
+        BEGIN
+          CLEAR(lEmployee);
+          lEmployee.INIT();
+          lEmployee.VALIDATE("No.", pNablementUser."Short Code");
+          lEmployee.INSERT(TRUE);
+
+          lCreated := TRUE;
+        END;
+      END
+      ELSE
+        lEmployee.GET(pNablementUser."Employee No.");
+
+      pNablementUser.CALCFIELDS(Picture);
+
+      NameToFirstLastNames(pNablementUser.Name + ' ' + pNablementUser."Name 2", lFirstName, lLastName);
+
+      lEmployee.VALIDATE("First Name", COPYSTR(lFirstName, 1, MAXSTRLEN(lEmployee."First Name")));
+      lEmployee.VALIDATE("Last Name", COPYSTR(lLastName, 1, MAXSTRLEN(lEmployee."Last Name")));
+      lEmployee.VALIDATE(Address, pNablementUser.Address);
+      lEmployee.VALIDATE("Address 2", pNablementUser."Address 2");
+      lEmployee.VALIDATE(City, pNablementUser.City);
+      lEmployee.VALIDATE(County, pNablementUser.County);
+      lEmployee.VALIDATE("Post Code", pNablementUser."Post Code");
+      lEmployee.VALIDATE("Phone No.", pNablementUser."Phone No.");
+      lEmployee.VALIDATE("E-Mail", pNablementUser."E-Mail");
+      lEmployee.Picture := pNablementUser.Picture;
+      lEmployee.MODIFY(TRUE);
+
+      pNablementUser.VALIDATE("Employee No.", lEmployee."No.");
+      pNablementUser.MODIFY(TRUE);
+
+      IF (pInteraction) THEN
+        MESSAGE(UpdatedCreatedText(lCreated), lEmployee.TABLECAPTION, lEmployee."No.");
+    END;
+
+    PROCEDURE "--- User Personalisation ---"@1000000025();
+    BEGIN
+    END;
+
+    PROCEDURE GetProfileId@1000000027(pNablementUser@1000000000 : Record 9062729) : Code[30];
+    VAR
+      lUserPersonalization@1000000001 : Record 2000000073;
+      lEmptyGuid@1000000002 : GUID;
+    BEGIN
+      //DOC NA2016.10 - Returning profile ID
+      //  -> pNablementUser: nAblement user
+      //  <- The profile ID
+
+      IF (pNablementUser."User Security ID" <> lEmptyGuid) THEN
+        IF ( NOT (lUserPersonalization.GET(pNablementUser."User Security ID"))) THEN
+          CLEAR(lUserPersonalization);
+
+      EXIT(lUserPersonalization."Profile ID");
+    END;
+
+    PROCEDURE SetProfileId@1000000029(pNablementUser@1000000004 : Record 9062729;pProfileId@1000000001 : Code[30]) : Boolean;
+    VAR
+      lUserPersonalization@1000000002 : Record 2000000073;
+      lEmptyGuid@1000000000 : GUID;
+      eNoNavUser@1000000003 : TextConst 'ENU=NAV user hasn''t been created for %1 "%2". Do you want to do it now?;ENG=NAV user hasn''t been created for %1 "%2". Do you want to do it now?';
+    BEGIN
+      //DOC NA2016.10 - Setting profile ID
+      //  -> pNablementUser: nAblement user
+      //  -> pProfileId: Profile ID
+      //  <- TRUE = Profile ID set, FALSE = Cancelled
+
+      IF (pNablementUser."User Security ID" = lEmptyGuid) THEN
+      BEGIN
+        IF ( NOT (CONFIRM(eNoNavUser, TRUE, pNablementUser."User ID"))) THEN
+          EXIT(FALSE);
+        UpdateUser(pNablementUser, FALSE);
+        pNablementUser.TESTFIELD("User Security ID");
+      END;
+
+      IF ( NOT (lUserPersonalization.GET(pNablementUser."User Security ID"))) THEN
+      BEGIN
+        CLEAR(lUserPersonalization);
+        lUserPersonalization.INIT();
+        lUserPersonalization.VALIDATE("User SID", pNablementUser."User Security ID");
+        lUserPersonalization.INSERT(TRUE);
+      END;
+
+      IF (lUserPersonalization."Profile ID" <> pProfileId) THEN
+      BEGIN
+        lUserPersonalization.VALIDATE("Profile ID", pProfileId);
+        lUserPersonalization.MODIFY(TRUE);
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetPanelSelections@1000000028(pNablementUser@1000000002 : Record 9062729;pPageId@1000000000 : Integer;VAR pPanelSelections@1000000001 : ARRAY [10] OF Code[20]);
+    VAR
+      lPanelSelection@1000000003 : Record 9062371;
+    BEGIN
+      //DOC NA2016.10 - Returning an array of panel selections
+      //  -> pNablementUser: The user
+      //  -> pPageId: Page ID
+      //  <> pPanelSelections: Target array
+
+      IF ( NOT (lPanelSelection.GET(pPageId, pNablementUser."User ID"))) THEN
+        CLEAR(lPanelSelection);
+
+      lPanelSelection.GetPanelCodes(pPanelSelections);
+    END;
+
+    PROCEDURE SetPanelSelections@1000000030(pNablementUser@1000000002 : Record 9062729;pPageId@1000000001 : Integer;pPanelSelections@1000000000 : ARRAY [10] OF Code[20]);
+    VAR
+      lPanelSelection@1000000003 : Record 9062371;
+    BEGIN
+      //DOC NA2016.10 - Setting panel selections
+      //  -> pNablementUser: The user
+      //  -> pPageId: Page ID
+      //  <> pPanelSelections: Target array
+
+      IF (pPageId = 0) THEN
+      BEGIN
+        CLEAR(pPanelSelections);
+        EXIT;
+      END;
+
+      IF ( NOT (lPanelSelection.GET(pPageId, pNablementUser."User ID"))) THEN
+      BEGIN
+        CLEAR(lPanelSelection);
+        lPanelSelection.INIT();
+        lPanelSelection.VALIDATE("Page ID", pPageId);
+        lPanelSelection.VALIDATE("User ID", pNablementUser."User ID");
+        lPanelSelection.INSERT(TRUE);
+      END;
+
+      lPanelSelection.SetPanelCodes(pPanelSelections);
+      lPanelSelection.MODIFY(TRUE);
+    END;
+
+    PROCEDURE "--- Tools ---"@1000000033();
+    BEGIN
+    END;
+
+    PROCEDURE CopyAddressFrom@1000000034(VAR pToNablementUser@1000000000 : Record 9062729;pModify@1000000003 : Boolean) : Boolean;
+    VAR
+      lFromNablementUser@1000000002 : Record 9062729;
+      lResult@1000000001 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Copying address to the current nAblement user from selected nAblement user
+      //  -> pToNablementUser: Target nAblement user
+      //  -> pModify: Flag to modify target nAblement user after
+      //  <- TRUE = Address copied, FALSE = Cancelled
+
+      lResult := FALSE;
+
+      lFromNablementUser.RESET();
+      lFromNablementUser.FILTERGROUP(2);
+      lFromNablementUser.SETFILTER("User ID", '<>%1', pToNablementUser."User ID");
+      lFromNablementUser.FILTERGROUP(0);
+      IF (PAGE.RUNMODAL(0, lFromNablementUser) = ACTION::LookupOK) THEN
+      BEGIN
+        pToNablementUser.VALIDATE(Address, lFromNablementUser.Address);
+        pToNablementUser.VALIDATE("Address 2", lFromNablementUser."Address 2");
+        pToNablementUser.VALIDATE(City, lFromNablementUser.City);
+        pToNablementUser.VALIDATE(County, lFromNablementUser.County);
+        pToNablementUser.VALIDATE("Post Code", lFromNablementUser."Post Code");
+        pToNablementUser.VALIDATE("Country/Region Code", lFromNablementUser."Country/Region Code");
+        pToNablementUser.VALIDATE("Phone No.", lFromNablementUser."Phone No.");
+        pToNablementUser.VALIDATE("Fax No.", lFromNablementUser."Fax No.");
+        pToNablementUser.VALIDATE("Home Page", lFromNablementUser."Home Page");
+        IF (pModify) THEN
+          pToNablementUser.MODIFY(TRUE);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE "--- Internal ---"@1000000003();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CheckShortCode@1000000008(pNablementUser@1000000000 : Record 9062729);
+    VAR
+      eEmptyShortCode@1000000001 : TextConst 'ENU=%1 "%2" has no "%3" assigned. "%3" is necessary for any relationship creation or update.;ENG=%1 "%2" has no "%3" assigned. "%3" is necessary for any relationship creation or update.';
+    BEGIN
+      //DOC NA2016.10 - Checking whether nAblement user has short code assigned
+      //  -> pNablementUser: The user
+
+      IF (pNablementUser."Short Code" = '') THEN
+        ERROR(eEmptyShortCode, pNablementUser.TABLECAPTION(), pNablementUser."User ID", pNablementUser.FIELDCAPTION("Short Code"));
+    END;
+
+    LOCAL PROCEDURE UpdatedCreatedText@1000000002(pCreated@1000000002 : Boolean) : Text;
+    VAR
+      eCreated@1000000001 : TextConst 'ENU=%1 "%2" has been created.;ENG=%1 "%2" has been created.';
+      eUpdated@1000000000 : TextConst 'ENU=%1 "%2" has been updated.;ENG=%1 "%2" has been updated.';
+    BEGIN
+      //DOC NA2016.10 - Returning updated or created text depending on the flag
+      //  -> pCreated: TRUE = Created text, FALSE = Updated text
+      //  <- The text
+
+      IF (pCreated) THEN
+        EXIT(eCreated)
+      ELSE
+        EXIT(eUpdated);
+    END;
+
+    LOCAL PROCEDURE "--- SMTP Mail ---"@1000000039();
+    BEGIN
+    END;
+
+    PROCEDURE OpenSMTPMailSetupCard@1000000037(VAR pNablementUser@1000000000 : Record 9062729);
+    VAR
+      SMTPMailSetup@1000000001 : Record 409;
+      SMTPMailSetupDefault@1000000004 : Record 409;
+      CreateNewSMTPMailSetup@1000000002 : Boolean;
+      SMTPMailSetupPK@1000000003 : Code[10];
+      EnhancedSMTPMailSetup@1000000005 : Page 9086437;
+    BEGIN
+      IF pNablementUser."SMTP Mail Setup" <> '' THEN BEGIN
+        IF NOT SMTPMailSetup.GET(pNablementUser."SMTP Mail Setup") THEN
+          CreateNewSMTPMailSetup := TRUE;
+      END ELSE
+        CreateNewSMTPMailSetup := TRUE;
+
+      IF CreateNewSMTPMailSetup THEN BEGIN
+        IF SMTPMailSetup.FINDLAST THEN BEGIN
+          IF SMTPMailSetup."Primary Key" = '' THEN
+            SMTPMailSetupPK := '1'
+          ELSE BEGIN
+            SMTPMailSetupPK := INCSTR(SMTPMailSetup."Primary Key");
+            IF SMTPMailSetupPK = '' THEN
+              SMTPMailSetupPK := '1';
+          END;
+        END ELSE
+          SMTPMailSetupPK := '1';
+
+        SMTPMailSetup.INIT;
+        SMTPMailSetup.VALIDATE(SMTPMailSetup."Primary Key",SMTPMailSetupPK);
+        SMTPMailSetup.INSERT(TRUE);
+
+
+        IF SMTPMailSetupDefault.GET THEN BEGIN
+          SMTPMailSetup.VALIDATE(SMTPMailSetup."SMTP Server",SMTPMailSetupDefault."SMTP Server");
+          SMTPMailSetup.VALIDATE(SMTPMailSetup.Authentication,SMTPMailSetupDefault.Authentication);
+          SMTPMailSetup.VALIDATE(SMTPMailSetup."SMTP Server Port",SMTPMailSetupDefault."SMTP Server Port");
+          SMTPMailSetup.VALIDATE(SMTPMailSetup."Secure Connection",SMTPMailSetupDefault."Secure Connection");
+          SMTPMailSetup.MODIFY;
+        END;
+
+        pNablementUser.VALIDATE(pNablementUser."SMTP Mail Setup",SMTPMailSetup."Primary Key");
+        pNablementUser.MODIFY(TRUE);
+      END;
+
+      EnhancedSMTPMailSetup.SETRECORD(SMTPMailSetup);
+      EnhancedSMTPMailSetup.RUN;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.10 JH 25/08/2015 - Completely redesigned for 2016
+      //DOC NA2016.11 JH 03/11/2015 - Vendor template logic added
+      //DOC NA2016.11 JH 02/12/2016 - Changes in adding Windows / NAV users, bugfixes
+      //DOC NA2016.12 JH 28/01/2016 - Name changed
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit used
+      //DOC NA2016.12 JH 04/02/2016 - "UserIdToShortUserId" added
+    }
+    END.
+  }
+}
+

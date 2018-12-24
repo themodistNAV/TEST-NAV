@@ -1,0 +1,175 @@
+OBJECT Codeunit 9062237 Field Lookup
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/09/16;
+    Time=11:45:29 AM;
+    Modified=Yes;
+    Version List=NA2016.12;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Field@1000000000 : Record 2000000041;
+      RunWithRecordRef@1000000002 : Codeunit 9062239;
+      NameValueToolkit@1000000001 : Codeunit 9062587;
+      String@1000000004 : Codeunit 9062236;
+
+    PROCEDURE Lookup@1000000001(pTableId@1000000000 : Integer;pFieldId@1000000001 : Integer;VAR pValue@1000000002 : Text) : Boolean;
+    VAR
+      lResult@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2015.3 - Performing a lookup
+      //  -> pTableId: Table ID
+      //  -> pFieldId: Field ID
+      //  <> pValue: Source / target value
+      //  <- Result
+
+      lResult := FALSE;
+
+      IF ( NOT (Field.GET(pTableId, pFieldId))) THEN
+        EXIT(lResult);
+
+      CASE (Field.Type) OF
+        Field.Type::Boolean:
+          lResult := LookupForBoolean(pTableId, pFieldId, pValue);
+        Field.Type::Option:
+          lResult := LookupForOption(pTableId, pFieldId, pValue);
+        ELSE
+          IF (Field.RelationTableNo <> 0) THEN
+            lResult := LookupForTable(Field.RelationTableNo, Field.RelationFieldNo, pValue);
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE LookupForBoolean@1000000011(pTableId@1000000004 : Integer;pFieldId@1000000003 : Integer;VAR pValue@1000000002 : Text) : Boolean;
+    VAR
+      lNameValueBufferTmp@1000000001 : TEMPORARY Record 9062730;
+      lResult@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2015.3 - Performing a lookup for boolean
+      //  -> pTableId: Table ID
+      //  -> pFieldId: Field ID
+      //  <> pValue: Source / target value
+      //  <- Result
+
+      lResult := FALSE;
+
+      NameValueToolkit.AddToNameValueBuffer(lNameValueBufferTmp, 0, FORMAT(FALSE));
+      NameValueToolkit.AddToNameValueBuffer(lNameValueBufferTmp, 1, FORMAT(TRUE));
+      IF (NameValueToolkit.NameValueLookup(lNameValueBufferTmp, FALSE)) THEN
+      BEGIN
+        pValue := lNameValueBufferTmp.Name;
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE LookupForOption@1000000010(pTableId@1000000007 : Integer;pFieldId@1000000005 : Integer;VAR pValue@1000000001 : Text) : Boolean;
+    VAR
+      lNameValueBufferTmp@1000000002 : TEMPORARY Record 9062730;
+      lNameValueBufferSelected@1000000006 : TEMPORARY Record 9062730;
+      lTableRef@1000000004 : RecordRef;
+      lFieldRef@1000000003 : FieldRef;
+      lResult@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2015.3 - Performing a lookup for option
+      //  -> pTableId: Table ID
+      //  -> pFieldId: Field ID
+      //  <> pValue: Source / target value
+      //  <- Result
+
+      lTableRef.OPEN(pTableId);
+      lFieldRef := lTableRef.FIELD(pFieldId);
+      String.SplitAdvanced(lFieldRef.OPTIONCAPTION, ',', TRUE, TRUE, lNameValueBufferTmp);
+      NameValueToolkit.SelectNameValueRecordsByName(lNameValueBufferTmp, pValue, '|', FALSE, TRUE);
+      IF (NameValueToolkit.NameValueLookupWithSelection(lNameValueBufferTmp, FALSE)) THEN
+      BEGIN
+        lNameValueBufferSelected := lNameValueBufferTmp;
+
+        pValue := '';
+        lNameValueBufferTmp.RESET();
+        lNameValueBufferTmp.SETRANGE(Selected, TRUE);
+        IF (lNameValueBufferTmp.FINDSET()) THEN
+          REPEAT
+            IF (pValue <> '') THEN
+              pValue := pValue + '|';
+            pValue := pValue + lNameValueBufferTmp.Name;
+          UNTIL (lNameValueBufferTmp.NEXT() = 0)
+        ELSE
+          pValue := lNameValueBufferSelected.Name;
+
+        lResult := TRUE;
+      END;
+      lTableRef.CLOSE();
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE LookupForTable@1000000004(pTableId@1000000002 : Integer;pFieldId@1000000001 : Integer;VAR pValue@1000000000 : Text) : Boolean;
+    VAR
+      lField@9062230 : Record 2000000041;
+      lRecordRef@1000000004 : RecordRef;
+      lFieldRef@1000000006 : FieldRef;
+      lResult@1000000005 : Boolean;
+      lPosition@1000000003 : Text;
+    BEGIN
+      //DOC NA2015.3 - Performing a lookup for table
+      //  -> pTableId: Table ID
+      //  -> pFieldId: Field ID
+      //  <> pValue: Source / target value
+      //  <- Result
+
+      IF (pTableId = 0) THEN
+        EXIT(FALSE);
+
+      lResult := FALSE;
+
+      //DOC NA2016.12 >>
+      IF (pFieldId = 0) THEN BEGIN
+        lRecordRef.OPEN(pTableId);
+        pFieldId := lRecordRef.KEYINDEX(1).FIELDINDEX(1).NUMBER;
+        lRecordRef.CLOSE();
+      END;
+      //DOC NA2016.12 <<
+
+      IF (lField.GET(pTableId, pFieldId)) THEN
+      BEGIN
+        lRecordRef.OPEN(pTableId);
+        IF (RunWithRecordRef.RunPage(lRecordRef, 0, TRUE)) THEN BEGIN
+          lPosition := RunWithRecordRef.GetPosition();
+          lRecordRef.SETPOSITION(lPosition);
+          lRecordRef.SETRECFILTER();
+          IF (lRecordRef.FINDFIRST()) THEN
+          BEGIN
+            lFieldRef := lRecordRef.FIELD(pFieldId);
+            pValue := FORMAT(lFieldRef.VALUE, 0, 1);
+            lResult := TRUE;
+          END;
+        END;
+        lRecordRef.CLOSE();
+      END;
+
+      EXIT(lResult);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.3  JH 15/08/2014 - Created
+      //DOC NA2016.10 JH 28/08/2015 - Upgraded to 2016
+      //DOC NA2016.11 AZ 10/11/2015 - LookupForTable function fixed and published
+      //DOC NA2016.12 AZ 12/01/2016 - LookupForTable function tries to find field id if it is 0
+      //DOC NA2016.12 JH 28/01/2016 - New string codeunit used
+    }
+    END.
+  }
+}
+

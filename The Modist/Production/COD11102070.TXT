@@ -1,0 +1,316 @@
+OBJECT Codeunit 11102070 OM - Repository VSS
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/10/13;
+    Time=12:00:00 PM;
+    Version List=OMA9.01;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            TmpFileRec@1000 : TEMPORARY Record 11102094;
+            ctConnectionFailed@1001 : TextConst 'DEU=The repository token cannot be found.;ENU=The repository token cannot be found.;ESP=The repository token cannot be found.;FRA=The repository token cannot be found.;NLD=Het repository token kan niet worden gevonden.;DEA=The repository token cannot be found.';
+            ctTokenInvalid@1002 : TextConst 'DEU=The token is invalid.;ENU=The token is invalid.;ESP=The token is invalid.;FRA=The token is invalid.;NLD=Het token is niet geldig.;DEA=The token is invalid.';
+          BEGIN
+            LastTokenNo := -1;
+
+            FillFileRec(TmpFileRec, '');
+
+            TmpFileRec.SETFILTER(Name, 'TOKEN*');
+            IF NOT TmpFileRec.FINDFIRST THEN
+              ERROR(ctConnectionFailed);
+
+            IF TmpFileRec.FINDFIRST THEN
+              IF NOT EVALUATE(LastTokenNo, COPYSTR(TmpFileRec.Name, 7)) THEN
+                ERROR(ctTokenInvalid);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      LastTokenNo@1000 : Integer;
+
+    PROCEDURE CheckCreateDirectory@1(DirectoryName@1000 : Text);
+    VAR
+      Mgt@1001 : Codeunit 11102035;
+      Parent@1002 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E3-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+      VssDatabase@1003 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E4-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+      FullPath@1004 : Text;
+      SubFolders@1005 : ARRAY [100] OF Text[120];
+      i@1006 : Integer;
+      j@1007 : Integer;
+      FolderPresent@1008 : Boolean;
+    BEGIN
+      OpenDatabase(VssDatabase);
+
+      Mgt.Split('$\' + DirectoryName, '\', SubFolders);
+
+      FullPath := SubFolders[1] + '\';
+      Parent := VssDatabase.VSSItem(FullPath);
+
+      FOR i := 2 TO ARRAYLEN(SubFolders) DO
+        IF SubFolders[i] <> '' THEN BEGIN
+          FolderPresent := FALSE;
+          FOR j := 1 TO Parent.Items(FALSE).Count DO
+            IF FORMAT(Parent.Items(FALSE).Item(j).Type) = '0' THEN
+              IF Parent.Items(FALSE).Item(j).Name = SubFolders[i] THEN
+                FolderPresent := TRUE;
+          IF NOT FolderPresent THEN
+            Parent.NewSubproject(SubFolders[i]);
+
+          FullPath += SubFolders[i] + '\';
+          Parent := VssDatabase.VSSItem(FullPath);
+
+        END ELSE
+          i := 100;
+
+      CloseDatabase(VssDatabase);
+    END;
+
+    PROCEDURE FileExists@2(Path@1000 : Text;FileName@1001 : Text) : Boolean;
+    VAR
+      Parent@1002 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E3-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+      VssDatabase@1003 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E4-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+      j@1004 : Integer;
+    BEGIN
+      OpenDatabase(VssDatabase);
+
+      Parent := VssDatabase.VSSItem('$\' + Path);
+      FOR j := 1 TO Parent.Items(FALSE).Count DO
+        IF FORMAT(Parent.Items(FALSE).Item(j).Type) = '1' THEN
+          IF Parent.Items(FALSE).Item(j).Name = FileName THEN BEGIN
+            CloseDatabase(VssDatabase);
+            EXIT(TRUE);
+          END;
+
+      CloseDatabase(VssDatabase);
+    END;
+
+    PROCEDURE FileOpen@3(VAR oFile@1000 : File;Path@1001 : Text;FileName@1002 : Text);
+    VAR
+      FileHandler@1003 : Codeunit 11102097;
+      VssDatabase@1004 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E4-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+      VssItem@1005 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E3-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+      LocalPathFileName@1006 : Text;
+    BEGIN
+      OpenDatabase(VssDatabase);
+      VssItem := VssDatabase.VSSItem('$\' + Path + FileName);
+
+      LocalPathFileName := FileHandler.TempDirectory + 'repository.tmp';
+
+      IF EXISTS(LocalPathFileName) THEN BEGIN
+        DeleteReadOnlyAttribute(LocalPathFileName);
+        ERASE(LocalPathFileName);
+      END;
+
+      VssItem.Get(LocalPathFileName);
+      DeleteReadOnlyAttribute(LocalPathFileName);
+
+      oFile.OPEN(LocalPathFileName);
+
+      CloseDatabase(VssDatabase);
+    END;
+
+    PROCEDURE FileSave@4(FromFileName@1000 : Text;ToPath@1001 : Text;ToFileName@1002 : Text);
+    VAR
+      VssDatabase@1003 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E4-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+      VssItem@1004 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E3-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+    BEGIN
+      OpenDatabase(VssDatabase);
+
+      IF FileExists(ToPath, ToFileName) THEN BEGIN
+        VssItem := VssDatabase.VSSItem('$\' + ToPath + ToFileName);
+        IF VssItem.IsCheckedOut <> 2 THEN BEGIN
+          VssItem.Checkout('', FromFileName + 'x', 1 + 2097152);
+          ERASE(FromFileName + 'x');
+        END;
+        VssItem.Checkin('', FromFileName, 1 + 2097152);
+      END ELSE BEGIN
+        VssItem := VssDatabase.VSSItem('$\' + ToPath);
+        VssItem.Add(FromFileName, '', 1 + 2097152);
+      END;
+
+      CloseDatabase(VssDatabase);
+
+      ERASE(FromFileName);
+    END;
+
+    PROCEDURE FileErase@5(Path@1000 : Text;FileName@1001 : Text);
+    VAR
+      VssDatabase@1002 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E4-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+      VssItem@1003 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E3-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+    BEGIN
+      OpenDatabase(VssDatabase);
+      VssItem := VssDatabase.VSSItem('$\' + Path + FileName);
+      VssItem.Destroy;
+      CloseDatabase(VssDatabase);
+    END;
+
+    PROCEDURE FileRename@6(FromPath@1000 : Text;FromFileName@1001 : Text;ToPath@1002 : Text;ToFileName@1003 : Text);
+    VAR
+      FileHandler@1004 : Codeunit 11102097;
+      VssDatabase@1005 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E4-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+      VssItem@1006 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E3-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+    BEGIN
+      OpenDatabase(VssDatabase);
+
+      VssItem := VssDatabase.VSSItem('$\' + FromPath + FromFileName);
+      VssItem.Checkout('', FileHandler.TempDirectory + ToFileName, 1 + 2097152);
+      VssItem.Destroy;
+
+      VssItem := VssDatabase.VSSItem('$\' + ToPath);
+      VssItem.Add(FileHandler.TempDirectory + ToFileName, '', 1 + 2097152);
+
+      CloseDatabase(VssDatabase);
+
+      ERASE(FileHandler.TempDirectory + ToFileName);
+    END;
+
+    PROCEDURE FileLock@7(Path@1000 : Text;FileName@1001 : Text);
+    VAR
+      FileHandler@1002 : Codeunit 11102097;
+      VssDatabase@1003 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E4-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+      VssItem@1004 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E3-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+    BEGIN
+      EXIT;
+      OpenDatabase(VssDatabase);
+
+      VssItem := VssDatabase.VSSItem('$\' + Path + FileName);
+      VssItem.Checkout('', FileHandler.TempDirectory + FileName, 1 + 2097152);
+      CloseDatabase(VssDatabase);
+
+      ERASE(FileHandler.TempDirectory + FileName);
+    END;
+
+    PROCEDURE FileUnlock@8(Path@1000 : Text;FileName@1001 : Text);
+    VAR
+      VssDatabase@1002 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E4-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+      VssItem@1003 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E3-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+    BEGIN
+      EXIT;
+      OpenDatabase(VssDatabase);
+
+      IF FileIsLocked(Path, FileName) THEN BEGIN
+        VssItem := VssDatabase.VSSItem('$\' + Path + FileName);
+        VssItem.UndoCheckout;
+      END;
+
+      CloseDatabase(VssDatabase);
+    END;
+
+    PROCEDURE FileIsLocked@9(Path@1000 : Text;FileName@1001 : Text) ExitValue : Boolean;
+    VAR
+      VssDatabase@1002 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E4-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+      VssItem@1003 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E3-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+    BEGIN
+      OpenDatabase(VssDatabase);
+
+      IF FileExists(Path, FileName) THEN BEGIN
+        VssItem := VssDatabase.VSSItem('$\' + Path + FileName);
+        ExitValue := VssItem.IsCheckedOut <> 0;
+      END;
+
+      CloseDatabase(VssDatabase);
+    END;
+
+    PROCEDURE FileLockedBy@10(Path@1000 : Text;FileName@1001 : Text;VAR LockedBy@1002 : Text;VAR LockDate@1003 : Date;VAR LockTime@1004 : Time);
+    VAR
+      VssCheckout@1005 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{2A0DE0E0-2E9F-11D0-9236-00AA00A1EB95}:Unknown Automation Server.Unknown Class";
+      VssDatabase@1006 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E4-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+      VssItem@1007 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E3-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+      DateTime@1008 : DateTime;
+    BEGIN
+      OpenDatabase(VssDatabase);
+
+      VssItem := VssDatabase.VSSItem('$\' + Path + FileName);
+      VssCheckout := VssItem.Checkouts.Item(1);
+
+      LockedBy := UPPERCASE(VssCheckout.Username);
+
+      LockDate := 0D;
+      LockTime := 0T;
+
+      IF EVALUATE(DateTime, FORMAT(VssCheckout.Date)) THEN BEGIN
+        LockDate := DT2DATE(DateTime);
+        LockTime := DT2TIME(DateTime);
+        IF LockTime = 000000T THEN
+          LockTime := 0T;
+      END;
+
+      CloseDatabase(VssDatabase);
+    END;
+
+    PROCEDURE FillFileRec@11(VAR TmpFileRec@1000 : TEMPORARY Record 11102094;Path@1001 : Text);
+    VAR
+      Parent@1002 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E3-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+      VssDatabase@1003 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E4-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class";
+      i@1004 : Integer;
+    BEGIN
+      TmpFileRec.RESET;
+      TmpFileRec.DELETEALL;
+
+      OpenDatabase(VssDatabase);
+
+      Parent := VssDatabase.VSSItem('$\' + Path);
+      FOR i := 1 TO Parent.Items(FALSE).Count DO BEGIN
+        TmpFileRec."Is a File" := FORMAT(Parent.Items(FALSE).Item(i).Type) = '1';
+        TmpFileRec.Name := Parent.Items(FALSE).Item(i).Name;
+        TmpFileRec.INSERT;
+      END;
+
+      CloseDatabase(VssDatabase);
+    END;
+
+    LOCAL PROCEDURE OpenDatabase@12(VAR VssDatabase@1000 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E4-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class");
+    VAR
+      RepositorySetup@1001 : Record 11102085;
+    BEGIN
+      IF ISCLEAR(VssDatabase) THEN
+        CREATE(VssDatabase, FALSE, TRUE);
+
+      RepositorySetup.GET;
+      RepositorySetup.TESTFIELD("VSS IniFile");
+
+      VssDatabase.Open(RepositorySetup."VSS IniFile", RepositorySetup.Username, RepositorySetup.Password);
+    END;
+
+    LOCAL PROCEDURE CloseDatabase@13(VAR VssDatabase@1000 : Automation "{783CD4E0-9D54-11CF-B8EE-00608CC9A71F} 5.2:{783CD4E4-9D54-11CF-B8EE-00608CC9A71F}:Unknown Automation Server.Unknown Class");
+    BEGIN
+      CLEAR(VssDatabase);
+    END;
+
+    PROCEDURE GetLastTokenNo@14() : Integer;
+    BEGIN
+      EXIT(LastTokenNo);
+    END;
+
+    LOCAL PROCEDURE DeleteReadOnlyAttribute@15(PathFileName@1000 : Text);
+    VAR
+      ScriptControl@1001 : Automation "{0E59F1D2-1FBE-11D0-8FF2-00A0D10038BC} 1.0:{0E59F1D5-1FBE-11D0-8FF2-00A0D10038BC}:'Microsoft Script Control 1.0'.ScriptControl";
+    BEGIN
+      IF ISCLEAR(ScriptControl) THEN
+        CREATE(ScriptControl, FALSE, TRUE);
+      ScriptControl.Language('VBScript');
+
+      ScriptControl.AddCode('Set oFSO = CreateObject("Scripting.FileSystemObject")');
+      ScriptControl.AddCode('Set oFile = oFSO.GetFile("' + PathFileName + '")');
+      ScriptControl.AddCode('oFile.Attributes = 0');
+      ScriptControl.ExecuteStatement('');
+      CLEAR(ScriptControl);
+    END;
+
+    BEGIN
+    {
+      Automation
+
+      Name: Microsoft SourceSafe 8.0 Type Library
+      GUID: 783CD4E0-9D54-11CF-B8EE-00608CC9A71F
+      Version: 5.2
+      TypeLibFile: C:\Program Files\Microsoft Visual SourceSafe\ssapi.dll
+    }
+    END.
+  }
+}
+

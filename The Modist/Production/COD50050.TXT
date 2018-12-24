@@ -1,0 +1,629 @@
+OBJECT Codeunit 50050 3PL GRN Import XML V2
+{
+  OBJECT-PROPERTIES
+  {
+    Date=17/12/18;
+    Time=[ 7:14:47 PM];
+    Modified=Yes;
+    Version List=TM0002,TM0004,TM3017;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            // IF COMPANYNAME = 'The Modist Fashion Trading LLC' THEN BEGIN
+            //  ModistEvents.RUN;
+            //  COMMIT;
+            // END;
+
+            FZWarehouseReceiptHeader.RESET;
+            FZWarehouseReceiptHeader.CHANGECOMPANY('The Modist FZ LLC');
+
+            GetModistSetup;
+            IntegrationProcessingGroup.GET(ModistSetup."3PL Integration Type",ModistSetup."3PL GRN Group");
+            IntegrationProcessingGroup.TESTFIELD("Working Location");
+            IntegrationProcessingGroup.TESTFIELD("Archive Location");
+            ArchLocation := IntegrationProcessingGroup."Archive Location";
+            ClearErrorLogs;
+            IF IntegrationProcessingGroup."Enable SFTP Connect" THEN
+              DownloadftpFiles(IntegrationProcessingGroup);
+            ProcessFTPFiles;
+            MoveSuccessFileToArchLocation;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ModistSetup@1000000000 : Record 50000;
+      IntegrationProcessingGroup@1000000001 : Record 50007;
+      TmpWarehouseReceiptHeader@1000000004 : TEMPORARY Record 7316;
+      TmpWarehouseReceiptLine@1000000003 : TEMPORARY Record 7317;
+      WarehouseReceiptHeader@1000000005 : Record 7316;
+      WarehouseReceiptLine@1000000006 : Record 7317;
+      FZWarehouseReceiptHeader@1000110014 : Record 7316;
+      gSalesHeader@1000000007 : Record 36;
+      gPurchaseHeader@1000000008 : Record 38;
+      NotificationEntry@1000000014 : Record 1511;
+      IntegrationErrorLog@1000223015 : Record 50011;
+      IntegrationProcessQueue@1033000017 : Record 50004;
+      SalesPayments@1000000019 : Record 50008;
+      WhsePostReceipt@1000000009 : Codeunit 5760;
+      SalesPost@1000000010 : Codeunit 80;
+      FileManagement@1000000011 : Codeunit 419;
+      PaymentMgmtV2@1000000020 : Codeunit 50043;
+      ModistEvents@1000000017 : Codeunit 50002;
+      IntegrationProcessProcessor@1000000021 : Codeunit 50005;
+      FileSystem@1000000023 : Codeunit 9062264;
+      SuccessList@1000000012 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      FZList@1000000025 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      PostedDocument@1000000016 : Variant;
+      RRef@1000000018 : RecordRef;
+      SuccessFile@1000000013 : Text;
+      FZFileName@1000000026 : Text;
+      ArchLocation@1000000024 : Text;
+      ModistSetupOK@1000000002 : Boolean;
+      Text000@1000000022 : TextConst 'ENU=Sales Payments not found for Order No. %1';
+      FZFile@1000000015 : Boolean;
+
+    LOCAL PROCEDURE ProcessFTPFiles@1000000001();
+    VAR
+      lFile@1000000000 : Record 2000000022;
+    BEGIN
+      CLEARLASTERROR;
+      SuccessList := SuccessList.List;
+      FZList := FZList.List;
+      lFile.SETRANGE(Path,IntegrationProcessingGroup."Working Location");
+      lFile.SETRANGE("Is a file",TRUE);
+      lFile.SETFILTER(Name,'%1','*.xml');
+      IF lFile.FINDSET THEN BEGIN
+        ClearErrorLogs;
+        REPEAT
+          FZFile := FALSE;
+          IF NOT ImportXMLFiles(IntegrationProcessingGroup."Working Location" + lFile.Name,lFile.Name) THEN
+            LogError(GETLASTERRORTEXT,'Import XML File',GETLASTERRORCODE,lFile.Name)
+          ELSE BEGIN
+            IF NOT FZFile THEN
+              SuccessList.Add(IntegrationProcessingGroup."Working Location" + lFile.Name)
+            ELSE
+              FZList.Add(IntegrationProcessingGroup."Working Location" + lFile.Name);
+          END;
+        UNTIL lFile.NEXT=0;
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ImportXMLFiles@1000000000(pFilePath@1000000001 : Text;pFileName@1000000000 : Text);
+    VAR
+      lReader@1000000005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlTextReader";
+      lReaderName@1000000004 : Text;
+      lReaderValue@1000000003 : Text;
+      lNodeTypeTxt@1000000002 : Text;
+    BEGIN
+      CLEARLASTERROR;
+      TmpWarehouseReceiptHeader.RESET;
+      TmpWarehouseReceiptHeader.DELETEALL;
+      TmpWarehouseReceiptLine.RESET;
+      TmpWarehouseReceiptLine.DELETEALL;
+
+      lReader := lReader.Create(pFilePath);
+      WHILE lReader.Read DO BEGIN
+        lNodeTypeTxt := FORMAT(lReader.NodeType);
+        CASE lNodeTypeTxt OF
+          'Element':
+            BEGIN
+              lReaderName := lReader.Name;
+              CASE lReaderName OF
+                'ReceiptConfirmation':
+                  BEGIN
+                    TmpWarehouseReceiptLine.INIT;
+                    TmpWarehouseReceiptHeader.INIT;
+                    TmpWarehouseReceiptHeader."File Name" := pFileName;
+                  END;
+              END;
+            END;
+          'Text':
+            BEGIN
+              lReaderValue := lReader.Value;
+              CASE lReaderName OF
+                'ASNNo': //Document No.
+                  BEGIN
+                    TmpWarehouseReceiptLine."Source No." := lReaderValue;
+                    SalesReturnOrPurchase(TmpWarehouseReceiptLine);
+                  END;
+                'ASNRef': //Warehouse Receipt No.
+                  BEGIN
+                    TmpWarehouseReceiptHeader."No." := lReaderValue;
+                    TmpWarehouseReceiptLine."No." := lReaderValue;
+                  END;
+                'ShipmentNo':
+                  BEGIN
+                    TmpWarehouseReceiptHeader."Vendor Shipment No." := lReaderValue;
+                  END;
+                'AirwayBillNumber':
+                  BEGIN
+                    TmpWarehouseReceiptHeader."Airway Bill No." := lReaderValue;
+                    TmpWarehouseReceiptLine."Airway Bill No." := lReaderValue;
+                  END;
+                'ASNLineNo':
+                  BEGIN
+                    EVALUATE(TmpWarehouseReceiptLine."Line No.",lReaderValue);
+                  END;
+                'SKUNumber':
+                  BEGIN
+                    GetItemVariantFromSKU(lReaderValue,TmpWarehouseReceiptLine."Item No.",TmpWarehouseReceiptLine."Variant Code");
+                  END;
+                'LocationCode':
+                  BEGIN
+                    TmpWarehouseReceiptLine."Location Code" := lReaderValue;
+                  END;
+                'Quantity':
+                  BEGIN
+                    EVALUATE(TmpWarehouseReceiptLine."Qty. to Receive",lReaderValue);
+                  END;
+              END;
+            END;
+          'EndElement':
+            BEGIN
+              lReaderName := lReader.Name;
+              CASE lReaderName OF
+                'ReceiptConfirmation':
+                  BEGIN
+                    TmpWarehouseReceiptHeader.INSERT;
+                    TmpWarehouseReceiptHeader.INIT;
+                  END;
+                'ReceiptConfirmationLine':
+                  BEGIN
+                    TmpWarehouseReceiptLine.INSERT;
+                    TmpWarehouseReceiptLine.INIT;
+                  END;
+              END;
+            END;
+        END;
+      END;
+      ProcessTmpWarehouseReceipt;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ProcessTmpWarehouseReceipt@1000000010();
+    VAR
+      lText000@1000000000 : TextConst 'ENU=WMS Received Incorrect Item aganist, Please contact System Administrator.';
+      lText001@1000000001 : TextConst 'ENU=WMS Received Item %1 in Incorrect Location, Please contact System Administrator.';
+      lSalesline@1000000003 : Record 37;
+      lSalesLine2@1000000004 : Record 37;
+      lSalesHeader@1000000005 : Record 36;
+      lSalesHeader2@1000000013 : Record 36;
+      lPurchaseHeader@1000000010 : Record 38;
+      lPurchaseLine@1000000011 : Record 39;
+      lWarehouseReceiptLine@1000000006 : Record 7317;
+      lPostedWhseReceiptHeader@1000000008 : Record 7318;
+      lPostedWhseReceiptLine@1000000014 : Record 7319;
+      lFZWarehouseReceiptHeader@1000000015 : Record 7316;
+      lItem@1000000017 : Record 27;
+      lPartiallyReceived@1000000002 : Boolean;
+      lText002@1000000007 : TextConst 'ENU=Incorrect Item No. or Variant Code and Line No. mapping from WMS and NAV for %4 %1-%2 Line No. %3, Please contact System Administrator.';
+      lText003@1000000009 : TextConst 'ENU=Warehouse Receipt %1 for %2 cannot be found.';
+      lText004@1000000012 : TextConst 'ENU=%1 %2 %3 cannot be found, it might be deleted after sending ASN to WMS, Please contact System Administrator.';
+      lText005@1000000016 : TextConst 'ENU=Warehouse Receipt No. %1 is already posted.';
+    BEGIN
+      lPartiallyReceived := FALSE;
+      FZFile := FALSE;
+      ArchLocation := IntegrationProcessingGroup."Archive Location";
+
+      WITH TmpWarehouseReceiptHeader DO BEGIN
+        RESET;
+        IF FINDSET THEN BEGIN
+          REPEAT
+            FZFile := FALSE;
+            lPartiallyReceived := FALSE;
+            IF WarehouseReceiptHeader.GET("No.") THEN BEGIN
+              //IF WarehouseReceiptHeader."Document Status" <> WarehouseReceiptHeader."Document Status"::"Partially Received" THEN BEGIN
+                WarehouseReceiptHeader.VALIDATE("Vendor Shipment No.","Vendor Shipment No.");
+                WarehouseReceiptHeader.VALIDATE("Airway Bill No.","Airway Bill No.");
+                WarehouseReceiptHeader.VALIDATE("Posting Date",TODAY);
+                WarehouseReceiptHeader.VALIDATE("File Name","File Name");
+                WarehouseReceiptLine.RESET;
+                WarehouseReceiptLine.SETRANGE("No.","No.");
+                IF WarehouseReceiptLine.FINDSET(TRUE,FALSE) THEN BEGIN
+                  REPEAT
+                    lItem.GET(WarehouseReceiptLine."Item No.");
+                    WarehouseReceiptLine."Item No." := lItem."No."; //Handle Special Character Error.
+                    IF TmpWarehouseReceiptLine.GET("No.",WarehouseReceiptLine."Line No.") THEN BEGIN
+                      IF (TmpWarehouseReceiptLine."Item No." <> WarehouseReceiptLine."Item No.") OR
+                         (TmpWarehouseReceiptLine."Variant Code" <> WarehouseReceiptLine."Variant Code")
+                      THEN
+                        ERROR(lText002,WarehouseReceiptLine."Item No.",WarehouseReceiptLine."Variant Code",WarehouseReceiptLine."Line No.",WarehouseReceiptLine."Source No.");
+                      IF (WarehouseReceiptLine.Quantity <> TmpWarehouseReceiptLine."Qty. to Receive") OR
+                         (WarehouseReceiptLine."Qty. to Receive" <> TmpWarehouseReceiptLine."Qty. to Receive")
+                      THEN BEGIN
+                        IF WarehouseReceiptLine."Source Document" = WarehouseReceiptLine."Source Document"::"Sales Return Order" THEN BEGIN
+                          WarehouseReceiptLine.VALIDATE(Quantity,TmpWarehouseReceiptLine."Qty. to Receive");
+                          WarehouseReceiptLine.VALIDATE("Qty. to Receive",TmpWarehouseReceiptLine."Qty. to Receive");
+                        END ELSE IF WarehouseReceiptLine."Source Document" = WarehouseReceiptLine."Source Document"::"Purchase Order" THEN BEGIN
+                          //IF WarehouseReceiptLine."Qty. Received" = 0 THEN //If no error happened in the file previously.
+                            WarehouseReceiptLine.VALIDATE("Qty. to Receive",TmpWarehouseReceiptLine."Qty. to Receive")
+                          //ELSE //Means if same WR posted before don't post again
+                            //WarehouseReceiptLine.VALIDATE("Qty. to Receive",0);
+                        END;
+                        WarehouseReceiptLine.MODIFY(TRUE);
+                        lPartiallyReceived := TRUE;
+                      END;
+                      //Below logic for only Sales Returns, does not apply for Purchase Orders
+                      CASE WarehouseReceiptLine."Source Type" OF
+                        DATABASE::"Sales Line":
+                          BEGIN
+                            IF lSalesline.GET(lSalesline."Document Type"::"Return Order",WarehouseReceiptLine."Source No.",WarehouseReceiptLine."Source Line No.") THEN BEGIN
+                              IF (lSalesHeader."No." <> lSalesline."Document No.") OR (lSalesHeader."Document Type" <> lSalesline."Document Type") THEN BEGIN
+                                lSalesHeader.GET(lSalesline."Document Type",lSalesline."Document No.");
+                                lSalesHeader.SetHideValidationDialog(TRUE);
+                                lSalesHeader.VALIDATE("Posting Date",TODAY); //Should be <ReceiptDate> Element when GAC adds it
+                                lSalesHeader.MODIFY;
+                              END;
+                              IF lSalesline.Quantity > TmpWarehouseReceiptLine."Qty. to Receive" THEN BEGIN
+                                lSalesline.SuspendStatusCheck(TRUE);
+                                lSalesline.SuspendWarehouseQtyCheck(TRUE);
+                                lSalesline.VALIDATE(Quantity,TmpWarehouseReceiptLine."Qty. to Receive");
+                                lSalesline.VALIDATE("Return Qty. to Receive",TmpWarehouseReceiptLine."Qty. to Receive");
+                                lSalesline.MODIFY(TRUE);
+                              END;
+                            END ELSE
+                              ERROR(lText004,lSalesline.TABLENAME,WarehouseReceiptLine."Source No.",WarehouseReceiptLine."Source Line No.");
+                          END;
+                        DATABASE::"Purchase Line":
+                          BEGIN
+                            //For Purchase Receipts, Warehouse Receipt and Purchase Order Quantities should not be changed
+                            lPostedWhseReceiptHeader.RESET; //If order was among other failed order files, don't post again.
+                            lPostedWhseReceiptHeader.SETCURRENTKEY("Whse. Receipt No.");
+                            lPostedWhseReceiptHeader.SETRANGE("Whse. Receipt No.",WarehouseReceiptLine."No.");
+                            IF lPostedWhseReceiptHeader.ISEMPTY THEN BEGIN
+                              IF (lPurchaseHeader."No." <> WarehouseReceiptLine."Source No.") THEN BEGIN
+                                lPurchaseHeader.GET(lPurchaseHeader."Document Type"::Order,WarehouseReceiptLine."Source No.");
+                                lPurchaseHeader.SetHideValidationDialog(TRUE);
+                                lPurchaseHeader.VALIDATE("Posting Date",TODAY); //Should be <ReceiptDate> Element when GAC adds it
+                                lPurchaseHeader.MODIFY;
+                              END;
+                            END;
+                          END;
+                      END;
+                    END ELSE BEGIN
+                      //Below logic for only Sales Returns, does not apply for Purchase Orders
+                      CASE WarehouseReceiptLine."Source Type" OF
+                        DATABASE::"Sales Line":
+                          BEGIN
+                            lWarehouseReceiptLine := WarehouseReceiptLine;
+                            lWarehouseReceiptLine.DELETE;
+                            IF NOT lPartiallyReceived THEN
+                              lPartiallyReceived := TRUE;
+                            IF lSalesline.GET(lSalesline."Document Type"::"Return Order",WarehouseReceiptLine."Source No.",WarehouseReceiptLine."Source Line No.") THEN BEGIN
+                              lSalesLine2.RESET;
+                              lSalesLine2.SETRANGE("Document Type",lSalesline."Document Type");
+                              lSalesLine2.SETRANGE("Document No.",lSalesline."Document No.");
+                              lSalesLine2.SETRANGE("Main Line No.",lSalesline."Line No.");
+                              lSalesLine2.SETFILTER("Line No.",'<>%1',lSalesline."Line No.");
+                              IF lSalesLine2.FINDSET THEN BEGIN
+                                REPEAT
+                                  lSalesLine2.SuspendStatusCheck(TRUE);
+                                  IF NOT lSalesLine2.ISEMPTY THEN
+                                    lSalesLine2.DELETE(TRUE);
+                                UNTIL lSalesLine2.NEXT=0;
+                              END;
+                              lSalesline.SuspendStatusCheck(TRUE);
+                              lSalesline.DELETE(TRUE);
+                            END;
+                          END;
+                        DATABASE::"Purchase Line":
+                          BEGIN
+                            WarehouseReceiptLine.VALIDATE("Qty. to Receive",0);
+                            WarehouseReceiptLine.MODIFY(TRUE);
+                            lPartiallyReceived := TRUE;
+                          END;
+                      END;
+                    END;
+                  UNTIL WarehouseReceiptLine.NEXT=0;
+                END;
+                //IF lPartiallyReceived THEN
+                  //WarehouseReceiptHeader."Document Status" := WarehouseReceiptHeader."Document Status"::"Partially Received";
+                //ELSE
+                  //WarehouseReceiptHeader."Document Status" := WarehouseReceiptHeader."Document Status"::"Completely Received";
+                CLEARLASTERROR;
+                WarehouseReceiptHeader.MODIFY(TRUE);
+                IF NOT PostWarehouseReceipt(WarehouseReceiptLine) THEN
+                  ERROR('Error Posting WHse Receipt: %1',GETLASTERRORTEXT);
+                PostOrder;
+              //END;
+            END ELSE BEGIN //If Warehouse Receipt does not exist, check if it is posted, or in FZ
+              FZWarehouseReceiptHeader.SETRANGE("No.","No.");
+              IF NOT FZWarehouseReceiptHeader.ISEMPTY THEN BEGIN
+                IF COMPANYNAME <> 'The Modist FZ LLC' THEN
+                  //ArchLocation := IntegrationProcessingGroup."Error Location";
+                  FZFile := TRUE;
+              END ELSE BEGIN
+                lPostedWhseReceiptHeader.RESET;
+                lPostedWhseReceiptHeader.SETCURRENTKEY("Whse. Receipt No.");
+                lPostedWhseReceiptHeader.SETRANGE("Whse. Receipt No.","No.");
+                IF NOT lPostedWhseReceiptHeader.FINDFIRST THEN
+                  ERROR(lText003,"No.",WarehouseReceiptLine."Source No.")
+                ELSE BEGIN
+                  //If the Warehouse Receipt is posted, but Order exist
+                  lPostedWhseReceiptLine.RESET;
+                  lPostedWhseReceiptLine.SETRANGE("No.",lPostedWhseReceiptHeader."No.");
+                  lPostedWhseReceiptLine.FINDFIRST;
+                  CASE lPostedWhseReceiptLine."Source Document" OF
+                    lPostedWhseReceiptLine."Source Document"::"Sales Return Order":
+                      BEGIN
+                        IF lSalesHeader2.GET(lSalesHeader."Document Type"::"Return Order",lPostedWhseReceiptLine."Source No.") THEN BEGIN
+                          CLEAR(gSalesHeader);
+                          gSalesHeader := lSalesHeader2;
+                          PostOrder;
+                        END ELSE BEGIN
+                          //ERROR(lText005,"No.");
+                        END;
+                      END;
+                  END;
+                END;
+              END;
+            END;
+          UNTIL NEXT=0;
+        END;
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE PostWarehouseReceipt@1000000011(pWarehouseReceiptLine@1000000000 : Record 7317);
+    BEGIN
+
+      CLEAR(WhsePostReceipt);
+      CLEAR(gSalesHeader);
+      CLEAR(gPurchaseHeader);
+
+      WhsePostReceipt.RUN(pWarehouseReceiptLine);
+      WhsePostReceipt.SelectLatestOrdersVersion(gSalesHeader,gPurchaseHeader);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE PostOrder@1000000007();
+    BEGIN
+
+      IF gSalesHeader."No." <> '' THEN BEGIN
+        gSalesHeader.Ship := TRUE;
+        gSalesHeader.Invoice := TRUE;
+        gSalesHeader.MODIFY;
+        CLEAR(SalesPost);
+        SalesPost.RUN(gSalesHeader);
+        EXIT;
+      END;
+
+      //Purchase Order will be posted automatically by standard functions - When WR is posted.
+    END;
+
+    LOCAL PROCEDURE DownloadftpFiles@1000000002(VAR IntegrationProcGroup@1000000001 : Record 50007);
+    VAR
+      WebIntegrationManagement@1000000000 : Codeunit 50100;
+    BEGIN
+      GetModistSetup;
+      IF NOT WebIntegrationManagement.DownloadftpFiles(IntegrationProcGroup."Working Location",ModistSetup."Demandware Import SFTP Server",IntegrationProcGroup."FTP Folder") THEN
+        ERROR(GETLASTERRORTEXT);
+    END;
+
+    LOCAL PROCEDURE GetModistSetup@1000000003();
+    BEGIN
+      IF NOT ModistSetupOK THEN BEGIN
+        ModistSetup.GET;
+        ModistSetupOK := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetItemVariantFromSKU@1000000004(pSKU@1000000004 : Text;VAR pItemNo@1000000005 : Code[20];VAR pVariantCode@1000000006 : Code[20]);
+    VAR
+      lChar@1000000003 : Code[1];
+      lCharPosition@1000000002 : Integer;
+    BEGIN
+      IF pSKU = '' THEN
+        EXIT;
+      lChar := '-';
+      lCharPosition := STRPOS(pSKU,lChar);
+      IF lCharPosition <> 0 THEN BEGIN
+        pItemNo := COPYSTR(pSKU,1,lCharPosition - 1);
+        pVariantCode := COPYSTR(pSKU,lCharPosition + 1);
+      END ELSE
+        pItemNo := pSKU;
+    END;
+
+    LOCAL PROCEDURE SalesReturnOrPurchase@1000000030(VAR pWarehouseReceiptLine@1000000000 : Record 7317);
+    VAR
+      lPurchaseHeader@1000000001 : Record 38;
+      lSalesHeader@1000000002 : Record 36;
+    BEGIN
+      IF lSalesHeader.GET(lSalesHeader."Document Type"::"Return Order",pWarehouseReceiptLine."Source No.") THEN BEGIN
+        pWarehouseReceiptLine."Source Type" := pWarehouseReceiptLine."Source Document"::"Sales Return Order";
+        EXIT;
+      END;
+      IF lPurchaseHeader.GET(lPurchaseHeader."Document Type"::"Return Order",pWarehouseReceiptLine."Source No.") THEN BEGIN
+        pWarehouseReceiptLine."Source Type" := pWarehouseReceiptLine."Source Document"::"Purchase Order";
+        EXIT;
+      END;
+    END;
+
+    LOCAL PROCEDURE MoveSuccessFileToArchLocation@1000000017();
+    BEGIN
+      GetModistSetup;
+
+      FOREACH SuccessFile IN SuccessList DO BEGIN
+        IF SuccessFile <> '' THEN BEGIN
+          //FileManagement.MoveFile(SuccessFile,IntegrationProcessingGroup."Archive Location" + FileManagement.GetFileName(SuccessFile));
+          //FileManagement.MoveFile(SuccessFile,lWhichLocation + FileManagement.GetFileName(SuccessFile));
+          FileSystem.MoveFile(FALSE,SuccessFile,IntegrationProcessingGroup."Archive Location" + FileManagement.GetFileName(SuccessFile));
+        END;
+      END;
+
+      FOREACH FZFileName IN FZList DO BEGIN
+        IF FZFileName <> '' THEN BEGIN
+          //FileManagement.MoveFile(SuccessFile,IntegrationProcessingGroup."Archive Location" + FileManagement.GetFileName(SuccessFile));
+          //FileManagement.MoveFile(SuccessFile,lWhichLocation + FileManagement.GetFileName(SuccessFile));
+          FileSystem.MoveFile(FALSE,FZFileName,IntegrationProcessingGroup."Error Location" + FileManagement.GetFileName(FZFileName));
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE AddSalesReturnNotificationEntry@1000000005(pPostedDocument@1000000000 : Variant);
+    BEGIN
+      NotificationEntry.INIT;
+      NotificationEntry.CreateNew(0,
+                                  'AMR.WAFA',
+                                  pPostedDocument,
+                                  0,
+                                  '');
+      NotificationEntry.INIT;
+      NotificationEntry.CreateNew(0,
+                                  'RED.BAMBA',
+                                  pPostedDocument,
+                                  0,
+                                  '');
+      NotificationEntry.INIT;
+      NotificationEntry.CreateNew(0,
+                                  'DANA.NASIR',
+                                  pPostedDocument,
+                                  0,
+                                  '');
+      NotificationEntry.INIT;
+      NotificationEntry.CreateNew(0,
+                                  'EMAN.YASSIN',
+                                  pPostedDocument,
+                                  0,
+                                  '');
+      NotificationEntry.INIT;
+      NotificationEntry.CreateNew(0,
+                                  'SNEHA.GOHRANI',
+                                  pPostedDocument,
+                                  0,
+                                  '');
+    END;
+
+    LOCAL PROCEDURE AddOrderUpdate@1000000008();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE LogError@1000000015(ErrMessage@1000000002 : Text;ErrorLocation@1000000004 : Text;ErrCode@1000000005 : Text;Filename@1000000001 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+    BEGIN
+      //This function facilitates the logging of an error in the error log table by deriving the default values
+      //and applying the variable values
+      GetModistSetup;
+      ErrorHandler.LogError(ModistSetup."3PL Integration Type",
+                            ModistSetup."3PL GRN Group",
+                            '',
+                            0,
+                            '',
+                            0,
+                            ErrMessage,
+                            ErrorLocation,
+                            0,
+                            ErrCode,
+                            Filename);
+    END;
+
+    LOCAL PROCEDURE ClearErrorLogs@1000000006();
+    BEGIN
+      IntegrationErrorLog.RESET;
+      IntegrationErrorLog.SETCURRENTKEY("Integration Type","Integration Process Group");
+      IntegrationErrorLog.SETRANGE("Integration Type",IntegrationProcessingGroup."Platform Code");
+      IntegrationErrorLog.SETRANGE("Integration Process Group",IntegrationProcessingGroup.Code);
+      IF NOT IntegrationErrorLog.ISEMPTY THEN BEGIN
+        IntegrationErrorLog.DELETEALL;
+        COMMIT;
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,80,OnAfterPostSalesDoc,"",Skip,Skip)]
+    [TryFunction]
+    LOCAL PROCEDURE RefundPayment_OnAfterPostSalesDoc@1000000013(VAR SalesHeader@1000000000 : Record 36;VAR GenJnlPostLine@1000000001 : Codeunit 12;SalesShptHdrNo@1000000002 : Code[20];RetRcpHdrNo@1000000003 : Code[20];SalesInvHdrNo@1000000004 : Code[20];SalesCrMemoHdrNo@1000000005 : Code[20]);
+    VAR
+      lSalesCrMemoHeader@1000000006 : Record 114;
+      lSalesCrMemoLine@1000000007 : Record 115;
+      SalesSetupL@1170000000 : Record 311;
+    BEGIN
+      IF SalesCrMemoHdrNo = '' THEN
+        EXIT;
+
+      lSalesCrMemoHeader.GET(SalesCrMemoHdrNo);
+
+      IF lSalesCrMemoHeader."Origianl Order No." = '' THEN
+        EXIT;
+
+      //DOC TM3017 ST 05/08/18 -
+      SalesSetupL.GET;
+      IF lSalesCrMemoHeader."Reason Code" IN [SalesSetupL."SRO Good Will Reason Code", SalesSetupL."SRO Tax Reason Code"] THEN
+        EXIT;
+      //DOC TM3017 ST 05/08/18 +
+
+      AddReturnStatusUpdateToDW(lSalesCrMemoHeader);
+      AddSalesReturnNotificationEntry(lSalesCrMemoHeader);
+
+      IF lSalesCrMemoHeader."Exahange Order" THEN
+        EXIT;
+
+      lSalesCrMemoHeader.CALCFIELDS("Amount Including VAT");
+
+      SalesPayments.RESET;
+      SalesPayments.SETRANGE("Order Guid",lSalesCrMemoHeader."Order GuID");
+      SalesPayments.SETFILTER("Payment Type",'%1|%2',SalesPayments."Payment Type"::CreditCard,SalesPayments."Payment Type"::PayPal);
+      IF NOT SalesPayments.FINDFIRST THEN BEGIN
+        SalesPayments.SETRANGE("Payment Type");
+        IF NOT SalesPayments.FINDFIRST THEN
+          ERROR(Text000,lSalesCrMemoHeader."Internet Order Reference");
+      END;
+
+      IF SalesPayments.ISEMPTY THEN
+        ERROR(Text000,lSalesCrMemoHeader."Internet Order Reference");
+
+      SalesPayments.VALIDATE("Refund Amount",lSalesCrMemoHeader."Amount Including VAT");
+      CLEAR(PaymentMgmtV2);
+      IF PaymentMgmtV2.RefundSalesDoc(SalesPayments,FALSE) THEN
+        AddRefundStatusUpdateToDW(lSalesCrMemoHeader);
+    END;
+
+    LOCAL PROCEDURE AddReturnStatusUpdateToDW@1000000012(pSalesCrMemoHeader@1000000000 : Record 114);
+    BEGIN
+      WITH pSalesCrMemoHeader DO BEGIN
+        IntegrationProcessProcessor.CreateProcessEntry('DMW',
+                                                        'SALESRETRECEIVED',
+                                                        DATABASE::"Sales Cr.Memo Header",
+                                                        "No.",
+                                                        3,
+                                                        '');
+      END;
+    END;
+
+    LOCAL PROCEDURE AddRefundStatusUpdateToDW@1000000019(pSalesCrMemoHeader@1000000000 : Record 114);
+    BEGIN
+      WITH pSalesCrMemoHeader DO BEGIN
+        IntegrationProcessProcessor.CreateProcessEntry('DMW',
+                                                        'SALESRETREFUND',
+                                                        DATABASE::"Sales Cr.Memo Header",
+                                                        "No.",
+                                                        3,
+                                                        '');
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnAfterInsertEvent)]
+    LOCAL PROCEDURE AddNewSalesReturnNotificationEntry_OnAfterInsertEvent@1000000009(VAR Rec@1000000000 : Record 36;RunTrigger@1000000001 : Boolean);
+    BEGIN
+      // WITH Rec DO BEGIN
+      //  IF "Document Type" <> "Document Type"::"Return Order" THEN
+      //    EXIT;
+      //  IF ISTEMPORARY THEN
+      //    EXIT;
+      //  AddSalesReturnNotificationEntry(Rec);
+      // END;
+    END;
+
+    BEGIN
+    {
+      //DOC TM0002 AW 31/01/2018 - Enhanced GRN Import
+      //DOC TM3017 ST 05/08/18 - Code added for creating sales return order.
+    }
+    END.
+  }
+}
+

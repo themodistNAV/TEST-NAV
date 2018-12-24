@@ -1,0 +1,197 @@
+OBJECT Codeunit 9087020 Unavailable Stock Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/09/16;
+    Time=[ 5:25:48 PM];
+    Version List=NS2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      nSembleSetup@1000000002 : Record 9087000;
+      ReservationEntry@1000000001 : Record 337;
+      UnavailableStock@1000000000 : Record 9087037;
+
+    PROCEDURE "--- Synchronisation --"@1000000002();
+    BEGIN
+    END;
+
+    PROCEDURE UnavailableStockToReservationEntry@1000000000(VAR pUnavailableStock@1000000000 : Record 9087037;pActivity@1000000001 : Integer;pSystemActivity@1000000002 : Boolean);
+    BEGIN
+      //DOC NS2015.1 - Synchronising unavailable stock with reservation entry
+      //  <> pUnavailableStock: Unavailable stock record
+      //  -> pActivity: Acctivity
+      //  -> pSystemActivity: System activity flag
+
+      IF (pSystemActivity) THEN
+        EXIT;
+
+      UnavailableStock := pUnavailableStock;
+
+      IF ((pActivity <> nSembleSetup.Activity::Delete) AND (UnavailableStock.Quantity = 0)) THEN
+        pActivity := nSembleSetup.Activity::Delete;
+      IF ((pActivity = nSembleSetup.Activity::Delete) AND (pUnavailableStock."Reservation Entry No." = 0)) THEN
+        pActivity := nSembleSetup.Activity::" ";
+
+      IF (pActivity <> nSembleSetup.Activity::Delete) THEN
+      BEGIN
+        IF (pUnavailableStock."Reservation Entry No." = 0) THEN
+        BEGIN
+          CLEAR(ReservationEntry);
+          ReservationEntry.INIT();
+          ReservationEntry.VALIDATE(Positive, FALSE);
+          ReservationEntry.VALIDATE("Unavailable Stock", TRUE);
+          ReservationEntry.VALIDATE("Creation Date", TODAY());
+          ReservationEntry.VALIDATE("Created By", USERID());
+          ReservationEntry.SetSystemActivity(TRUE);
+          ReservationEntry.INSERT(TRUE);
+          ReservationEntry.SetSystemActivity(FALSE);
+          UnavailableStock.VALIDATE("Reservation Entry No.", ReservationEntry."Entry No.");
+        END
+        ELSE
+        BEGIN
+          ReservationEntry.GET(pUnavailableStock."Reservation Entry No.", FALSE);
+          ReservationEntry.VALIDATE("Changed By", USERID());
+        END;
+        ReservationEntry.VALIDATE("Item No.", UnavailableStock."Item No.");
+        ReservationEntry.VALIDATE("Variant Code", UnavailableStock."Variant Code");
+        ReservationEntry.VALIDATE("Location Code", UnavailableStock."Location Code");
+        ReservationEntry.VALIDATE(Description, UnavailableStock.Remarks);
+        ReservationEntry.VALIDATE("Reason Code", UnavailableStock."Reason Code");
+        ReservationEntry.VALIDATE("Qty. per Unit of Measure", 1);
+        ReservationEntry.VALIDATE(Quantity, UnavailableStock.Quantity);
+        ReservationEntry.VALIDATE("Quantity (Base)", UnavailableStock.Quantity);
+        ReservationEntry.SetSystemActivity(TRUE);
+        ReservationEntry.MODIFY(TRUE);
+        ReservationEntry.SetSystemActivity(FALSE);
+      END
+      ELSE
+        IF (ReservationEntry.GET(pUnavailableStock."Reservation Entry No.", FALSE)) THEN
+        BEGIN
+          ReservationEntry.SetSystemActivity(TRUE);
+          ReservationEntry.DELETE(TRUE);
+          ReservationEntry.SetSystemActivity(FALSE);
+        END;
+
+      pUnavailableStock := UnavailableStock;
+    END;
+
+    PROCEDURE ReservationEntryToUnavailableStock@1000000001(pReservationEntry@1000000000 : Record 337;pActivity@1000000001 : Integer;pSystemActivity@1000000002 : Boolean);
+    BEGIN
+      //DOC NS2015.1 - Synchronising reservation entry with unavailable stock
+      //  -> pReservationEntry: Reservation entry record
+      //  -> pActivity: Acctivity
+      //  -> pSystemActivity: System activity flag
+
+      IF (pSystemActivity) THEN
+        EXIT;
+
+      ReservationEntry := pReservationEntry;
+
+      IF ((ReservationEntry.Positive) OR ( NOT (ReservationEntry."Unavailable Stock") OR (ReservationEntry."Item No." = ''))) THEN
+        pActivity := nSembleSetup.Activity::Delete;
+
+      IF (pActivity <> nSembleSetup.Activity::Delete) THEN
+      BEGIN
+        UnavailableStock.RESET();
+        UnavailableStock.SETCURRENTKEY("Reservation Entry No.");
+        UnavailableStock.SETRANGE("Reservation Entry No.", ReservationEntry."Entry No.");
+        IF ( NOT (UnavailableStock.FINDFIRST())) THEN
+        BEGIN
+          CLEAR(UnavailableStock);
+          UnavailableStock.INIT();
+          UnavailableStock.VALIDATE("Reservation Entry No.", ReservationEntry."Entry No.");
+          UnavailableStock.SetSystemActivity(TRUE);
+          UnavailableStock.INSERT(TRUE);
+          UnavailableStock.SetSystemActivity(FALSE);
+        END;
+        UnavailableStock.VALIDATE("Item No.", ReservationEntry."Item No.");
+        UnavailableStock.VALIDATE("Variant Code", ReservationEntry."Variant Code");
+        UnavailableStock.VALIDATE("Location Code", ReservationEntry."Location Code");
+        UnavailableStock.VALIDATE(Quantity, ReservationEntry."Quantity (Base)");
+        UnavailableStock.VALIDATE("Reason Code", ReservationEntry."Reason Code");
+        UnavailableStock.VALIDATE(Remarks, ReservationEntry.Description);
+        UnavailableStock.SetSystemActivity(TRUE);
+        UnavailableStock.MODIFY(TRUE);
+        UnavailableStock.SetSystemActivity(FALSE);
+      END
+      ELSE
+      BEGIN
+        UnavailableStock.RESET();
+        UnavailableStock.SETCURRENTKEY("Reservation Entry No.");
+        UnavailableStock.SETRANGE("Reservation Entry No.", ReservationEntry."Entry No.");
+        IF (UnavailableStock.FINDFIRST()) THEN
+        BEGIN
+          UnavailableStock.SetSystemActivity(TRUE);
+          UnavailableStock.DELETE(TRUE);
+          UnavailableStock.SetSystemActivity(FALSE);
+        END;
+      END;
+    END;
+
+    PROCEDURE "--- Create / Show ---"@1000000003();
+    BEGIN
+    END;
+
+    PROCEDURE CreateUnavailableStock@1000000004(pDocumentType@1000000004 : Integer;pDocumentNo@1000000003 : Code[20];pDocumentLineNo@1000000005 : Integer;pItemNo@1000000000 : Code[20];pVariantCode@1000000001 : Code[10];pLocationCode@1000000002 : Code[10]);
+    BEGIN
+      //DOC NS2015.1 - Creating unavailable stock entry
+      //  -> pDocumentType: Document type
+      //  -> pDocumentNo: Document no.
+      //  -> pDocumentLineNo: Document line no.
+      //  -> pItemNo: Item no.
+      //  -> pVariantCode: Variant code
+      //  -> pLocationCode: Location code
+
+      UnavailableStock.RESET();
+      UnavailableStock.SETCURRENTKEY("Document Type", "Document No.", "Document Line No.");
+      UnavailableStock.SETRANGE("Document Type", pDocumentType);
+      UnavailableStock.SETRANGE("Document No.", pDocumentNo);
+      UnavailableStock.SETRANGE("Document Line No.", pDocumentLineNo);
+      IF (UnavailableStock.ISEMPTY) THEN
+      BEGIN
+        CLEAR(UnavailableStock);
+        UnavailableStock.VALIDATE("Document Type", pDocumentType);
+        UnavailableStock.VALIDATE("Document No.", pDocumentNo);
+        UnavailableStock.VALIDATE("Document Line No.", pDocumentLineNo);
+        UnavailableStock.VALIDATE("Item No.", pItemNo);
+        UnavailableStock.VALIDATE("Variant Code", pVariantCode);
+        UnavailableStock.VALIDATE("Location Code", pLocationCode);
+        UnavailableStock.INSERT(TRUE);
+        COMMIT;
+      END;
+
+      ShowUnavailableStock(pDocumentType, pDocumentNo, pDocumentLineNo);
+    END;
+
+    PROCEDURE ShowUnavailableStock@1000000005(pDocumentType@1000000001 : Integer;pDocumentNo@1000000000 : Code[20];pDocumentLineNo@1000000002 : Integer);
+    BEGIN
+      //DOC NS2015.1 - Showing unavailable stock entries
+      //  -> pDocumentType: Document type
+      //  -> pDocumentNo: Document no.
+      //  -> pDocumentLineNo: Document line no.
+
+      UnavailableStock.RESET();
+      UnavailableStock.SETCURRENTKEY("Document Type", "Document No.", "Document Line No.");
+      UnavailableStock.SETRANGE("Document Type", pDocumentType);
+      UnavailableStock.SETRANGE("Document No.", pDocumentNo);
+      UnavailableStock.SETRANGE("Document Line No.", pDocumentLineNo);
+
+      PAGE.RUN(0, UnavailableStock);
+    END;
+
+    BEGIN
+    {
+      //DOC NS2015.1 JH 06/02/2014 - Created
+    }
+    END.
+  }
+}
+

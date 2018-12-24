@@ -1,0 +1,1067 @@
+OBJECT Codeunit 9062307 Planning Board Data Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/09/16;
+    Time=12:01:51 PM;
+    Version List=NA2016.16.1;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      PlanningBoardHeader@1000000000 : Record 9062337;
+      PlanningBoardSetup@1000000036 : Record 9062335;
+      PlanningBoardTableStyle@1000000029 : Record 9062342;
+      PlanningBoardTable@1000000007 : Record 9062338;
+      PlanningBoardTableField@1000000012 : Record 9062340;
+      PlanningBoardTableLink@1000000032 : Record 9062339;
+      PlanningBoardTableRelation@1000000041 : Record 9062341;
+      PlanningBoardTableRelationTmp@1000000006 : TEMPORARY Record 9062341;
+      PlanningBoardResourceBuffer@1000000001 : TEMPORARY Record 9062346;
+      PlanningBoardResourceBufferId@1000000003 : Integer;
+      PlanningBoardEntryBuffer@1000000002 : TEMPORARY Record 9062347;
+      PlanningBoardEntryBufferId@1000000004 : Integer;
+      PlanningBoardFilterBuffer@9062230 : TEMPORARY Record 9062352;
+      SystemColour@1000000038 : Record 9062336;
+      CriteriaManagement@1000000005 : Codeunit 9062462;
+      EnhancedFieldManagement@1000000047 : Codeunit 9062298;
+      KeyRefToolkit@1000000008 : Codeunit 9062303;
+      PlanningBoardStyleCaching@1000000022 : Codeunit 9062308;
+      PlanningBoardToolkit@1000000037 : Codeunit 9062301;
+      ReleasePlanningBoard@1000000042 : Codeunit 9062310;
+      TnpToolkit@9062236 : Codeunit 9062230;
+      TableRecordRef@1000000009 : RecordRef;
+      StartDate@1000000039 : Date;
+      EndDate@1000000040 : Date;
+      CurrentTableId@1000000015 : Integer;
+      CurrentPosition@1000000014 : Text;
+      TableLinkFields@1000000031 : Integer;
+      TableLinkResourceFieldRefs@1000000033 : ARRAY [10] OF FieldRef;
+      TableLinkEntryFieldRefs@1000000030 : ARRAY [10] OF FieldRef;
+      ResourceTableId@1000000034 : Integer;
+      ResourceRecordRef@1000000035 : RecordRef;
+      TableCaptionFields@1000000011 : Integer;
+      TableCaptionFieldBuffer@1000000045 : ARRAY [10] OF Codeunit 9062319;
+      StartDateFieldRef@1000000016 : FieldRef;
+      StartTimeFieldRef@1000000018 : FieldRef;
+      EndDateFieldRef@1000000020 : FieldRef;
+      EndTimeFieldRef@1000000021 : FieldRef;
+      SplitDateTimes@1000000019 : Boolean;
+      AllDay@1000000017 : Boolean;
+      ForegroundStyleFieldBuffer@1000000059 : Codeunit 9062319;
+      BackgroundStyleFieldBuffer@1000000025 : Codeunit 9062319;
+      BorderStyleFieldBuffer@1000000023 : Codeunit 9062319;
+      tDefaiultDialogTitle@9062235 : TextConst 'ENU=Processing data...;ENG=Processing data...';
+      PictureFieldBuffer@1000000057 : Codeunit 9062319;
+      DialogTitle@9062231 : Text;
+      DialogWindow@9062232 : Dialog;
+      DialogTime@9062233 : DateTime;
+      DialogOpened@9062234 : Boolean;
+      RelationRecordRef@1000000058 : RecordRef;
+
+    PROCEDURE "--- General ---"@1000000012();
+    BEGIN
+    END;
+
+    PROCEDURE LoadData@1000000000(VAR pPlanningBoardContext@1000000000 : Record 9062349);
+    BEGIN
+      //DOC NA2016.12 - Loading planning board data
+      //  <> pPlanningBoardContext: The planning board context
+
+      PlanningBoardSetup.VerifyAndGet();
+
+      IF (pPlanningBoardContext."Update Type" = pPlanningBoardContext."Update Type"::" ") THEN
+        EXIT;
+
+      CheckExecutePermission(pPlanningBoardContext);
+
+      InitialiseBuffers(pPlanningBoardContext);
+
+      IF (pPlanningBoardContext."Planning Board Code" <> '') THEN
+      BEGIN
+        PlanningBoardHeader.GET(pPlanningBoardContext."Planning Board Code");
+        StartDate := pPlanningBoardContext."Start Date";
+        EndDate := pPlanningBoardContext."End Date";
+        GetFilterBuffer(pPlanningBoardContext);
+        LoadResourceData(pPlanningBoardContext);
+        LoadEntryData(pPlanningBoardContext);
+        RemoveEmptyResources(pPlanningBoardContext);
+      END;
+
+      pPlanningBoardContext.SetResourceBuffer(PlanningBoardResourceBuffer);
+      pPlanningBoardContext.SetEntryBuffer(PlanningBoardEntryBuffer);
+    END;
+
+    LOCAL PROCEDURE LoadResourceData@1000000003(VAR pPlanningBoardContext@9062230 : Record 9062349);
+    VAR
+      lActivity@9062231 : Integer;
+      eDialogTitle@9062232 : TextConst 'ENU=Loading resources...;ENG=Loading resources...';
+    BEGIN
+      //DOC NA2016.12 - Loading resource data
+      //  <> pPlanningBoardContext: The planning board context
+
+      IF ((pPlanningBoardContext."Update Type" = pPlanningBoardContext."Update Type"::Incremental) AND
+          (pPlanningBoardContext."Event Resource Position" = '')) THEN
+        EXIT;
+
+      InitialiseDialog(eDialogTitle);
+
+      InitialiseTable(pPlanningBoardContext, PlanningBoardTable."Table Type"::Resource, pPlanningBoardContext."Event Resource Position");
+      ApplyTableFilters(pPlanningBoardContext);
+      InitialiseForegroundStyling();
+      InitialisePicture();
+      IF (TableRecordRef.FINDSET()) THEN
+      REPEAT
+        UpdateDialog();
+
+        CLEAR(lActivity);
+        IF (pPlanningBoardContext."Update Type" = pPlanningBoardContext."Update Type"::Incremental) THEN
+          lActivity := pPlanningBoardContext."Event Resource Activity"
+        ELSE
+          lActivity := pPlanningBoardContext.Activity::Insert;
+        IF (lActivity = pPlanningBoardContext.Activity::Modify) THEN
+          IF ( NOT (PlanningBoardResourceBuffer.GET(PlanningBoardHeader.Code, pPlanningBoardContext."Event Resource ID"))) THEN
+            lActivity := pPlanningBoardContext.Activity::Insert;
+
+        IF (lActivity = pPlanningBoardContext.Activity::Insert) THEN
+        BEGIN
+          CurrentTableId := TableRecordRef.NUMBER;
+          CurrentPosition := TableRecordRef.GETPOSITION(FALSE);
+          PlanningBoardResourceBufferId += 1;
+          CLEAR(PlanningBoardResourceBuffer);
+          PlanningBoardResourceBuffer."Planning Board Code" := PlanningBoardHeader.Code;
+          PlanningBoardResourceBuffer.ID := PlanningBoardResourceBufferId;
+          PlanningBoardResourceBuffer."Table ID" := CurrentTableId;
+          PlanningBoardResourceBuffer.Position := CurrentPosition;
+        END;
+
+        IF (lActivity IN [pPlanningBoardContext.Activity::Insert, pPlanningBoardContext.Activity::Modify]) THEN
+        BEGIN
+          PositionTableRelations();
+
+          PlanningBoardResourceBuffer.Caption := GetCaption();
+          GetForegroundStyle(PlanningBoardResourceBuffer."Foreground Colour", PlanningBoardResourceBuffer."Foreground Font Size",
+            PlanningBoardResourceBuffer."Foreground Font Style");
+          GetPicture();
+
+          IF (pPlanningBoardContext."Update Type" = pPlanningBoardContext."Update Type"::Incremental) THEN
+            PlanningBoardResourceBuffer."Incremental Activity" := lActivity;
+        END;
+
+        CASE (lActivity) OF
+          pPlanningBoardContext.Activity::Insert:
+            PlanningBoardResourceBuffer.INSERT();
+          pPlanningBoardContext.Activity::Modify:
+            PlanningBoardResourceBuffer.MODIFY();
+        END;
+      UNTIL (TableRecordRef.NEXT() = 0);
+
+      FinaliseTable();
+
+      FinaliseDialog();
+    END;
+
+    LOCAL PROCEDURE LoadEntryData@1000000004(VAR pPlanningBoardContext@9062230 : Record 9062349);
+    VAR
+      lActivity@9062231 : Integer;
+      eDialogTitle@9062232 : TextConst 'ENU=Loading entries...;ENG=Loading entries...';
+    BEGIN
+      //DOC NA2016.12 - Loading entry data
+      //  <> pPlanningBoardContext: The planning board context
+
+      IF ((pPlanningBoardContext."Update Type" = pPlanningBoardContext."Update Type"::Incremental) AND
+          (pPlanningBoardContext."Event Entry Position" = '')) THEN
+        EXIT;
+
+      InitialiseDialog(eDialogTitle);
+
+      ResourceRecordRef.OPEN(ResourceTableId);
+
+      PlanningBoardResourceBuffer.RESET();
+      PlanningBoardResourceBuffer.SETCURRENTKEY("Planning Board Code", Position);
+
+      InitialiseTable(pPlanningBoardContext, PlanningBoardTable."Table Type"::Entry, pPlanningBoardContext."Event Entry Position");
+      ApplyTableFilters(pPlanningBoardContext);
+      InitialiseTableLinks();
+      InitialiseEntryDataDatesAndTimes();
+      InitialiseForegroundStyling();
+      InitialiseBackgroundStyling();
+      InitialiseBorderStyling();
+      FilterEntryDates();
+      IF (TableRecordRef.FINDSET()) THEN
+      REPEAT
+        UpdateDialog();
+
+        CLEAR(lActivity);
+        IF (pPlanningBoardContext."Update Type" = pPlanningBoardContext."Update Type"::Incremental) THEN
+          lActivity := pPlanningBoardContext."Event Entry Activity"
+        ELSE
+          lActivity := pPlanningBoardContext.Activity::Insert;
+        IF (lActivity = pPlanningBoardContext.Activity::Modify) THEN
+          IF ( NOT (PlanningBoardEntryBuffer.GET(PlanningBoardHeader.Code, pPlanningBoardContext."Event Entry ID"))) THEN
+            lActivity := pPlanningBoardContext.Activity::Insert;
+
+        IF (lActivity = pPlanningBoardContext.Activity::Insert) THEN
+        BEGIN
+          CurrentTableId := TableRecordRef.NUMBER;
+          CurrentPosition := TableRecordRef.GETPOSITION(FALSE);
+          PlanningBoardEntryBufferId += 1;
+          CLEAR(PlanningBoardResourceBuffer);
+          PlanningBoardEntryBuffer."Planning Board Code" := PlanningBoardHeader.Code;
+          PlanningBoardEntryBuffer.ID := PlanningBoardEntryBufferId;
+          PlanningBoardEntryBuffer."Table ID" := CurrentTableId;
+          PlanningBoardEntryBuffer.Position := CurrentPosition;
+        END;
+
+        IF (lActivity IN [pPlanningBoardContext.Activity::Insert, pPlanningBoardContext.Activity::Modify]) THEN
+        BEGIN
+          PositionTableRelations();
+
+          PlanningBoardEntryBuffer."Resource Position" := GetResourcePosition();
+          PlanningBoardEntryBuffer."Resource ID" := GetResourceId();
+          PlanningBoardEntryBuffer.Caption := GetCaption();
+          GetDatesAndTimes(PlanningBoardEntryBuffer."Start Date", PlanningBoardEntryBuffer."Start Time",
+            PlanningBoardEntryBuffer."End Date", PlanningBoardEntryBuffer."End Time");
+          PlanningBoardEntryBuffer."All Day" := AllDay;
+          GetForegroundStyle(PlanningBoardEntryBuffer."Foreground Colour", PlanningBoardEntryBuffer."Foreground Font Size",
+            PlanningBoardEntryBuffer."Foreground Font Style");
+          GetBackgroundStyle(PlanningBoardEntryBuffer."Background Colour");
+          GetBorderStyle(PlanningBoardEntryBuffer."Border Colour", PlanningBoardEntryBuffer."Border Line Width",
+            PlanningBoardEntryBuffer."Border Line Style");
+
+          IF (pPlanningBoardContext."Update Type" = pPlanningBoardContext."Update Type"::Incremental) THEN
+            PlanningBoardEntryBuffer."Incremental Activity" := lActivity;
+        END;
+
+        CASE (lActivity) OF
+          pPlanningBoardContext.Activity::Insert:
+            PlanningBoardEntryBuffer.INSERT();
+          pPlanningBoardContext.Activity::Modify:
+            PlanningBoardEntryBuffer.MODIFY();
+        END;
+
+        MarkResourceAsHavingEntries();
+      UNTIL (TableRecordRef.NEXT() = 0);
+
+      FinaliseTable();
+
+      PlanningBoardResourceBuffer.RESET();
+
+      ResourceRecordRef.CLOSE();
+
+      FinaliseDialog();
+    END;
+
+    LOCAL PROCEDURE RemoveEmptyResources@1000000028(VAR pPlanningBoardContext@1000000000 : Record 9062349);
+    BEGIN
+      //DOC NA2016.12 - Removing empty resources
+      //  <> pPlanningBoardContext: The planning board context
+
+      IF ( NOT (pPlanningBoardContext."Non-Empty Resources")) THEN
+        EXIT;
+
+      PlanningBoardResourceBuffer.SETRANGE("Has Entries", FALSE);
+      PlanningBoardResourceBuffer.DELETEALL();
+      PlanningBoardResourceBuffer.SETRANGE("Has Entries");
+    END;
+
+    LOCAL PROCEDURE "--- Internal ---"@1000000013();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE InitialiseBuffers@9062233(VAR pPlanningBoardContext@9062230 : Record 9062349);
+    BEGIN
+      //DOC NA2016.12 - Initialising buffers (resource / entry buffers)
+      //  <> pPlanningBoardContext: The planning board context
+
+      IF (pPlanningBoardContext."Update Type" = pPlanningBoardContext."Update Type"::" ") THEN
+        EXIT;
+
+      IF (pPlanningBoardContext."Update Type" = pPlanningBoardContext."Update Type"::Incremental) THEN
+      BEGIN
+        pPlanningBoardContext.GetResourceBuffer(PlanningBoardResourceBuffer);
+        PlanningBoardResourceBuffer.RESET();
+        IF (PlanningBoardResourceBuffer.FINDLAST()) THEN
+          PlanningBoardResourceBufferId := PlanningBoardResourceBuffer.ID
+        ELSE
+          CLEAR(PlanningBoardResourceBufferId);
+      END
+      ELSE
+      BEGIN
+        PlanningBoardResourceBuffer.RESET();
+        PlanningBoardResourceBuffer.DELETEALL();
+        CLEAR(PlanningBoardResourceBufferId);
+      END;
+
+      IF (pPlanningBoardContext."Update Type" = pPlanningBoardContext."Update Type"::Incremental) THEN
+      BEGIN
+        pPlanningBoardContext.GetEntryBuffer(PlanningBoardEntryBuffer);
+        PlanningBoardEntryBuffer.RESET();
+        IF (PlanningBoardEntryBuffer.FINDLAST()) THEN
+          PlanningBoardEntryBufferId := PlanningBoardEntryBuffer.ID
+        ELSE
+          CLEAR(PlanningBoardEntryBufferId);
+      END
+      ELSE
+      BEGIN
+        PlanningBoardEntryBuffer.RESET();
+        PlanningBoardEntryBuffer.DELETEALL();
+        CLEAR(PlanningBoardEntryBufferId);
+      END;
+    END;
+
+    LOCAL PROCEDURE InitialiseCaches@9062237(pPlanningBoardContext@9062230 : Record 9062349;pTableType@9062231 : Integer);
+    BEGIN
+      //DOC NA2016.12 - Initialising caches
+      //  -> pPlanningBoardContext: Planning board context
+      //  -> pTableType: Table type
+
+      CASE (pTableType) OF
+        PlanningBoardTable."Table Type"::Resource:
+          PlanningBoardStyleCaching.FlushForegroundCache(pPlanningBoardContext."Planning Board Code", pTableType);
+        PlanningBoardTable."Table Type"::Entry:
+          BEGIN
+            PlanningBoardStyleCaching.FlushForegroundCache(pPlanningBoardContext."Planning Board Code", pTableType);
+            PlanningBoardStyleCaching.FlushBackgroundCache(pPlanningBoardContext."Planning Board Code", pTableType);
+            PlanningBoardStyleCaching.FlushBorderCache(pPlanningBoardContext."Planning Board Code", pTableType);
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ClearTableGlobals@1000000024();
+    BEGIN
+      //DOC NA2016.12 - Clearing all table globals
+
+      CLEAR(TableCaptionFields);
+      CLEAR(TableCaptionFieldBuffer);
+
+      CLEAR(StartDateFieldRef);
+      CLEAR(StartTimeFieldRef);
+      CLEAR(EndDateFieldRef);
+      CLEAR(EndTimeFieldRef);
+      CLEAR(SplitDateTimes);
+      CLEAR(AllDay);
+
+      CLEAR(ForegroundStyleFieldBuffer);
+      CLEAR(BackgroundStyleFieldBuffer);
+      CLEAR(BorderStyleFieldBuffer);
+      CLEAR(PictureFieldBuffer);
+    END;
+
+    LOCAL PROCEDURE InitialiseTable@1000000014(VAR pPlanningBoardContext@9062231 : Record 9062349;pTableType@1000000001 : Integer;pPosition@9062230 : Text);
+    BEGIN
+      //DOC NA2016.12 - Initialising table for processing
+      //  <> pPlanningBoardContext: The planning board context
+      //  -> pTableType: Table type
+      //  -> pPosition: Position (for incremental update)
+
+      ClearTableGlobals();
+      PlanningBoardTable.GET(PlanningBoardHeader.Code, pTableType);
+      TableRecordRef.OPEN(PlanningBoardTable."Table ID");
+      IF (pPlanningBoardContext."Update Type" = pPlanningBoardContext."Update Type"::Incremental) THEN
+      BEGIN
+        TableRecordRef.SETPOSITION(pPosition);
+        TableRecordRef.SETRECFILTER();
+      END
+      ELSE
+      BEGIN
+        IF (PlanningBoardTable."Table Key Index" <> 0) THEN
+          KeyRefToolkit.ApplyKeyToRecordRef(TableRecordRef, PlanningBoardTable."Table Key Index");
+        IF (PlanningBoardTable."Table Filter ID" <> 0) THEN
+          CriteriaManagement.ApplyCriteriaToRecRef(PlanningBoardTable."Table Filter ID", TableRecordRef);
+      END;
+
+      InitialiseTableRelations();
+      InitialiseTableCaption();
+
+      InitialiseCaches(pPlanningBoardContext, pTableType);
+
+      IF (pTableType = PlanningBoardTable."Table Type"::Resource) THEN
+        ResourceTableId := PlanningBoardTable."Table ID";
+    END;
+
+    LOCAL PROCEDURE InitialiseTableLinks@1000000020();
+    VAR
+      lMaxNoOfTableLinks@1000000000 : Integer;
+    BEGIN
+      //DOC NA2016.12 - Initialising table links
+
+      CLEAR(TableLinkFields);
+      CLEAR(TableLinkResourceFieldRefs);
+      CLEAR(TableLinkEntryFieldRefs);
+
+      lMaxNoOfTableLinks := ReleasePlanningBoard.MaxNoOfTableLinks();
+
+      PlanningBoardTableLink.RESET();
+      PlanningBoardTableLink.SETCURRENTKEY("Planning Board Code", Sequence);
+      PlanningBoardTableLink.SETRANGE("Planning Board Code", PlanningBoardHeader.Code);
+      IF (PlanningBoardTableLink.FINDSET()) THEN
+      REPEAT
+        TableLinkFields += 1;
+        TableLinkResourceFieldRefs[TableLinkFields] := ResourceRecordRef.FIELD(PlanningBoardTableLink."Resource Table Field ID");
+        TableLinkEntryFieldRefs[TableLinkFields] := TableRecordRef.FIELD(PlanningBoardTableLink."Entry Table Field ID");
+      UNTIL ((PlanningBoardTableLink.NEXT() = 0) OR (TableLinkFields >= lMaxNoOfTableLinks));
+    END;
+
+    LOCAL PROCEDURE InitialiseTableCaption@1000000010();
+    VAR
+      lEnhancedFieldDefinition@1000000004 : Record 9062327;
+      lMaxNoOfCaptionFields@1000000003 : Integer;
+      lFirstTableCaptionField@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2016.12 - Initialising table caption
+
+      lMaxNoOfCaptionFields := ReleasePlanningBoard.MaxNoOfCaptionFields();
+      lFirstTableCaptionField := TRUE;
+
+      PlanningBoardTableField.RESET();
+      PlanningBoardTableField.SETRANGE("Planning Board Code", PlanningBoardTable."Planning Board Code");
+      PlanningBoardTableField.SETRANGE("Planning Board Table Type", PlanningBoardTable."Table Type");
+      PlanningBoardTableField.SETRANGE("Field Application", PlanningBoardTableField."Field Application"::Caption);
+      PlanningBoardTableField.SETRANGE(Index, 1, lMaxNoOfCaptionFields);
+      IF (PlanningBoardTableField.FINDSET()) THEN
+      REPEAT
+        IF (PlanningBoardTableField.Index > TableCaptionFields) THEN
+          TableCaptionFields := PlanningBoardTableField.Index;
+        TableCaptionFieldBuffer[PlanningBoardTableField.Index].Set(PlanningBoardTable, TableRecordRef,
+          PlanningBoardTableField."Field Type", PlanningBoardTableField."Field ID", PlanningBoardTableField."Relation ID",
+          PlanningBoardTableRelationTmp);
+      UNTIL (PlanningBoardTableField.NEXT() = 0);
+
+      IF ((PlanningBoardTable."Caption Formula" = '') AND (TableCaptionFields > 1)) THEN
+        TableCaptionFields := 1;
+    END;
+
+    LOCAL PROCEDURE InitialiseTableRelations@1000000022();
+    VAR
+      eTooManyRelations@1000000002 : TextConst 'ENU="There are too many relations defined for ""%1"" table; you can only define up to %2.";ENG="There are too many relations defined for ""%1"" table; you can only define up to %2."';
+    BEGIN
+      //DOC NA2016.12 - Initialising table relations
+
+      PlanningBoardTableRelationTmp.RESET();
+      PlanningBoardTableRelationTmp.DELETEALL();
+
+      PlanningBoardTableRelation.RESET();
+      PlanningBoardTableRelation.SETRANGE("Planning Board Code", PlanningBoardTable."Planning Board Code");
+      PlanningBoardTableRelation.SETRANGE("Planning Board Table Type", PlanningBoardTable."Table Type");
+      IF (PlanningBoardTableRelation.FINDSET()) THEN
+      BEGIN
+        IF (PlanningBoardTableRelation.COUNT() > ReleasePlanningBoard.MaxNoOfRelations()) THEN
+          ERROR(eTooManyRelations, FORMAT(PlanningBoardTable."Table Type"), ReleasePlanningBoard.MaxNoOfRelations());
+        REPEAT
+          PlanningBoardTableRelationTmp := PlanningBoardTableRelation;
+          PlanningBoardTableRelationTmp.INSERT();
+          PlanningBoardTableRelationTmp.OpenRecordReference();
+        UNTIL (PlanningBoardTableRelation.NEXT() = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE InitialiseEntryDataDatesAndTimes@1000000033();
+    BEGIN
+      //DOC NA2016.12 - Initialising entry data dates and times
+
+      SplitDateTimes := (PlanningBoardTable."Date Time Fields" IN [PlanningBoardTable."Date Time Fields"::DateTimes,
+        PlanningBoardTable."Date Time Fields"::"Single DateTime"]);
+      AllDay := (PlanningBoardTable."Date Time Fields" IN [PlanningBoardTable."Date Time Fields"::Dates,
+        PlanningBoardTable."Date Time Fields"::"DateTimes (Dates Only)", PlanningBoardTable."Date Time Fields"::"Single Date",
+        PlanningBoardTable."Date Time Fields"::"Single DateTime (Date Only)"]);
+
+      StartDateFieldRef := TableRecordRef.FIELD(PlanningBoardTable."Start Date Field ID");
+      StartTimeFieldRef := TableRecordRef.FIELD(PlanningBoardTable."Start Time Field ID");
+      EndDateFieldRef := TableRecordRef.FIELD(PlanningBoardTable."End Date Field ID");
+      EndTimeFieldRef := TableRecordRef.FIELD(PlanningBoardTable."End Time Field ID");
+    END;
+
+    LOCAL PROCEDURE InitialiseForegroundStyling@1000000011();
+    BEGIN
+      //DOC NA2016.12 - Initialising foreground styling
+
+      ForegroundStyleFieldBuffer.Set(PlanningBoardTable, TableRecordRef, PlanningBoardTable."Foreground Style Field Type",
+        PlanningBoardTable."Foreground Style Field ID", PlanningBoardTable."Foreground Style Relation ID", PlanningBoardTableRelationTmp);
+    END;
+
+    LOCAL PROCEDURE InitialiseBackgroundStyling@1000000016();
+    BEGIN
+      //DOC NA2016.12 - Initialising background styling
+
+      BackgroundStyleFieldBuffer.Set(PlanningBoardTable, TableRecordRef, PlanningBoardTable."Background Style Field Type",
+        PlanningBoardTable."Background Style Field ID", PlanningBoardTable."Background Style Relation ID", PlanningBoardTableRelationTmp);
+    END;
+
+    LOCAL PROCEDURE InitialiseBorderStyling@1000000017();
+    BEGIN
+      //DOC NA2016.12 - Initialising border styling
+
+      BorderStyleFieldBuffer.Set(PlanningBoardTable, TableRecordRef, PlanningBoardTable."Border Style Field Type",
+        PlanningBoardTable."Border Style Field ID", PlanningBoardTable."Border Style Relation ID", PlanningBoardTableRelationTmp);
+    END;
+
+    LOCAL PROCEDURE InitialisePicture@1000000039();
+    BEGIN
+      //DOC NA2016.12 - Initialising picture
+
+      PictureFieldBuffer.Set(PlanningBoardTable, TableRecordRef, PlanningBoardTable."Picture Field Type",
+        PlanningBoardTable."Picture Field ID", PlanningBoardTable."Picture Relation ID", PlanningBoardTableRelationTmp);
+    END;
+
+    LOCAL PROCEDURE ApplyTableFilters@9062230(VAR pPlanningBoardContext@9062231 : Record 9062349);
+    VAR
+      lFieldRef@9062230 : FieldRef;
+      lValue@1000000000 : Text;
+    BEGIN
+      //DOC NA2016.12 - Applying table filters
+      //  <> pPlanningBoardContext: The planning board context
+
+      IF (pPlanningBoardContext."Update Type" = pPlanningBoardContext."Update Type"::Incremental) THEN
+        EXIT;
+
+      PlanningBoardFilterBuffer.RESET();
+      PlanningBoardFilterBuffer.SETRANGE("Table Type", PlanningBoardTable."Table Type");
+      IF (PlanningBoardFilterBuffer.FINDSET()) THEN
+      REPEAT
+        IF (PlanningBoardTableField.GET(PlanningBoardTable."Planning Board Code", PlanningBoardTable."Table Type",
+            PlanningBoardTableField."Field Application"::Filter, PlanningBoardFilterBuffer.ID)) THEN
+          IF (PlanningBoardTableField."Field ID" <> 0) THEN
+          BEGIN
+            lFieldRef := TableRecordRef.FIELD(PlanningBoardTableField."Field ID");
+            IF (PlanningBoardFilterBuffer."Flexible Filter") THEN
+              lValue := '@*' + PlanningBoardFilterBuffer.Value + '*'
+            ELSE
+              lValue := PlanningBoardFilterBuffer.Value;
+            lFieldRef.SETFILTER(lValue);
+          END;
+      UNTIL (PlanningBoardFilterBuffer.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE FilterEntryDates@1000000019();
+    BEGIN
+      //DOC NA2016.12 - Filtering entry dates
+
+      StartDateFieldRef.SETFILTER('<=%1', EndDate);
+      EndDateFieldRef.SETFILTER('>=%1', StartDate);
+    END;
+
+    LOCAL PROCEDURE FinaliseTable@1000000015();
+    BEGIN
+      //DOC NA2016.12 - Finalising table after processing
+
+      TableRecordRef.CLOSE();
+      FinaliseTableRelations();
+    END;
+
+    LOCAL PROCEDURE FinaliseTableRelations@1000000027();
+    VAR
+      eTooManyRelations@1000000002 : TextConst 'ENU="There are too many relations defined for ""%1"" table; you can only define up to %2.";ENG="There are too many relations defined for ""%1"" table; you can only define up to %2."';
+    BEGIN
+      //DOC NA2016.12 - Finalising table relations
+
+      IF (PlanningBoardTableRelationTmp.FINDSET()) THEN
+      REPEAT
+        PlanningBoardTableRelationTmp.CloseRecordReference();
+      UNTIL (PlanningBoardTableRelationTmp.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE PositionTableRelations@1000000046();
+    VAR
+      lCriteriaField@1000000000 : Record 9062627;
+      lFieldReference@1000000002 : FieldRef;
+      lValue@1000000001 : Variant;
+      lFound@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2016.12 - Positioning table relations
+
+      SetFieldBuffersSearchResult(0, TRUE);
+
+      IF (PlanningBoardTableRelationTmp.FINDSET()) THEN
+      REPEAT
+        PlanningBoardTableRelationTmp.ResetRecordReference();
+        lCriteriaField.RESET();
+        lCriteriaField.SETRANGE("Criteria ID", PlanningBoardTableRelationTmp."Relation Definition ID");
+        IF (lCriteriaField.FINDSET()) THEN
+        REPEAT
+          CASE (lCriteriaField."Filter Source") OF
+            lCriteriaField."Filter Source"::Const:
+              lValue := lCriteriaField.Value;
+            lCriteriaField."Filter Source"::Field,
+            lCriteriaField."Filter Source"::Filter:
+              BEGIN
+                lFieldReference := TableRecordRef.FIELD(lCriteriaField."Filter Source Field Id");
+                lValue := lFieldReference.VALUE;
+              END;
+          END;
+          PlanningBoardTableRelationTmp.SetRecordReferenceFilter(lCriteriaField."Field ID", lValue);
+        UNTIL (lCriteriaField.NEXT() = 0);
+        lFound := PlanningBoardTableRelationTmp.FindRecordReference();
+        SetFieldBuffersSearchResult(PlanningBoardTableRelationTmp.ID, lFound);
+      UNTIL (PlanningBoardTableRelationTmp.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE SetFieldBuffersSearchResult@1000000023(pRelationId@1000000001 : Integer;pResult@1000000000 : Boolean);
+    VAR
+      lIndex@1000000002 : Integer;
+    BEGIN
+      //DOC NA2016.12 - Setting field buffers search result
+      //  -> pRelationId: Relation ID
+      //  -> pResult: The result
+
+      FOR lIndex := 1 TO TableCaptionFields DO
+        TableCaptionFieldBuffer[lIndex].SetSearchResult(pRelationId, pResult);
+      ForegroundStyleFieldBuffer.SetSearchResult(pRelationId, pResult);
+      BackgroundStyleFieldBuffer.SetSearchResult(pRelationId, pResult);
+      BorderStyleFieldBuffer.SetSearchResult(pRelationId, pResult);
+      PictureFieldBuffer.SetSearchResult(pRelationId, pResult);
+    END;
+
+    LOCAL PROCEDURE PositionResourceBuffer@1000000036() : Boolean;
+    VAR
+      lResult@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2016.12 - Positioning resource buffer according to the current entry
+      //  <- TRUE = Resource buffer found, FALSE = Not
+
+      PlanningBoardResourceBuffer.SETRANGE(Position, PlanningBoardEntryBuffer."Resource Position");
+      lResult := PlanningBoardResourceBuffer.FINDFIRST();
+      IF ( NOT (lResult)) THEN
+        PlanningBoardResourceBuffer.INIT();
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE GetResourcePosition@1000000034() : Text[250];
+    VAR
+      lIndex@1000000000 : Integer;
+      lValue@1000000001 : Variant;
+    BEGIN
+      //DOC NA2016.12 - Returning resource position for entry table
+      //  <- The position
+
+      FOR lIndex := 1 TO TableLinkFields DO
+      BEGIN
+        lValue := TableLinkEntryFieldRefs[lIndex].VALUE;
+        //DOC NA2016.16.1 PC 06/09/2016 >>>
+        //TableLinkResourceFieldRefs[lIndex].VALUE := lValue;
+        TableLinkResourceFieldRefs[lIndex].SETRANGE(lValue);
+        //DOC NA2016.16.1 PC 06/09/2016 <<<
+      END;
+
+      //DOC NA2016.16.1 PC 06/09/2016 >>>
+      //EXIT(ResourceRecordRef.GETPOSITION(FALSE));
+      IF ResourceRecordRef.FINDFIRST THEN
+        EXIT(ResourceRecordRef.GETPOSITION(FALSE));
+      //DOC NA2016.16.1 PC 06/09/2016 <<<
+    END;
+
+    LOCAL PROCEDURE GetResourceId@1000000035() : Integer;
+    VAR
+      lResourceId@1000000000 : Integer;
+    BEGIN
+      //DOC NA2016.12 - Returning resource ID for entry table
+      //  <- The ID
+
+      lResourceId := 0;
+
+      IF (PositionResourceBuffer()) THEN
+        lResourceId := PlanningBoardResourceBuffer.ID;
+
+      EXIT(lResourceId);
+    END;
+
+    LOCAL PROCEDURE MarkResourceAsHavingEntries@1000000026();
+    BEGIN
+      //DOC NA2016.12 - Mark resource flag "Has Entries"
+
+      IF (PlanningBoardEntryBuffer."Resource ID" <> 0) THEN
+      BEGIN
+        IF (PlanningBoardResourceBuffer."Table ID" = 0) THEN
+          PositionResourceBuffer();
+        IF ( NOT (PlanningBoardResourceBuffer."Has Entries")) THEN
+        BEGIN
+          PlanningBoardResourceBuffer."Has Entries" := TRUE;
+          PlanningBoardResourceBuffer.MODIFY();
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetCaption@1000000001() : Text;
+    VAR
+      lCaption@1000000002 : Text;
+      lCaptionParts@1000000001 : ARRAY [10] OF Text;
+      lIndex@1000000000 : Integer;
+    BEGIN
+      //DOC NA2016.12 - Getting caption for the current table recordref
+      //  <- The caption
+
+      CASE (TableCaptionFields) OF
+        0:
+          lCaption := TableRecordRef.GETPOSITION(TRUE);
+        1:
+          lCaption := TableCaptionFieldBuffer[1].GetTextValue();
+        ELSE
+          BEGIN
+            CLEAR(lCaptionParts);
+            FOR lIndex := 1 TO TableCaptionFields DO
+              lCaptionParts[lIndex] := TableCaptionFieldBuffer[lIndex].GetTextValue();
+            lCaption := STRSUBSTNO(PlanningBoardTable."Caption Formula", lCaptionParts[1], lCaptionParts[2], lCaptionParts[3],
+              lCaptionParts[4], lCaptionParts[5], lCaptionParts[6], lCaptionParts[7], lCaptionParts[8], lCaptionParts[9],
+              lCaptionParts[10]);
+          END;
+      END;
+
+      EXIT(lCaption);
+    END;
+
+    LOCAL PROCEDURE GetDatesAndTimes@1000000007(VAR pStartDate@1000000000 : Date;VAR pStartTime@1000000001 : Time;VAR pEndDate@1000000002 : Date;VAR pEndTime@1000000003 : Time);
+    VAR
+      lStartDateTime@1000000004 : DateTime;
+      lEndDateTime@1000000005 : DateTime;
+    BEGIN
+      //DOC NA2016.12 - Getting dates and times for the current table recordref
+      //  <> pStartDate: Target start date
+      //  <> pStartTime: Target start time
+      //  <> pEndDate: Target end date
+      //  <> pEndTime: Target end time
+
+      IF (SplitDateTimes) THEN
+      BEGIN
+        lStartDateTime := StartDateFieldRef.VALUE;
+        pStartDate := DT2DATE(lStartDateTime);
+        pStartTime := DT2TIME(lStartDateTime);
+        lEndDateTime := EndDateFieldRef.VALUE;
+        pEndDate := DT2DATE(lEndDateTime);
+        pEndTime := DT2TIME(lEndDateTime);
+      END
+      ELSE
+      BEGIN
+        pStartDate := StartDateFieldRef.VALUE;
+        IF ( NOT (AllDay)) THEN
+          pStartTime := StartTimeFieldRef.VALUE
+        ELSE
+          pStartTime := 000000T;
+        pEndDate := EndDateFieldRef.VALUE;
+        IF ( NOT (AllDay)) THEN
+          pEndTime := EndTimeFieldRef.VALUE
+        ELSE
+          pEndTime := 235959T;
+      END;
+
+      //DOC NA2016.16.1 JH 26/07/2016 >>>
+      IF (pStartTime = 0T) THEN
+        pStartTime := TnpToolkit.DefaultTime(PlanningBoardHeader."Start Time", 000000T);
+      IF (pEndTime = 0T) THEN
+        pEndTime := TnpToolkit.DefaultTime(PlanningBoardHeader."End Time", 235959T);
+      //DOC NA2016.16.1 JH 26/07/2016 <<<
+    END;
+
+    LOCAL PROCEDURE GetForegroundStyle@1000000002(VAR pColour@1000000000 : Code[20];VAR pFontSize@1000000001 : '0';VAR pFontStyle@1000000002 : '0');
+    VAR
+      lPlanningBoardTableStyle@1000000005 : Record 9062342;
+      lRetrievedFromCache@1000000003 : Boolean;
+      lColourCode@1000000006 : Code[20];
+      lValue@1000000004 : Text[250];
+    BEGIN
+      //DOC NA2016.12 - Getting foreground style for the current table recordref
+      //  <> pColour: Target colour
+      //  <> pFontSize: Target font size
+      //  <> pFontStyle: Target font style
+
+      IF (ForegroundStyleFieldBuffer.IsEnabled()) THEN
+      BEGIN
+        lValue := ForegroundStyleFieldBuffer.GetTextValue();
+
+        IF (PlanningBoardHeader."Use Foreground Style Cache") THEN
+          lRetrievedFromCache := PlanningBoardStyleCaching.GetForegroundStyle(PlanningBoardTable."Planning Board Code", PlanningBoardTable."Table Type",
+            lValue, lColourCode, pFontSize, pFontStyle);
+
+        IF ( NOT (lRetrievedFromCache)) THEN
+        BEGIN
+          IF ( NOT (FindTableStyle(PlanningBoardTableStyle."Style Application"::Foreground, lValue, lPlanningBoardTableStyle))) THEN
+            CLEAR(lPlanningBoardTableStyle);
+          lColourCode := lPlanningBoardTableStyle."Colour Code";
+          pFontSize := lPlanningBoardTableStyle."Font Size";
+          pFontStyle := lPlanningBoardTableStyle."Font Style";
+          IF (PlanningBoardHeader."Use Foreground Style Cache") THEN
+            PlanningBoardStyleCaching.AddForegroundStyle(PlanningBoardTable."Planning Board Code", PlanningBoardTable."Table Type", lValue,
+              lColourCode, pFontSize, pFontStyle);
+        END;
+      END;
+
+      VerifyForegroundColourCode(lColourCode);
+      VerifyForegroundFontSize(pFontSize);
+
+      pColour := SystemColour.HtmlColourName(lColourCode);
+    END;
+
+    LOCAL PROCEDURE VerifyForegroundColourCode@1000000021(VAR pColourCode@1000000000 : Code[20]);
+    BEGIN
+      //DOC NA2016.12 - Verifying foreground colour code (to make it non-empty)
+      //  <> pColourCode: The colour code
+
+      IF (pColourCode = '') THEN
+        pColourCode := PlanningBoardTable."Foreground Colour Code";
+      IF (pColourCode = '') THEN
+        CASE (PlanningBoardTable."Table Type") OF
+          PlanningBoardTable."Table Type"::Resource:
+            pColourCode := PlanningBoardSetup."Res. Foreground Colour Code";
+          PlanningBoardTable."Table Type"::Entry:
+            pColourCode := PlanningBoardSetup."Entry Foreground Colour Code";
+        END;
+      IF (pColourCode = '') THEN
+        CASE (PlanningBoardTable."Table Type") OF
+          PlanningBoardTable."Table Type"::Resource:
+            pColourCode := PlanningBoardToolkit.DefaultResourceForegroundColourCode();
+          PlanningBoardTable."Table Type"::Entry:
+            pColourCode := PlanningBoardToolkit.DefaultEntryForegroundColourCode();
+        END;
+    END;
+
+    LOCAL PROCEDURE VerifyForegroundFontSize@1000000025(VAR pFontSize@1000000000 : '0');
+    BEGIN
+      //DOC NA2016.12 - Verifying foreground font size
+      //  <> pFontSize: The font size
+
+      IF (pFontSize = PlanningBoardTable."Foreground Font Size"::" ") THEN
+        pFontSize := PlanningBoardTable."Foreground Font Size";
+      IF (pFontSize = PlanningBoardTable."Foreground Font Size"::" ") THEN
+        pFontSize := PlanningBoardSetup."Res. Foreground Font Size";
+      IF (pFontSize = PlanningBoardTable."Foreground Font Size"::" ") THEN
+        pFontSize := PlanningBoardTable."Foreground Font Size"::Medium;
+    END;
+
+    LOCAL PROCEDURE GetBackgroundStyle@1000000005(VAR pColour@1000000000 : Code[20]);
+    VAR
+      lPlanningBoardTableStyle@1000000003 : Record 9062342;
+      lRetrievedFromCache@1000000002 : Boolean;
+      lValue@1000000001 : Text[250];
+      lColourCode@1000000004 : Code[20];
+    BEGIN
+      //DOC NA2016.12 - Getting background style for the current table recordref
+      //  <> pColour: Target colour
+
+      IF (BackgroundStyleFieldBuffer.IsEnabled()) THEN
+      BEGIN
+        lValue := BackgroundStyleFieldBuffer.GetTextValue();
+
+        IF (PlanningBoardHeader."Use Background Style Cache") THEN
+          lRetrievedFromCache := PlanningBoardStyleCaching.GetBackgroundStyle(PlanningBoardTable."Planning Board Code", PlanningBoardTable."Table Type",
+            lValue, lColourCode);
+
+        IF ( NOT (lRetrievedFromCache)) THEN
+        BEGIN
+          IF ( NOT (FindTableStyle(PlanningBoardTableStyle."Style Application"::Background, lValue, lPlanningBoardTableStyle))) THEN
+            CLEAR(lPlanningBoardTableStyle);
+          lColourCode := lPlanningBoardTableStyle."Colour Code";
+          IF (PlanningBoardHeader."Use Background Style Cache") THEN
+            PlanningBoardStyleCaching.AddBackgroundStyle(PlanningBoardTable."Planning Board Code", PlanningBoardTable."Table Type", lValue, lColourCode);
+        END;
+      END;
+
+      VerifyBackgroundColourCode(lColourCode);
+
+      pColour := SystemColour.HtmlColourName(lColourCode);
+    END;
+
+    LOCAL PROCEDURE VerifyBackgroundColourCode@1000000029(VAR pColourCode@1000000000 : Code[20]);
+    BEGIN
+      //DOC NA2016.12 - Verifying background colour code (to make it non-empty)
+      //  <> pColourCode: The colour code
+
+      IF (pColourCode = '') THEN
+        pColourCode := PlanningBoardTable."Background Colour Code";
+      IF (pColourCode = '') THEN
+        pColourCode := PlanningBoardSetup."Entry Background Colour Code";
+      IF (pColourCode = '') THEN
+        pColourCode := PlanningBoardToolkit.DefaultEntryBackgroundColourCode();
+    END;
+
+    LOCAL PROCEDURE GetBorderStyle@1000000006(VAR pColour@1000000000 : Code[20];VAR pLineWidth@1000000001 : '0';VAR pLineStyle@1000000002 : '0');
+    VAR
+      lPlanningBoardTableStyle@1000000005 : Record 9062342;
+      lRetrievedFromCache@1000000004 : Boolean;
+      lValue@1000000003 : Text[250];
+      lColourCode@1000000006 : Code[20];
+    BEGIN
+      //DOC NA2016.12 - Getting border style for the current table recordref
+      //  <> pColour: Target colour
+      //  <> pLineWidth: Target line width
+      //  <> pLineStyle: Target line style
+
+      IF (BorderStyleFieldBuffer.IsEnabled()) THEN
+      BEGIN
+        lValue := BorderStyleFieldBuffer.GetTextValue();
+
+        IF (PlanningBoardHeader."Use Border Style Cache") THEN
+          lRetrievedFromCache := PlanningBoardStyleCaching.GetBorderStyle(PlanningBoardTable."Planning Board Code", PlanningBoardTable."Table Type",
+            lValue, lColourCode, pLineWidth, pLineStyle);
+
+        IF ( NOT (lRetrievedFromCache)) THEN
+        BEGIN
+          IF ( NOT (FindTableStyle(PlanningBoardTableStyle."Style Application"::Border, lValue, lPlanningBoardTableStyle))) THEN
+            CLEAR(lPlanningBoardTableStyle);
+          lColourCode := lPlanningBoardTableStyle."Colour Code";
+          pLineWidth := lPlanningBoardTableStyle."Line Width";
+          pLineStyle := lPlanningBoardTableStyle."Line Style";
+          IF (PlanningBoardHeader."Use Border Style Cache") THEN
+            PlanningBoardStyleCaching.AddBorderStyle(PlanningBoardTable."Planning Board Code", PlanningBoardTable."Table Type", lValue,
+              lColourCode, pLineWidth, pLineStyle);
+        END;
+      END;
+
+      VerifyBorderColourCode(lColourCode);
+      VerifyBorderLineWidth(pLineWidth);
+
+      pColour := SystemColour.HtmlColourName(lColourCode);
+    END;
+
+    LOCAL PROCEDURE VerifyBorderColourCode@1000000032(VAR pColourCode@1000000000 : Code[20]);
+    BEGIN
+      //DOC NA2016.12 - Verifying border colour code (to make it non-empty)
+      //  <> pColourCode: The colour code
+
+      IF (pColourCode = '') THEN
+        pColourCode := PlanningBoardTable."Border Colour Code";
+      IF (pColourCode = '') THEN
+        pColourCode := PlanningBoardSetup."Entry Border Colour Code";
+      IF (pColourCode = '') THEN
+        pColourCode := PlanningBoardToolkit.DefaultEntryBorderColourCode();
+    END;
+
+    LOCAL PROCEDURE VerifyBorderLineWidth@1000000038(VAR pLineWidth@1000000000 : '0');
+    BEGIN
+      //DOC NA2016.12 - Verifying border line width
+      //  <> pLineWidth: The width
+
+      IF (pLineWidth = PlanningBoardTable."Border Line Width"::" ") THEN
+        pLineWidth := PlanningBoardTable."Border Line Width";
+      IF (pLineWidth = PlanningBoardTable."Border Line Width"::" ") THEN
+        pLineWidth := PlanningBoardSetup."Entry Border Line Width";
+      IF (pLineWidth = PlanningBoardTable."Border Line Width"::" ") THEN
+        pLineWidth := PlanningBoardTable."Border Line Width"::Medium;
+    END;
+
+    LOCAL PROCEDURE GetPicture@1000000008();
+    VAR
+      lPictureBlob@1000000000 : Record 99008535;
+    BEGIN
+      //DOC NA2016.12 - Getting picture
+
+      IF (PictureFieldBuffer.IsEnabled()) THEN
+      BEGIN
+        PictureFieldBuffer.GetBlobValue(lPictureBlob);
+        PlanningBoardResourceBuffer.Picture := lPictureBlob.Blob;
+      END
+      ELSE
+        CLEAR(PlanningBoardResourceBuffer.Picture);
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@1000000009();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE GetFilterBuffer@9062232(pPlanningBoardContext@9062230 : Record 9062349);
+    BEGIN
+      //DOC NA2016.12 - Getting filter buffer from planning board context
+      //  -> pPlanningBoardContext: The context
+
+      PlanningBoardFilterBuffer.RESET();
+      PlanningBoardFilterBuffer.DELETEALL();
+
+      pPlanningBoardContext.GetFilterBuffer(PlanningBoardFilterBuffer);
+    END;
+
+    LOCAL PROCEDURE FindTableStyle@1000000018(pStyleApplication@1000000000 : Integer;pValue@1000000001 : Text[250];VAR pPlanningBoardTableStyle@1000000004 : Record 9062342) : Boolean;
+    VAR
+      lValueBuffer@1000000002 : TEMPORARY Record 9062730;
+      lStyleFound@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2016.12 - Trying to find table style with filter covering the value passed as parameter
+      //  -> pStyleApplication: Style application
+      //  -> pValue: Value
+      //  <> pPlanningBoardTableStyle: Target style
+      //  <- Result
+
+      lStyleFound := FALSE;
+
+      lValueBuffer.Value := pValue;
+      lValueBuffer.INSERT();
+
+      PlanningBoardTableStyle.RESET();
+      PlanningBoardTableStyle.SETCURRENTKEY("Planning Board Code", "Planning Board Table Type", "Style Application", Sequence);
+      PlanningBoardTableStyle.SETRANGE("Planning Board Code", PlanningBoardTable."Planning Board Code");
+      PlanningBoardTableStyle.SETRANGE("Planning Board Table Type", PlanningBoardTable."Table Type");
+      PlanningBoardTableStyle.SETRANGE("Style Application", pStyleApplication);
+      IF (PlanningBoardTableStyle.FINDSET()) THEN
+      REPEAT
+        IF (PlanningBoardTableStyle.Filter <> '') THEN
+          lValueBuffer.SETFILTER(Value, PlanningBoardTableStyle.Filter)
+        ELSE
+          lValueBuffer.SETRANGE(Value);
+        IF ( NOT (lValueBuffer.ISEMPTY())) THEN
+        BEGIN
+          pPlanningBoardTableStyle := PlanningBoardTableStyle;
+          lStyleFound := TRUE;
+        END;
+      UNTIL ((PlanningBoardTableStyle.NEXT() = 0) OR (lStyleFound));
+
+      EXIT(lStyleFound);
+    END;
+
+    LOCAL PROCEDURE CheckExecutePermission@1000000030(pPlanningBoardContext@1000000000 : Record 9062349);
+    VAR
+      EnhancedPermissionsMgt@1000000001 : Codeunit 9062277;
+    BEGIN
+      //DOC NA2016.15 - Checking execute permission for
+      //  -> pPlanningBoardContext: Context to check permissions for
+
+      IF ( NOT (PlanningBoardHeader.GET(pPlanningBoardContext."Planning Board Code"))) THEN
+        EXIT;
+      EnhancedPermissionsMgt.CheckPlanningBoardExecutePermission(PlanningBoardHeader, USERID());
+    END;
+
+    LOCAL PROCEDURE "--- Dialog ---"@9062231();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE InitialiseDialog@9062234(pDialogTitle@9062230 : Text);
+    BEGIN
+      DialogTime := CURRENTDATETIME();
+      DialogTitle := TnpToolkit.DefaultString(pDialogTitle, tDefaiultDialogTitle);
+      CLEAR(DialogOpened);
+      CLEAR(DialogWindow);
+    END;
+
+    LOCAL PROCEDURE UpdateDialog@9062235();
+    BEGIN
+      IF ( NOT (DialogOpened)) THEN
+        IF (CURRENTDATETIME() - DialogTime > 1000) THEN
+        BEGIN
+          DialogWindow.OPEN(DialogTitle);
+          DialogOpened := TRUE;
+        END;
+    END;
+
+    LOCAL PROCEDURE FinaliseDialog@9062236();
+    BEGIN
+      IF (DialogOpened) THEN
+        DialogWindow.CLOSE();
+      CLEAR(DialogTime);
+      CLEAR(DialogTitle);
+      CLEAR(DialogOpened);
+      CLEAR(DialogWindow);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.12 JH 11/10/2015 - Created
+      //DOC NA2016.15 JH 05/05/2016 - Enhanced permissions
+      //DOC NA2016.16.1 JH 26/07/2016 - Start / end time logic
+      //DOC NA2016.16.1 PC 06/09/2016 - Change to GetResourcePosition function to support linking Resource/Entry on Non-Primary Key Fields
+    }
+    END.
+  }
+}
+

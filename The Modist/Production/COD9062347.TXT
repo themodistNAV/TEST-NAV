@@ -1,0 +1,343 @@
+OBJECT Codeunit 9062347 Jet Report Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=17/09/15;
+    Time=[ 3:47:32 PM];
+    Version List=NA2016.10;
+  }
+  PROPERTIES
+  {
+    TableNo=9062296;
+    OnRun=BEGIN
+            RunJetReport(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      JetReportHeader@1000000000 : Record 9062296;
+      SystemBehaviour@9062229 : Record 9062230;
+      FileSystem@9062234 : Codeunit 9062264;
+      NameFilter@1000000001 : ARRAY [4] OF Text;
+      NameFound@1000000002 : Boolean;
+      NameFilterIndex@1000000003 : Integer;
+      JetDefaultInputPath@9062230 : Text;
+      JetDefaultInputPathRetrieved@9062231 : Boolean;
+      JetDefaultOutputPath@9062232 : Text;
+      JetDefaultOutputPathRetrieved@9062233 : Boolean;
+
+    PROCEDURE "--- General ---"@9062232();
+    BEGIN
+    END;
+
+    PROCEDURE RunJetReport@9062234(pJetReportHeader@9062229 : Record 9062296);
+    VAR
+      lPath@9062230 : Text;
+      lFileName@9062231 : Text;
+      lFileExtension@9062232 : Text;
+      eDownloadTitle@9062233 : TextConst 'ENU=Select Destination to Save the Jet Report to;ENG=Select Destination to Save the Jet Report to';
+      eCouldNotRun@9062234 : TextConst 'ENU=Could not run the Jet report due to error: %1.;ENG=Could not run the Jet report due to error: %1.';
+    BEGIN
+      //DOC NA2016.10 - Running a jet report
+      //  -> pJetReportHeader: The jet report to run
+
+      lPath := pJetReportHeader.RunReport(FALSE, FALSE);
+
+      IF (COPYSTR(lPath, 1, 1) <> '!') THEN
+      BEGIN
+        lFileName := FileSystem.GetFileName(FALSE, lPath);
+        lFileExtension := FileSystem.GetExtension(FALSE, lPath);
+        DOWNLOAD(lPath, eDownloadTitle, '', lFileExtension, lFileName);
+      END
+      ELSE
+        ERROR(eCouldNotRun, COPYSTR(lPath, 1, STRLEN(lPath) - 1));
+    END;
+
+    PROCEDURE "--- Validation and Lookup ---"@1000000028();
+    BEGIN
+    END;
+
+    PROCEDURE GetJetReportDescription@1000000042(pJetReportId@1000000000 : Integer) : Text[50];
+    BEGIN
+      //DOC NA2015.4 - Returning jet report description
+      //  -> pJetReportId: Jet report ID
+      //  <- The description
+
+      IF ( NOT (JetReportHeader.GET(pJetReportId))) THEN
+        CLEAR(JetReportHeader);
+      EXIT(JetReportHeader.Description);
+    END;
+
+    PROCEDURE ValidateJetReportId@1000000003(pJetReportId@1000000000 : Integer);
+    VAR
+      eUknownJetReport@1000000002 : TextConst 'ENU="Jet report with ID = %1 doesn''t exist.";ENG="Jet report with ID = %1 doesn''t exist."';
+    BEGIN
+      //DOC NA2015.4 - Validating jet report ID
+      //  -> pJetReportId: Jet report ID
+
+      IF ( NOT (TryToValidateJetReportId(pJetReportId))) THEN
+        ERROR(eUknownJetReport, pJetReportId);
+    END;
+
+    PROCEDURE TryToValidateJetReportId@1000000117(pJetReportId@1000000001 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Trying to validate jet report ID
+      //  -> pJetReportId: Jet report ID
+      //  <- Result
+
+      IF (pJetReportId = 0) THEN
+        EXIT(TRUE);
+
+      EXIT(JetReportHeader.GET(pJetReportId));
+    END;
+
+    PROCEDURE ValidateJetReportDescription@1000000001(VAR pJetReportId@1000000001 : Integer;VAR pJetReportDescription@1000000002 : Text[50];pExactMatch@1000000004 : Boolean);
+    VAR
+      eUnknownJetReport@1000000000 : TextConst 'ENU=Unknown jet report "%1".;ENG=Unknown jet report "%1".';
+    BEGIN
+      //DOC NA2015.4 - Validating jet report description
+      //  <> pJetReportId: Target jet report ID
+      //  <> pJetReportDescription: Source / target jet report description
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+
+      IF ( NOT (TryToValidateJetReportDescription(pJetReportId, pJetReportDescription, pExactMatch))) THEN
+        ERROR(eUnknownJetReport, pJetReportDescription);
+    END;
+
+    PROCEDURE TryToValidateJetReportDescription@1000000113(VAR pJetReportId@1000000009 : Integer;VAR pJetReportDescription@1000000008 : Text[50];pExactMatch@1000000007 : Boolean) : Boolean;
+    VAR
+      eUnknownObjectType@1000000003 : TextConst 'ENU=Unknown %1: "%2";ENG=Unknown %1: "%2"';
+      eUnknownObject@1000000004 : TextConst 'ENU=Unknown object: "%1";ENG=Unknown object: "%1"';
+      lField@1000000001 : ' ,Description,Short Code';
+      lResult@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Trying to validate jet report description
+      //  <> pJetReportId: Target jet report ID
+      //  <> pJetReportDescription: Source / target jet report description
+      //  -> pExactMatch: Exact match flag (TRUE = Match name exactly, FALSE = Match part of a name)
+      //  <- Result
+
+      lResult := FALSE;
+
+      IF (pJetReportDescription <> '') THEN
+      BEGIN
+        FOR lField := lField::Description TO lField::"Short Code" DO
+        BEGIN
+          JetReportHeader.RESET();
+          PrepareNameFilters(pJetReportDescription, pExactMatch);
+          WHILE ((NextNameFilter()) AND ( NOT (lResult))) DO
+          BEGIN
+            JetReportHeader.SETFILTER(Description, CurrentNameFilter());
+            lResult := JetReportHeader.FINDFIRST();
+            IF (lResult) THEN
+              lField := lField::"Short Code";
+          END;
+        END;
+        IF ( NOT (lResult)) THEN
+          IF (EVALUATE(pJetReportId, pJetReportDescription)) THEN
+          BEGIN
+            JetReportHeader.SETRANGE(Description);
+            JetReportHeader.SETRANGE(ID, pJetReportId);
+            lResult := JetReportHeader.FINDFIRST();
+          END;
+        IF (lResult) THEN
+        BEGIN
+          pJetReportId := JetReportHeader.ID;
+          pJetReportDescription := JetReportHeader.Description;
+        END;
+      END
+      ELSE
+      BEGIN
+        CLEAR(pJetReportId);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE JetReportLookup@1000000075(VAR pJetReportId@1000000000 : Integer) : Boolean;
+    VAR
+      lResult@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Lookup for nQuiries
+      //  <> pJetReportId: Target jet report ID
+      //  <- Lookup result
+
+      lResult := FALSE;
+
+      JetReportHeader.RESET();
+      IF (pJetReportId <> 0) THEN
+        IF (JetReportHeader.GET(pJetReportId)) THEN;
+
+      IF (PAGE.RUNMODAL(0, JetReportHeader) = ACTION::LookupOK) THEN
+      BEGIN
+        pJetReportId := JetReportHeader.ID;
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE "--- Name Filtering ---"@1000000093();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE PrepareNameFilters@1000000087(pName@1000000000 : Text[50];pExactMatch@1000000001 : Boolean);
+    BEGIN
+      //DOC NA2015.2 - Preparing name filters
+      //  -> pName: The name
+      //  -> pExactMatch: Exact match flag (TRUE = Prepare filters for matching only entire name, FALSE = Prepare fitlers for matching any part of name)
+
+      CLEAR(NameFilter);
+      NameFilter[1] := pName;
+      IF ( NOT (pExactMatch)) THEN
+      BEGIN
+        NameFilter[2] := '@' + pName;
+        NameFilter[3] := '@' + pName + '*';
+        NameFilter[4] := '@*' + pName + '*';
+      END;
+
+      NameFound := FALSE;
+      NameFilterIndex := 0;
+    END;
+
+    LOCAL PROCEDURE NextNameFilter@1000000089() : Boolean;
+    VAR
+      lNextNameFilter@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2015.2 - Going into next name filter
+      //  <- TRUE: Next name filter found, FALSE: No next name filter or name found already
+
+      IF (NameFound) THEN
+        lNextNameFilter := FALSE
+      ELSE
+        IF (NameFilterIndex < ARRAYLEN(NameFilter)) THEN
+        BEGIN
+          NameFilterIndex += 1;
+          lNextNameFilter := (NameFilter[NameFilterIndex] <> '');
+        END
+        ELSE
+          lNextNameFilter := FALSE;
+
+      EXIT(lNextNameFilter);
+    END;
+
+    LOCAL PROCEDURE CurrentNameFilter@1000000097() : Text[250];
+    BEGIN
+      //DOC NA2015.1 - Returning current name filter
+      //  <- The filter
+
+      EXIT(NameFilter[NameFilterIndex]);
+    END;
+
+    PROCEDURE "--- Paths ---"@9062229();
+    BEGIN
+    END;
+
+    PROCEDURE GetDefaultInputPath@9062230() : Text;
+    BEGIN
+      //DOC NA2016.10 - Returning jet default input path
+      //  <- The path
+
+      IF ( NOT (JetDefaultInputPathRetrieved)) THEN
+      BEGIN
+        JetDefaultInputPath := SystemBehaviour.GetText('JET_DEFAULT_INPUT');
+        JetDefaultInputPathRetrieved := TRUE;
+      END;
+      EXIT(JetDefaultInputPath);
+    END;
+
+    PROCEDURE GetDefaultOutputPath@9062231() : Text;
+    BEGIN
+      //DOC NA2016.10 - Returning jet default output path
+      //  <- The path
+
+      IF ( NOT (JetDefaultOutputPathRetrieved)) THEN
+      BEGIN
+        JetDefaultOutputPath := SystemBehaviour.GetText('JET_DEFAULT_OUTPUT');
+        JetDefaultOutputPathRetrieved := TRUE;
+      END;
+      EXIT(JetDefaultOutputPath);
+    END;
+
+    PROCEDURE OpenInputFile@9062233(pJetReportHeader@9062229 : Record 9062296);
+    BEGIN
+      //DOC NA2016.10 - Opening input file of the jet report
+      //  -> pJetReportHeader: The jet report header
+
+      OpenPath(pJetReportHeader.GetInputFilePath());
+    END;
+
+    PROCEDURE OpenInputFolder@9062235(pJetReportHeader@9062230 : Record 9062296);
+    VAR
+      lPath@9062229 : Text;
+    BEGIN
+      //DOC NA2016.10 - Opening input folder of the jet report
+      //  -> pJetReportHeader: The jet report header
+
+      lPath := pJetReportHeader.GetInputFilePath();
+      IF (lPath <> '') THEN
+      BEGIN
+        lPath := FileSystem.GetFolderName(FALSE, lPath);
+        OpenPath(lPath);
+      END;
+    END;
+
+    PROCEDURE OpenOutputFolder@9062236(pJetReportHeader@9062229 : Record 9062296);
+    BEGIN
+      //DOC NA2016.10 - Opening output folder of the jet report
+      //  -> pJetReportHeader: The jet report header
+
+      OpenPath(pJetReportHeader.GetOutputFolderPath());
+    END;
+
+    PROCEDURE OpenPath@9062237(pPath@9062229 : Text);
+    BEGIN
+      //DOC NA2016.10 - Opening (hyperlinking) the given path
+      //  -> pPath: The path
+
+      IF (pPath <> '') THEN
+        HYPERLINK(pPath);
+    END;
+
+    PROCEDURE InputPathLookup@9062238(VAR pJetReportHeader@9062233 : Record 9062296) : Boolean;
+    VAR
+      lFileManagement@9062229 : Codeunit 419;
+      eDialogTitle@9062231 : TextConst 'ENU=Select Jet Report;ENG=Select Jet Report';
+      eDialogFilter@9062230 : TextConst 'ENU=Excel Files (*.xls*)|*.xls*|All Files (*.*)|*.*;ENG=Excel Files (*.xls*)|*.xls*|All Files (*.*)|*.*';
+      lDefaultInputPath@9062237 : Text;
+      lInputPath@9062232 : Text;
+      lInputDirectoryName@9062236 : Text;
+      lInputFileName@9062235 : Text;
+      lResult@9062234 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Performing lookup for input file path
+      //  <> pJetReportHeader: The jet report header to perform lookup for
+      //  <- Lookup result
+
+      lResult := FALSE;
+      lInputPath := lFileManagement.OpenFileDialog(eDialogTitle, '', eDialogFilter);
+      IF (lInputPath <> '') THEN
+      BEGIN
+        lDefaultInputPath := GetDefaultInputPath();
+        lInputDirectoryName := FileSystem.GetFolderName(FALSE, lInputPath);
+        IF (LOWERCASE(lDefaultInputPath) = LOWERCASE(lInputDirectoryName)) THEN
+          lInputPath := FileSystem.GetFileName(FALSE, lInputPath);
+        pJetReportHeader.VALIDATE("Input File Path", lInputPath);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.4  JH 02/01/2015 - Created
+      //DOC NA2016.10 JH 27/08/2015 - Upgraded to 2016
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,280 @@
+OBJECT Codeunit 50011 3PL Catalogue Export XML
+{
+  OBJECT-PROPERTIES
+  {
+    Date=21/03/17;
+    Time=[ 9:56:19 AM];
+    Modified=Yes;
+    Version List=OP9031,IN36585,TM0026;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            ClearLastErrors;
+            IF NOT ExportXML(Filename) THEN
+              LogError(GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ExportXML'),GETLASTERRORCODE,Filename);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ERRLOCATION@1000000000 : TextConst 'ENU=%1\Codeunit 50011;ENG=%1\Codeunit 50011';
+      BrandName@1000000001 : Text;
+      NumVariants@1000000002 : Integer;
+      Filename@1000000003 : Text;
+
+    [TryFunction]
+    LOCAL PROCEDURE ExportXML@1000000001(VAR pFilename@1000000018 : Text);
+    VAR
+      XMLDoc@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLWriter@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlWriter";
+      ModistSetup@1000000002 : Record 50000;
+      Style@1000000003 : Record 9087012;
+      Item@1000000004 : Record 27;
+      WebIntegrationManagement@1000000005 : Codeunit 50100;
+      FileAttachment@1000000006 : Record 9062272;
+      Vendor@1000000007 : Record 23;
+      Colour@1000000009 : Record 9087003;
+      Size@1000000008 : Record 9087002;
+      ItemColours@1000000010 : Record 27;
+      ItemVariant@1000000011 : Record 5401;
+      GeneralLookup@1000000012 : Record 9062232;
+      ItemXRef@1000000013 : Record 5717;
+      BrandName@1000000016 : Text;
+      IntegrationProcessingGroup@1000000014 : Record 50007;
+      FileName@1000000015 : Text;
+      IntegrationFunctions@1000000017 : Codeunit 50008;
+    BEGIN
+      ModistSetup.GET;
+
+      IntegrationProcessingGroup.GET(ModistSetup."3PL Integration Type",ModistSetup."3PL Catalogue Group");
+
+      FileName := WebIntegrationManagement.Nav3PLCatalogFileName;
+      pFilename := FileName;
+
+      XMLWriter := XMLWriter.Create(WebIntegrationManagement.Nav3PLCatalogFileName);
+
+      XMLWriter.WriteStartElement('Items');
+
+      Style.FINDSET;
+      REPEAT
+        BrandName := GetBrandName(Style."Brand Code");
+        CLEAR(Item);
+        Item.SETRANGE("Style No.",Style."No.");
+        IF Item.FINDSET THEN BEGIN
+          NumVariants:= Item.COUNT;
+          REPEAT
+            //XMLWriter.WriteStartElement('Item');
+            ItemVariant.RESET; //variants
+            ItemVariant.SETRANGE("Item No.",Item."No.");
+            IF ItemVariant.FINDSET THEN BEGIN
+              REPEAT
+                XMLWriter.WriteStartElement('Item');
+                XMLWriter.WriteElementString('SKUNumber',ItemVariant."Item No." + '-' + ItemVariant.Code);
+                XMLWriter.WriteElementString('Description',AppendStrings(ItemVariant.Description,ItemVariant."Description 2",''));
+                XMLWriter.WriteElementString('VendorNo',Item."Vendor No.");
+                IF Vendor.GET(Item."Vendor No.") THEN BEGIN
+                  XMLWriter.WriteElementString('VendorName',AppendStrings(Vendor.Name,Vendor."Name 2",''));
+                  XMLWriter.WriteElementString('VendorAddress',AppendStrings(Vendor.Address,Vendor."Address 2",''));
+                  XMLWriter.WriteElementString('VendorCity',Vendor.City);
+                  XMLWriter.WriteElementString('VendorCounty',Vendor.County);
+                  XMLWriter.WriteElementString('VendorPostCode',Vendor."Post Code");
+                  XMLWriter.WriteElementString('VendorCountryCode',Vendor."Country/Region Code");
+                  XMLWriter.WriteElementString('VendorItemNo',Style."Vendor Style No.");
+                  XMLWriter.WriteElementString('VendorColour',GetColourName(Item."Vendor Colour Code"));
+                END;
+                XMLWriter.WriteElementString('CountryOfOrigin',Item."Country/Region of Origin Code");
+                XMLWriter.WriteElementString('Division',ItemVariant."Division Code");
+                XMLWriter.WriteElementString('Department',ItemVariant."Department Code");
+                XMLWriter.WriteElementString('Group',ItemVariant."Group Code");
+                XMLWriter.WriteElementString('Category',ItemVariant."Category Code");
+                XMLWriter.WriteElementString('SubCategory',ItemVariant."Sub-Category Code");
+                XMLWriter.WriteElementString('Season',ItemVariant."Season Code");
+                XMLWriter.WriteElementString('Colour',GetColourName(ItemVariant."Colour Code"));
+                XMLWriter.WriteElementString('SizeGroup',ItemVariant."Size Group Code");
+                XMLWriter.WriteElementString('USDCostPrice',FORMAT(Item."Unit Cost",0,9)); //DOC TM0026 AW 24/01/2018 -+
+
+                ItemXRef.RESET; //barcodes (EAN & UPC)
+                ItemXRef.SETRANGE("Item No.",Item."No.");
+                ItemXRef.SETRANGE("Cross-Reference Type",ItemXRef."Cross-Reference Type"::"Bar Code");
+                ItemXRef.SETRANGE("Variant Code",ItemVariant.Code);
+                IF ItemXRef.FINDSET THEN BEGIN
+                  REPEAT
+                    XMLWriter.WriteElementString(LOWERCASE(ItemXRef."Cross-Reference Type No."),ItemXRef."Cross-Reference No.");
+                  UNTIL ItemXRef.NEXT = 0;
+                END ELSE BEGIN
+                  XMLWriter.WriteElementString('EAN','');
+                  XMLWriter.WriteElementString('UPC','');
+                END;
+                XMLWriter.WriteElementString('Size',GetSizeName(ItemVariant."Size Group Code",ItemVariant."Size Code"));
+                XMLWriter.WriteElementString('Designer',BrandName);
+                XMLWriter.WriteElementString('HSCode', Item."Tariff No.");//DOC IN36585 EK 21/03/17 -+
+                XMLWriter.WriteEndElement; // </item>
+              UNTIL ItemVariant.NEXT = 0;
+            END ELSE BEGIN //no variants
+               XMLWriter.WriteStartElement('Item');
+              XMLWriter.WriteElementString('SKUNumber',Item."No.");
+              XMLWriter.WriteElementString('Description',AppendStrings(Item.Description,Item."Description 2",''));
+              IF Vendor.GET(Item."Vendor No.") THEN BEGIN
+                XMLWriter.WriteElementString('VendorName',AppendStrings(Vendor.Name,Vendor."Name 2",''));
+                XMLWriter.WriteElementString('VendorAddress',AppendStrings(Vendor.Address,Vendor."Address 2",''));
+                XMLWriter.WriteElementString('VendorCity',Vendor.City);
+                XMLWriter.WriteElementString('VendorCounty',Vendor.County);
+                XMLWriter.WriteElementString('VendorPostCode',Vendor."Post Code");
+                XMLWriter.WriteElementString('VendorCountryCode',Vendor."Country/Region Code");
+                XMLWriter.WriteElementString('VendorItemNo',Item."Vendor Item No.");
+                XMLWriter.WriteElementString('VendorColour',GetColourName(Item."Vendor Colour Code"));
+              END;
+                XMLWriter.WriteElementString('CountryOfOrigin',Item."Country/Region of Origin Code");
+                XMLWriter.WriteElementString('Division',Item."Division Code");
+                XMLWriter.WriteElementString('Department',Item."Department Code");
+                XMLWriter.WriteElementString('Group',Item."Group Code");
+                XMLWriter.WriteElementString('Category',Item."Category Code");
+                XMLWriter.WriteElementString('SubCategory',Item."Sub-Category Code");
+                XMLWriter.WriteElementString('Season',Item."Season Code");
+                XMLWriter.WriteElementString('Colour',GetColourName(Item."Colour Code"));
+                XMLWriter.WriteElementString('SizeGroup',Item."Size Group Code");
+                XMLWriter.WriteElementString('USDCostPrice',FORMAT(Item."Unit Cost",0,9)); //DOC TM0026 AW 24/01/2018 -+
+                ItemXRef.RESET; //barcodes (EAN & UPC)
+                ItemXRef.SETRANGE("Item No.",Item."No.");
+                ItemXRef.SETRANGE("Cross-Reference Type",ItemXRef."Cross-Reference Type"::"Bar Code");
+                ItemXRef.SETRANGE("Variant Code",'');
+                IF ItemXRef.FINDSET THEN BEGIN
+                  REPEAT
+                    XMLWriter.WriteElementString(LOWERCASE(ItemXRef."Cross-Reference Type No."),ItemXRef."Cross-Reference No.");
+                  UNTIL ItemXRef.NEXT = 0;
+                END ELSE BEGIN
+                  XMLWriter.WriteElementString('EAN','');
+                  XMLWriter.WriteElementString('UPC','');
+                END;
+                XMLWriter.WriteElementString('Size',GetSizeGroupName(Item."Size Group Code"));
+                XMLWriter.WriteElementString('Designer',BrandName);
+                XMLWriter.WriteElementString('HSCode', Item."Tariff No.");//DOC IN36585 EK 21/03/17 -+
+                XMLWriter.WriteEndElement; // </item>
+            END;
+
+          UNTIL Item.NEXT= 0;
+        END;
+      UNTIL Style.NEXT = 0;
+
+      XMLWriter.WriteEndElement; // </items>
+      XMLWriter.Flush;
+      XMLWriter.Close;
+
+      //upload to SFTP server
+      IF IntegrationProcessingGroup."Enable SFTP Connect" THEN BEGIN //if we are ready to connect to sftp
+        WebIntegrationManagement.TransferFTPfiles(IntegrationProcessingGroup."Working Location",IntegrationProcessingGroup."Archive Location",'.xml',ModistSetup."FTP temporary file extension",
+                                                ModistSetup."Demandware Export SFTP Server",IntegrationProcessingGroup."FTP Folder",IntegrationProcessingGroup."FTP Archive Folder",TRUE);
+      END;
+
+      //Log integration
+      IntegrationFunctions.Log3PLCatalogueUpload(FileName,'');
+    END;
+
+    LOCAL PROCEDURE AppendStrings@1000000000(string1@1000000000 : Text;string2@1000000001 : Text;string3@1000000002 : Text) : Text;
+    VAR
+      tempString@1000000003 : Text;
+    BEGIN
+      IF string1 <> '' THEN
+        tempString := tempString + string1;
+
+      IF string2 <> '' THEN
+        tempString := tempString + ' ' + string2;
+
+      IF string3 <> '' THEN
+        tempString := tempString + ' ' + string3;
+
+      EXIT(tempString);
+    END;
+
+    LOCAL PROCEDURE LogError@1000000015(ErrMessage@1000000002 : Text;ErrorLocation@1000000004 : Text;ErrCode@1000000005 : Text;FileName@1000000001 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+    BEGIN
+      //This function facilitates the logging of an error in the error log table by deriving the default values
+      //and applying the variable values
+      ModistSetup.GET;
+      ErrorHandler.LogError(ModistSetup."3PL Integration Type",
+                            ModistSetup."3PL Catalogue Group",
+                            '',
+                            0,
+                            '',
+                            0,
+                            ErrMessage,
+                            ErrorLocation,
+                            0,
+                            ErrCode,
+                            FileName);
+    END;
+
+    LOCAL PROCEDURE ClearLastErrors@1000000008();
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+      IntegrationErrorLog@1000000001 : Record 50011;
+    BEGIN
+      //This function deletes all previous errors for the integration type and group
+      ModistSetup.GET;
+      IntegrationErrorLog.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+      IntegrationErrorLog.SETRANGE("Integration Process Group",ModistSetup."3PL Catalogue Group");
+      IF IntegrationErrorLog.FINDSET THEN
+        IntegrationErrorLog.DELETEALL;
+
+      CLEARLASTERROR;
+    END;
+
+    LOCAL PROCEDURE GetSizeName@1000000003(SizeGroupCode@1000000000 : Code[20];SizeCode@1000000002 : Code[20]) : Text;
+    VAR
+      Size@1000000001 : Record 9087002;
+    BEGIN
+      //DOC OP9031 LF 20/10/2016 -
+      //This function derives the Size Name
+      IF Size.GET(SizeGroupCode,SizeCode) THEN
+        EXIT(Size.Name);
+      //DOC OP9031 LF 20/10/2016 +
+    END;
+
+    LOCAL PROCEDURE GetSizeGroupName@1000000004(SizeGroupCode@1000000000 : Code[20]) : Text;
+    VAR
+      SizeGroup@1000000001 : Record 9087001;
+    BEGIN
+      //DOC OP9031 LF 22/12/2016 -
+      //This function derives the Size Group Namee
+      IF SizeGroup.GET(SizeGroupCode) THEN BEGIN
+          EXIT(SizeGroup.Name)
+      END;
+      //DOC OP9031 LF 22/12/2016 +
+    END;
+
+    LOCAL PROCEDURE GetBrandName@1000000002(BrandCode@1000000000 : Code[10]) : Text;
+    VAR
+      Brand@1000000001 : Record 9087006;
+    BEGIN
+      //DOC OP9031 LF 19/10/2016 -
+      //This function derives the Brand Name
+      IF Brand.GET(BrandCode) THEN
+        EXIT(Brand.Name);
+      //DOC OP9031 LF 19/10/2016 +
+    END;
+
+    LOCAL PROCEDURE GetColourName@1000000007(ColourCode@1000000000 : Code[20]) : Text;
+    VAR
+      lColour@1000000001 : Record 9087003;
+    BEGIN
+      //DOC OP9031 LF 30/01/2017  -
+      IF lColour.GET(ColourCode) THEN
+        EXIT(lColour.Name);
+      //DOC OP9031 LF 30/01/2017 +
+    END;
+
+    BEGIN
+    {
+      //DOC IN36585 EK 21/03/17 - Added <HSCode> node.
+      //DOC TM0026 AW 24/01/2018 - USD Cost Price Element added.
+    }
+    END.
+  }
+}
+

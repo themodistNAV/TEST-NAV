@@ -1,0 +1,465 @@
+OBJECT Codeunit 9062249 Dialog Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=26/08/15;
+    Time=12:02:18 PM;
+    Version List=NA2016.3;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      mPlanningTools@1000000004 : Codeunit 9062230;
+      mDialog@1000000006 : Dialog;
+      mDialogText@1000000003 : Text[1024];
+      mCounterType@1000000013 : ARRAY [20] OF ' ,Text,Decimal,Progress';
+      mCounterCaption@1000000008 : ARRAY [20] OF Text[250];
+      mCounterDecimalValue@1000000000 : ARRAY [20,6] OF Decimal;
+      mCounterTextValue@1000000001 : ARRAY [20] OF Text[250];
+      mDecimalIndex@1000000007 : ',Refresh,Count,Step,Value,RoundedValue,RefreshedValue';
+      tOnlyIndexesBetween@1000000002 : TextConst 'ENU=Only indexes between 1 and 20 are allowed while using "Schedule Dialog Management".;ENG=Only indexes between 1 and 20 are allowed while using "Schedule Dialog Management".';
+      tIndexZero@1000000005 : TextConst 'ENU=Index can''t be zero for element in "Schedule Dialog Management".;ENG=Index can''t be zero for element in "Schedule Dialog Management".';
+      tCounterIsNotDecimal@1000000009 : TextConst 'ENU=Counter %1 is not a decimal counter.;ENG=Counter %1 is not a decimal counter.';
+      tCounterIsNotText@1000000010 : TextConst 'ENU=Counter %1 is not a text counter.;ENG=Counter %1 is not a text counter.';
+      mMaxIndex@1000000011 : Integer;
+      tFinalMessageCounter@1000000012 : TextConst 'ENU=%1: %2;ENG=%1: %2';
+      mStartDateTime@1000000016 : DateTime;
+      mShowAfter@1000000014 : Integer;
+      mDialogOpened@1000000015 : Boolean;
+      mTitle@1000000017 : Text[1024];
+
+    PROCEDURE "--- General Methods ---"@1000000007();
+    BEGIN
+    END;
+
+    PROCEDURE Add@1000000001(pCaption@1000000000 : Text[250];pCaptionLength@1000000001 : Integer;pIndex@1000000002 : Integer;pLength@1000000003 : Integer;pDecimal@1000000006 : Boolean;pProgress@1000000004 : Boolean);
+    VAR
+      lChar@1000000005 : Code[1];
+    BEGIN
+      //DOC NA2015.1 - Adding another counter to a dialog
+      //  -> pCaption: Caption of the element
+      //  -> pCaptionLength: Caption length
+      //  -> pIndex: Index of the counter
+      //  -> pLength: Length of the counter
+      //  -> pDecimal: TRUE: Decimal counter, FALSE: Text counter
+      //  -> pProgress: TRUE: Progress counter, FALSE: Normal counter
+
+      IF ( NOT (GUIALLOWED())) THEN
+        EXIT;
+
+      IF ((pIndex < 0) OR (pIndex > 20)) THEN
+        ERROR(tOnlyIndexesBetween);
+      IF ((pIndex = 0) AND (pLength > 0)) THEN
+        ERROR(tIndexZero);
+
+      IF (pDecimal) THEN
+      BEGIN
+        CLEAR(mCounterDecimalValue[pIndex]);
+        mCounterDecimalValue[pIndex][mDecimalIndex::Count] := mPlanningTools.IIFDecimal(pProgress, 10000, 1);
+        mCounterDecimalValue[pIndex][mDecimalIndex::Step] := mPlanningTools.IIFDecimal(pProgress, 100, 1);
+        mCounterDecimalValue[pIndex][mDecimalIndex::Refresh] := mPlanningTools.IIFDecimal(pProgress, 100, 1);
+        mCounterType[pIndex] := mPlanningTools.IIFInteger(pProgress, mCounterType[pIndex]::Progress,
+          mCounterType[pIndex]::Decimal);
+      END
+      ELSE
+      BEGIN
+        mCounterTextValue[pIndex] := '';
+        mCounterType[pIndex] := mCounterType[pIndex]::Text;
+      END;
+      mCounterCaption[pIndex] := pCaption;
+
+      IF (pIndex > mMaxIndex) THEN
+        mMaxIndex := pIndex;
+
+      IF (mDialogText <> '') THEN
+        mDialogText := mDialogText + '\';
+      IF (pCaptionLength > 0) THEN
+        mDialogText := mDialogText + PADSTR(pCaption, pCaptionLength, ' ');
+      IF (pLength > 0) THEN
+      BEGIN
+        IF (pCaptionLength > 0) THEN
+          mDialogText := mDialogText + ' ';
+        lChar := mPlanningTools.IIFText(pProgress, '@', '#');
+        mDialogText := mDialogText + PADSTR(lChar + FORMAT(pIndex), pLength, lChar);
+      END;
+    END;
+
+    PROCEDURE Open@1000000002(pTitle@1000000000 : Text[1024]);
+    BEGIN
+      //DOC NA2015.1 - Opening dialog
+      //  -> pTitle: Title
+
+      mTitle := pTitle;
+      OpenInternal();
+    END;
+
+    LOCAL PROCEDURE OpenInternal@1000000033() : Boolean;
+    BEGIN
+      //DOC NA2015.1 - Opening dialog (internal version)
+
+      IF ( NOT (GUIALLOWED())) THEN
+        EXIT(FALSE);
+
+      IF (mDialogOpened) THEN
+        EXIT(TRUE);
+
+      IF ((mShowAfter > 0) AND (mStartDateTime = 0DT)) THEN
+        mStartDateTime := CURRENTDATETIME();
+
+      IF (TimeToShow()) THEN
+      BEGIN
+        IF (mTitle <> '') THEN
+          mDialogText := mTitle + '\' + mDialogText;
+        mDialog.OPEN(mDialogText);
+        mDialogOpened := TRUE;
+      END;
+
+      EXIT(mDialogOpened);
+    END;
+
+    PROCEDURE Close@1000000003();
+    BEGIN
+      //DOC NA2015.1 - Closing dialog
+      //  -> pTitle: Title
+
+      IF ( NOT (GUIALLOWED())) THEN
+        EXIT;
+
+      IF ( NOT (mDialogOpened)) THEN
+        EXIT;
+
+      mDialog.CLOSE();
+
+      mDialogOpened := FALSE;
+    END;
+
+    PROCEDURE FinalMessage@1000000000(pMessageTitle@1000000001 : Text[250]);
+    VAR
+      lMessage@1000000002 : Text[1024];
+      lIndex@1000000000 : Integer;
+    BEGIN
+      //DOC NA2015.1 - Showing final message
+      //  -> pMessageTitle: Message title
+
+      IF ( NOT (GUIALLOWED())) THEN
+        EXIT;
+
+      IF (pMessageTitle <> '') THEN
+        lMessage := pMessageTitle + '\';
+
+      FOR lIndex := 1 TO mMaxIndex DO
+      BEGIN
+        IF (mCounterType[lIndex] = mCounterType[lIndex]::Decimal) THEN
+        BEGIN
+          IF (lMessage <> '') THEN
+            lMessage := lMessage + '\';
+          lMessage := lMessage + STRSUBSTNO(tFinalMessageCounter, mCounterCaption[lIndex],
+            mCounterDecimalValue[lIndex][mDecimalIndex::Value]);
+        END;
+      END;
+
+      MESSAGE(lMessage);
+    END;
+
+    PROCEDURE "--- Decimal Counters ---"@1000000014();
+    BEGIN
+    END;
+
+    PROCEDURE SetCounterCount@1000000012(pIndex@1000000000 : Integer;pCount@1000000001 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Setting count for dialog counter
+      //  -> pIndex: Counter index
+      //  -> pCount: Count
+
+      IF ( NOT (GUIALLOWED())) THEN
+        EXIT;
+
+      IF ( NOT (OpenInternal())) THEN
+        EXIT;
+
+      CheckIndex(pIndex);
+      CheckIfCounterDecimal(pIndex);
+
+      mCounterDecimalValue[pIndex][mDecimalIndex::Count] := pCount;
+      IF (pCount <> 0) THEN
+        mCounterDecimalValue[pIndex][mDecimalIndex::Step] := mPlanningTools.IIFDecimal((pCount <> 0), 10000 / pCount, 0)
+      ELSE
+        mCounterDecimalValue[pIndex][mDecimalIndex::Step] := 0;
+      mCounterDecimalValue[pIndex][mDecimalIndex::Value] := 0;
+      mCounterDecimalValue[pIndex][mDecimalIndex::RoundedValue] := 0;
+      mCounterDecimalValue[pIndex][mDecimalIndex::RefreshedValue] := 0;
+    END;
+
+    PROCEDURE GetCounterDecimalValue@1000000017(pIndex@1000000000 : Integer) : Decimal;
+    BEGIN
+      //DOC NA2015.1 - Getting dialog counter decimal value
+      //  -> pIndex: Counter index
+      //  <- Value
+
+      IF ( NOT (GUIALLOWED())) THEN
+        EXIT;
+
+      IF ( NOT (OpenInternal())) THEN
+        EXIT;
+
+      CheckIndex(pIndex);
+      CheckIfCounterDecimal(pIndex);
+
+      EXIT(mCounterDecimalValue[pIndex][mDecimalIndex::Value]);
+    END;
+
+    PROCEDURE SetCounterDecimalValue@1000000030(pIndex@1000000001 : Integer;pValue@1000000000 : Decimal);
+    BEGIN
+      //DOC NA2015.1 - Setting counter decimal value
+      //  -> pIndex: Counter index
+      //  -> pValue: Value
+
+      IF ( NOT (GUIALLOWED())) THEN
+        EXIT;
+
+      IF ( NOT (OpenInternal())) THEN
+        EXIT;
+
+      CheckIndex(pIndex);
+      CheckIfCounterDecimal(pIndex);
+
+      mCounterDecimalValue[pIndex][mDecimalIndex::Value] := pValue;
+      mCounterDecimalValue[pIndex][mDecimalIndex::RoundedValue] := ROUND(mCounterDecimalValue[pIndex][mDecimalIndex::Value],
+        mCounterDecimalValue[pIndex][mDecimalIndex::Refresh]);
+      IF (mCounterDecimalValue[pIndex][mDecimalIndex::RoundedValue] <> mCounterDecimalValue[pIndex][mDecimalIndex::RefreshedValue]) THEN
+      BEGIN
+        mCounterDecimalValue[pIndex][mDecimalIndex::RefreshedValue] := mCounterDecimalValue[pIndex][mDecimalIndex::RoundedValue];
+        mDialog.UPDATE(pIndex, mCounterDecimalValue[pIndex][mDecimalIndex::RefreshedValue]);
+      END;
+    END;
+
+    PROCEDURE StepCounter@1000000004(pIndex@1000000001 : Integer);
+    BEGIN
+      //DOC NA2015.3 - Stepping dialog counter
+      //  -> pIndex: Counter index
+
+      IF ( NOT (GUIALLOWED())) THEN
+        EXIT;
+
+      IF ( NOT (OpenInternal())) THEN
+        EXIT;
+
+      CheckIndex(pIndex);
+      CheckIfCounterDecimal(pIndex);
+
+      MoveCounter(pIndex, 1);
+    END;
+
+    PROCEDURE MoveCounter@1000000018(pIndex@1000000001 : Integer;pValue@1000000000 : Decimal);
+    BEGIN
+      //DOC NA2015.1 - Moving dialog counter
+      //  -> pIndex: Counter index
+      //  -> pValue: Value
+
+      IF ( NOT (GUIALLOWED())) THEN
+        EXIT;
+
+      IF ( NOT (OpenInternal())) THEN
+        EXIT;
+
+      CheckIndex(pIndex);
+      CheckIfCounterDecimal(pIndex);
+
+      mCounterDecimalValue[pIndex][mDecimalIndex::Value] += pValue * mCounterDecimalValue[pIndex][mDecimalIndex::Step];
+      mCounterDecimalValue[pIndex][mDecimalIndex::RoundedValue] := ROUND(mCounterDecimalValue[pIndex][mDecimalIndex::Value],
+        mCounterDecimalValue[pIndex][mDecimalIndex::Refresh]);
+      IF (mCounterDecimalValue[pIndex][mDecimalIndex::RoundedValue] <> mCounterDecimalValue[pIndex][mDecimalIndex::RefreshedValue]) THEN
+      BEGIN
+        mCounterDecimalValue[pIndex][mDecimalIndex::RefreshedValue] := mCounterDecimalValue[pIndex][mDecimalIndex::RoundedValue];
+        mDialog.UPDATE(pIndex, mCounterDecimalValue[pIndex][mDecimalIndex::RefreshedValue]);
+      END;
+    END;
+
+    PROCEDURE SetCounterMax@1000000016(pIndex@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Setting dialog counter maximal value
+      //  -> pIndex: Counter index
+
+      IF ( NOT (GUIALLOWED())) THEN
+        EXIT;
+
+      IF ( NOT (OpenInternal())) THEN
+        EXIT;
+
+      CheckIndex(pIndex);
+      CheckIfCounterDecimal(pIndex);
+
+      mCounterDecimalValue[pIndex][mDecimalIndex::Value] := 10000;
+      mCounterDecimalValue[pIndex][mDecimalIndex::RoundedValue] := 10000;
+      mCounterDecimalValue[pIndex][mDecimalIndex::RefreshedValue] := 10000;
+      mDialog.UPDATE(pIndex, mCounterDecimalValue[pIndex][mDecimalIndex::RefreshedValue]);
+    END;
+
+    PROCEDURE "--- Text Counters ---"@1000000015();
+    BEGIN
+    END;
+
+    PROCEDURE SetCounterTextValue@1000000005(pIndex@1000000000 : Integer;pValue@1000000001 : Text[1024]);
+    BEGIN
+      //DOC NA2015.1 - Setting dialog counter text value
+      //  -> pIndex: Counter index
+      //  -> pValue: Value to set
+
+      IF ( NOT (GUIALLOWED())) THEN
+        EXIT;
+
+      IF ( NOT (OpenInternal())) THEN
+        EXIT;
+
+      CheckIndex(pIndex);
+      CheckIfCounterText(pIndex);
+
+      mCounterTextValue[pIndex] := pValue;
+      mDialog.UPDATE(pIndex, mCounterTextValue[pIndex]);
+    END;
+
+    PROCEDURE GetCounterTextValue@1000000006(pIndex@1000000000 : Integer) : Text[1024];
+    BEGIN
+      //DOC NA2015.1 - Getting dialog counter text value
+      //  -> pIndex: Counter index
+      //  <- Value
+
+      IF ( NOT (GUIALLOWED())) THEN
+        EXIT;
+
+      IF ( NOT (OpenInternal())) THEN
+        EXIT;
+
+      CheckIndex(pIndex);
+      CheckIfCounterText(pIndex);
+
+      EXIT(mCounterTextValue[pIndex]);
+    END;
+
+    PROCEDURE "--- General Counters ---"@1000000020();
+    BEGIN
+    END;
+
+    PROCEDURE ResetCounter@1000000021(pIndex@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.3 - Resetting a counter
+      //  -> pIndex: Counter index
+
+      IF (IsCounterDecimal(pIndex)) THEN
+        SetCounterDecimalValue(pIndex, 0)
+      ELSE IF (IsCounterText(pIndex)) THEN
+        SetCounterTextValue(pIndex, '');
+    END;
+
+    PROCEDURE "--- Time ---"@1000000010();
+    BEGIN
+    END;
+
+    PROCEDURE SetShowAfter@1000000019(pShowAfter@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Setting "Show After" time
+      //  -> pShowAfter: The show after time
+
+      mShowAfter := pShowAfter;
+    END;
+
+    PROCEDURE ResetStartDateTime@1000000036();
+    BEGIN
+      //DOC NA2015.1 - Resetting starting date & time
+
+      mStartDateTime := CURRENTDATETIME();
+    END;
+
+    LOCAL PROCEDURE TimeToShow@1000000024() : Boolean;
+    VAR
+      lCurrentDateTime@1000000000 : DateTime;
+      lStartDate@1000000001 : Date;
+      lStartTime@1000000002 : Time;
+      lCurrentDate@1000000003 : Date;
+      lCurrentTime@1000000004 : Time;
+      lTime@1000000005 : Integer;
+    BEGIN
+      //DOC NA2015.1 - Returning if it is time to show the dialog
+      //  <- Time to show / not
+
+      IF (mDialogOpened) THEN
+        EXIT(FALSE);
+
+      IF ((mShowAfter <= 0) OR (mStartDateTime = 0DT)) THEN
+        EXIT(TRUE);
+
+      lCurrentDateTime := CURRENTDATETIME();
+      lStartDate := DT2DATE(mStartDateTime);
+      lStartTime := DT2TIME(mStartDateTime);
+      lCurrentDate := DT2DATE(lCurrentDateTime);
+      lCurrentTime := DT2TIME(lCurrentDateTime);
+      lTime := ((lCurrentDate - lStartDate) * 24 * 60 * 60) + ((lCurrentTime - lStartTime) DIV 1000);
+      EXIT(lTime >= mShowAfter);
+    END;
+
+    PROCEDURE "--- Tools ---"@1000000011();
+    BEGIN
+    END;
+
+    PROCEDURE CheckIndex@1000000013(pIndex@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.1 - Checking if the index is within limits
+      //  -> pIndex: Index
+
+      IF ((pIndex < 1) OR (pIndex > 20)) THEN
+        ERROR(tOnlyIndexesBetween);
+    END;
+
+    LOCAL PROCEDURE IsCounterDecimal@1000000023(pIndex@1000000000 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.3 - Returning if the counter is a decimal counter
+      //  -> pIndex: Index
+      //  <- Answer
+
+      EXIT(mCounterType[pIndex] IN [mCounterType[pIndex]::Decimal, mCounterType[pIndex]::Progress]);
+    END;
+
+    LOCAL PROCEDURE IsCounterText@1000000022(pIndex@1000000000 : Integer) : Boolean;
+    BEGIN
+      //DOC NA2015.3 - Returning if the counter is a text counter
+      //  -> pIndex: Index
+      //  <- Answer
+
+      EXIT(mCounterType[pIndex] = mCounterType[pIndex]::Text);
+    END;
+
+    LOCAL PROCEDURE CheckIfCounterDecimal@1000000008(pIndex@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.3 - Checking if the counter is a decimal counter
+      //  -> pIndex: Index
+
+      IF ( NOT (IsCounterDecimal(pIndex))) THEN
+        ERROR(tCounterIsNotDecimal, pIndex);
+    END;
+
+    LOCAL PROCEDURE CheckIfCounterText@1000000009(pIndex@1000000000 : Integer);
+    BEGIN
+      //DOC NA2015.3 - Checking if the counter is a text counter
+      //  -> pIndex: Index
+
+      IF ( NOT (IsCounterText(pIndex))) THEN
+        ERROR(tCounterIsNotText, pIndex);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1 JH 09/10/2012 - Planning Board 2013
+      //DOC NA2015.3 JH 20/08/2014 - Reset added, setting decimal value added, a couple of technical mods
+      //DOC NA2015.3 JH 29/08/2014 - Further fixes ("StepCounter" function)
+      //DOC NA2016.3 JH 26/08/2015 - Upgraded to 2016
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,118 @@
+OBJECT Codeunit 9062594 AutoNAV Task User Session
+{
+  OBJECT-PROPERTIES
+  {
+    Date=18/12/15;
+    Time=[ 2:12:53 PM];
+    Version List=NA2016.12;
+  }
+  PROPERTIES
+  {
+    TableNo=9062734;
+    OnRun=BEGIN
+            IF WaitForAutoNavTaskReady(Rec) THEN
+              Process(Rec)
+            ELSE BEGIN
+              LOCKTABLE;
+              IF NOT GET(ID) THEN
+                EXIT;
+              IF ("Expiration Date/Time" > 0DT) AND (CURRENTDATETIME > "Expiration Date/Time") THEN
+                SetError(Text001);
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1000000000 : TextConst 'ENU=The job queue entry has expired.;ENG=The job queue entry has expired.';
+
+    LOCAL PROCEDURE WaitForAutoNavTaskReady@2(VAR AutoNavTask@1001 : Record 9062734) : Boolean;
+    VAR
+      Status@1003 : 'Not Ready,Ready,Deleted,Restarted';
+    BEGIN
+      Status := CheckCurrAutoNavTaskReady(AutoNavTask);
+      WHILE (Status = Status::"Not Ready") AND
+            ((AutoNavTask."Expiration Date/Time" = 0DT) OR (AutoNavTask."Expiration Date/Time" > CURRENTDATETIME))
+      DO BEGIN
+        COMMIT;
+        SLEEP(NoOfMilliSecondsToWait(AutoNavTask));
+        Status := CheckCurrAutoNavTaskReady(AutoNavTask);
+      END;
+      EXIT(Status = Status::Ready);
+    END;
+
+    LOCAL PROCEDURE CheckCurrAutoNavTaskReady@1(VAR AutoNavTask@1000 : Record 9062734) : Integer;
+    VAR
+      Status@1001 : 'Not Ready,Ready,Deleted,Restarted';
+    BEGIN
+      AutoNavTask.LOCKTABLE;
+      IF AutoNavTask.GET(AutoNavTask."AutoNAV Task Queue Code", AutoNavTask.ID) THEN BEGIN
+        IF AutoNavTask."User Service Instance ID" = 0 THEN BEGIN
+          AutoNavTask."User Service Instance ID" := SERVICEINSTANCEID;
+          AutoNavTask."User Session Started" := CURRENTDATETIME;
+          AutoNavTask.MODIFY;
+        END;
+        IF AutoNavTask."User Session ID" <> SESSIONID THEN
+          EXIT(Status::Restarted);
+        IF AutoNavTask.Status = AutoNavTask.Status::"In Process" THEN
+          EXIT(Status::Ready);
+        EXIT(Status::"Not Ready");
+      END;
+      EXIT(Status::Deleted);
+    END;
+
+    LOCAL PROCEDURE Process@9(VAR AutoNavTask@1000 : Record 9062734);
+    VAR
+      Success@1001 : Boolean;
+      AttemptToRun@1002 : Boolean;
+      NoOfAttempts@1003 : Integer;
+    BEGIN
+      COMMIT;
+      AttemptToRun := TRUE;
+      WHILE NOT Success AND AttemptToRun DO BEGIN
+        IF (NoOfAttempts > 0) AND (AutoNavTask."Rerun Delay (sec.)" > 0) THEN BEGIN
+          AutoNavTask.LOCKTABLE;
+          AutoNavTask.GET(AutoNavTask."AutoNAV Task Queue Code", AutoNavTask.ID);
+          AutoNavTask.SetErrorMessage(GETLASTERRORTEXT);
+          AutoNavTask.MODIFY(TRUE);
+          COMMIT;
+          SLEEP(AutoNavTask."Rerun Delay (sec.)" * 1000);
+        END;
+
+        Success := CODEUNIT.RUN(CODEUNIT::"AutoNAV Task Queue Start Cdu.",AutoNavTask);
+        IF NOT Success THEN BEGIN
+          NoOfAttempts := NoOfAttempts + 1;
+          AttemptToRun := NoOfAttempts < AutoNavTask."Maximum No. of Attempts to Run";
+        END;
+      END;
+      AutoNavTask.LOCKTABLE;
+      IF AutoNavTask.GET(AutoNavTask."AutoNAV Task Queue Code", AutoNavTask.ID) THEN
+        AutoNavTask.TESTFIELD(Status,AutoNavTask.Status::"In Process")
+      ELSE
+        ERROR(Text001);
+      COMMIT;
+      IF Success THEN
+        AutoNavTask.SetStatus(AutoNavTask.Status::Finished)
+      ELSE
+        AutoNavTask.SetError(GETLASTERRORTEXT);
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE NoOfMilliSecondsToWait@3(VAR AutoNavTask@1000 : Record 9062734) : Integer;
+    BEGIN
+      IF AutoNavTask."Earliest Start Date/Time" > CURRENTDATETIME + 600000 THEN
+        EXIT(600000);
+      IF AutoNavTask."Earliest Start Date/Time" > CURRENTDATETIME + 60000 THEN
+        EXIT(AutoNavTask."Earliest Start Date/Time" - CURRENTDATETIME - 10000);
+      EXIT(1000);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.12 JH 17/12/2015 - Updated from standard
+    }
+    END.
+  }
+}
+

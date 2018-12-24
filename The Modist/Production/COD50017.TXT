@@ -1,0 +1,737 @@
+OBJECT Codeunit 50017 3PL Order Update Functions
+{
+  OBJECT-PROPERTIES
+  {
+    Date=17/12/18;
+    Time=[ 7:05:23 PM];
+    Modified=Yes;
+    Version List=OP9031,TM3028,TM3032;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            ModistSetup.GET;
+            ModistSetup.TESTFIELD("3PL Order Update Import Group");
+            ModistSetup.TESTFIELD("3PL Order Update Process Group");
+            ModistSetup.TESTFIELD("3PL Import SFTP Server");
+            IntegrationProcessingGroup.GET(ModistSetup."3PL Integration Type",ModistSetup."3PL Order Update Import Group");
+            IntegrationProcessingGroup.TESTFIELD("Working Location");
+            IntegrationProcessingGroup.TESTFIELD("Archive Location");
+            IF IntegrationProcessingGroup."Enable SFTP Connect" THEN
+              DownloadftpFiles;
+
+            ImportOrderUpdates;
+            COMMIT;
+            ProcessOrderUpdates;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ModistSetup@1000000000 : Record 50000;
+      IntegrationProcessingGroup@1000000005 : Record 50007;
+      IntegrationProcessMgmt@1000000001 : Codeunit 50005;
+      Location@1000000002 : Record 14;
+      GACEntryNo@1000000003 : Integer;
+      InvalidFile@1000000004 : Boolean;
+      FailCount@1000000006 : Integer;
+      SuccessCount@1000000007 : Integer;
+      MARACreateOrderG@1170000000 : Codeunit 50084;
+      ErrorHandlerG@1170000001 : Codeunit 50007;
+
+    LOCAL PROCEDURE DownloadftpFiles@1000000001();
+    VAR
+      WebIntegrationManagement@1000000000 : Codeunit 50100;
+    BEGIN
+      IF NOT WebIntegrationManagement.DownloadftpFiles(IntegrationProcessingGroup."Working Location",ModistSetup."3PL Import SFTP Server",IntegrationProcessingGroup."FTP Folder") THEN
+        ERROR(GETLASTERRORTEXT);
+    END;
+
+    LOCAL PROCEDURE ImportOrderUpdates@1000000002();
+    VAR
+      FileRec@1000000000 : Record 2000000022;
+      ImportError@1000000001 : Record 50009;
+      WebIntegrationManagement@1000000002 : Codeunit 50100;
+      SalesPayProcessing@1000000007 : Codeunit 50026;
+      GACOrderUpdate@1000000003 : Record 50013;
+      SalesHeader@1000000004 : Record 36;
+      PurchHeader@1000000005 : Record 38;
+      GACDocNo@1000000006 : Code[20];
+      List@1000000009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      element@1000000008 : Text;
+      IntegrationFunctions@1000000010 : Codeunit 50008;
+      FileMgmnt@1000000011 : Codeunit 419;
+      Filename@1000000012 : Text;
+      FailList@1000000013 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+    BEGIN
+      GACOrderUpdate.RESET;
+      IF GACOrderUpdate.FINDLAST THEN
+        GACEntryNo := GACOrderUpdate."Entry No."
+      ELSE
+        GACEntryNo := 0;
+      SuccessCount := 0;
+      FailCount := 0;
+      GACOrderUpdate.SETCURRENTKEY("File Name");
+      FileRec.SETRANGE(Path,IntegrationProcessingGroup."Working Location");
+      FileRec.SETRANGE("Is a file",TRUE);
+      FileRec.SETFILTER(Name,'%1','*.xml');
+      IF FileRec.FINDFIRST THEN BEGIN
+        List := List.List();
+        FailList := FailList.List();
+        REPEAT
+          IF ImportOrder(IntegrationProcessingGroup."Working Location" + FileRec.Name, FileRec.Name) THEN BEGIN
+            InvalidFile := FALSE;
+            SuccessCount := SuccessCount + 1;
+            //LF 24/01/2017 -
+            //RENAME(IntegrationProcessingGroup."Working Location" + FileRec.Name, IntegrationProcessingGroup."Archive Location" + FileRec.Name);
+            //LF 24/01/2017 +
+            ImportError.SETRANGE("File Name",FileRec.Name);
+            IF ImportError.FINDFIRST THEN
+              ImportError.DELETE;
+            COMMIT;
+            GACOrderUpdate.SETRANGE("File Name",FileRec.Name);
+            //GACOrderUpdate.SETRANGE(Ship,TRUE);
+            GACOrderUpdate.SETFILTER("Line Status",'%1|%2',GACOrderUpdate."Line Status"::Picked,GACOrderUpdate."Line Status"::Shipped);
+            IF GACOrderUpdate.FINDFIRST THEN BEGIN
+              GACDocNo := '';
+              REPEAT
+                IF GACDocNo <> GACOrderUpdate."Document No." THEN BEGIN
+                  IF GACOrderUpdate."Document Type" = GACOrderUpdate."Document Type"::"Sales Order" THEN BEGIN
+                    SalesHeader.SETRANGE("Document Type",SalesHeader."Document Type"::Order);
+                  // OP9031 RK 09/01/2017 -
+                    //SalesHeader.SETRANGE("No.",GACOrderUpdate."Document No.");
+                    SalesHeader.SETRANGE("Internet Order Reference",GACOrderUpdate."Document No.");
+                  // OP9031 RK 09/01/2017 +
+                    IF SalesHeader.FINDFIRST THEN BEGIN
+                      IntegrationProcessMgmt.Add3PLOrderUpdateSO(SalesHeader);
+                      {CASE GACOrderUpdate."Line Status" OF
+                        GACOrderUpdate."Line Status"::Processing:
+                          IntegrationProcessMgmt.AddUpdateProcessed(SalesHeader);
+                        GACOrderUpdate."Line Status"::Picked:
+                          BEGIN
+                            IntegrationProcessMgmt.AddUpdatePicking(SalesHeader);
+                            SalesPayProcessing.CaptureOrderPayments(SalesHeader."No.",SalesHeader."Bill-to Customer No.");
+                          END;
+                        GACOrderUpdate."Line Status"::Shipped:
+                          BEGIN
+                            IntegrationProcessMgmt.AddUpdateShipped(SalesHeader);
+                            SalesPayProcessing.CaptureOrderPayments(SalesHeader."No.",SalesHeader."Bill-to Customer No.");
+                          END;
+                        GACOrderUpdate."Line Status"::Cancelled:
+                          IntegrationProcessMgmt.AddUpdateCancelled(SalesHeader);
+                      END;}
+                    END;
+                  END ELSE BEGIN
+                    PurchHeader.SETRANGE("Document Type",PurchHeader."Document Type"::"Return Order");
+                    PurchHeader.SETRANGE("No.",GACOrderUpdate."Document No.");
+                    IF PurchHeader.FINDFIRST THEN
+                      IntegrationProcessMgmt.Add3PLOrderUpdatePR(PurchHeader);
+                  END;
+                  GACDocNo := GACOrderUpdate."Document No.";
+                END;
+              UNTIL GACOrderUpdate.NEXT = 0;
+            END;
+          END ELSE BEGIN
+            //RENAME(IntegrationProcessingGroup."Working Location" + FileRec.Name, IntegrationProcessingGroup."Error Location" + FileRec.Name);
+            InvalidFile := TRUE;
+            FailCount := FailCount + 1;
+            FailList.Add(FileMgmnt.CombinePath(FileRec.Path,FileRec.Name));
+            ImportError.SETRANGE("File Name",FileRec.Name);
+            IF ImportError.FINDFIRST THEN BEGIN
+              ImportError."Error Text" := GETLASTERRORTEXT;
+              ImportError.MODIFY;
+            END ELSE BEGIN
+              ImportError.INIT;
+              ImportError."File Name" := FileRec.Name;
+              ImportError."Error Text" := GETLASTERRORTEXT;
+              ImportError.INSERT;
+            END;
+            GACOrderUpdate.SETRANGE("File Name",FileRec.Name);
+            IF NOT GACOrderUpdate.ISEMPTY THEN
+              GACOrderUpdate.DELETEALL;
+          END;
+
+          //LF 24/01/2017 -
+          //those files that are not in error will be recorded in an list
+          IF InvalidFile = FALSE THEN BEGIN
+            IF IntegrationFunctions.GetNumIntegrationErrors(ModistSetup."3PL Integration Type",ModistSetup."3PL Order Update Import Group",FileRec.Name) = 0 THEN BEGIN
+              List.Add(FileMgmnt.CombinePath(FileRec.Path, FileRec.Name));
+              //Log integration
+              IntegrationFunctions.LogDMWOrderUpdate(FileRec.Path + FileRec.Name,'');
+            END;
+          END;
+          //LF 24/01/2017 +
+        UNTIL FileRec.NEXT = 0;
+
+        //LF 24/01/2017 -
+        //iterate through our list and move the files to the archive
+        IF SuccessCount > 0 THEN BEGIN
+          Filename:='';
+          FOREACH element IN List DO BEGIN
+            Filename := FileMgmnt.GetFileName(element);
+            IntegrationFunctions.MoveFile(FileMgmnt.CombinePath(IntegrationProcessingGroup."Working Location", Filename),FileMgmnt.CombinePath(IntegrationProcessingGroup."Archive Location",Filename));
+          END;
+        END;
+        IF FailCount > 0 THEN BEGIN
+          Filename:='';
+          FOREACH element IN FailList DO BEGIN
+            Filename := FileMgmnt.GetFileName(element);
+            IntegrationFunctions.MoveFile(FileMgmnt.CombinePath(IntegrationProcessingGroup."Working Location", Filename),FileMgmnt.CombinePath(IntegrationProcessingGroup."Error Location",Filename));
+          END;
+        END;
+        CLEAR(List);
+        CLEAR(FailList);
+        //LF 24/01/2017 +
+      END;
+    END;
+
+    [TryFunction]
+    PROCEDURE ImportOrder@1000000000(FileName@1000000000 : Text;ShortFileName@1000000011 : Text);
+    VAR
+      SalesHeader@1000000013 : Record 36;
+      SalesLine@1000000015 : Record 37;
+      OrderUpdateCode@1000000017 : Record 50012;
+      GACOrderUpdate@1000000001 : Record 50013;
+      Customer@1000000012 : Record 18;
+      ShipmentMethod@1000000006 : Record 10;
+      SalesPromotion@1000000007 : Record 50006;
+      SalesPayment@1000000009 : Record 50008;
+      Reader@1000000003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlTextReader";
+      Reader2@1000000005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlTextReader";
+      IsSales@1000000002 : Boolean;
+      OrderNo@1000000004 : Code[20];
+      OrderStartus@1000000008 : Code[20];
+      AirwayBillNo@1000000010 : Text;
+      ReturnAirwayBillNumber@1000000014 : Text;
+      MaraAPICalled@1170000000 : Boolean;
+    BEGIN
+      SalesHeader.SETRANGE("Document Type",SalesHeader."Document Type"::Order);
+      Reader := Reader.Create(FileName);
+      WHILE Reader.Read DO BEGIN
+        IF Reader.IsStartElement THEN BEGIN
+          CASE Reader.Name OF
+            'SalesOrderNo':
+              BEGIN
+                IsSales := TRUE;
+                OrderNo := DELCHR(Reader.ReadString);
+              //OP9031 RK 30/01/2017 -
+                IF COPYSTR(OrderNo,1,2) = 'PR' THEN
+                  IsSales := FALSE;
+              //OP9031 RK 30/01/2017 +
+                AirwayBillNo := '';
+                MaraAPICalled := FALSE;
+              END;
+            'PurchReturnNo':
+              BEGIN
+                IsSales := FALSE;
+                OrderNo := DELCHR(Reader.ReadString);
+              END;
+            'AirwayBillNumber':
+              AirwayBillNo := Reader.ReadString;
+            'ReturnAirwayBillNumber':
+              ReturnAirwayBillNumber := Reader.ReadString;
+            'OrderStatus':
+              OrderStartus := Reader.ReadString;
+            'LineNo':
+              BEGIN
+                GACOrderUpdate.INIT;
+                GACEntryNo := GACEntryNo + 1;
+                GACOrderUpdate."Entry No." := GACEntryNo;
+                IF IsSales THEN BEGIN
+                  GACOrderUpdate."Document Type" := GACOrderUpdate."Document Type"::"Sales Order";
+                  SalesHeader.SETRANGE("Internet Order Reference",OrderNo);
+                  IF SalesHeader.FINDFIRST THEN BEGIN
+                    GACOrderUpdate."NAV Doc No." := SalesHeader."No.";
+                    SalesHeader."Airway Bill No." := AirwayBillNo;
+                    SalesHeader."Return Airway Bill Number" := ReturnAirwayBillNumber;
+                    SalesHeader."Order Status" := OrderStartus;
+                    SalesHeader.MODIFY;
+                    //DOC TM3032 ST 20/10/18 +
+                    IF ((FORMAT(ModistSetup."Carry Trigger Status") = SalesHeader."Order Status") AND (SalesHeader."Ship-to Country/Region Code" = 'AE') AND (NOT MaraAPICalled)) THEN BEGIN
+                      CLEARLASTERROR;
+                      IF NOT MARACreateOrderG.MARACreateOrder(SalesHeader) THEN BEGIN
+                        ErrorHandlerG.LogError(ModistSetup."Carry Integration Code",
+                              '',
+                              '',
+                              0,
+                              '',
+                              0,
+                              COPYSTR(GETLASTERRORTEXT, 1, 1024),
+                              '',
+                              0,
+                              GETLASTERRORCODE,
+                              '');
+                      END ELSE
+                        MaraAPICalled := TRUE;
+                    END;
+                    //DOC TM3032 ST 20/10/18 -
+                  END;
+                END ELSE BEGIN
+                  GACOrderUpdate."Document Type" := GACOrderUpdate."Document Type"::"Purchase Return";
+                  GACOrderUpdate."NAV Doc No." := OrderNo;
+                END;
+                GACOrderUpdate."Document No." := OrderNo;
+                EVALUATE(GACOrderUpdate."Document Line No.",Reader.ReadString);
+                GACOrderUpdate."File Name" := ShortFileName;
+                GACOrderUpdate."Order Status" := OrderStartus;
+                GACOrderUpdate.INSERT;
+              END;
+            'SKUNumber':
+              GACOrderUpdate."Item No." := Reader.ReadString;
+            'EAN':
+              GACOrderUpdate.EAN := Reader.ReadString;
+            'LocationCode':
+              GACOrderUpdate."Location Code" := Reader.ReadString;
+            'BinCode':
+              GACOrderUpdate."Bin Code" := Reader.ReadString;
+            'Quantity':
+              EVALUATE(GACOrderUpdate.Quantity,Reader.ReadString);
+            'CourierTrackingURL':
+              BEGIN
+                GACOrderUpdate."Courier Tracking URL" := Reader.ReadString;
+                IF IsSales THEN BEGIN
+                  IF (GACOrderUpdate."Courier Tracking URL" <> '') AND (GACOrderUpdate."Courier Tracking URL" <> SalesHeader."Package Tracking No.") AND (SalesHeader."No." <> '') THEN BEGIN
+                    SalesHeader."Package Tracking No." := GACOrderUpdate."Courier Tracking URL";
+                    SalesHeader.MODIFY;
+                  END;
+                END;
+              END;
+            'ReturnsTrackingURL':
+              GACOrderUpdate."Return Tracking URL" := Reader.ReadString;
+            'OrderLineStatus':
+              BEGIN
+                GACOrderUpdate."Update Code" := Reader.ReadString;
+                OrderUpdateCode.SETRANGE(Code,GACOrderUpdate."Update Code");
+                IF OrderUpdateCode.FINDFIRST THEN BEGIN
+                  GACOrderUpdate."Cancellation Allowed" :=  OrderUpdateCode."Canellation Allowed";
+                  GACOrderUpdate."Change Allowed" := OrderUpdateCode."Change Allowed";
+                  GACOrderUpdate."Sequence Number" := OrderUpdateCode."Sequence Number";
+                  GACOrderUpdate."Line Status" := OrderUpdateCode."Line Status";
+                END ELSE BEGIN
+                  OrderUpdateCode.INIT;
+                  OrderUpdateCode.Code := GACOrderUpdate."Update Code";
+                  OrderUpdateCode.Description := GACOrderUpdate."Update Code";
+                  OrderUpdateCode.INSERT;
+                END;
+                GACOrderUpdate.Ship := OrderUpdateCode.Ship;
+                GACOrderUpdate."Airway Bill Number" := AirwayBillNo;
+                GACOrderUpdate."Return Airway Bill Number" := ReturnAirwayBillNumber;
+                GACOrderUpdate.MODIFY;
+                IF IsSales THEN BEGIN
+                  IF SalesLine.GET(SalesLine."Document Type"::Order,SalesHeader."No.",GACOrderUpdate."Document Line No.") THEN BEGIN
+                    SalesLine."Order Update Code" := OrderUpdateCode.Code;
+                    SalesLine."Line Status" := OrderUpdateCode."Line Status";
+                    SalesLine.MODIFY;
+                  END;
+                END;
+              END;
+          END;
+        END;
+      END;
+      Reader.Close;
+      CLEAR(Reader);
+    END;
+
+    LOCAL PROCEDURE ProcessOrderUpdates@1000000004();
+    VAR
+      IntegrationProcessStaging@1000000000 : Record 50004;
+      GACOrderUpdate@1000000001 : Record 50013;
+      PurchLine@1000000006 : Record 39;
+      SalesHeader@1000000012 : Record 36;
+      SalesLine@1000000005 : Record 37;
+      WhseShipLine@1000000004 : Record 7321;
+      TempSalesLine@1000000002 : TEMPORARY Record 37;
+      DocNo@1000000003 : Code[20];
+      SLZero@1000000009 : Boolean;
+      WSZero@1000000008 : Boolean;
+      PLZero@1000000007 : Boolean;
+      WhseFound@1000000011 : Boolean;
+      LineFound@1000000010 : Boolean;
+      DocumentNo@1000000013 : Code[20];
+      PickOrderNo@1000000014 : Code[20];
+      ShipOrderNo@1000000015 : Code[20];
+      OrderNo@1000000016 : Code[20];
+      SalesPayProcessing@1000000017 : Codeunit 50026;
+    BEGIN
+      GACOrderUpdate.SETCURRENTKEY("Document Type","Document No.","Document Line No.",Ship,Processed);
+      IntegrationProcessStaging.RESET;
+      IntegrationProcessStaging.SETCURRENTKEY("Integration Type","Group Code",Processed);
+      IntegrationProcessStaging.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+      IntegrationProcessStaging.SETRANGE("Group Code",ModistSetup."3PL Order Update Process Group");
+      IntegrationProcessStaging.SETRANGE(Processed,FALSE);
+      IF IntegrationProcessStaging.FINDSET THEN BEGIN
+        ShipOrderNo := '';
+        PickOrderNo := '';
+        OrderNo := '';
+        REPEAT
+          IF IntegrationProcessStaging."Document Type" = IntegrationProcessStaging."Document Type"::Order THEN BEGIN
+            GACOrderUpdate.SETRANGE("Document Type",GACOrderUpdate."Document Type"::"Sales Order");
+            GACOrderUpdate.SETRANGE("NAV Doc No.",IntegrationProcessStaging."Document No.");
+          END ELSE BEGIN
+            GACOrderUpdate.SETRANGE("Document Type",GACOrderUpdate."Document Type"::"Purchase Return");
+            GACOrderUpdate.SETRANGE("NAV Doc No.",IntegrationProcessStaging."Document No.");
+          END;
+          //GACOrderUpdate.SETRANGE(Ship,TRUE);
+          GACOrderUpdate.SETFILTER("Line Status",'%1|%2',GACOrderUpdate."Line Status"::Picked,GACOrderUpdate."Line Status"::Shipped);
+          GACOrderUpdate.SETRANGE(Processed,FALSE);
+          IF GACOrderUpdate.FINDFIRST THEN BEGIN
+            IF GACOrderUpdate."Document Type" = GACOrderUpdate."Document Type"::"Sales Order" THEN BEGIN
+              SalesHeader.SETRANGE("Document Type",SalesHeader."Document Type"::Order);
+              SalesHeader.SETRANGE("No.",GACOrderUpdate."NAV Doc No.");
+              IF SalesHeader.FINDFIRST THEN
+                SalesPayProcessing.CaptureOrderPayments(SalesHeader."No.",SalesHeader."Bill-to Customer No.");
+              COMMIT;
+            END;
+            // Populate temporary sales line to total quantity for each line to be shipped
+            TempSalesLine.DELETEALL;
+            REPEAT
+              IF GACOrderUpdate."Document Type" = GACOrderUpdate."Document Type"::"Purchase Return" THEN
+                TempSalesLine.SETRANGE("Document Type",TempSalesLine."Document Type"::"Return Order")
+              ELSE BEGIN
+                TempSalesLine.SETRANGE("Document Type",TempSalesLine."Document Type"::Order);
+                IF GACOrderUpdate."Line Status" = GACOrderUpdate."Line Status"::Picked THEN BEGIN
+                  IF (PickOrderNo <> GACOrderUpdate."NAV Doc No.") AND (GACOrderUpdate."NAV Doc No." <> '') AND (SalesHeader."No." = GACOrderUpdate."NAV Doc No.") THEN BEGIN
+                    IntegrationProcessMgmt.AddUpdatePicking(SalesHeader);
+                    PickOrderNo := GACOrderUpdate."NAV Doc No.";
+                  END;
+                END ELSE BEGIN
+                  IF (ShipOrderNo <> GACOrderUpdate."NAV Doc No.") AND (GACOrderUpdate."NAV Doc No." <> '') AND (SalesHeader."No." = GACOrderUpdate."NAV Doc No.") THEN BEGIN
+                    IntegrationProcessMgmt.AddUpdateShipped(SalesHeader); //TEMP
+                    ShipOrderNo := GACOrderUpdate."NAV Doc No.";
+                  END;
+                END;
+              END;
+            //DOC OP9031 RK 13/03/17 -
+              IF GACOrderUpdate."Line Status" = GACOrderUpdate."Line Status"::Shipped THEN BEGIN
+            //DOC OP9031 RK 13/03/17 +
+                TempSalesLine.SETRANGE("Document No.",GACOrderUpdate."Document No.");
+                TempSalesLine.SETRANGE("Line No.",GACOrderUpdate."Document Line No.");
+                IF TempSalesLine.FINDFIRST THEN BEGIN
+                  TempSalesLine.Quantity := TempSalesLine.Quantity + GACOrderUpdate.Quantity;
+                  TempSalesLine.MODIFY;
+                END ELSE BEGIN
+                  TempSalesLine.INIT;
+                  IF GACOrderUpdate."Document Type" = GACOrderUpdate."Document Type"::"Purchase Return" THEN
+                    TempSalesLine."Document Type" := TempSalesLine."Document Type"::"Return Order"
+                  ELSE
+                    TempSalesLine."Document Type" := TempSalesLine."Document Type"::Order;
+                  TempSalesLine."Document No." := GACOrderUpdate."Document No.";
+                  TempSalesLine."Line No." := GACOrderUpdate."Document Line No.";
+                  TempSalesLine.Type := TempSalesLine.Type::Item;
+                  TempSalesLine."No." := GACOrderUpdate."Item No.";
+                  TempSalesLine.Quantity := GACOrderUpdate.Quantity;
+                  TempSalesLine."Order Update Code" := GACOrderUpdate."Update Code";
+                  TempSalesLine."Line Status" := GACOrderUpdate."Line Status";
+                  TempSalesLine."Shipment ID" := GACOrderUpdate."NAV Doc No.";
+                  TempSalesLine.INSERT;
+                END;
+            //DOC OP9031 RK 13/03/17 -
+              END;
+            //DOC OP9031 RK 13/03/17 +
+            UNTIL GACOrderUpdate.NEXT = 0;
+            TempSalesLine.RESET;
+            IF TempSalesLine.FINDFIRST THEN BEGIN
+              // Set qty. to ship except g/l lines on sales order to zero
+              IF TempSalesLine."Document Type" = TempSalesLine."Document Type"::Order THEN  BEGIN
+                SalesLine.SETRANGE("Document Type",TempSalesLine."Document Type");
+              //OP9031 RK 09/01/2017 -
+                //SalesHeader.SETRANGE("Document Type",SalesHeader."Document Type"::Order);
+                //SalesHeader.SETRANGE("Internet Order Reference",TempSalesLine."Document No.");
+                //SalesHeader.FINDFIRST;
+                //SalesLine.SETRANGE("Document No.",TempSalesLine."Document No.");
+                //SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+                SalesLine.SETRANGE("Document No.",TempSalesLine."Shipment ID");
+                DocumentNo := TempSalesLine."Shipment ID";
+              //OP9031 RK 09/01/2017 +
+                SalesLine.SETRANGE("Line No.");
+                IF SalesLine.FINDFIRST THEN BEGIN
+                  REPEAT
+                    GetLocation(SalesLine."Location Code");
+                    IF Location."Require Shipment" = FALSE THEN BEGIN // No warehouse shipment  used
+                      SalesLine.VALIDATE("Qty. to Ship",0);
+                      SalesLine.VALIDATE("Qty. to Invoice",0);
+                      IF SalesLine."Outstanding Quantity" <> 0 THEN BEGIN
+                        // G/L Lines will be fully posted on first shipment.
+      //DOC TM3028 ST 10/10/18 -
+                        IF (SalesLine.Type = SalesLine.Type::"G/L Account") AND (SalesLine."Line No." = SalesLine."Main Line No.") OR
+                           (SalesLine.Type = SalesLine.Type::"G/L Account") AND (SalesLine."Main Line No." = 0) THEN BEGIN
+      //DOC TM3028 ST 10/10/18 +
+                          SalesLine.VALIDATE("Qty. to Ship",SalesLine."Outstanding Quantity");
+                          SalesLine.VALIDATE("Qty. to Invoice",SalesLine."Outstanding Quantity");
+                        END;
+                      END;
+                      SalesLine.MODIFY;
+                    END ELSE BEGIN // Warehouse Shipment used
+                      WhseShipLine.SETRANGE("Source Type",DATABASE::"Sales Line");
+                      WhseShipLine.SETRANGE("Source Subtype",SalesLine."Document Type");
+                      WhseShipLine.SETRANGE("Source No.",SalesLine."Document No.");
+                      WhseShipLine.SETRANGE("Source Line No.",SalesLine."Line No.");
+                      IF WhseShipLine.FINDFIRST THEN BEGIN
+                        WhseShipLine.VALIDATE("Qty. to Ship",0);
+                        WhseShipLine.MODIFY;
+                      END;
+                    END;
+                  UNTIL SalesLine.NEXT = 0;
+                END;
+              END ELSE BEGIN
+                // Purchase return order shipment quantity to zero first
+                PurchLine.SETRANGE("Document Type",PurchLine."Document Type"::"Return Order");
+                PurchLine.SETRANGE("Document No.",TempSalesLine."Document No.");
+                DocumentNo := TempSalesLine."Document No.";
+                PurchLine.SETRANGE("Line No.");
+                IF PurchLine.FINDFIRST THEN BEGIN
+                  REPEAT
+                    GetLocation(PurchLine."Location Code");
+                    IF Location."Require Shipment" = FALSE THEN BEGIN
+                      IF PurchLine.Type = PurchLine.Type::Item THEN BEGIN
+                        PurchLine.VALIDATE("Return Qty. to Ship",0);
+                        PurchLine.MODIFY;
+                      END;
+                    END ELSE BEGIN
+                      WhseShipLine.SETRANGE("Source Type",DATABASE::"Purchase Line");
+                      WhseShipLine.SETRANGE("Source Subtype",WhseShipLine."Source Subtype"::"5");
+                      WhseShipLine.SETRANGE("Source No.",SalesLine."Document No.");
+                      WhseShipLine.SETRANGE("Source Line No.",PurchLine."Line No.");
+                      IF WhseShipLine.FINDFIRST THEN BEGIN
+                        WhseShipLine.VALIDATE("Qty. to Ship",0);
+                        WhseShipLine.MODIFY;
+                      END;
+                    END;
+                  UNTIL PurchLine.NEXT = 0;
+                END;
+              END;
+              // Set shipment quanitty for lines that need to be posted.
+              LineFound := FALSE;
+              WhseFound := FALSE;
+              REPEAT
+                IF TempSalesLine."Document Type" = TempSalesLine."Document Type"::Order THEN  BEGIN
+                  SalesLine.SETRANGE("Line No.",TempSalesLine."Line No.");
+                  IF SalesLine.FINDFIRST THEN BEGIN
+                    GetLocation(SalesLine."Location Code");
+                    IF Location."Require Shipment" THEN BEGIN
+                      WhseShipLine.SETRANGE("Source Line No.",SalesLine."Line No.");
+                      IF WhseShipLine.FINDFIRST THEN BEGIN
+                        IF WhseShipLine."Qty. Outstanding" <> 0 THEN BEGIN
+                          IF WhseShipLine."Qty. Outstanding" < TempSalesLine.Quantity THEN
+                            WhseShipLine.VALIDATE("Qty. to Ship",WhseShipLine."Qty. Outstanding")
+                          ELSE
+                            WhseShipLine.VALIDATE("Qty. to Ship",TempSalesLine.Quantity);
+                          WhseShipLine.MODIFY;
+                          WhseFound := TRUE;
+                        END;
+                      END;
+                    END ELSE BEGIN
+                      IF SalesLine.Quantity - SalesLine."Quantity Shipped" > 0 THEN BEGIN
+                        IF SalesLine.Quantity - SalesLine."Quantity Shipped" < TempSalesLine.Quantity THEN
+                          SalesLine.VALIDATE("Qty. to Ship",SalesLine.Quantity - SalesLine."Quantity Shipped")
+                        ELSE
+                          SalesLine.VALIDATE("Qty. to Ship",TempSalesLine.Quantity);
+                        LineFound := TRUE;
+                      END;
+                    END;
+                    SalesLine."Order Update Code" := TempSalesLine."Order Update Code";
+                    SalesLine."Line Status" := TempSalesLine."Line Status";
+                    SalesLine.MODIFY;
+                  END;
+                END ELSE BEGIN
+                  PurchLine.SETRANGE("Line No.",TempSalesLine."Line No.");
+                  IF PurchLine.FINDFIRST THEN BEGIN
+                    GetLocation(PurchLine."Location Code");
+                    IF Location."Require Shipment" THEN BEGIN
+                      WhseShipLine.SETRANGE("Source Line No.",PurchLine."Line No.");
+                      IF WhseShipLine.FINDFIRST THEN BEGIN
+                        IF WhseShipLine."Qty. Outstanding" <> 0 THEN BEGIN
+                          IF WhseShipLine."Qty. Outstanding" < TempSalesLine.Quantity THEN
+                            WhseShipLine.VALIDATE("Qty. to Ship",WhseShipLine."Qty. Outstanding")
+                          ELSE
+                            WhseShipLine.VALIDATE("Qty. to Ship",TempSalesLine.Quantity);
+                          WhseShipLine.MODIFY;
+                          WhseFound := TRUE;
+                        END;
+                      END;
+                    END ELSE BEGIN
+                      IF PurchLine.Quantity - PurchLine."Return Qty. Shipped" > 0 THEN BEGIN
+                        IF PurchLine.Quantity - PurchLine."Return Qty. Shipped" < TempSalesLine.Quantity THEN
+                          PurchLine.VALIDATE("Return Qty. to Ship",PurchLine.Quantity - PurchLine."Return Qty. Shipped")
+                        ELSE
+                          PurchLine.VALIDATE("Return Qty. to Ship",TempSalesLine.Quantity);
+                        LineFound := TRUE;
+                      END;
+                    END;
+                    PurchLine."Order Update Code" := TempSalesLine."Order Update Code";
+                    PurchLine."Line Status" := TempSalesLine."Line Status";
+                    PurchLine.MODIFY;
+                  END;
+                END;
+              UNTIL TempSalesLine.NEXT = 0;
+            END;
+            IF TempSalesLine.FINDFIRST THEN BEGIN
+              IF TempSalesLine."Document Type" = TempSalesLine."Document Type"::Order THEN
+                PostShipments(WhseFound,LineFound,DocumentNo,TRUE,IntegrationProcessStaging."Entry No.")
+              ELSE
+                PostShipments(WhseFound,LineFound,DocumentNo,FALSE,IntegrationProcessStaging."Entry No.");
+            END;
+          END;
+        UNTIL IntegrationProcessStaging.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE PostShipments@1000000022(WhseFound@1000000000 : Boolean;LineFound@1000000001 : Boolean;DocNo@1000000002 : Code[20];Sales@1000000003 : Boolean;ProcessEntryNo@1000000011 : Integer);
+    VAR
+      SalesHeader@1000000010 : Record 36;
+      PurchHeader@1000000007 : Record 38;
+      WhseShipLine@1000000006 : Record 7321;
+      WhsePostShipment@1000000005 : Codeunit 5763;
+      GACOrderUpdate@1000000008 : Record 50013;
+      SalesPost@1000000004 : Codeunit 80;
+      PurchPost@1000000009 : Codeunit 90;
+      IntProcessQueUpdate@1000000012 : Record 50004;
+    BEGIN
+      COMMIT;
+      GACOrderUpdate.SETCURRENTKEY("Document Type","Document No.","Document Line No.",Ship,Processed);
+      IF WhseFound THEN BEGIN
+        IF Sales THEN BEGIN
+          WhseShipLine.SETRANGE("Source Type",DATABASE::"Sales Line");
+          WhseShipLine.SETRANGE("Source Subtype",WhseShipLine."Source Subtype"::"1");
+        END ELSE BEGIN
+          WhseShipLine.SETRANGE("Source Type",DATABASE::"Purchase Line");
+          WhseShipLine.SETRANGE("Source Subtype",WhseShipLine."Source Subtype"::"5");
+        END;
+        WhseShipLine.SETRANGE("Source No.",DocNo);
+        IF WhseShipLine.FINDFIRST THEN BEGIN
+          WhsePostShipment.SetPostingSettings(FALSE);
+          IF WhsePostShipment.RUN(WhseShipLine) THEN BEGIN
+            GACOrderUpdate.SETRANGE("Document No.",DocNo);
+            GACOrderUpdate.SETRANGE(Ship,TRUE);
+            GACOrderUpdate.SETRANGE(Processed,FALSE);
+            GACOrderUpdate.MODIFYALL(Processed,TRUE);
+            IntProcessQueUpdate.GET(ProcessEntryNo);
+            IntProcessQueUpdate.Processed := TRUE;
+            COMMIT;
+          END;
+        END;
+      END;
+      IF LineFound THEN BEGIN
+        IF Sales THEN BEGIN
+          SalesHeader.SETRANGE("Document Type",SalesHeader."Document Type"::Order);
+          SalesHeader.SETRANGE("No.",DocNo);
+          IF SalesHeader.FINDFIRST THEN BEGIN
+            SalesHeader.Ship := TRUE;
+          //OP9031 RK 17/01/2017 -
+            //SalesHeader.Invoice := FALSE;
+            SalesHeader.Invoice := TRUE;
+          //OP9031 RK 17/01/2017 +
+            IF SalesHeader."Posting Date" <> WORKDATE THEN //TEMP
+              SalesHeader."Posting Date" := WORKDATE; //TEMP
+            //SalesHeader."Posting Date" := SalesHeader."Document Date"; //TEMP
+            SalesHeader.MODIFY;
+            COMMIT;
+            //IF SalesHeader."Posting Date" <> WORKDATE THEN
+            //  SalesPost.SetPostingDate(TRUE,FALSE,WORKDATE);
+            IF SalesPost.RUN(SalesHeader) THEN BEGIN
+              GACOrderUpdate.SETRANGE("NAV Doc No.",DocNo);
+              GACOrderUpdate.SETRANGE(Ship,TRUE);
+              GACOrderUpdate.SETRANGE(Processed,FALSE);
+              GACOrderUpdate.MODIFYALL(Processed,TRUE);
+              IntProcessQueUpdate.GET(ProcessEntryNo);
+              IntProcessQueUpdate.Processed := TRUE;
+              COMMIT;
+            END ELSE BEGIN
+              GACOrderUpdate.SETRANGE("NAV Doc No.",DocNo);
+              GACOrderUpdate.SETRANGE(Ship,TRUE);
+              GACOrderUpdate.SETRANGE(Processed,FALSE);
+              //IF GACOrderUpdate.FINDFIRST THEN BEGIN
+                //GACOrderUpdate."Error Text" := COPYSTR(GETLASTERRORTEXT,1,250);
+                //GACOrderUpdate.MODIFY;
+                GACOrderUpdate.MODIFYALL("Error Text",COPYSTR(GETLASTERRORTEXT,1,250));
+                COMMIT;
+              //END;
+            END;
+          END;
+        END ELSE BEGIN
+          PurchHeader.SETRANGE("Document Type",PurchHeader."Document Type"::"Return Order");
+          PurchHeader.SETRANGE("No.",DocNo);
+          IF PurchHeader.FINDFIRST THEN BEGIN
+            PurchHeader.Ship := TRUE;
+            PurchHeader.Invoice := FALSE;
+            IF PurchHeader."Posting Date" <> WORKDATE THEN
+              PurchHeader."Posting Date" := WORKDATE;
+            PurchHeader.MODIFY;
+            COMMIT;
+            IF PurchPost.RUN(PurchHeader) THEN BEGIN
+              GACOrderUpdate.SETRANGE("Document No.",DocNo);
+              GACOrderUpdate.SETRANGE(Ship,TRUE);
+              GACOrderUpdate.SETRANGE(Processed,FALSE);
+              GACOrderUpdate.MODIFYALL(Processed,TRUE);
+              IntProcessQueUpdate.GET(ProcessEntryNo);
+              IntProcessQueUpdate.Processed := TRUE;
+              COMMIT;
+            END ELSE BEGIN
+              GACOrderUpdate.SETRANGE("Document No.",DocNo);
+              GACOrderUpdate.SETRANGE(Ship,TRUE);
+              GACOrderUpdate.SETRANGE(Processed,FALSE);
+              IF GACOrderUpdate.FINDFIRST THEN BEGIN
+                GACOrderUpdate."Error Text" := COPYSTR(GETLASTERRORTEXT,1,250);
+                GACOrderUpdate.MODIFY;
+                COMMIT;
+              END;
+            END;
+          END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetLocation@7300(LocationCode@1000 : Code[10]);
+    BEGIN
+      IF LocationCode = '' THEN
+        CLEAR(Location)
+      ELSE
+        IF Location.Code <> LocationCode THEN
+          Location.GET(LocationCode);
+    END;
+
+    PROCEDURE CheckCancelChangeAllowed@1000000003(OrderNo@1000000000 : Code[20];LineNo@1000000001 : Integer) : Boolean;
+    VAR
+      GACUpdates@1000000002 : Record 50013;
+    BEGIN
+      //DOC OP9031 RK 01/03/17 -
+      GACUpdates.RESET;
+      GACUpdates.SETRANGE("Document Type",GACUpdates."Document Type"::"Sales Order");
+      GACUpdates.SETRANGE("NAV Doc No.",OrderNo);
+      IF LineNo <> 0 THEN
+        GACUpdates.SETRANGE("Document Line No.",LineNo);
+      GACUpdates.SETFILTER("Line Status",'%1|%2',GACUpdates."Line Status"::Picked,GACUpdates."Line Status"::Shipped);
+      EXIT(GACUpdates.ISEMPTY);
+      //DOC OP9031 RK 01/03/17 +
+    END;
+
+    [EventSubscriber(Table,37,OnAfterModifyEvent)]
+    LOCAL PROCEDURE OnModify_SalesLineQtyItem@1000000005(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;RunTrigger@1000000002 : Boolean);
+    VAR
+      ErrCancelNotAllowed@1000000003 : TextConst 'ENU=Item %1 is already packed or shipped, so cancellation not allowed.;ENG=Item %1 is already packed or shipped, so cancellation not allowed.';
+    BEGIN
+      //DOC OP9031 RK 01/03/17 -
+      IF (Rec.ISTEMPORARY = FALSE) AND (Rec.Type = Rec.Type::Item) THEN BEGIN
+        IF (xRec.Quantity <> 0) AND ((xRec.Quantity <> Rec.Quantity) OR (xRec."No." <> Rec."No.")) THEN BEGIN
+          IF NOT CheckCancelChangeAllowed(Rec."Document No.",Rec."Line No.") THEN
+            ERROR(STRSUBSTNO(ErrCancelNotAllowed,Rec."No."));
+        END;
+      END;
+      //DOC OP9031 RK 01/03/17 +
+    END;
+
+    BEGIN
+    {
+      //OP9031 RK 09/01/2017 - Use internet order reference to find navision order.
+      //OP9031 RK 17/01/2017 - Post invoice alongwith shipment.
+      //OP9031 RK 30/01/2017 - Use first two character of order number to determine if it is purchase return.
+      //DOC OP9031 RK 01/03/17 - Disallow cancelling of line of GAC has sent pack, pick or ship status.
+      //DOC OP9031 RK 13/03/17 - Avoid posting shipment on pick status.
+      //DOC TM3028 ST 10/10/18 - Bug fix for G/L posting all the lines in SO.
+      //DOC TM3032 ST 20/10/18 - Code added for MARA integration call.
+    }
+    END.
+  }
+}
+

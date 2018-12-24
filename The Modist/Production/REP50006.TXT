@@ -1,0 +1,291 @@
+OBJECT Report 50006 TEMP Remove Unused Item Vars
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/03/17;
+    Time=11:13:44 PM;
+    Modified=Yes;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    ProcessingOnly=Yes;
+    OnInitReport=BEGIN
+                   AnalysisMode:=TRUE;
+                 END;
+
+    OnPreReport=BEGIN
+                  IF NOT AnalysisMode THEN
+                    IF NOT CONFIRM('You have chosen to delete all un used Item Variants\Are you sure you wish to continue?') THEN
+                      CurrReport.QUIT;
+                END;
+
+    OnPostReport=VAR
+                   ItemVar@1000000000 : Record 5401;
+                 BEGIN
+
+                   IF TEMPItemVariant.COUNT > 0 THEN BEGIN
+                     Window2.OPEN(
+                       Text002 +
+                       '@1@@@@@@@@@@@@@@@@@@@@@\');
+                     Window2.UPDATE(1,0);
+                     TotalRecNo := TEMPItemVariant.COUNTAPPROX;
+                     RecNo :=0;
+
+                     IF AnalysisMode THEN BEGIN
+                       TempExcelBuffer.DELETEALL;
+                       CLEAR(TempExcelBuffer);
+                       EnterCell(1, 1, Text000, TRUE, TRUE, FALSE,1);
+                       EnterCell(3, 1, 'Item No.', FALSE, FALSE, FALSE,1);
+                       EnterCell(3, 2, 'Code', FALSE, FALSE, FALSE,1);
+                       EnterCell(3, 3, 'Description', FALSE, FALSE, FALSE,1);
+                       EnterCell(3, 4, 'Style No.', FALSE, FALSE, FALSE,1);
+                       EnterCell(3, 5, 'Colour Code', FALSE, FALSE, FALSE,1);
+                       EnterCell(3, 6, 'Size Group Code', FALSE, FALSE, FALSE,1);
+                       EnterCell(3, 7, 'Size Code', FALSE, FALSE, FALSE,1);
+                       Row := 3;
+                     END;
+                     //iterate through any unused variants
+                     IF TEMPItemVariant.FINDSET THEN BEGIN
+                       REPEAT
+                         Row := Row + 1;
+                         IF AnalysisMode THEN BEGIN
+                           EnterCell(Row, 1, TEMPItemVariant."Item No.", FALSE, FALSE, FALSE,1);
+                           EnterCell(Row, 2, TEMPItemVariant.Code, FALSE, FALSE, FALSE,1);
+                           EnterCell(Row, 3, TEMPItemVariant.Description, FALSE, FALSE, FALSE,1);
+                           EnterCell(Row, 4, TEMPItemVariant."Style No.", FALSE, FALSE, FALSE,1);
+                           EnterCell(Row, 5, TEMPItemVariant."Colour Code", FALSE, FALSE, FALSE,1);
+                           EnterCell(Row, 6, TEMPItemVariant."Size Group Code", FALSE, FALSE, FALSE,1);
+                           EnterCell(Row, 7, TEMPItemVariant."Size Code", FALSE, FALSE, FALSE,1);
+                         END ELSE BEGIN
+                           //Delete the Style Colour Size record
+                           DeleteStyleSizeColour(TEMPItemVariant."Style No.",TEMPItemVariant."Colour Code",TEMPItemVariant."Size Group Code",TEMPItemVariant."Size Code");
+                           //Delete the variants
+                           DeleteItemVariant(TEMPItemVariant."Item No.",TEMPItemVariant.Code);
+                         END;
+
+                         RecNo := RecNo + 1;
+                         Window2.UPDATE(1,ROUND(RecNo / TotalRecNo * 10000,1));
+                       UNTIL TEMPItemVariant.NEXT = 0;
+                     END;
+
+                     //Delete Orphaned Item Variants
+                     IF AnalysisMode THEN BEGIN
+                       CLEAR(ItemVar);
+                       ItemVar.SETRANGE("Item No.",'');
+                       IF ItemVar.FINDSET THEN BEGIN
+                         REPEAT
+                           Row := Row + 1;
+                           EnterCell(Row, 1, ItemVar."Item No.", FALSE, FALSE, FALSE,1);
+                           EnterCell(Row, 2, ItemVar.Code, FALSE, FALSE, FALSE,1);
+                           EnterCell(Row, 3, ItemVar.Description, FALSE, FALSE, FALSE,1);
+                           EnterCell(Row, 4, ItemVar."Style No.", FALSE, FALSE, FALSE,1);
+                           EnterCell(Row, 5, ItemVar."Colour Code", FALSE, FALSE, FALSE,1);
+                           EnterCell(Row, 6, ItemVar."Size Group Code", FALSE, FALSE, FALSE,1);
+                           EnterCell(Row, 7, ItemVar."Size Code", FALSE, FALSE, FALSE,1);
+                         UNTIL ItemVar.NEXT = 0;
+                       END;
+                     END ELSE BEGIN
+                       DeleteOrphanedItemVariants();
+                     END;
+
+                     Window2.CLOSE;
+                     CLEAR(Window2);
+
+                     IF AnalysisMode THEN BEGIN
+                       TempExcelBuffer.CreateBookAndOpenExcel('','Item Variants','Missing Item Variants',COMPANYNAME,USERID);
+                     END;
+                   END ELSE BEGIN
+                     MESSAGE('Nothing to process');
+                   END;
+                 END;
+
+  }
+  DATASET
+  {
+    { 1000000001;;DataItem;                  ;
+               DataItemTable=Table27;
+               DataItemTableView=SORTING(No.)
+                                 WHERE(Inventory=FILTER(>0));
+               OnPreDataItem=BEGIN
+                                 Window.OPEN(
+                                   Text001 +
+                                   '@1@@@@@@@@@@@@@@@@@@@@@\');
+                                 Window.UPDATE(1,0);
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  i := i + 1;
+                                  Window.UPDATE(1,ROUND(i / Item.COUNT * 10000,1));
+                                END;
+
+               OnPostDataItem=BEGIN
+                                Window.CLOSE;
+                                CLEAR(Window);
+                              END;
+                               }
+
+    { 1000000000;1;DataItem;                 ;
+               DataItemTable=Table5401;
+               DataItemTableView=WHERE(Persist=CONST(No));
+               OnAfterGetRecord=VAR
+                                  remove@1000000000 : Boolean;
+                                BEGIN
+                                  remove := FALSE;
+                                  "Item Variant".CALCFIELDS(Inventory);
+                                  IF "Item Variant".Inventory = 0 THEN BEGIN
+                                    //check if variant exists on PO
+                                    IF NOT VariantExistsOnPO("Item Variant"."Item No.","Item Variant".Code) THEN BEGIN
+                                      //check if variant exists on Warehouse receipt
+                                      IF NOT VariantExistsOnWR("Item Variant"."Item No.","Item Variant".Code) THEN BEGIN
+                                        //check if variant exists in Item Ledger Entry
+                                        IF NOT VariantExistsInItemLedgEntry("Item Variant"."Item No.","Item Variant".Code) THEN BEGIN
+                                        // remove it..
+                                          remove := TRUE;
+                                        END;
+                                      END;
+                                    END;
+                                  END;
+
+                                  IF remove THEN BEGIN
+                                    TEMPItemVariant.INIT;
+                                    TEMPItemVariant."Item No." := "Item Variant"."Item No.";
+                                    TEMPItemVariant.Code :=  "Item Variant".Code;
+                                    TEMPItemVariant.Description := "Item Variant".Description;
+                                    TEMPItemVariant."Style No." := "Item Variant"."Style No.";
+                                    TEMPItemVariant."Colour Code":= "Item Variant"."Colour Code";
+                                    TEMPItemVariant."Size Group Code":= "Item Variant"."Size Group Code";
+                                    TEMPItemVariant."Size Code":= "Item Variant"."Size Code";
+                                    TEMPItemVariant.INSERT;
+                                  END;
+
+                                  //
+                                END;
+
+               DataItemLink=Item No.=FIELD(No.) }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+      { 1000000000;;Container;
+                  Name=main;
+                  ContainerType=ContentArea }
+
+      { 1000000001;1;Group  ;
+                  CaptionML=ENU=Options;
+                  GroupType=Group }
+
+      { 1000000002;2;Field  ;
+                  CaptionML=[ENU=Analysis Mode;
+                             ENG=Analysis Mode];
+                  SourceExpr=AnalysisMode }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      TEMPItemVariant@1000000000 : TEMPORARY Record 5401;
+      TempExcelBuffer@1000000005 : TEMPORARY Record 370;
+      Window2@1000000004 : Dialog;
+      Row@1000000003 : Integer;
+      TotalRecNo@1000000002 : Integer;
+      RecNo@1000000001 : Integer;
+      Text000@1000000007 : TextConst 'ENU=Unused Item Variants';
+      Text001@1000000006 : TextConst 'ENU=Analyzing Data...';
+      Window@1000000008 : Dialog;
+      i@1000000009 : Integer;
+      Text002@1000000010 : TextConst 'ENU=Processing Data...';
+      AnalysisMode@1000000011 : Boolean;
+
+    LOCAL PROCEDURE VariantExistsOnPO@1000000001(ItemNo@1000000000 : Code[20];VariantCode@1000000001 : Code[10]) : Boolean;
+    VAR
+      PurchLine@1000000002 : Record 39;
+    BEGIN
+      PurchLine.RESET;
+      PurchLine.SETRANGE(Type,PurchLine.Type::Item);
+      PurchLine.SETRANGE("No.",ItemNo);
+      PurchLine.SETRANGE("Variant Code",VariantCode);
+      EXIT(PurchLine.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE VariantExistsOnWR@1000000003(ItemNo@1000000000 : Code[20];VariantCode@1000000001 : Code[10]) : Boolean;
+    VAR
+      WHRecLine@1000000002 : Record 7317;
+    BEGIN
+      WHRecLine.RESET;
+      WHRecLine.SETRANGE("No.",ItemNo);
+      WHRecLine.SETRANGE("Variant Code",VariantCode);
+      EXIT(WHRecLine.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE VariantExistsInItemLedgEntry@1000000002(ItemNo@1000000000 : Code[20];VariantCode@1000000001 : Code[10]) : Boolean;
+    VAR
+      ItemLedgEntry@1000000002 : Record 32;
+    BEGIN
+      ItemLedgEntry.RESET;
+      ItemLedgEntry.SETRANGE("Item No.",ItemNo);
+      ItemLedgEntry.SETRANGE("Variant Code",VariantCode);
+      EXIT(ItemLedgEntry.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE EnterCell@2(RowNo@1000 : Integer;ColumnNo@1001 : Integer;CellValue@1002 : Text[250];Bold@1003 : Boolean;Italic@1004 : Boolean;UnderLine@1005 : Boolean;CellType@1000000000 : 'Number,Text,Date,Time');
+    BEGIN
+      TempExcelBuffer.INIT;
+      TempExcelBuffer.VALIDATE("Row No.",RowNo);
+      TempExcelBuffer.VALIDATE("Column No.",ColumnNo);
+      TempExcelBuffer."Cell Value as Text" := CellValue;
+      TempExcelBuffer.Formula := '';
+      TempExcelBuffer.Bold := Bold;
+      TempExcelBuffer.Italic := Italic;
+      TempExcelBuffer.Underline := UnderLine;
+      TempExcelBuffer."Cell Type" := CellType;
+      TempExcelBuffer.INSERT;
+    END;
+
+    LOCAL PROCEDURE DeleteItemVariant@1000000000(ItemNo@1000000000 : Code[20];VariantCode@1000000001 : Code[10]);
+    VAR
+      ItemVariant@1000000002 : Record 5401;
+    BEGIN
+      IF ItemVariant.GET(ItemNo,VariantCode) THEN BEGIN
+        ItemVariant.DELETE(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE DeleteStyleSizeColour@1000000005(StyleCode@1000000000 : Code[20];ColourCode@1000000001 : Code[20];SizeGroupCode@1000000003 : Code[20];SizeCode@1000000004 : Code[20]);
+    VAR
+      StyleColourSize@1000000002 : Record 9087014;
+    BEGIN
+      IF StyleColourSize.GET(StyleCode,ColourCode,SizeGroupCode,SizeCode) THEN BEGIN
+        StyleColourSize.DELETE(FALSE);
+      END;
+    END;
+
+    LOCAL PROCEDURE DeleteOrphanedItemVariants@1000000007();
+    VAR
+      ItemVariant@1000000002 : Record 5401;
+    BEGIN
+      ItemVariant.RESET;
+      ItemVariant.SETRANGE("Item No.",'');
+
+      IF ItemVariant.FINDSET THEN BEGIN
+        ItemVariant.DELETEALL(TRUE);
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

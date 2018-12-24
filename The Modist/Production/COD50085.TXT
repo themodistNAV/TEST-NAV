@@ -1,0 +1,208 @@
+OBJECT Codeunit 50085 FF - Download Pdf
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/12/18;
+    Time=12:29:30 PM;
+    Modified=Yes;
+    Version List=TM3033;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            CreatePrintDocumentRequest();
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      OrderNoG@1170000000 : Code[20];
+      SalesHeader@1170000001 : Record 36;
+
+    PROCEDURE CreatePrintDocumentRequest@1170000000();
+    VAR
+      WebServicehandlerL@1170000006 : Codeunit 50066;
+      XMLWriterL@1170000005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlWriter";
+      XmlRequestL@1170000004 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      ReqBodyOutStreamL@1170000003 : OutStream;
+      WebServiceSetupL@1170000002 : Record 50027;
+      MsgHdrDirectionL@1170000001 : 'Incoming Request,Incoming Response,Outgoing Request,Outgoing Response';
+      StatusL@1170000000 : 'To be Processed,Failed,Processed,Closed Manually,Skip Processing';
+    BEGIN
+      WebServiceSetupL.GET;
+      WebServiceSetupL.TESTFIELD("FF Safe Key");
+      WebServicehandlerL.InitializeWebRequest(XMLWriterL, ReqBodyOutStreamL);
+      XMLWriterL.WriteStartElement('Envelope', 'http://schemas.xmlsoap.org/soap/envelope/');
+        XMLWriterL.WriteStartElement('Body');
+          XMLWriterL.WriteStartElement('GetOrdersHeaders', 'http://tempuri.org/');
+            XMLWriterL.WriteElementString('selectedStep', 'Step3');
+            XMLWriterL.WriteElementString('Key', WebServiceSetupL."FF Safe Key");
+          XMLWriterL.WriteEndElement;
+        XMLWriterL.WriteEndElement;
+      XMLWriterL.WriteEndElement;
+      PostCreateGetPossibleDuplicateRequest(ReqBodyOutStreamL,
+              WebServicehandlerL.FinalizeWebRequest(XMLWriterL, ReqBodyOutStreamL, 1, 0, 'FF-INV-PDF'));
+    END;
+
+    LOCAL PROCEDURE PostCreateGetPossibleDuplicateRequest@1170000009(ReqBodyOutStreamP@1170000001 : OutStream;EntryNoP@1170000000 : BigInteger);
+    VAR
+      XMLDOMManagementL@1170000010 : Codeunit 6224;
+      WebServicehandlerL@1170000009 : Codeunit 50066;
+      XmlRequestL@1170000008 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XmlResponseL@1170000007 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLBodyL@1170000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      MsgHdrDirectionL@1170000005 : 'Incoming Request,Incoming Response,Outgoing Request,Outgoing Response';
+      StatusL@1170000004 : 'To be Processed,Failed,Processed,Closed Manually,Skip Processing';
+      WebServiceSetupL@1170000003 : Record 50027;
+      ResponseTextL@1170000002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      XMLNodeListL@1170000013 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      NodeListCounterL@1170000012 : Integer;
+      XMLBodyNodeL@1170000011 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLNodeList2L@1170000016 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      IntegrationErrorLogL@1170000017 : Codeunit 50007;
+      NavOrderNoL@1170000014 : Code[20];
+      FFOrderNoL@1170000020 : Code[20];
+      UrlL@1170000022 : ARRAY [3] OF Text;
+      RecordLinkL@1170000015 : Record 2000000068;
+      SalesHeaderL@1170000018 : Record 36;
+      CounterL@1170000019 : Integer;
+      FFPointID@1170000021 : Code[20];
+    BEGIN
+      WebServiceSetupL.GET;
+      WebServiceSetupL.TESTFIELD("FF URL");
+      XmlResponseL := XmlResponseL.XmlDocument();
+      XmlRequestL := XmlRequestL.XmlDocument;
+      XmlRequestL.Load(ReqBodyOutStreamP);
+      IF WebServicehandlerL.PostSoapCall(WebServiceSetupL."FF URL", 'http://tempuri.org/GetOrdersHeaders', XmlRequestL, ResponseTextL) THEN BEGIN
+        XmlResponseL.LoadXml(ResponseTextL.ToString);
+        WebServicehandlerL.RemoveNamespace(XmlResponseL, XmlResponseL);
+        WebServicehandlerL.InsertMessageHeader(MsgHdrDirectionL::"Outgoing Response", StatusL::"Skip Processing", 0, XmlResponseL, EntryNoP, 0, 'FF-INV-PDF');
+        IF XMLDOMManagementL.FindNode(XmlResponseL, '//GetOrdersHeadersResponse/GetOrdersHeadersResult/Data/OrderWorkflowStepCommonStoreHeaderDTO', XMLBodyL) THEN
+          IF XMLDOMManagementL.FindNodes(XMLBodyL, '//GetOrdersHeadersResponse/GetOrdersHeadersResult/Data/OrderWorkflowStepCommonStoreHeaderDTO', XMLNodeListL) THEN BEGIN
+            FOR NodeListCounterL := 0 TO XMLNodeListL.Count - 1 DO BEGIN
+              XMLBodyNodeL := XMLNodeListL.Item(NodeListCounterL);
+              FFOrderNoL := XMLDOMManagementL.FindNodeText(XMLBodyNodeL, 'OrderId');
+              FFPointID := XMLDOMManagementL.FindNodeText(XMLBodyNodeL, 'PointCode');
+              IF FindFarfetchSalesOrder(FFOrderNoL, NavOrderNoL) THEN BEGIN
+                IF XMLDOMManagementL.FindNodes(XMLBodyNodeL,'FilesUrl/string', XMLNodeList2L) THEN BEGIN
+                  XMLBodyNodeL := XMLNodeList2L.Item(0);
+                  UrlL[1] := XMLBodyNodeL.InnerText();
+                  XMLBodyNodeL := XMLNodeList2L.Item(1);
+                  UrlL[2] := XMLBodyNodeL.InnerText();
+                  XMLBodyNodeL := XMLNodeList2L.Item(2);
+                  UrlL[3] := XMLBodyNodeL.InnerText();
+
+                  SalesHeaderL.GET(SalesHeaderL."Document Type"::Order, NavOrderNoL);
+                  RecordLinkL.SETRANGE("Record ID", SalesHeaderL.RECORDID);
+                  RecordLinkL.DELETEALL;
+                  FOR CounterL := 1 TO 3 DO BEGIN
+                    RecordLinkL.INIT;
+                    RecordLinkL."Link ID" := 0;
+                    RecordLinkL."Record ID" := SalesHeaderL.RECORDID;
+                    RecordLinkL.URL1 := COPYSTR(UrlL[CounterL], 1, 250);
+                    RecordLinkL.URL2 := COPYSTR(UrlL[CounterL], 251, 250);
+                    RecordLinkL.Created := CURRENTDATETIME;
+                    RecordLinkL."User ID" := USERID;
+                    RecordLinkL.Company := COMPANYNAME;
+                    RecordLinkL.INSERT;
+                  END;
+
+                  CLEARLASTERROR;
+                  IF NOT SendEmail(UrlL[1], UrlL[2], UrlL[3], FFPointID + FFOrderNoL) THEN
+                    IntegrationErrorLogL.LogError('FF-INV-PDF', '', '', 0, NavOrderNoL, 0, COPYSTR(GETLASTERRORTEXT, 1, 1024), '', 0, COPYSTR(GETLASTERRORCODE, 1, 20), '');
+                END;
+              END;
+            END;
+          END;
+      END;
+      WebServicehandlerL.WebResponseErrorHandling(ResponseTextL, 1, EntryNoP);
+    END;
+
+    LOCAL PROCEDURE DownloadPdf@1170000001(UrlP@1170000008 : Text) : Text;
+    VAR
+      WebClientL@1170000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.WebClient";
+      StringHelperL@1170000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      FileManagementL@1170000002 : Codeunit 419;
+    BEGIN
+      StringHelperL := UrlP;
+      UrlP := StringHelperL.Replace('amp;', '');
+      WebClientL := WebClientL.WebClient;
+      StringHelperL := FileManagementL.ServerTempFileName('pdf');
+      WebClientL.DownloadFile(UrlP, StringHelperL.ToString);
+      EXIT(StringHelperL.ToString);
+    END;
+
+    LOCAL PROCEDURE FindFarfetchSalesOrder@1170000016(FFOrderNoP@1170000000 : Code[20];VAR NavOrderNoP@1170000002 : Code[20]) : Boolean;
+    VAR
+      SalesHeaderL@1170000001 : Record 36;
+    BEGIN
+      SalesHeaderL.SETCURRENTKEY("Document Type", "Farfetch Order", "Your Reference");
+      SalesHeaderL.SETRANGE("Document Type", SalesHeaderL."Document Type"::Order);
+      SalesHeaderL.SETRANGE("Farfetch Order", TRUE);
+      SalesHeaderL.SETRANGE("Your Reference", FFOrderNoP);
+      SalesHeaderL.SETRANGE("EU 3-Party Trade",FALSE);
+      IF SalesHeaderL.FINDFIRST THEN BEGIN
+        SalesHeaderL."EU 3-Party Trade" := TRUE;
+        SalesHeaderL.MODIFY;
+        NavOrderNoP := SalesHeaderL."No.";
+        EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    [TryFunction]
+    PROCEDURE SendEmail@1170000007(Url1P@1170000009 : Text;Url2P@1170000010 : Text;Url3P@1170000011 : Text;FFOrderNoP@1170000012 : Code[40]);
+    VAR
+      C_Invoice@1170000003 : TextConst 'ENU=Invoice_%1.pdf';
+      C_AwbPdf@1170000002 : TextConst 'ENU=AwbPdf_%1.pdf';
+      C_Returnint@1170000001 : TextConst 'ENU=Returnint_%1.pdf';
+      C_Body@1170000000 : TextConst 'ENU=Hi,<br><br>Please find the attached documentations for Farfetch Order No. %1 <br><br>BR,<br><b>The NAV Team<b>';
+      FileManagementL@1170000008 : Codeunit 419;
+      ZipFilePathL@1170000007 : Text;
+      DownloadPathL@1170000006 : Text;
+      EmailItemL@1170000005 : Record 9500;
+      RenamedFilePathL@1170000004 : Text;
+    BEGIN
+      ZipFilePathL := FileManagementL.CreateZipArchiveObject;
+
+      DownloadPathL := DownloadPdf(Url1P);
+      RenamedFilePathL := FileManagementL.CombinePath(FileManagementL.GetDirectoryName(DownloadPathL), STRSUBSTNO(C_Invoice, FFOrderNoP));
+      FILE.RENAME(DownloadPathL, RenamedFilePathL);
+      FileManagementL.AddFileToZipArchive(RenamedFilePathL, FileManagementL.GetFileName(RenamedFilePathL));
+      FILE.ERASE(RenamedFilePathL);
+
+      DownloadPathL := DownloadPdf(Url2P);
+      RenamedFilePathL := FileManagementL.CombinePath(FileManagementL.GetDirectoryName(DownloadPathL), STRSUBSTNO(C_AwbPdf, FFOrderNoP));
+      FILE.RENAME(DownloadPathL, RenamedFilePathL);
+      FileManagementL.AddFileToZipArchive(RenamedFilePathL, FileManagementL.GetFileName(RenamedFilePathL));
+      FILE.ERASE(RenamedFilePathL);
+
+      DownloadPathL := DownloadPdf(Url3P);
+      RenamedFilePathL := FileManagementL.CombinePath(FileManagementL.GetDirectoryName(DownloadPathL), STRSUBSTNO(C_Returnint, FFOrderNoP));
+      FILE.RENAME(DownloadPathL, RenamedFilePathL);
+      FileManagementL.AddFileToZipArchive(RenamedFilePathL, FileManagementL.GetFileName(RenamedFilePathL));
+      FILE.ERASE(RenamedFilePathL);
+
+      FileManagementL.CloseZipArchive;
+
+      EmailItemL.Init;
+      EmailItemL."From Name" := COMPANYNAME;
+      EmailItemL.Subject := 'Farfetch Order No.: ' + FFOrderNoP;
+      EmailItemL."Send to" := 'amr.wafa@themodist.com';
+      //EmailItemL."Send CC" := 'amr.wafa@themodist.com';
+      EmailItemL."Attachment File Path" := ZipFilePathL;
+      EmailItemL."Attachment Name" := 'FarfetchOrder_' + FFOrderNoP + '.zip';
+      EmailItemL.SetBodyText(STRSUBSTNO(C_Body, FFOrderNoP));
+      //EmailItemL.INSERT;
+      EmailItemL.Send(TRUE);
+    END;
+
+    BEGIN
+    {
+      //DOC TM3033 ST 25/11/18 - Object added to download the FF order documents.
+    }
+    END.
+  }
+}
+

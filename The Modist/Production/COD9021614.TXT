@@ -1,0 +1,1100 @@
+OBJECT Codeunit 9021614 Internet Data Mgmt
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:17 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 18=rm,
+                TableData 21=rm,
+                TableData 36=rm,
+                TableData 37=rm,
+                TableData 112=rm,
+                TableData 113=rm,
+                TableData 114=rm,
+                TableData 115=rm,
+                TableData 5050=rm,
+                TableData 9021642=r,
+                TableData 9021666=r;
+    OnRun=VAR
+            ApplyPatches@1000000000 : Boolean;
+            Customer@1000000006 : Record 18;
+            CustLedgerEntry@1000000005 : Record 21;
+            SalesHeader@1000000004 : Record 36;
+            SalesInvoiceHeader@1000000003 : Record 112;
+            SalesCrMemoHeader@1000000002 : Record 114;
+            SegmentLine@1000000001 : Record 5077;
+          BEGIN
+            //ApplyPatches:=true;  //DO update records
+            ApplyPatches:=FALSE; //do NOT update records
+
+            IF GUIALLOWED THEN BEGIN
+
+              //check whether to patch data...
+              IF CONFIRM(Text006,FALSE,
+                        Customer.TABLECAPTION,
+                        CustLedgerEntry.TABLECAPTION,
+                        SalesHeader.TABLECAPTION,
+                        SalesInvoiceHeader.TABLECAPTION,
+                        SalesCrMemoHeader.TABLECAPTION,
+                        SegmentLine.TABLECAPTION,
+                        IDMI.TABLECAPTION
+                        ) THEN
+                ApplyPatches:=TRUE
+              ELSE
+                ApplyPatches:=FALSE;
+
+              IF NOT CONFIRM(Text007) THEN  //Confirm OK cos routine takes a long time
+                ERROR(Text008);
+
+            END;
+
+            CleanseData(ApplyPatches,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1000000000 : TextConst 'ENU=You cannot run a check for %1 unless you also run a check on Customers.\\Operation abandonned.;ENG=You cannot run a check for %1 unless you also run a check on Customers.\\Operation abandonned.';
+      CountOfCont@1000000034 : Integer;
+      CountOfCust@1000000006 : Integer;
+      CountOfCLE@1000000007 : Integer;
+      CountOfSale@1000000008 : Integer;
+      CountOfInv@1000000009 : Integer;
+      CountOfCredit@1000000010 : Integer;
+      CountOfSegment@1000000052 : Integer;
+      dlgCountCont@1000000035 : Integer;
+      dlgCountCust@1000000004 : Integer;
+      dlgCountCLE@1000000011 : Integer;
+      dlgCountSale@1000000012 : Integer;
+      dlgCountInv@1000000013 : Integer;
+      dlgCountCredit@1000000014 : Integer;
+      dlgCountSegment@1000000053 : Integer;
+      dlgMax@1000000005 : Integer;
+      CustomerUserGuid@1190000007 : Text[38];
+      dlgIntroText@1190000009 : Text[250];
+      dlgTextCont@1000000038 : Text[250];
+      dlgTextCust@1000000021 : Text[250];
+      dlgTextCLE@1000000022 : Text[250];
+      dlgTextSale@1000000023 : Text[250];
+      dlgTextInv@1000000024 : Text[250];
+      dlgTextCredit@1000000025 : Text[250];
+      dlgTextSegment@1000000054 : Text[250];
+      msg@1190000006 : Text[250];
+      dlgTimeCheck@1000000003 : Time;
+      IDMI@1000000001 : Record 9021720;
+      InternetSetup@1040001 : Record 9021609;
+      LabelCode@1000000044 : Code[10];
+      SumOfConts@1000000036 : Integer;
+      SumOfCusts@1000000026 : Integer;
+      SumOfCLEs@1000000027 : Integer;
+      SumOfSales@1000000028 : Integer;
+      SumOfInvs@1000000029 : Integer;
+      SumOfCredits@1000000030 : Integer;
+      SumOfSegments@1000000055 : Integer;
+      TotalConts@1000000037 : Integer;
+      TotalCusts@1000000015 : Integer;
+      TotalCLEs@1000000016 : Integer;
+      TotalSales@1000000017 : Integer;
+      TotalInvs@1000000018 : Integer;
+      TotalCredits@1000000019 : Integer;
+      Text002@1000000020 : TextConst 'ENU=No %1 records found;ENG=No %1 records found';
+      Text003@1000000031 : TextConst 'ENU=Internet Data Mgmt Issues have been created during this process (or a previous run of the same process).\\Please run Form(Page) Internet Data Mgmt Issue List 9021720 to review.;ENG=Internet Data Mgmt Issues have been created during this process (or a previous run of the same process).\\Please run Form(Page) Internet Data Mgmt Issue List 9021720 to review.';
+      Text004@1000000033 : TextConst 'ENU=%1 records already exist that are not closed.\\Do you want to delete them before re-running the internet data cleansing process?;ENG=%1 records already exist that are not closed.\\Do you want to delete them before re-running the internet data cleansing process?';
+      Text005@1000000039 : TextConst 'ENU=Done;ENG=Done';
+      TotalSegments@1000000056 : Integer;
+      Text006@1000000045 : TextConst
+        'ENU=This routine will find all %1 records flagged as Internet Customers and check the required internet fields on each %1 record and its associated records (%2, %3/Line, %4/Line, %5/Line, %6/Line).\\Any data issues found will be logged in the %7 table.\\You can run this routine to:\* FIND AND LOG data issues, or\* Find, log, and PATCH data issues\\It is strongly recommended that you run the routine to only find and log issues the first time, and then review them by spot checking the integrity of the findings before running the routine a second time to patch any issues found.\\Do you want to patch issues during this execution?\(Click ''No'' if you want to run the routine WITHOUT modifying any records.)',
+        'ENG=This routine will find all %1 records flagged as Internet Customers and check the required internet fields on each %1 record and its associated records (%2, %3/Line, %4/Line, %5/Line, %6/Line).\\Any data issues found will be logged in the %7 table.\\You can run this routine to:\* FIND AND LOG data issues, or\* Find, log, and PATCH data issues\\It is strongly recommended that you run the routine to only find and log issues the first time, and then review them by spot checking the integrity of the findings before running the routine a second time to patch any issues found.\\Do you want to patch issues during this execution?\(Click ''No'' if you want to run the routine WITHOUT modifying any records.)';
+      Text007@1000000046 : TextConst 'ENU=The routine can take a long time to run.\\Please ensure you run it:\* When there is least risk of disruption to other users, and\* On a machine with a stable connection to the NAV server\\Are you sure you want to run it now?;ENG=The routine can take a long time to run.\\Please ensure you run it:\* When there is least risk of disruption to other users, and\* On a machine with a stable connection to the NAV server\\Are you sure you want to run it now?';
+      Text008@1000000047 : TextConst 'ENU="Phew!  That was a close one!  ;o)";ENG="Phew!  That was a close one!  ;o)"';
+      Text009@1000000048 : TextConst 'ENU=Found %1 %2 records %3\\Shall we process them?;ENG=Found %1 %2 records %3\\Shall we process them?';
+      Text010@1000000050 : TextConst 'ENU=with the ''%1'' flag.;ENG=with the ''%1'' flag.';
+      Text011@1000000049 : TextConst 'ENU=with the ''%1'' flag but no ''%2'' flag.;ENG=with the ''%1'' flag but no ''%2'' flag.';
+      dlg@1190000005 : Dialog;
+      IsAnInternetCustomer@1190000010 : Boolean;
+      PatchApplied@1190000011 : Boolean;
+      dlgIsOpen@1190000012 : Boolean;
+      Text012@1190000013 : TextConst 'ENU=This will not run if the Customer User Guid or Label Code is blank;ENG=This will not run if the Customer User Guid or Label Code is blank';
+      ExternalDocNo20@1000000002 : Code[20];
+      TxtLabelCodeCouldBePatched@1000000032 : TextConst 'ENU=Label Code [%1] could be patched to [%2];ENG=Label Code [%1] could be patched to [%2]';
+      TxtUserGuidCouldBePatched@1000000040 : TextConst 'ENU=User Guid [%1] could be patched to [%2];ENG=User Guid [%1] could be patched to [%2]';
+      TxtOrderGuidCouldBePatched@1000000042 : TextConst 'ENU=Order Guid [%1] could be patched to [%2];ENG=Order Guid [%1] could be patched to [%2]';
+      TxtIsAnInternetCustomerCouldBePatched@1000000041 : TextConst 'ENU=Is An Internet Customer [%1] could be patched to [%2];ENG=Is An Internet Customer [%1] could be patched to [%2]';
+
+    PROCEDURE CleanseData@1000000001(PatchBadData@1000000001 : Boolean;doContactCheck@1000000002 : Boolean;doCustLedgerEntryCheck@1000000007 : Boolean;doSalesCheck@1000000006 : Boolean;doInvoiceCheck@1000000005 : Boolean;doCreditCheck@1000000004 : Boolean;doSegmentCheck@1000000000 : Boolean);
+    VAR
+      startTime@1040000 : Time;
+      TxtRoutineStartTime@1000000003 : TextConst 'ENU=Routine Start Time;ENG=Routine Start Time';
+      TxtNoCustomersChecked@1000000008 : TextConst 'ENU=No. Customers Checked;ENG=No. Customers Checked';
+      TxtRoutineEndTime@1000000009 : TextConst 'ENU=Routine End Time;ENG=Routine End Time';
+      TxtTotalDuration@1000000010 : TextConst 'ENU=Total Duration (mins);ENG=Total Duration (mins)';
+      TxtAverageDurationPerCustomer@1000000011 : TextConst 'ENU=Average Duration Per Customer (secs);ENG=Average Duration Per Customer (secs)';
+    BEGIN
+      //checks specified tables for missing internet data...
+      //optionally updates tables where data is missing...
+
+      //notify on any data issues previously reported and not closed...
+      IDMI.RESET;
+      IDMI.SETCURRENTKEY(Closed);
+      IDMI.SETFILTER(Closed,'%1',FALSE);
+      IF GUIALLOWED THEN BEGIN
+        IF IDMI.COUNT>0 THEN BEGIN
+          IF CONFIRM(Text004,TRUE,IDMI.TABLECAPTION) THEN BEGIN
+            IDMI.DELETEALL(TRUE);
+          END;
+        END;
+      END;
+
+      //run the main routine...
+      startTime:=TIME;
+      CheckCustomers(PatchBadData,doContactCheck,doCustLedgerEntryCheck,doSalesCheck,doInvoiceCheck,doCreditCheck,doSegmentCheck);
+      IF dlgIsOpen THEN dlg.UPDATE;
+      IF (GUIALLOWED) AND (TotalCusts>0) THEN BEGIN
+        MESSAGE(PADSTR(TxtRoutineStartTime + ': ',50,'.')+'%1\\'+
+                PADSTR(TxtNoCustomersChecked + ': ',50,'.')+'%2\\'+
+                PADSTR(TxtRoutineEndTime + ': ',50,'.')+'%3\\'+
+                PADSTR(TxtTotalDuration + ': ',50,'.')+'%4\\'+
+                PADSTR(TxtAverageDurationPerCustomer + ': ',50,'.')+'%5',
+                startTime,
+                TotalCusts,
+                TIME,
+                (ROUND((TIME-startTime)/1000/60,1)),
+                (ROUND((TIME-startTime)/1000/TotalCusts,1))
+                );
+      END;
+
+      //notify on any data issues reported...
+      IDMI.RESET;
+      IDMI.SETFILTER(Closed,'%1',FALSE);
+      IF IDMI.COUNT>0 THEN BEGIN
+        IF GUIALLOWED THEN BEGIN
+          //DOC EC2013.4.00 -
+          //IF CONFIRM(Text003,TRUE,IDMI.TABLECAPTION) THEN BEGIN
+          //  FORM.RUN(9021720);
+          //END;
+          MESSAGE(Text003);
+          //DOC EC2013.4.00 +
+        END;
+      END ELSE BEGIN
+        IF GUIALLOWED THEN
+          MESSAGE(Text005);
+      END;
+    END;
+
+    PROCEDURE CheckCustomers@1000000002(PatchBadData@1000000001 : Boolean;doContactCheck@1000000007 : Boolean;doCustLedgerEntryCheck@1000000005 : Boolean;doSalesCheck@1000000004 : Boolean;doInvoiceCheck@1000000003 : Boolean;doCreditCheck@1000000002 : Boolean;doSegmentCheck@1000000008 : Boolean);
+    VAR
+      CustLocal@1000000006 : Record 18;
+      CustLocal1@1000000000 : Record 18;
+    BEGIN
+      //NOTES:
+      //  ("Is An Internet Customer"=FALSE) AND ("User Guid"<>'') is valid if some was once an internet customer but is no longer...
+
+
+      //###########################################################
+      //  ("Is An Internet Customer"=TRUE) AND ("Label Code"='') OR
+      //  ("Is An Internet Customer"=TRUE) AND ("User Guid"='')
+      CustLocal.RESET;
+      CustLocal.SETFILTER("Is An Internet Customer",'%1',TRUE);
+
+      //for testing on smaller numbers of records...
+      //CustLocal.SETCURRENTKEY("Search Name");
+      //CustLocal.SETFILTER("Search Name",'B*');
+
+      IF CustLocal.FIND('-') THEN BEGIN
+        IF GUIALLOWED THEN
+          IF NOT CONFIRM(Text009,TRUE,
+                          CustLocal.COUNT,
+                          CustLocal.TABLECAPTION,
+                          STRSUBSTNO(Text010,CustLocal.FIELDNAME(CustLocal."Is An Internet Customer"))
+                          ) THEN
+            ERROR(Text008);
+        TotalCusts:=CustLocal.COUNT;
+        REPEAT
+          CustLocal1 := CustLocal;
+          CheckCustomer(CustLocal1,PatchBadData,doContactCheck,doCustLedgerEntryCheck,doSalesCheck,
+                        doInvoiceCheck,doCreditCheck,doSegmentCheck);
+          IF PatchApplied THEN
+            CustLocal1.MODIFY;
+        UNTIL CustLocal.NEXT=0;
+      END;
+
+      COMMIT;  //GW 101223 If no commit and do not process the lines below then the above will be wasted.
+
+      //###########################################################
+      //  ("Is An Internet Customer"=FALSE) AND ("Is A B2B Internet Customer"=TRUE)
+
+      // ************** GW 101223 Its pretty expensive to run through the Customer table twice but there is no key on Is An Internet Cust
+
+      CustLocal.RESET;
+      CustLocal.SETFILTER("Is An Internet Customer",'%1',FALSE);
+      CustLocal.SETFILTER("Is a B2B Internet Customer",'%1',TRUE);
+      IF CustLocal.FIND('-') THEN BEGIN
+        IF GUIALLOWED THEN
+          IF NOT CONFIRM(Text009,TRUE,
+                          CustLocal.COUNT,
+                          CustLocal.TABLECAPTION,
+                          STRSUBSTNO(Text011,
+                                      CustLocal.FIELDNAME(CustLocal."Is a B2B Internet Customer"),
+                                      CustLocal.FIELDNAME(CustLocal."Is An Internet Customer")
+                                      )
+                          ) THEN
+            ERROR(Text008);
+        TotalCusts:=CustLocal.COUNT;
+        REPEAT
+          CustLocal1 := CustLocal;
+          CheckCustomer(CustLocal1,PatchBadData,doContactCheck,doCustLedgerEntryCheck,doSalesCheck,
+                        doInvoiceCheck,doCreditCheck,doSegmentCheck);
+          IF PatchApplied THEN
+            CustLocal1.MODIFY;
+        UNTIL CustLocal.NEXT=0;
+      END;
+      CustLocal.RESET;
+    END;
+
+    PROCEDURE CheckCustomer@1000000022(VAR Customer@1000000006 : Record 18;PatchBadData@1000000005 : Boolean;doContactCheck@1000000004 : Boolean;doCustLedgerEntryCheck@1000000003 : Boolean;doSalesCheck@1000000002 : Boolean;doInvoiceCheck@1000000001 : Boolean;doCreditCheck@1000000000 : Boolean;doSegmentCheck@1000000008 : Boolean);
+    VAR
+      IsSingleCustomerCall@1000000009 : Boolean;
+      ValuesSetFromCustomer@1000000007 : Boolean;
+      PromoHistSum@1040000 : Record 9021679;
+      AdDocSearch@1000000010 : Codeunit 9021674;
+      TxtCustomersPending@1000000011 : TextConst 'ENU=Customers Pending;ENG=Customers Pending';
+      TxtContactsPending@1000000012 : TextConst 'ENU=Contacts Pending;ENG=Contacts Pending';
+      TxtIntro@1000000013 : TextConst 'ENU=CHECKING INTERNET DATA FOR ISSUES;ENG=CHECKING INTERNET DATA FOR ISSUES';
+      TxtProcessingCustomer@1000000014 : TextConst 'ENU=Processing Customer;ENG=Processing Customer';
+      TxtMissingLabelCode@1000000015 : TextConst 'ENU=Missing Label Code. Could not patch;ENG=Missing Label Code. Could not patch';
+      TxtMissingUserGuid@1000000016 : TextConst 'ENU=Missing User Guid. Could not patch;ENG=Missing User Guid. Could not patch';
+      TxtMissingInternetCustomer@1000000017 : TextConst 'ENU=Missing Internet Customer flag;ENG=Missing Internet Customer flag';
+    BEGIN
+      PatchApplied := FALSE;
+
+      //in case function is called directly from outside codeunit and not via CleanseData function...
+      //DOC EC2009.2.74 IF NOT dlgIsOpen THEN InitialiseDialogue;
+      IF NOT dlgIsOpen THEN BEGIN
+        IF GUIALLOWED THEN BEGIN
+          //set up the dialogue box...
+          dlgTextCust:=TxtCustomersPending;
+          dlgTextCont:=TxtContactsPending;
+          dlgIntroText:=TxtIntro + '...';
+          ResetDialogDocDisplay('');
+          dlg.OPEN('#1############################## @2@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ #3#####\' +
+                   '#4############################## @5@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ #6#####\' +
+                   '#7############################## @8@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ #9#####\' +
+                   '#10############################# @11@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ #12####\' +
+                   '#13############################# @14@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ #15####\' +
+                   '#16############################# @17@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ #18####\',
+                    dlgTextCust,dlgCountCust,SumOfCusts,
+                    dlgTextCLE,dlgCountCLE,SumOfCLEs,
+                    dlgTextSale,dlgCountSale,SumOfSales,
+                    dlgTextInv,dlgCountInv,SumOfInvs,
+                    dlgTextCredit,dlgCountCredit,SumOfCredits,
+                    dlgTextCont,dlgCountCont,SumOfConts);
+                    //dlgTextSegment,dlgCountSegment,SumOfSegments); GW 1011223 cant have as makes too complex
+          dlgTimeCheck:=TIME;
+          dlgIsOpen:=TRUE;
+        END;
+      END;
+
+      //update progress indicators...
+      IF (TotalCusts=0) THEN BEGIN
+        //assume function call made directly; total not set in CheckCustomers...
+        TotalCusts:=1;
+        IsSingleCustomerCall:=TRUE;
+      END;
+
+      ResetDialogDocDisplay(Customer."No.");  //called above with blank parameter
+      CountOfCust := CountOfCust + 1;
+      dlgCountCust:=ROUND(CountOfCust / TotalCusts * 10000,1);
+      dlgTextCust:=TxtProcessingCustomer + ' ' + Customer."No.";
+
+      IF dlgIsOpen THEN
+        dlg.UPDATE;
+
+      //DOC EC2009.2.74 -
+      IF (Customer."User GUID" = '') OR (Customer."Label Code" = '') THEN BEGIN
+        IF IsSingleCustomerCall THEN BEGIN
+          IF dlgIsOpen THEN BEGIN
+            dlg.CLOSE;
+            dlgIsOpen := FALSE;
+          END;
+          ERROR(Text012);
+        END ELSE BEGIN
+          IF Customer."Label Code" = '' THEN BEGIN
+            SumOfCusts := SumOfCusts + 1;
+            msg:=TxtMissingLabelCode;
+            LogDataIssue('',IDMI.Type::Customer,Customer."No.",'',msg,FALSE,FALSE);
+          END;
+          IF Customer."User GUID" = '' THEN BEGIN
+            SumOfCusts := SumOfCusts + 1;
+            msg:=TxtMissingUserGuid;
+            LogDataIssue('',IDMI.Type::Customer,Customer."No.",'',msg,FALSE,FALSE);
+          END;
+          EXIT;
+        END;
+      END ELSE BEGIN
+        CustomerUserGuid := Customer."User GUID";
+        IsAnInternetCustomer := Customer."Is An Internet Customer";
+        LabelCode := Customer."Label Code";
+      END;
+      //DOC EC2009.2.74 +
+
+
+      //### MISSING INTERNET CUSTOMER FLAG ################################
+      IF (Customer."Is An Internet Customer" = FALSE) AND
+         (Customer."Is a B2B Internet Customer" = TRUE) THEN BEGIN
+        SumOfCusts := SumOfCusts + 1;
+        msg:=TxtMissingInternetCustomer;
+        IsAnInternetCustomer := TRUE; //DOC EC2009.2.74
+        IF PatchBadData THEN BEGIN
+          Customer."Is An Internet Customer":=TRUE;
+          PatchApplied:=TRUE;
+        END;
+        LogDataIssue(LabelCode,IDMI.Type::Customer,Customer."No.",'',msg,FALSE,PatchApplied);
+      END;
+
+      //DOC EC2015.5.03 IF PatchApplied THEN
+      //DOC EC2015.5.03  Customer.DateTimeInsertedModified:=CURRENTDATETIME;
+
+      //DOC EC2009.2.74 - remove function CheckIntCustEntries
+      //code here instead
+      //CheckIntCustEntries(Customer,PatchBadData,doContactCheck,doCustLedgerEntryCheck,doSalesCheck,
+      //                    doInvoiceCheck,doCreditCheck,doSegmentCheck);
+
+      IF doContactCheck THEN
+        CheckCustomerContacts(Customer,PatchBadData,doSegmentCheck);
+      IF doCustLedgerEntryCheck THEN
+        CheckCustLedgerEntries(Customer,PatchBadData);
+      IF doSalesCheck THEN
+        CheckSales(Customer,PatchBadData);
+      IF doInvoiceCheck THEN
+        CheckInvoices(Customer,PatchBadData);
+      IF doCreditCheck THEN
+        CheckCredits(Customer,PatchBadData);
+      //DOC EC2009.2.74 +
+
+      //DOC EC2009.2.74 - new code
+      PromoHistSum.RESET;
+      PromoHistSum.SETCURRENTKEY("Customer No.");
+      PromoHistSum.SETRANGE("Customer No.",Customer."No.");
+      PromoHistSum.MODIFYALL("Customer User GuID",CustomerUserGuid);
+      PromoHistSum.MODIFYALL("Label Code",LabelCode);
+      //DOC EC2009.2.74 +
+
+      IF IsSingleCustomerCall THEN BEGIN
+        IF dlgIsOpen THEN BEGIN
+          dlg.CLOSE;
+          dlgIsOpen := FALSE;
+        END;
+      END
+    END;
+
+    PROCEDURE CheckCredits@1000000006(Customer@1000000003 : Record 18;PatchBadData@1000000000 : Boolean);
+    VAR
+      CrMemoHeaderLocal@1000000002 : Record 114;
+    BEGIN
+      CrMemoHeaderLocal.SETCURRENTKEY("Sell-to Customer No.");
+      CrMemoHeaderLocal.SETRANGE("Sell-to Customer No.",Customer."No.");
+      IF CrMemoHeaderLocal.FIND('-') THEN BEGIN
+        TotalCredits:=CrMemoHeaderLocal.COUNT;
+        REPEAT
+          CheckCredit(Customer,PatchBadData,CrMemoHeaderLocal);
+        UNTIL CrMemoHeaderLocal.NEXT=0;
+      END ELSE BEGIN
+        dlgCountCredit:=ROUND(1 / 1 * 10000,1);
+      END;
+    END;
+
+    PROCEDURE CheckCredit@1000000037(Customer@1000000003 : Record 18;PatchBadData@1000000000 : Boolean;SalesCrMemoHeader@1000000001 : Record 114);
+    VAR
+      DocLineLocal@1000000009 : Record 115;
+      iSalesHeaderLocal@1000000005 : Record 9021666;
+      OrderGuid@1000000010 : Text[40];
+      TxtProcessingCreditMemo@1000000002 : TextConst 'ENU=Processing Credit Memo;ENG=Processing Credit Memo';
+    BEGIN
+      PatchApplied := FALSE;
+
+      //update progress bar...
+      CountOfCredit := CountOfCredit + 1;
+      dlgCountCredit:=ROUND(CountOfCredit / TotalCredits * 10000,1);
+      IF dlgTimeCheck < TIME - 1000 THEN BEGIN // every second
+        dlgTimeCheck := TIME;
+        dlgTextCredit:=TxtProcessingCreditMemo + ' ' + SalesCrMemoHeader."No.";
+        IF dlgIsOpen THEN dlg.UPDATE;  //GW 101018
+      END;
+
+      //### LABEL CODE ##############################################
+
+      IF SalesCrMemoHeader."Label Code"<>LabelCode THEN BEGIN
+        SumOfCredits := SumOfCredits + 1;
+        msg:=STRSUBSTNO(TxtLabelCodeCouldBePatched, SalesCrMemoHeader."Label Code", LabelCode);
+        //DOC EC2009.2.74 IF (PatchBadData) AND (Customer."Label Code"<>'') THEN BEGIN
+        IF PatchBadData THEN BEGIN
+          //DOC EC2009.2.74 SalesCrMemoHeader."Label Code":=Customer."Label Code";
+          SalesCrMemoHeader."Label Code":= LabelCode;
+          PatchApplied:=TRUE;
+        END;
+        LogDataIssue(LabelCode,IDMI.Type::Credit,SalesCrMemoHeader."No.",'',msg,FALSE,PatchApplied);
+      END;
+
+      //### MISSING ORDER GUID #############################################
+      IF SalesCrMemoHeader."Order GuID"='' THEN BEGIN
+        SumOfCredits := SumOfCredits + 1;
+        //find Order Guid from Customer Reference on Internet Order...
+        iSalesHeaderLocal.SETCURRENTKEY("Internet Order Reference");
+        ExternalDocNo20 := COPYSTR(SalesCrMemoHeader."External Document No.",1,20); //DOC EC2009.2.74
+        IF SalesCrMemoHeader."Internet Order Reference" = '' THEN
+          iSalesHeaderLocal.SETRANGE("Internet Order Reference",ExternalDocNo20)
+        ELSE
+          iSalesHeaderLocal.SETRANGE("Internet Order Reference",SalesCrMemoHeader."Internet Order Reference");
+
+        IF iSalesHeaderLocal.FINDFIRST THEN BEGIN
+          OrderGuid:=iSalesHeaderLocal."Order Guid";
+        END ELSE BEGIN
+          //assume order is not an internet order; use Document No...
+          OrderGuid:=SalesCrMemoHeader."No.";
+          IF LabelCode<>'' THEN
+            OrderGuid:=LabelCode + '-' + OrderGuid;
+        END;
+        msg:=STRSUBSTNO(TxtOrderGuidCouldBePatched, SalesCrMemoHeader."Order GuID", OrderGuid);
+        IF PatchBadData THEN BEGIN
+          SalesCrMemoHeader."Order GuID":=OrderGuid;
+          PatchApplied:=TRUE;
+        END;
+        LogDataIssue(LabelCode,IDMI.Type::Credit,SalesCrMemoHeader."No.",'',msg,FALSE,PatchApplied);
+      END;
+
+      //### USER GUID ##############################################
+      IF (SalesCrMemoHeader."User GuID"<>CustomerUserGuid) THEN BEGIN
+        SumOfCredits := SumOfCredits + 1;
+        msg:=STRSUBSTNO(TxtUserGuidCouldBePatched, SalesCrMemoHeader."User GuID", CustomerUserGuid);
+        IF (PatchBadData) AND (Customer."User GUID"<>'') THEN BEGIN
+          SalesCrMemoHeader."User GuID":=Customer."User GUID";
+          PatchApplied:=TRUE;
+        END;
+        LogDataIssue(LabelCode,IDMI.Type::Credit,SalesCrMemoHeader."No.",'',msg,FALSE,PatchApplied);
+      END;
+
+      //### INTERNET CUSTOMER FLAG ################################
+      IF SalesCrMemoHeader."Is An Internet Customer"<>IsAnInternetCustomer THEN BEGIN
+        SumOfCredits := SumOfCredits + 1;
+        msg:=STRSUBSTNO(TxtIsAnInternetCustomerCouldBePatched, SalesCrMemoHeader."Is An Internet Customer", IsAnInternetCustomer);
+        IF PatchBadData THEN BEGIN
+          SalesCrMemoHeader."Is An Internet Customer":=Customer."Is An Internet Customer";
+          PatchApplied:=TRUE;
+        END;
+        LogDataIssue(LabelCode,IDMI.Type::Credit,SalesCrMemoHeader."No.",'',msg,FALSE,PatchApplied);
+      END;
+
+      IF PatchApplied THEN BEGIN
+        IF SalesCrMemoHeader.DateTimeInsertedModified = 0DT THEN
+          SalesCrMemoHeader.DateTimeInsertedModified := CREATEDATETIME(SalesCrMemoHeader."Posting Date",0T)
+        ELSE
+          SalesCrMemoHeader.DateTimeInsertedModified := CURRENTDATETIME;
+        SalesCrMemoHeader.MODIFY;
+        //update lines...
+        DocLineLocal.SETRANGE("Document No.",SalesCrMemoHeader."No.");
+        IF DocLineLocal.FIND('-') THEN
+        REPEAT
+          DocLineLocal.DateTimeInsertedModified := SalesCrMemoHeader.DateTimeInsertedModified;
+          DocLineLocal."Is An Internet Customer" := SalesCrMemoHeader."Is An Internet Customer";
+          DocLineLocal."Label Code":=SalesCrMemoHeader."Label Code";
+          DocLineLocal."Order GuID":=SalesCrMemoHeader."Order GuID";
+          DocLineLocal.MODIFY;
+        UNTIL DocLineLocal.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE CheckCustomerContacts@1000000013(Customer@1000000001 : Record 18;PatchBadData@1000000000 : Boolean;doSegmentCheck@1000000004 : Boolean);
+    VAR
+      ContBusRelLocal@1000000003 : Record 5054;
+      ContactLocal@1000000002 : Record 5050;
+      TxtCannotGetContact@1000000005 : TextConst 'ENU=Cannot get Contact No.  [%1] for Customer No.  [%2];ENG=Cannot get Contact No.  [%1] for Customer No.  [%2]';
+      TxtContactNoTypeCompany@1000000006 : TextConst 'ENU=Contact No. [%1] for Customer No. [%2] must be of Type Company;ENG=Contact No. [%1] for Customer No. [%2] must be of Type Company';
+      TxtCustomerHasNoContacts@1000000007 : TextConst 'ENU=Customer No. [%1] has no contacts and it needs at least 1;ENG=Customer No. [%1] has no contacts and it needs at least 1';
+    BEGIN
+      //DOC EC2009.2.74 -
+      IF Customer."Is a B2B Internet Customer" = FALSE THEN BEGIN
+        InternetSetup.GET;
+        IF InternetSetup."Use Internet Customer" =
+           InternetSetup."Use Internet Customer"::Always THEN
+          EXIT;
+      END;
+      //DOC EC2009.2.74 +
+
+      ContBusRelLocal.SETCURRENTKEY("Link to Table","No.");
+      ContBusRelLocal.SETRANGE("Link to Table",ContBusRelLocal."Link to Table"::Customer);
+      ContBusRelLocal.SETRANGE("No.",Customer."No.");
+      IF ContBusRelLocal.FINDFIRST THEN BEGIN
+        IF NOT ContactLocal.GET(ContBusRelLocal."Contact No.") THEN BEGIN
+          msg:=STRSUBSTNO(TxtCannotGetContact, ContBusRelLocal."Contact No.", Customer."No.");
+          LogDataIssue(LabelCode,IDMI.Type::Contact,Customer."No.",'',msg,TRUE,FALSE);
+        END ELSE BEGIN
+          IF ContactLocal.Type <> ContactLocal.Type::Company THEN BEGIN
+            msg := STRSUBSTNO(TxtContactNoTypeCompany, ContactLocal."No.", Customer."No.");
+            LogDataIssue(LabelCode,IDMI.Type::Contact,Customer."No.",'',msg,TRUE,FALSE);
+          END;
+          TotalConts:= 1;
+          CheckCustomerContact(Customer,ContactLocal,PatchBadData,doSegmentCheck);
+          ContactLocal.RESET;
+          ContactLocal.SETCURRENTKEY("Company No.");
+          ContactLocal.SETRANGE("Company No.",ContBusRelLocal."Contact No.");
+          ContactLocal.SETRANGE(Type,ContactLocal.Type::Person);
+          IF ContactLocal.FIND('-') THEN BEGIN
+            TotalConts:=ContactLocal.COUNT;
+            REPEAT
+              CheckCustomerContact(Customer,ContactLocal,PatchBadData,doSegmentCheck);
+            UNTIL ContactLocal.NEXT = 0;
+          END ELSE
+            dlgCountCont:=ROUND(1 / 1 * 10000,1);
+        END;
+      END ELSE BEGIN
+        msg:=STRSUBSTNO(TxtCustomerHasNoContacts, Customer."No.");
+        LogDataIssue(LabelCode,IDMI.Type::Customer,Customer."No.",'',msg,TRUE,FALSE);
+      END;
+    END;
+
+    PROCEDURE CheckCustomerContact@1000000017(Customer@1000000000 : Record 18;Contact@1000000005 : Record 5050;PatchBadData@1000000001 : Boolean;doSegmentCheck@1000000002 : Boolean);
+    VAR
+      IntB2BCust@1190000005 : Record 9021643;
+      SegLine@1000000003 : Record 5077;
+      SegmentPatchApplied@1000000004 : Boolean;
+      IntCust@1190000006 : Record 9021642;
+      TxtProcessingContact@1000000006 : TextConst 'ENU=Processing Contact;ENG=Processing Contact';
+      TxtContactTypeCompany@1000000007 : TextConst 'ENU=Contact Type is Company but is linked to a Internet B2B customer. This is not necessarily an error.;ENG=Contact Type is Company but is linked to a Internet B2B customer. This is not necessarily an error.';
+      TxtCustomerContactMismatch@1000000008 : TextConst 'ENU=The Internet B2B Customer [%1] should have Contact No. [%2] , not [%3];ENG=The Internet B2B Customer [%1] should have Contact No. [%2] , not [%3]';
+      TxtCustomerCustomerMismatch@1000000009 : TextConst 'ENU=The Internet B2B Customer [%1] should have Customer No. [%2] , not [%3];ENG=The Internet B2B Customer [%1] should have Customer No. [%2] , not [%3]';
+      TxtContactPatched@1000000010 : TextConst 'ENU=The Internet B2B Customer [%1] has Customer No. [%2] and Contact No. [%3] so the Contact has been patched with this UserGUID;ENG=The Internet B2B Customer [%1] has Customer No. [%2] and Contact No. [%3] so the Contact has been patched with this UserGUID';
+      TxtCustomerContactMismatch2@1000000011 : TextConst 'ENU=The Internet Customer [%1] should have Contact No. [%2] , not [%3];ENG=The Internet Customer [%1] should have Contact No. [%2] , not [%3]';
+      TxtCustomerCustomerMismatch2@1000000012 : TextConst 'ENU=The Internet Customer [%1] should have Customer No. [%2] , not [%3];ENG=The Internet Customer [%1] should have Customer No. [%2] , not [%3]';
+      TxtIsAnInternetCustomer@1000000013 : TextConst 'ENU=Is An Internet Customer [%1] could be patched to [%2];ENG=Is An Internet Customer [%1] could be patched to [%2]';
+      TxtProcessingSegment@1000000014 : TextConst 'ENU=Processing Segment;ENG=Processing Segment';
+      TxtSegmentContact@1000000015 : TextConst 'ENU=Segment No. %1, Line No. %2 has Co. UserGuID %3. It should be %4;ENG=Segment No. %1, Line No. %2 has Co. UserGuID %3. It should be %4';
+      TxtSegmentLabel@1000000016 : TextConst 'ENU=Segment No. %1, Line No. %2 has Label Code %3. It should be %4;ENG=Segment No. %1, Line No. %2 has Label Code %3. It should be %4';
+    BEGIN
+      PatchApplied := FALSE;
+
+      //update progress bar...
+      CountOfCont := CountOfCont + 1;
+      dlgCountCont:=ROUND(CountOfCont / TotalConts * 10000,1);
+      dlgTextCont:=TxtProcessingContact + ' ' + Contact."No.";
+      IF dlgIsOpen THEN dlg.UPDATE;
+
+      //### LABEL CODE ##############################################
+      IF Contact."Label Code"<>LabelCode THEN BEGIN
+        SumOfConts := SumOfConts + 1;
+        msg:=STRSUBSTNO(TxtLabelCodeCouldBePatched, Contact."Label Code", LabelCode);
+        IF (PatchBadData) AND (Customer."Label Code"<>'') THEN BEGIN
+          Contact."Label Code":=Customer."Label Code";
+          PatchApplied:=TRUE;
+        END;
+        LogDataIssue(LabelCode,IDMI.Type::Contact,Contact."No.",'',msg,FALSE,PatchApplied);
+      END;
+
+      //### USER GUID ##############################################
+      IF Contact.Type = Contact.Type::Company THEN BEGIN
+        IF Contact."User GuID" <> CustomerUserGuid THEN BEGIN
+          SumOfConts := SumOfConts + 1;
+          msg:=STRSUBSTNO(TxtUserGuidCouldBePatched, Contact."User GuID", CustomerUserGuid);
+          IF (PatchBadData) AND (CustomerUserGuid<>'') THEN BEGIN
+            Contact."User GuID" := CustomerUserGuid;
+            PatchApplied:=TRUE;
+          END;
+          LogDataIssue(LabelCode,IDMI.Type::Contact,Contact."No.",'',msg + 'ha',FALSE,PatchApplied);
+        END;
+      END;
+
+      Contact.CALCFIELDS("Is An Internet B2B Customer");
+      //flowfield where Contact User Guid = Internet B2B Cust. No.
+      IF Contact."Is An Internet B2B Customer" THEN BEGIN
+        IF Contact.Type = Contact.Type::Company THEN BEGIN
+          SumOfConts := SumOfConts + 1;
+          msg:=TxtContactTypeCompany;
+          LogDataIssue(LabelCode,IDMI.Type::Contact,Contact."No.",'',msg,TRUE,FALSE);
+        END;
+        IntB2BCust.GET(Contact."User GuID");
+        IF IntB2BCust."Contact No." <> Contact."No." THEN BEGIN
+          SumOfConts := SumOfConts + 1;
+          msg := STRSUBSTNO(TxtCustomerContactMismatch, Contact."User GuID", Contact."No.", IntB2BCust."Contact No.");
+          LogDataIssue(LabelCode,IDMI.Type::Contact,Contact."No.",'',msg,TRUE,FALSE);
+        END;
+        IF IntB2BCust."Customer No." <> Customer."No." THEN BEGIN
+          SumOfConts := SumOfConts + 1;
+          msg := STRSUBSTNO(TxtCustomerCustomerMismatch, Contact."User GuID", Customer."No.", IntB2BCust."Customer No.");
+          LogDataIssue(LabelCode,IDMI.Type::Contact,Contact."No.",'',msg,TRUE,FALSE);
+        END;
+      END ELSE BEGIN
+        IntB2BCust.RESET;
+        IntB2BCust.SETCURRENTKEY("Customer No.");
+        IntB2BCust.SETRANGE("Customer No.",Customer."No.");
+        IntB2BCust.SETRANGE("Contact No.",Contact."No.");
+        IF IntB2BCust.FIND('-') THEN BEGIN
+          SumOfConts := SumOfConts + 1;
+          msg := STRSUBSTNO(TxtContactPatched, IntB2BCust."No.", Customer."No.", Contact."No.");
+          LogDataIssue(LabelCode,IDMI.Type::Contact,Contact."No.",'',msg,TRUE,FALSE);
+          IF PatchBadData THEN BEGIN
+            Contact."User GuID" := IntB2BCust."No.";
+            PatchApplied:=TRUE;
+          END;
+        END;
+      END;
+
+      IF IntCust.GET(Contact."User GuID") THEN BEGIN
+        IF IntCust."Contact No." <> Contact."No." THEN BEGIN
+          SumOfConts := SumOfConts + 1;
+          msg := STRSUBSTNO(TxtCustomerContactMismatch2, Contact."User GuID", Contact."No.", IntCust."Contact No.");
+          LogDataIssue(LabelCode,IDMI.Type::Contact,Contact."No.",'',msg,TRUE,FALSE);
+        END;
+        IF IntCust."Customer No." <> Customer."No." THEN BEGIN
+          SumOfConts := SumOfConts + 1;
+          msg := STRSUBSTNO(TxtCustomerCustomerMismatch2, Contact."User GuID", Customer."No.", IntCust."Customer No.");
+          LogDataIssue(LabelCode,IDMI.Type::Contact,Contact."No.",'',msg,TRUE,FALSE);
+        END;
+      END;
+
+      //### INTERNET CUSTOMER FLAG ################################
+      IF Contact."Is An Internet Customer"<>IsAnInternetCustomer THEN BEGIN
+        SumOfConts := SumOfConts + 1;
+        msg:=STRSUBSTNO(TxtIsAnInternetCustomer, Contact."Is An Internet Customer", IsAnInternetCustomer);
+        IF PatchBadData THEN BEGIN
+          Contact."Is An Internet Customer":= IsAnInternetCustomer;
+          PatchApplied:=TRUE;
+        END;
+        LogDataIssue(LabelCode,IDMI.Type::Contact,Contact."No.",'',msg,FALSE,PatchApplied);
+      END;
+
+      IF PatchApplied THEN BEGIN
+        Contact."Last Date Modified":=TODAY;
+        Contact."Last Time Modified":=TIME;
+        Contact.MODIFY;
+      END;
+
+
+      //### SEGMENT LINES ################################
+      CountOfSegment := 0;
+      IF doSegmentCheck THEN BEGIN
+        SegLine.RESET;
+        SegLine.SETCURRENTKEY("Contact No.");
+        SegLine.SETRANGE("Contact No.",Contact."No.");
+        TotalSegments := SegLine.COUNT;
+        IF SegLine.FIND('-') THEN
+        REPEAT
+          SegmentPatchApplied := FALSE;
+          CountOfSegment := CountOfSegment + 1;
+          dlgCountSegment:=ROUND(CountOfSegment / TotalSegments * 10000,1);
+          dlgTextSegment:=TxtProcessingSegment + ' ' + Contact."No.";
+          IF dlgIsOpen THEN dlg.UPDATE;
+          IF SegLine."Company User GuID" <> CustomerUserGuid THEN BEGIN
+            SumOfSegments := SumOfSegments + 1;
+            msg := STRSUBSTNO(TxtSegmentContact, SegLine."Segment No.", SegLine."Line No.", SegLine."Company User GuID", CustomerUserGuid);
+            IF PatchBadData THEN BEGIN
+              SegLine."Company User GuID" := CustomerUserGuid;
+              SegmentPatchApplied:=TRUE;
+            END;
+            LogDataIssue(LabelCode,IDMI.Type::Contact,Contact."No.",'',msg,FALSE,SegmentPatchApplied);
+          END;
+          IF SegLine."Label Code" <> LabelCode THEN BEGIN
+            SumOfSegments := SumOfSegments + 1;
+            msg := STRSUBSTNO(TxtSegmentLabel, SegLine."Segment No.", SegLine."Line No.", SegLine."Label Code", LabelCode);
+            IF PatchBadData THEN BEGIN
+              SegLine."Label Code" := LabelCode;
+              SegmentPatchApplied:=TRUE;
+            END;
+            LogDataIssue(LabelCode,IDMI.Type::Contact,Contact."No.",'',msg,FALSE,SegmentPatchApplied);
+          END;
+          //DOC EC2015.5.03 IF SegmentPatchApplied THEN BEGIN
+          //DOC EC2015.5.03   SegLine.DateTimeInsertedModified := CURRENTDATETIME;
+          //DOC EC2015.5.03   SegLine.MODIFY;
+          //DOC EC2015.5.03 END;
+          IF SegmentPatchApplied THEN SegLine.MODIFY; //DOC EC2015.5.04
+        UNTIL SegLine.NEXT = 0;
+      END;
+
+
+      //****************************************************************
+      //should go on to do related Profile records
+    END;
+
+    PROCEDURE CheckCustLedgerEntries@1000000007(Customer@1000000001 : Record 18;PatchBadData@1000000000 : Boolean);
+    VAR
+      CLELocal@1000000002 : Record 21;
+    BEGIN
+      CLELocal.RESET;  //GW 101125
+      CLELocal.SETCURRENTKEY("Customer No.");  //GW 101125
+      CLELocal.SETRANGE("Customer No.",Customer."No.");
+      IF CLELocal.FIND('-') THEN BEGIN
+        TotalCLEs:=CLELocal.COUNT;
+        REPEAT
+          CheckCustLedgerEntry(CLELocal,Customer,PatchBadData);
+        UNTIL CLELocal.NEXT=0;
+      END ELSE BEGIN
+        dlgCountCLE:=ROUND(1 / 1 * 10000,1);
+      END;
+    END;
+
+    PROCEDURE CheckCustLedgerEntry@1000000012(CustLedgerEntry@1000000002 : Record 21;Customer@1000000001 : Record 18;PatchBadData@1000000000 : Boolean);
+    VAR
+      TxtProcessingCustLedgerEntry@1000000003 : TextConst 'ENU=Processing Customer Ledger Entry;ENG=Processing Customer Ledger Entry';
+    BEGIN
+      PatchApplied := FALSE;  //GW 101125
+
+      //update progress bar...
+      CountOfCLE := CountOfCLE + 1;
+      dlgCountCLE:=ROUND(CountOfCLE / TotalCLEs * 10000,1);
+      IF dlgTimeCheck < TIME - 1000 THEN BEGIN // every second
+        dlgTimeCheck := TIME;
+        dlgTextCLE:=TxtProcessingCustLedgerEntry + ' ' + FORMAT(CustLedgerEntry."Entry No.");
+        IF dlgIsOpen THEN dlg.UPDATE; //GW 101018
+      END;
+
+      //### LABEL CODE ##############################################
+      IF CustLedgerEntry."Label Code"<>LabelCode THEN BEGIN
+        SumOfCLEs := SumOfCLEs + 1;
+        msg:=STRSUBSTNO(TxtLabelCodeCouldBePatched, CustLedgerEntry."Label Code", LabelCode);
+        IF (PatchBadData) AND (Customer."Label Code"<>'') THEN BEGIN
+          CustLedgerEntry."Label Code":=Customer."Label Code";
+          PatchApplied:=TRUE;
+        END;
+        LogDataIssue(LabelCode,IDMI.Type::"Cust. Ledger Entry",FORMAT(CustLedgerEntry."Entry No."),'',msg,FALSE,PatchApplied);
+      END;
+
+      //### INTERNET CUSTOMER FLAG ################################
+      IF CustLedgerEntry."Is An Internet Customer"<>IsAnInternetCustomer THEN BEGIN
+        SumOfCLEs := SumOfCLEs + 1;
+        msg:=STRSUBSTNO(TxtIsAnInternetCustomerCouldBePatched, CustLedgerEntry."Is An Internet Customer", IsAnInternetCustomer);
+        IF PatchBadData THEN BEGIN
+          CustLedgerEntry."Is An Internet Customer":=Customer."Is An Internet Customer";
+          PatchApplied:=TRUE;
+        END;
+        LogDataIssue(LabelCode,IDMI.Type::"Cust. Ledger Entry",FORMAT(CustLedgerEntry."Entry No."),'',msg,FALSE,PatchApplied);
+      END;
+    END;
+
+    PROCEDURE CheckInvoices@1000000005(Customer@1000000003 : Record 18;PatchBadData@1000000000 : Boolean);
+    VAR
+      InvoiceHeaderLocal@1000000001 : Record 112;
+    BEGIN
+      InvoiceHeaderLocal.SETCURRENTKEY("Sell-to Customer No."); //GW 101125
+      InvoiceHeaderLocal.SETRANGE("Sell-to Customer No.",Customer."No.");
+      IF InvoiceHeaderLocal.FIND('-') THEN BEGIN
+        TotalInvs:=InvoiceHeaderLocal.COUNT;
+        REPEAT
+          CheckInvoice(Customer,InvoiceHeaderLocal,PatchBadData);
+        UNTIL InvoiceHeaderLocal.NEXT=0;
+      END ELSE BEGIN
+        dlgCountInv:=ROUND(1 / 1 * 10000,1);
+      END;
+    END;
+
+    PROCEDURE CheckInvoice@1000000036(Customer@1000000003 : Record 18;SalesInvHeader@1000000001 : Record 112;PatchBadData@1000000000 : Boolean);
+    VAR
+      DocLineLocal@1000000010 : Record 113;
+      iSalesHeaderLocal@1000000005 : Record 9021666;
+      OrderGuid@1000000009 : Text[40];
+      TxtProcessingInvoice@1000000002 : TextConst 'ENU=Processing Invoice;ENG=Processing Invoice';
+    BEGIN
+      PatchApplied := FALSE;  //GW 101125
+
+      //update progress bar...
+      CountOfInv := CountOfInv + 1;
+      dlgCountInv:=ROUND(CountOfInv / TotalInvs * 10000,1);
+      IF dlgTimeCheck < TIME - 1000 THEN BEGIN // every second
+        dlgTimeCheck := TIME;
+        dlgTextInv:=TxtProcessingInvoice + ' ' + SalesInvHeader."No.";
+        IF dlgIsOpen THEN dlg.UPDATE; //GW 101018
+      END;
+
+      //### LABEL CODE ##############################################
+      IF SalesInvHeader."Label Code"<>LabelCode THEN BEGIN
+        SumOfInvs := SumOfInvs + 1;
+        msg:=STRSUBSTNO(TxtLabelCodeCouldBePatched, SalesInvHeader."Label Code", LabelCode);
+        IF (PatchBadData) AND (Customer."Label Code"<>'') THEN BEGIN
+          SalesInvHeader."Label Code":=Customer."Label Code";
+          PatchApplied:=TRUE;
+        END;
+        LogDataIssue(LabelCode,IDMI.Type::Invoice,SalesInvHeader."No.",'',msg,FALSE,PatchApplied);
+      END;
+
+      //### MISSING ORDER GUID #############################################
+      IF SalesInvHeader."Order GuID"='' THEN BEGIN
+        SumOfInvs := SumOfInvs + 1;
+        //find Order Guid from Customer Reference on to Internet Order...
+        iSalesHeaderLocal.SETCURRENTKEY("Internet Order Reference");
+        ExternalDocNo20 := COPYSTR(SalesInvHeader."External Document No.",1,20); //DOC EC2009.2.74
+        IF SalesInvHeader."Internet Order Reference" = '' THEN  //MQ 06/04/2011 - GW110406
+          iSalesHeaderLocal.SETRANGE("Internet Order Reference",ExternalDocNo20)
+        ELSE
+          iSalesHeaderLocal.SETRANGE("Internet Order Reference",SalesInvHeader."Internet Order Reference");
+
+        IF iSalesHeaderLocal.FINDFIRST THEN BEGIN
+          OrderGuid:=iSalesHeaderLocal."Order Guid";
+        END ELSE BEGIN
+          //assume order is not an internet order; use Document No.
+          OrderGuid:=SalesInvHeader."No.";
+          IF LabelCode<>'' THEN
+            OrderGuid:=LabelCode + '-' + OrderGuid;
+        END;
+        msg:=STRSUBSTNO(TxtOrderGuidCouldBePatched, SalesInvHeader."Order GuID", OrderGuid);
+        IF PatchBadData THEN BEGIN
+          SalesInvHeader."Order GuID":=OrderGuid;
+          PatchApplied:=TRUE;
+        END;
+        LogDataIssue(LabelCode,IDMI.Type::Invoice,SalesInvHeader."No.",'',msg,FALSE,PatchApplied);
+      END;
+
+      //### USER GUID ##############################################
+      IF SalesInvHeader."User GuID"<>CustomerUserGuid THEN BEGIN
+        SumOfInvs := SumOfInvs + 1;
+        msg:=STRSUBSTNO(TxtUserGuidCouldBePatched, SalesInvHeader."User GuID", CustomerUserGuid);
+        IF (PatchBadData) AND (Customer."User GUID"<>'') THEN BEGIN
+          SalesInvHeader."User GuID":=Customer."User GUID";
+          PatchApplied:=TRUE;
+        END;
+        LogDataIssue(LabelCode,IDMI.Type::Invoice,SalesInvHeader."No.",'',msg,FALSE,PatchApplied);
+      END;
+
+      //### INTERNET CUSTOMER FLAG ################################
+      IF SalesInvHeader."Is An Internet Customer"<>IsAnInternetCustomer THEN BEGIN
+        SumOfInvs := SumOfInvs + 1;
+        msg:=STRSUBSTNO(TxtIsAnInternetCustomerCouldBePatched, SalesInvHeader."Is An Internet Customer", IsAnInternetCustomer);
+        IF PatchBadData THEN BEGIN
+          SalesInvHeader."Is An Internet Customer":=Customer."Is An Internet Customer";
+          PatchApplied:=TRUE;
+        END;
+        LogDataIssue(LabelCode,IDMI.Type::Invoice,SalesInvHeader."No.",'',msg,FALSE,PatchApplied);
+      END;
+
+      IF PatchApplied THEN BEGIN
+        //DOC EC2009.2.72 -
+        //Orig SalesInvHeader.DateTimeInsertedModified:=CURRENTDATETIME;
+        IF SalesInvHeader.DateTimeInsertedModified = 0DT THEN
+          SalesInvHeader.DateTimeInsertedModified := CREATEDATETIME(SalesInvHeader."Posting Date",0T)
+        ELSE
+          SalesInvHeader.DateTimeInsertedModified:=CURRENTDATETIME;
+        //DOC EC2009.2.72 +
+        SalesInvHeader.MODIFY;
+        //update lines...
+        DocLineLocal.RESET;
+        DocLineLocal.SETRANGE("Document No.",SalesInvHeader."No.");
+        IF DocLineLocal.FIND('-') THEN
+        REPEAT
+          //DOC EC2009.2.72 -
+          //Orig DocLineLocal.DateTimeInsertedModified := CURRENTDATETIME;
+          DocLineLocal.DateTimeInsertedModified := SalesInvHeader.DateTimeInsertedModified;
+          //DOC EC2009.2.72 +
+          DocLineLocal."Is An Internet Customer" := SalesInvHeader."Is An Internet Customer";
+          DocLineLocal."Label Code":=SalesInvHeader."Label Code";
+          DocLineLocal."Order GuID":=SalesInvHeader."Order GuID";
+          DocLineLocal.MODIFY;
+        UNTIL DocLineLocal.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE CheckSales@1000000004(Customer@1000000001 : Record 18;PatchBadData@1000000000 : Boolean);
+    VAR
+      SalesHeaderLocal@1000000002 : Record 36;
+    BEGIN
+      SalesHeaderLocal.SETCURRENTKEY("Sell-to Customer No."); //GW 101125
+      SalesHeaderLocal.SETRANGE("Sell-to Customer No.",Customer."No.");
+      IF SalesHeaderLocal.FIND('-') THEN BEGIN
+        TotalSales:=SalesHeaderLocal.COUNT;
+        REPEAT
+          CheckSale(Customer,SalesHeaderLocal,PatchBadData);
+        UNTIL SalesHeaderLocal.NEXT=0;
+      END ELSE BEGIN
+        dlgCountSale:=ROUND(1 / 1 * 10000,1);
+      END;
+    END;
+
+    PROCEDURE CheckSale@1000000035(Customer@1000000003 : Record 18;SalesHeader@1000000001 : Record 36;PatchBadData@1000000000 : Boolean);
+    VAR
+      DocLineLocal@1000000009 : Record 37;
+      iSalesHeaderLocal@1000000005 : Record 9021666;
+      OrderGuid@1000000010 : Text[40];
+      TxtProcessingSalesDocument@1000000002 : TextConst 'ENU=Processing Sales Document;ENG=Processing Sales Document';
+    BEGIN
+      PatchApplied := FALSE;  //GW 101125
+
+      //update progress bar...
+      CountOfSale := CountOfSale + 1;
+      dlgCountSale:=ROUND(CountOfSale / TotalSales * 10000,1);
+      IF dlgTimeCheck < TIME - 1000 THEN BEGIN // every second
+        dlgTimeCheck := TIME;
+        dlgTextSale:=TxtProcessingSalesDocument + ' ' + FORMAT(SalesHeader."Document Type") + '-' + SalesHeader."No.";
+        IF dlgIsOpen THEN dlg.UPDATE;  //GW 101018
+      END;
+
+      //### LABEL CODE ##############################################
+      IF SalesHeader."Label Code"<>LabelCode THEN BEGIN
+        SumOfSales := SumOfSales + 1;
+        msg:=STRSUBSTNO(TxtLabelCodeCouldBePatched, SalesHeader."Label Code", LabelCode);
+        IF (PatchBadData) AND (SalesHeader."Label Code"<>Customer."Label Code") THEN BEGIN
+          SalesHeader."Label Code":=Customer."Label Code";
+          PatchApplied:=TRUE;
+        END;
+        LogDataIssue(LabelCode,IDMI.Type::Sale,FORMAT(SalesHeader."Document Type"),SalesHeader."No.",msg,FALSE,PatchApplied);
+      END;
+
+      //### MISSING ORDER GUID #############################################
+      IF SalesHeader."Order GuID"='' THEN BEGIN
+        SumOfSales := SumOfSales + 1;
+        //find Order Guid from Customer Reference on to Internet Order...
+        iSalesHeaderLocal.SETCURRENTKEY("Internet Order Reference");
+        ExternalDocNo20 := COPYSTR(SalesHeader."External Document No.",1,20); //DOC EC2009.2.74
+        IF SalesHeader."Internet Order Reference" = '' THEN  //MQ 06/04/2011 - GW110406
+          iSalesHeaderLocal.SETRANGE("Internet Order Reference",ExternalDocNo20)
+        ELSE
+          iSalesHeaderLocal.SETRANGE("Internet Order Reference",SalesHeader."Internet Order Reference");
+
+        IF iSalesHeaderLocal.FINDFIRST THEN BEGIN
+          OrderGuid:=iSalesHeaderLocal."Order Guid";
+        END ELSE BEGIN
+          //assume order is not an internet order; use Document No.
+          OrderGuid:=FORMAT(SalesHeader."Document Type")+'-'+SalesHeader."No.";
+          IF LabelCode<>'' THEN
+            OrderGuid:=LabelCode + '-' + OrderGuid;
+        END;
+        msg:=STRSUBSTNO(TxtOrderGuidCouldBePatched, SalesHeader."Order GuID", OrderGuid);
+        IF PatchBadData THEN BEGIN
+          SalesHeader."Order GuID":=OrderGuid;
+          PatchApplied:=TRUE;
+        END;
+        LogDataIssue(LabelCode,IDMI.Type::Sale,FORMAT(SalesHeader."Document Type"),SalesHeader."No.",msg,FALSE,PatchApplied);
+      END;
+
+      //### USER GUID ##############################################
+      IF SalesHeader."User GuID"<>CustomerUserGuid THEN BEGIN
+        SumOfSales := SumOfSales + 1;
+        msg:=STRSUBSTNO(TxtUserGuidCouldBePatched, SalesHeader."User GuID", CustomerUserGuid);
+        IF (PatchBadData) AND (Customer."User GUID"<>'') THEN BEGIN
+          SalesHeader."User GuID":=Customer."User GUID";
+          PatchApplied:=TRUE;
+        END;
+        LogDataIssue(LabelCode,IDMI.Type::Sale,FORMAT(SalesHeader."Document Type"),SalesHeader."No.",msg,FALSE,PatchApplied);
+      END;
+
+      //### INTERNET CUSTOMER FLAG ################################
+      IF SalesHeader."Is An Internet Customer"<>IsAnInternetCustomer THEN BEGIN
+        SumOfSales := SumOfSales + 1;
+        msg:=STRSUBSTNO(TxtIsAnInternetCustomerCouldBePatched, SalesHeader."Is An Internet Customer", IsAnInternetCustomer);
+        IF PatchBadData THEN BEGIN
+          SalesHeader."Is An Internet Customer":=Customer."Is An Internet Customer";
+          PatchApplied:=TRUE;
+        END;
+        LogDataIssue(LabelCode,IDMI.Type::Sale,FORMAT(SalesHeader."Document Type"),SalesHeader."No.",msg,FALSE,PatchApplied);
+      END;
+
+      IF PatchApplied THEN BEGIN
+        SalesHeader.DateTimeInsertedModified:=CURRENTDATETIME;
+        SalesHeader.MODIFY;
+        //update lines...
+        DocLineLocal.SETRANGE("Document Type",SalesHeader."Document Type");
+        DocLineLocal.SETRANGE("Document No.",SalesHeader."No.");
+        IF DocLineLocal.FIND('-') THEN
+        REPEAT
+          DocLineLocal.DateTimeInsertedModified := CURRENTDATETIME;
+          DocLineLocal."Is An Internet Customer":=SalesHeader."Is An Internet Customer";
+          DocLineLocal."Label Code":=SalesHeader."Label Code";
+          DocLineLocal."Order GuID":=SalesHeader."Order GuID";
+          DocLineLocal.MODIFY;
+        UNTIL DocLineLocal.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE LogDataIssue@1000000010(LabelCode@1000000006 : Code[10];Type@1000000000 : Integer;KeyField1@1000000001 : Code[20];KeyField2@1000000002 : Code[20];IssueText@1000000004 : Text[250];CanNotCorrect@1000000007 : Boolean;Patched@1000000003 : Boolean);
+    VAR
+      IMDILocal@1000000005 : Record 9021720;
+    BEGIN
+      EXIT; //DOC EC2013.3.30 MQ 29/11/2012 - GW121129
+
+      //check whether a record of this issue already exists...
+      IMDILocal.SETCURRENTKEY("Label Code",Type,"Key Field 1","Key Field 2",Closed); //GW 101125
+      IMDILocal.SETRANGE("Label Code",LabelCode);
+      IMDILocal.SETRANGE(Type,Type);
+      IMDILocal.SETRANGE("Key Field 1",KeyField1);
+      IMDILocal.SETRANGE("Key Field 2",KeyField2);
+      IMDILocal.SETFILTER("Issue Description",'%1',IssueText);
+      IMDILocal.SETFILTER(Closed,'%1',FALSE);
+      //exit if open issue already exists...
+      IF IMDILocal.FINDFIRST THEN EXIT;
+
+      //create a new issue record...
+      IDMI.INIT;
+      IDMI."Label Code":=LabelCode;
+      IDMI.Type:=Type;
+      IDMI."Key Field 1":=KeyField1;
+      IDMI."Key Field 2":=KeyField2;
+      IDMI."Issue Description":=IssueText;
+      IDMI."Can Not Fix Automatically" := CanNotCorrect;
+      IDMI.Patched:=Patched;
+      IDMI.INSERT(TRUE);
+    END;
+
+    PROCEDURE ResetDialogDocDisplay@1000000008(CustomerNo@1000000000 : Code[20]);
+    VAR
+      TxtPending@1000000001 : TextConst 'ENU=Pending;ENG=Pending';
+      TxtCustLedgerEntries@1000000002 : TextConst 'ENU=Cust. Ledger Entries;ENG=Cust. Ledger Entries';
+      TxtContacts@1000000003 : TextConst 'ENU=Contacts;ENG=Contacts';
+      TxtCreditMemos@1000000004 : TextConst 'ENU=Credit Memos;ENG=Credit Memos';
+      TxtInvoices@1000000005 : TextConst 'ENU=Invoices;ENG=Invoices';
+      TxtSalesDocuments@1000000006 : TextConst 'ENU=Sales Documents;ENG=Sales Documents';
+      TxtSegments@1000000007 : TextConst 'ENU=Segments;ENG=Segments';
+    BEGIN
+      //doesn't reset SUM counters as these represent problem records processed in total...
+
+      IF CustomerNo<>'' THEN
+        CustomerNo:=CustomerNo + '...';
+
+      dlgTextCLE:=CustomerNo + ' ' + TxtCustLedgerEntries + ' ' + TxtPending;
+      CountOfCLE:=0;
+      TotalCLEs:=0;
+      dlgCountCLE:=0;
+
+      dlgTextCont:=CustomerNo + ' ' + TxtContacts + ' ' + TxtPending;
+      CountOfCont:=0;
+      TotalConts:=0;
+      dlgCountCont:=0;
+
+      dlgTextCredit:=CustomerNo + ' ' + TxtCreditMemos + ' ' + TxtPending;
+      CountOfCredit:=0;
+      TotalCredits:=0;
+      dlgCountCredit:=0;
+
+      dlgTextInv:=CustomerNo + ' ' + TxtInvoices + ' ' + TxtPending;
+      CountOfInv:=0;
+      TotalInvs:=0;
+      dlgCountInv:=0;
+
+      dlgTextSale:=CustomerNo + ' ' + TxtSalesDocuments + ' ' + TxtPending;
+      CountOfSale:=0;
+      TotalSales:=0;
+      dlgCountSale:=0;
+
+      dlgTextSale:=CustomerNo + ' ' + TxtSegments + ' ' + TxtPending;
+      CountOfSegment:=0;
+      TotalSegments:=0;
+      dlgCountSegment:=0;
+    END;
+
+    BEGIN
+    {
+      //DOC EC2009.2.72 MQ 22/02/2012 - GW120222 Modified so initial population of DateTimeInserted is Posting Date
+      //DOC EC2009.2.72 MQ 26/03/2012 - GW120326 Add call to Custom Mods - W
+      //DOC EC2009.2.74 MQ 01/04/2012 - Code to update Promotion History Summary and CheckCustomerContacts; Deleted functions CheckContacts, CheckContact and SetContLabelAndUser
+      //DOC EC2009.2.74 MQ 30/07/2012 - GW120730 Additional code to deal with External Document No.s over 20 characters in length
+      //DOC EC2013.3.30 MQ 29/11/2012 - GW121129 Do not create Log Data - not used and causing "Entry No." x already exists at DERM
+      //DOC EC2013.3.60 MQ 30/05/2013 - GW130530 TD only enhancement
+      //DOC EC2013.3.70 MQ 10/07/2013 - GW130710 Run Additional Document Search populate code.
+      //DOC EC2013.4.00 MQ 17/10/2013 - GW131017 RTC
+      //DOC EC2013.4.50 MQ 03/03/2014 - GW140303 Enhanced for DermAU
+      //DOC EC2015.5.03 MQ 05/05/2015 - GW150505 Removed update of DateTimeInsertedModified from Customer, Segment Line and CustLedEntry
+      //DOC EC2015.5.04 MQ 21/07/2015 - GW150721 Corrected EC2015.5.03
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

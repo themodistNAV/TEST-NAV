@@ -1,0 +1,276 @@
+OBJECT Codeunit 9062675 Enhanced View Session Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=04/07/16;
+    Time=10:38:36 AM;
+    Version List=NA2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      HtmlControlRequestProxy@1000000001 : Codeunit 9062665;
+      KendoUIManagement@1000000010 : Codeunit 9062699;
+      EnhViewCalcMgt@1000000005 : Codeunit 9062674;
+      EnhViewMgt@1000000007 : Codeunit 9062679;
+      ViewCode@1000000013 : Code[20];
+      ControlTemplateCode@1000000003 : Code[10];
+      ControlViewCode@1000000012 : Code[10];
+      Initialized@1000000000 : Boolean;
+      errMessageNotSupported@1000000004 : TextConst 'ENU=Message %1 not supported.;ENG=Message %1 not supported.';
+      "--- Temporary Data Sources ---"@1000000011 : Integer;
+      UseTempDataSources@1000000009 : Boolean;
+      SrcEnhViewField@1000000002 : TEMPORARY Record 9062807;
+
+    PROCEDURE Initialize@1000000000(VAR Value@1000000000 : DotNet "'TheNavPeople.HtmlControlCommunication.9.0.0.0, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7c0c47cc7f65ff95'.TheNavPeople.HtmlControlCommunication.RequestMessageEvent");
+    VAR
+      UIManipulationMgt@1000000002 : Codeunit 9062672;
+    BEGIN
+      Initialized := FALSE;
+      //initialize control and libraries
+      HtmlControlRequestProxy.SetRequestEvent(Value);
+
+      KendoUIManagement.Initialize(HtmlControlRequestProxy);
+
+      HtmlControlRequestProxy.AddScriptLink('libraries/jquery-ui-1.11.4/jquery-ui.js');
+      HtmlControlRequestProxy.AddScriptLink('libraries/tnp.enhview/tnp.enhview.js');
+      HtmlControlRequestProxy.AddScriptLink('libraries/bootstrap-3.3.6/js/bootstrap.min.js');
+      //HtmlControlRequestProxy.AddScriptLink('libraries/jquery.ui.touch-punch/jquery.ui.touch-punch.min.js');
+      HtmlControlRequestProxy.AddScriptLink('libraries/jquery.ui.touch-punch/jquery.ui.touch-punch.js');
+      HtmlControlRequestProxy.AddStyleSheetLink('libraries/bootstrap-3.3.6/css/bootstrap.min.css');
+
+      //KendoUI libraries
+      KendoUIManagement.AddLibraryReferences();
+
+      HtmlControlRequestProxy.SendResourceLinkRequest();
+      //update client ui
+      UIManipulationMgt.ClearScript();
+      UIManipulationMgt.UseWindowHeight();
+      IF (UIManipulationMgt.HasScript) THEN
+        HtmlControlRequestProxy.SendJavaScriptRequest(UIManipulationMgt.GetScript);
+    END;
+
+    PROCEDURE LinksLoaded@1000000001();
+    BEGIN
+      HtmlControlRequestProxy.SendJavaScriptRequest(
+        'InitTouchPunch(jQuery);InitEnhView("controlAddIn");');
+      Initialized := TRUE;
+      HtmlControlRequestProxy.LoadView(ControlTemplateCode, ControlViewCode);
+      RenderContent(TRUE);
+    END;
+
+    PROCEDURE HandleControlMessage@1000000002(ControlMessage@1000000000 : DotNet "'TheNavPeople.HtmlControlCommunication.9.0.0.0, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7c0c47cc7f65ff95'.TheNavPeople.HtmlControlCommunication.ControlMessage";VAR ClosePage@1000000001 : Boolean);
+    VAR
+      CellIdText@1000000002 : Text;
+      CellIndexText@1000000003 : Text;
+      ColIdText@1000000004 : Text;
+    BEGIN
+    END;
+
+    PROCEDURE ProcessMessage@1000000066(VAR EventArgs@1000000000 : Record 9062811);
+    BEGIN
+      //send message to calculation management codeunit
+      EnhViewCalcMgt.ProcessMessage(EventArgs);
+
+      //process message here if it has not been handled yet
+      IF (NOT(EventArgs.Handled)) THEN
+        InternalProcessMessage(EventArgs);
+
+      //throw error for not supported messages
+      IF (NOT(EventArgs.Handled)) THEN
+        ERROR(errMessageNotSupported, EventArgs.Type);
+
+      //refresh control if required
+      RenderContent(FALSE);
+    END;
+
+    LOCAL PROCEDURE InternalProcessMessage@1000000003(VAR EventArgs@1000000000 : Record 9062811);
+    VAR
+      EnhViewsConst@1000000001 : Codeunit 9062689;
+      MessageHandled@1000000002 : Boolean;
+    BEGIN
+      MessageHandled := TRUE;
+      CASE (EventArgs.Type) OF
+        EnhViewsConst.CMD_ExportToExcel:
+          ExportToExcel();
+        EnhViewsConst.CMD_ExportToPdf:
+          ExportToPdf();
+        ELSE
+          MessageHandled := FALSE;
+      END;
+
+      IF (MessageHandled) THEN
+        EventArgs.Handled := TRUE;
+
+      RenderContent(FALSE);
+    END;
+
+    PROCEDURE MessageTypeSupported@1000000006(MessageType@1000000000 : Text) : Boolean;
+    VAR
+      EnhViewConst@1000000001 : Codeunit 9062689;
+    BEGIN
+      IF (EnhViewCalcMgt.MessageTypeSupported(MessageType)) THEN
+        EXIT(TRUE);
+
+      EXIT(MessageType IN [
+        //EnhViewConst.CMD_ExportToPdf,    //performance issues - export to pdf disabled
+        EnhViewConst.CMD_ExportToExcel
+        ]);
+    END;
+
+    LOCAL PROCEDURE "--- Rendering ---"@1000000017();
+    BEGIN
+    END;
+
+    PROCEDURE RenderContent@1000000004(ReloadView@1000000002 : Boolean);
+    VAR
+      CellId@1000000003 : Integer;
+    BEGIN
+      IF (ViewCode = '') OR (NOT(Initialized)) THEN
+        EXIT;
+
+      IF (NOT(ReloadView)) THEN
+        ReloadView := EnhViewCalcMgt.ViewReloadRequired;
+
+      IF (ReloadView) THEN
+        RenderView()
+      ELSE IF (EnhViewCalcMgt.CellReloadRequired(CellId)) THEN
+        RenderCell(CellId);
+
+      EnhViewCalcMgt.ClearReloadFlags();
+    END;
+
+    LOCAL PROCEDURE RenderView@1000000007();
+    VAR
+      DataSource@1000000001 : TEMPORARY Record 9062810;
+      EnhViewData@1000000000 : Codeunit 9062678;
+    BEGIN
+      EnhViewCalcMgt.SetSelectedEntryNo(0);
+
+      DataSource.RESET();
+      DataSource.DELETEALL();
+
+      EnhViewData.SetEnhViewState(EnhViewCalcMgt);
+      EnhViewCalcMgt.GetEnhViewXmlData(DataSource);
+      HtmlControlRequestProxy.RenderViewData(DataSource);
+    END;
+
+    LOCAL PROCEDURE RenderCell@1000000008(CellId@1000000000 : Integer);
+    VAR
+      DataSource@1000000001 : TEMPORARY Record 9062810;
+      EnhViewData@1000000002 : Codeunit 9062678;
+    BEGIN
+      IF (ViewCode = '') OR (NOT(Initialized)) THEN
+        EXIT;
+
+      DataSource.RESET();
+      DataSource.DELETEALL();
+      EnhViewData.SetEnhViewState(EnhViewCalcMgt);
+      EnhViewCalcMgt.GetCellXmlData(DataSource, CellId);
+      HtmlControlRequestProxy.RenderViewData(DataSource);
+    END;
+
+    LOCAL PROCEDURE "--- Settings ---"@1000000018();
+    BEGIN
+    END;
+
+    PROCEDURE SetEnhView@1000000005(VAR NewEnhView@1000000000 : Record 9062804);
+    VAR
+      EnhViewFieldDb@1000000001 : Record 9062807;
+    BEGIN
+      ViewCode := NewEnhView.Code;
+      ControlTemplateCode := NewEnhView."Control Template Code";
+      ControlViewCode := NewEnhView."Control View Code";
+      //DOC NA2016.16 >>
+      IF (Initialized) THEN
+        HtmlControlRequestProxy.LoadView(ControlTemplateCode, ControlViewCode);
+      //DOC NA2016.16 >>
+      EnhViewCalcMgt.SetEnhView(NewEnhView);
+
+      IF (Initialized) THEN
+        RenderContent(FALSE);
+    END;
+
+    PROCEDURE SetViewMode@1000000014(NewMode@1000000000 : Option);
+    VAR
+      ModeChanged@1000000001 : Boolean;
+    BEGIN
+      EnhViewCalcMgt.SetViewMode(NewMode, FALSE);
+      RenderContent(FALSE);
+    END;
+
+    LOCAL PROCEDURE "--- Data Export ---"@1000000016();
+    BEGIN
+    END;
+
+    PROCEDURE GetSupportedExportFormats@1000000025();
+    BEGIN
+    END;
+
+    PROCEDURE ExportToExcel@1000000023();
+    VAR
+      EnhView@1000000000 : Record 9062804;
+    BEGIN
+      IF (EnhViewCalcMgt.GetViewMode() = EnhView."View Mode"::Grid) THEN BEGIN
+        HtmlControlRequestProxy.SendJavaScriptRequest(
+          'var grid = $("#gridView").data("kendoGrid");' +
+          'grid.saveAsExcel();');
+      END;
+    END;
+
+    PROCEDURE ExportToPdf@1000000024();
+    VAR
+      EnhView@1000000000 : Record 9062804;
+    BEGIN
+      IF (EnhViewCalcMgt.GetViewMode() = EnhView."View Mode"::Grid) THEN BEGIN
+        HtmlControlRequestProxy.SendJavaScriptRequest(
+          'var grid = $("#gridView").data("kendoGrid");' +
+          'grid.saveAsPDF();');
+      END;
+    END;
+
+    PROCEDURE HasMapView@1000000040() : Boolean;
+    BEGIN
+      EXIT(EnhViewCalcMgt.HasMapView());
+    END;
+
+    LOCAL PROCEDURE "--- Data Source ---"@1000000029();
+    BEGIN
+    END;
+
+    PROCEDURE SetDataSource@1000000032(VAR NewEnhViewField@1000000000 : Record 9062807);
+    BEGIN
+      //UseTempDataSources := TRUE;
+      //SrcEnhViewField.COPY(NewEnhViewField, TRUE);
+    END;
+
+    PROCEDURE InitDataSource@1000000035();
+    BEGIN
+      EnhViewCalcMgt.InitDataSource();
+    END;
+
+    PROCEDURE DisposeDataSource@1000000036();
+    BEGIN
+      EnhViewCalcMgt.DisposeDataDource();
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.12 AZ 21/01/2016 - Created
+      //DOC NA2016.14 AZ 26/02/2016 - Grid View added, bugfixes
+      //DOC NA2016.14 AZ 01/03/2016 - Registered version of KendoUI used
+      //DOC NA2016.14 AZ 02/03/2016 - KendoUI initialization moved to separate codeunit
+      //DOC NA2016.15 AZ 12/04/2016 - Midifications and bugfixes, Quick Reports support added
+      //DOC NA2016.15 JH 09/05/2016 - CfMD modifications
+      //DOC NA2016.16 AZ 20/06/2016 - Reload enhview template
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,267 @@
+OBJECT Codeunit 9062694 PowerBI Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/07/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            PowerBIReport@1000000000 : Record 9062826;
+          BEGIN
+            IF NOT PowerBIReport.FINDSET THEN
+              GetReports(PowerBIReport);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      PowerBIDashboardTile@1000000000 : Record 9062828;
+
+    PROCEDURE GetAccessToken@1000000010() Token : Text;
+    VAR
+      PSMPowershellWrapper@1000000012 : Codeunit 9062554;
+      PSMPsObjectCollection@1000000011 : Codeunit 9062555;
+      PSMSetup@1000000009 : Record 9062714;
+      PSMSetupPage@1000000001 : Page 9063043;
+      TokenScript@1000000000 : Text;
+      PSMessage@1000000002 : Text;
+      WebClient@1000000003 : DotNet "'System.Web, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Web.HtmlString";
+      PowerBIAuthentication@1000000004 : Record 9062825;
+    BEGIN
+      IF NOT PSMSetup.GET THEN
+        PSMSetupPage.RUNMODAL;
+
+      //needs better handling. To ask user for credentials
+      IF NOT PowerBIAuthentication.GET THEN
+        EXIT('');
+
+      //Check and install required modules
+      InstallPowerBIModule();
+
+      WITH PSMPowershellWrapper DO BEGIN
+        OpenRunspace(PSMSetup."Default Server Name",PSMSetup.GetLoginID,PSMSetup.GetPassword);
+        TokenScript += '$PlainPassword = "' + PowerBIAuthentication.Password +'" ; ';
+        TokenScript += '$SecurePassword = $PlainPassword | ConvertTo-SecureString -AsPlainText -Force ; ';
+        TokenScript += '$UserName = "' + PowerBIAuthentication.Username + '" ; ';
+        TokenScript += '$Credentials = New-Object System.Management.Automation.PSCredential -ArgumentList $UserName, $SecurePassword ;';
+        TokenScript += '$accessToken = Get-PBIAuthToken -Credential $Credentials -ClientId "' + PowerBIAuthentication."Client ID" + '" ; ';
+        TokenScript += '$info = @{} ; ';
+        TokenScript += '$info.AccessToken = $accessToken ; ';
+        TokenScript += '$Result = New-Object -TypeName PSObject -Property $info ; ';
+        TokenScript += '$log = $Result | Select-Object -Property AccessToken ; ';
+        TokenScript += '$log';
+
+        PSMPowershellWrapper.AddScript(TokenScript);
+        InvokeCommands(PSMPsObjectCollection);
+        IF (PSMPsObjectCollection.FINDFIRST) THEN
+          PSMessage := PSMPsObjectCollection.GetPropertyValueText('AccessToken');
+        EXIT(PSMessage);
+        CloseRunspace();
+      END;
+    END;
+
+    PROCEDURE GetReports@1000000001(VAR PowerBIReport@1000000004 : Record 9062826);
+    VAR
+      PSMPowershellWrapper@1000000012 : Codeunit 9062554;
+      PSMPsObjectCollection@1000000011 : Codeunit 9062555;
+      PSMSetup@1000000009 : Record 9062714;
+      PSMSetupPage@1000000001 : Page 9063043;
+      ReportScript@1000000000 : Text;
+      PSMessage@1000000002 : Text;
+      WebClient@1000000003 : DotNet "'System.Web, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Web.HtmlString";
+      AuthToken@1000000005 : Text;
+    BEGIN
+      IF NOT PSMSetup.GET THEN
+        PSMSetupPage.RUNMODAL;
+
+      //Get Access Token
+      AuthToken := GetAccessToken();
+
+      WITH PSMPowershellWrapper DO BEGIN
+        OpenRunspace(PSMSetup."Default Server Name",PSMSetup.GetLoginID,PSMSetup.GetPassword);
+        ReportScript += 'Get-PBIReport -authToken "' + AuthToken + '"';
+
+        PSMPowershellWrapper.AddScript(ReportScript);
+        InvokeCommands(PSMPsObjectCollection);
+        IF (PSMPsObjectCollection.FINDFIRST) THEN REPEAT
+          IF NOT PowerBIReport.GET(PSMPsObjectCollection.GetPropertyValueText('id')) THEN BEGIN
+            PowerBIReport.INIT;
+            PowerBIReport.id := PSMPsObjectCollection.GetPropertyValueText('id');
+            PowerBIReport.name := PSMPsObjectCollection.GetPropertyValueText('name');
+            PowerBIReport.webUrl := PSMPsObjectCollection.GetPropertyValueText('webUrl');
+            PowerBIReport.embedUrl := PSMPsObjectCollection.GetPropertyValueText('embedUrl');
+            PowerBIReport.INSERT(TRUE);
+          END;
+        UNTIL PSMPsObjectCollection.NEXT < 1;
+        CloseRunspace();
+      END;
+    END;
+
+    PROCEDURE GetDashboards@1000000002(VAR PowerBIDashboard@1000000004 : Record 9062827);
+    VAR
+      PSMPowershellWrapper@1000000012 : Codeunit 9062554;
+      PSMPsObjectCollection@1000000011 : Codeunit 9062555;
+      PSMSetup@1000000009 : Record 9062714;
+      PSMSetupPage@1000000001 : Page 9063043;
+      ReportScript@1000000000 : Text;
+      PSMessage@1000000002 : Text;
+      WebClient@1000000003 : DotNet "'System.Web, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Web.HtmlString";
+      AuthToken@1000000005 : Text;
+    BEGIN
+      IF NOT PSMSetup.GET THEN
+        PSMSetupPage.RUNMODAL;
+
+      //Get Access Token
+      AuthToken := GetAccessToken();
+
+      WITH PSMPowershellWrapper DO BEGIN
+        OpenRunspace(PSMSetup."Default Server Name",PSMSetup.GetLoginID,PSMSetup.GetPassword);
+        ReportScript += 'Get-PBIDashboard -authToken "' + AuthToken + '"';
+
+        PSMPowershellWrapper.AddScript(ReportScript);
+        InvokeCommands(PSMPsObjectCollection);
+        IF (PSMPsObjectCollection.FINDFIRST) THEN REPEAT
+          IF NOT PowerBIDashboard.GET(PSMPsObjectCollection.GetPropertyValueText('id')) THEN BEGIN
+            PowerBIDashboard.INIT;
+            PowerBIDashboard.id := PSMPsObjectCollection.GetPropertyValueText('id');
+            PowerBIDashboard.displayName := PSMPsObjectCollection.GetPropertyValueText('displayName');
+            PowerBIDashboard.isReadOnly := PSMPsObjectCollection.GetPropertyValueBoolean('isReadOnly');
+            PowerBIDashboard.INSERT(TRUE);
+            GetDashboardTiles(PowerBIDashboard.id);
+          END;
+        UNTIL PSMPsObjectCollection.NEXT < 1;
+        CloseRunspace();
+      END;
+    END;
+
+    PROCEDURE GetDashboardTiles@1000000003(PowerBIDashboardId@1000000004 : GUID);
+    VAR
+      PSMPowershellWrapper@1000000012 : Codeunit 9062554;
+      PSMPsObjectCollection@1000000011 : Codeunit 9062555;
+      PSMSetup@1000000009 : Record 9062714;
+      PSMSetupPage@1000000001 : Page 9063043;
+      ReportScript@1000000000 : Text;
+      PSMessage@1000000002 : Text;
+      WebClient@1000000003 : DotNet "'System.Web, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Web.HtmlString";
+      AuthToken@1000000005 : Text;
+    BEGIN
+      IF NOT PSMSetup.GET THEN
+        PSMSetupPage.RUNMODAL;
+
+      //Get Access Token
+      AuthToken := GetAccessToken();
+
+      WITH PSMPowershellWrapper DO BEGIN
+        OpenRunspace(PSMSetup."Default Server Name",PSMSetup.GetLoginID,PSMSetup.GetPassword);
+        ReportScript += 'Get-PBIDashboardTile -authToken "' + AuthToken + '" -dashboardId "' + FORMAT(PowerBIDashboardId) +'"';
+
+        PSMPowershellWrapper.AddScript(ReportScript);
+        InvokeCommands(PSMPsObjectCollection);
+        IF (PSMPsObjectCollection.FINDFIRST) THEN REPEAT
+          IF NOT PowerBIDashboardTile.GET(PowerBIDashboardId,PSMPsObjectCollection.GetPropertyValueText('id')) THEN BEGIN
+            PowerBIDashboardTile.INIT;
+            PowerBIDashboardTile.dashboardId := PowerBIDashboardId;
+            PowerBIDashboardTile.id := PSMPsObjectCollection.GetPropertyValueText('id');
+            PowerBIDashboardTile.title := PSMPsObjectCollection.GetPropertyValueText('title');
+            PowerBIDashboardTile.subtitle := PSMPsObjectCollection.GetPropertyValueText('subtitle');
+            PowerBIDashboardTile.embedUrl := PSMPsObjectCollection.GetPropertyValueText('embedUrl');
+            PowerBIDashboardTile.rowSpan := PSMPsObjectCollection.GetPropertyValueInteger('rowSpan');
+            PowerBIDashboardTile.colSpan := PSMPsObjectCollection.GetPropertyValueInteger('colSpan');
+            PowerBIDashboardTile.INSERT(TRUE);
+          END;
+        UNTIL PSMPsObjectCollection.NEXT < 1;
+        CloseRunspace();
+      END;
+    END;
+
+    LOCAL PROCEDURE "-------PS Utiles------"@1000000012();
+    BEGIN
+    END;
+
+    PROCEDURE InstallPowerBIModule@1000000089();
+    VAR
+      PSMPowershellWrapper@1000000012 : Codeunit 9062554;
+      PSMPsObjectCollection@1000000011 : Codeunit 9062555;
+      PSMSetup@1000000009 : Record 9062714;
+      PSMSetupPage@1000000001 : Page 9063043;
+      CheckModuleScript@1000000000 : Text;
+      PSMessage@1000000002 : Text;
+    BEGIN
+      IF NOT PSMSetup.GET THEN
+        PSMSetupPage.RUNMODAL;
+
+      WITH PSMPowershellWrapper DO BEGIN
+        OpenRunspace(PSMSetup."Default Server Name",PSMSetup.GetLoginID,PSMSetup.GetPassword);
+        CheckModuleScript += 'if (Get-Module -ListAvailable -Name  PowerBIPS) {';
+        CheckModuleScript += '    $ModuleInstalled = "Module exists"';
+        CheckModuleScript += '} else {';
+        CheckModuleScript += '    $ModuleInstalled = "Module does not exist"';
+        CheckModuleScript += '} ; ';
+        CheckModuleScript += '$info = @{} ; ';
+        CheckModuleScript += '$info.ModuleExists = $ModuleInstalled ; ';
+        CheckModuleScript += '$Result = New-Object -TypeName PSObject -Property $info ; ';
+        CheckModuleScript += '$log = $Result | Select-Object -Property ModuleExists ; ';
+        CheckModuleScript += '$log';
+
+        PSMPowershellWrapper.AddScript(CheckModuleScript);
+
+        InvokeCommands(PSMPsObjectCollection);
+        PSMPowershellWrapper.ClearCommands();
+
+        IF (PSMPsObjectCollection.FINDFIRST) THEN REPEAT
+          PSMessage := PSMPsObjectCollection.GetPropertyValueText('ModuleExists');
+          IF PSMessage = ('Module does not exist') THEN BEGIN
+            CLEAR(PSMPsObjectCollection);
+            InstallPackageManagement();
+            PSMPowershellWrapper.AddScript('Install-Module -Name PowerBIPS -Force');
+            InvokeCommands(PSMPsObjectCollection);
+          END;
+
+        UNTIL PSMPsObjectCollection.NEXT < 1;
+        CloseRunspace();
+      END;
+    END;
+
+    PROCEDURE InstallPackageManagement@1000000000();
+    VAR
+      PSMPowershellWrapper@1000000012 : Codeunit 9062554;
+      PSMPsObjectCollection@1000000011 : Codeunit 9062555;
+      PSMSetup@1000000009 : Record 9062714;
+      PSMSetupPage@1000000001 : Page 9063043;
+      InstallScript@1000000000 : Text;
+      PSMessage@1000000002 : Text;
+      WebClient@1000000003 : DotNet "'System.Web, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Web.HtmlString";
+    BEGIN
+      IF NOT PSMSetup.GET THEN
+        PSMSetupPage.RUNMODAL;
+
+      WITH PSMPowershellWrapper DO BEGIN
+        OpenRunspace(PSMSetup."Default Server Name",PSMSetup.GetLoginID,PSMSetup.GetPassword);
+        InstallScript += '$Folder = $env:temp ; ';
+        InstallScript += '$Filename = "$Folder\PackageManagement_x64.msi" ; ';
+        InstallScript += 'New-Item $Folder -itemtype directory -ErrorAction ignore ; ';
+        InstallScript += 'if (!(Test-Path $Filename)) {';
+        InstallScript += '    $WebClient = New-Object -TypeName System.Net.WebClient ; ';
+        InstallScript += '    $WebClient.DownloadFile("https://tnp.blob.core.windows.net:443/content/software/powershell/PackageManagement_x64.msi", $Filename)';
+        InstallScript += '} ; ';
+        InstallScript += '$setupParameters = "/quiet" ;';
+        InstallScript += 'Start-Process -FilePath $Filename -WorkingDirectory $Folder -ArgumentList $setupParameters -Wait -Passthru ; ';
+
+        PSMPowershellWrapper.AddScript(InstallScript);
+        InvokeCommands(PSMPsObjectCollection);
+        CloseRunspace();
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.16 AP 14/07/2016 - Created
+    }
+    END.
+  }
+}
+

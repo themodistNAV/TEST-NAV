@@ -1,0 +1,267 @@
+OBJECT Codeunit 9062338 General Lookup Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/09/15;
+    Time=[ 5:31:58 PM];
+    Version List=NA2016.4;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      mGeneralLookup@1000000000 : Record 9062232;
+
+    PROCEDURE CollectTypes@1000000000(VAR pTypeBuffer@1000000000 : Record 9062730;pForce@1000000001 : Boolean);
+    VAR
+      lTypeBufferId@1000000002 : Integer;
+    BEGIN
+      //DOC NA2015.4 - Collecting types and placing them into type buffer
+      //  <> pTypeBuffer: The buffer
+      //  -> pForce: TRUE = Clear the current content of the buffer and collect again, FALSE = Accept the buffer if not empty
+
+      pTypeBuffer.RESET();
+      IF (pForce) THEN
+        pTypeBuffer.DELETEALL(TRUE);
+      IF ( NOT (pTypeBuffer.ISEMPTY)) THEN
+        EXIT;
+
+      lTypeBufferId := 0;
+
+      mGeneralLookup.RESET();
+      mGeneralLookup.SETFILTER(Type, '<>''''');
+      IF (mGeneralLookup.FINDSET()) THEN
+      REPEAT
+        pTypeBuffer.SETRANGE(Name, mGeneralLookup.Type);
+        IF (pTypeBuffer.ISEMPTY) THEN
+        BEGIN
+          lTypeBufferId += 1;
+          pTypeBuffer.ID := lTypeBufferId;
+          pTypeBuffer.Name := mGeneralLookup.Type;
+          pTypeBuffer.INSERT();
+        END;
+      UNTIL (mGeneralLookup.NEXT() = 0);
+
+      pTypeBuffer.RESET();
+      IF (pTypeBuffer.FINDFIRST()) THEN;
+    END;
+
+    PROCEDURE ValidateType@1000000001(VAR pTypeBuffer@1000000000 : Record 9062730;VAR pType@1000000001 : Code[20]);
+    VAR
+      lValidated@1000000002 : Boolean;
+      eUnknownType@1000000003 : TextConst 'ENU=Unknown general lookup type: "%1".;ENG=Unknown general lookup type: "%1".';
+    BEGIN
+      //DOC NA2015.4 - Validating type
+      //  <> pTypeBuffer: Type buffer
+      //  <> pType: The type
+
+      IF (pType = '') THEN
+        EXIT;
+
+      CollectTypes(pTypeBuffer, FALSE);
+
+      lValidated := FALSE;
+
+      IF ( NOT (lValidated)) THEN
+      BEGIN
+        pTypeBuffer.SETRANGE(Name, pType);
+        lValidated := pTypeBuffer.FINDFIRST();
+      END;
+      IF ( NOT (lValidated)) THEN
+      BEGIN
+        pTypeBuffer.SETFILTER(Name, pType + '*');
+        lValidated := pTypeBuffer.FINDFIRST();
+      END;
+      IF ( NOT (lValidated)) THEN
+      BEGIN
+        pTypeBuffer.SETRANGE(Name, '*' + pType);
+        lValidated := pTypeBuffer.FINDFIRST();
+      END;
+      IF ( NOT (lValidated)) THEN
+      BEGIN
+        pTypeBuffer.SETRANGE(Name, '*' + pType + '*');
+        lValidated := pTypeBuffer.FINDFIRST();
+      END;
+
+      IF (lValidated) THEN
+        pType := pTypeBuffer.Name
+      ELSE
+        ERROR(eUnknownType, pType);
+
+      pTypeBuffer.SETRANGE(Name);
+    END;
+
+    PROCEDURE TypeLookup@1000000002(VAR pTypeBuffer@1000000000 : Record 9062730;VAR pType@1000000001 : Code[20]) : Boolean;
+    VAR
+      lResult@1000000002 : Boolean;
+    BEGIN
+      //DOC NA2015.4 - Lookup for type
+      //  <> pTypeBuffer: Type buffer
+      //  <> pType: The type
+      //  <- Lookup result
+
+      CollectTypes(pTypeBuffer, FALSE);
+
+      IF (pType <> '') THEN
+      BEGIN
+        pTypeBuffer.SETRANGE(Name, pType);
+        IF (pTypeBuffer.FINDFIRST()) THEN;
+        pTypeBuffer.SETRANGE(Name);
+      END;
+      IF (PAGE.RUNMODAL(PAGE::"General Lookup Types", pTypeBuffer) = ACTION::LookupOK) THEN
+      BEGIN
+        pType := pTypeBuffer.Name;
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE CreateType@1000000003(VAR pTypeBuffer@1000000000 : Record 9062730;VAR pType@1000000001 : Code[20]) : Boolean;
+    VAR
+      lCreateGeneralLookupType@1000000004 : Report 9062279;
+      lCreated@1000000003 : Boolean;
+      lCreating@1000000002 : Boolean;
+      lType@1000000005 : Code[20];
+      eTypeExists@1000000007 : TextConst 'ENU="Type ""%1"" exists already; please enter a different value.";ENG="Type ""%1"" exists already; please enter a different value."';
+      eEmptyType@1000000006 : TextConst 'ENU="Type can''t be empty; please provide some value.";ENG="Type can''t be empty; please provide some value."';
+    BEGIN
+      //DOC NA2015.4 - Creating a new type
+      //  <> pTypeBuffer: Type buffer
+      //  <> pType: The type
+      //  <- Type created / not
+
+      CollectTypes(pTypeBuffer, FALSE);
+
+      lCreated := FALSE;
+      lCreating := TRUE;
+      WHILE (lCreating) DO
+      BEGIN
+        CLEAR(lCreateGeneralLookupType);
+        lCreateGeneralLookupType.SetType(lType);
+        lCreateGeneralLookupType.RUNMODAL();
+        IF (lCreateGeneralLookupType.OK) THEN
+        BEGIN
+          lType := lCreateGeneralLookupType.GetType();
+          IF (lType <> '') THEN
+          BEGIN
+            pTypeBuffer.SETRANGE(Name, lType);
+            IF (pTypeBuffer.ISEMPTY) THEN
+            BEGIN
+              CLEAR(mGeneralLookup);
+              mGeneralLookup.INIT();
+              mGeneralLookup.VALIDATE(Type, lType);
+              mGeneralLookup.VALIDATE(Code, mGeneralLookup.FIELDCAPTION(Code));
+              mGeneralLookup.INSERT(TRUE);
+              pType := lType;
+              CollectTypes(pTypeBuffer, TRUE);
+              lCreated := TRUE;
+              lCreating := FALSE;
+            END
+            ELSE
+              MESSAGE(eTypeExists, lType);
+            pTypeBuffer.SETRANGE(Name);
+          END
+          ELSE
+            MESSAGE(eEmptyType);
+        END
+        ELSE
+          lCreating := FALSE;
+      END;
+
+      EXIT(lCreated);
+    END;
+
+    PROCEDURE DeleteType@1000000004(VAR pTypeBuffer@1000000000 : Record 9062730;VAR pType@1000000001 : Code[20]) : Boolean;
+    VAR
+      eConfirmation@1000000002 : TextConst 'ENU=Do you want to delete general lookup type "%1"?;ENG=Do you want to delete general lookup type "%1"?';
+      eConfirmation2@1000000003 : TextConst 'ENU=The type "%1" has general lookup entries defined.\\ARE YOU SURE you want to delete it?;ENG=The type "%1" has general lookup entries defined.\\ARE YOU SURE you want to delete it?';
+    BEGIN
+      //DOC NA2015.4 - Deleting the current type
+      //  <> pTypeBuffer: Type buffer
+      //  <> pType: The type
+      //  <- Type deleted / not
+
+      IF (pType = '') THEN
+        EXIT(FALSE);
+
+      IF ( NOT (CONFIRM(eConfirmation, TRUE, pType))) THEN
+        EXIT(FALSE);
+
+      mGeneralLookup.RESET();
+      mGeneralLookup.SETRANGE(Type, pType);
+      mGeneralLookup.SETFILTER(Code, '<>%1', mGeneralLookup.FIELDCAPTION(Code));
+      IF ( NOT (mGeneralLookup.ISEMPTY)) THEN
+        IF ( NOT (CONFIRM(eConfirmation2, FALSE, pType))) THEN
+          EXIT(FALSE);
+
+      mGeneralLookup.RESET();
+      mGeneralLookup.SETRANGE(Type, pType);
+      mGeneralLookup.DELETEALL(TRUE);
+
+      CollectTypes(pTypeBuffer, TRUE);
+      pType := '';
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE PreviousType@1000000005(VAR pTypeBuffer@1000000001 : Record 9062730;VAR pType@1000000000 : Code[20]) : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Moving to the previous type (if exists)
+      //  <> pTypeBuffer: Type buffer
+      //  <> pType: The type
+      //  <- TRUE = Moved, FALSE = Not
+
+      EXIT(MoveType(-1, pTypeBuffer, pType));
+    END;
+
+    PROCEDURE NextType@1000000006(VAR pTypeBuffer@1000000001 : Record 9062730;VAR pType@1000000000 : Code[20]) : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Moving to the next type (if exists)
+      //  <> pTypeBuffer: Type buffer
+      //  <> pType: The type
+      //  <- TRUE = Moved, FALSE = Not
+
+      EXIT(MoveType(1, pTypeBuffer, pType));
+    END;
+
+    LOCAL PROCEDURE MoveType@1000000009(pDirection@1000000002 : Integer;VAR pTypeBuffer@1000000001 : Record 9062730;VAR pType@1000000000 : Code[20]) : Boolean;
+    VAR
+      lMoved@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2016.10 - Moving to the next type (if exists)
+      //  -> pDirection: Direction (-1 = previous, 1 = next)
+      //  <> pTypeBuffer: Type buffer
+      //  <> pType: The type
+      //  <- TRUE = Moved, FALSE = Not
+
+      lMoved := FALSE;
+
+      pTypeBuffer.SETRANGE(Name, pType);
+      IF (pTypeBuffer.FINDFIRST()) THEN
+      BEGIN
+        pTypeBuffer.SETRANGE(Name);
+        IF (pTypeBuffer.NEXT(pDirection) <> 0) THEN
+        BEGIN
+          pType := pTypeBuffer.Name;
+          lMoved := TRUE;
+        END;
+      END;
+
+      EXIT(lMoved);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.4  JH 24/11/2014 - Created
+      //DOC NA2016.10 JH 27/08/2015 - Upgraded to 2016
+    }
+    END.
+  }
+}
+

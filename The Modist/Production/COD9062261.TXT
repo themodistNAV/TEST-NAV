@@ -1,0 +1,1133 @@
+OBJECT Codeunit 9062261 Enhanced Workflow Notif. Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=26/09/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.16.2;
+  }
+  PROPERTIES
+  {
+    TableNo=9062734;
+    OnRun=BEGIN
+            ProcessNotifications();
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      NextEntryNo@1000000000 : Integer;
+      Po@1000000003 : Integer;
+      EMail@1000000004 : Text[100];
+      BodyText@1000000006 : Text[200];
+      ErrorNo@1000000001 : Integer;
+      Text0001@1000000007 : TextConst 'ENU=NAV WFlows;ENG=NAV WFlows';
+      Text0002@1000000008 : TextConst 'ENU=autonavdemo@touchstonenav.co.uk;ENG=autonavdemo@touchstonenav.co.uk';
+      EnablementSetup@1000000009 : Record 9062229;
+      Text0003@1000000010 : TextConst 'ENU=WFlow Type %1 does not exist;ENG=WFlow Type %1 does not exist';
+      CRLF@1000000011 : Text[2];
+      TNLMail@1000000012 : Codeunit 9062276;
+      SysB@1000000013 : Record 9062230;
+      Logger@1000000014 : Record 9062280;
+      TNLUtils@1000000015 : Codeunit 9062229;
+      FileMgt@1000000017 : Codeunit 419;
+      String@1000000016 : Codeunit 9062236;
+      TnpToolkit@1000000002 : Codeunit 9062230;
+      LastErrorMessage@1000000005 : Text;
+
+    PROCEDURE ProcessNotifications@1000000017();
+    VAR
+      WFlowNotification@1000000002 : Record 9062261;
+      WFlowLine@1000000001 : Record 9062266;
+      WFlowNotification2@1000000000 : Record 9062261;
+      TxtNotForTheUser@1000000003 : TextConst 'ENU=Not sending workflow notifications as WFLOWNOTIF autonav task is not for user %1;ENG=Not sending workflow notifications as WFLOWNOTIF autonav task is not for user %1';
+      TxtChecking@1000000004 : TextConst 'ENU=Checking for WFlow Notifications to send;ENG=Checking for WFlow Notifications to send';
+      TxtTryingToSend@1000000005 : TextConst 'ENU=Trying to send notification entry %1;ENG=Trying to send notification entry %1';
+      TxtSent@1000000006 : TextConst 'ENU=Sent notification entry %1;ENG=Sent notification entry %1';
+      TxtFailedToSend@1000000007 : TextConst 'ENU=Failed to send notification entry %1;ENG=Failed to send notification entry %1';
+      TxtNoNotifications@1000000008 : TextConst 'ENU=No Workflow Notifications found at %1;ENG=No Workflow Notifications found at %1';
+      WorkflowNotSendSMTP@1000000009 : Codeunit 9062415;
+      WFlowIn@1000000010 : Codeunit 9062262;
+      ErrorWFlow@1000000011 : Code[20];
+    BEGIN
+      Logger.Log('WFLOWNOT', Logger.Type::Debug, TxtChecking, USERID);
+      InitCRLF;
+      CLEAR(WFlowNotification);
+      WFlowNotification.RESET;
+      WFlowNotification.SETRANGE(Type,WFlowNotification.Type::"E-Mail");
+      WFlowNotification.SETRANGE(Sent,FALSE);
+      WFlowNotification.SETRANGE(Cancelled,FALSE);
+      WFlowNotification.SETRANGE(Errored,FALSE);
+      IF WFlowNotification.FINDSET THEN BEGIN
+      REPEAT
+        IF NOT WFlowLine.GET(COPYSTR(WFlowNotification."Workflow GUID",1,MAXSTRLEN(WFlowLine."GUID No."))) THEN;
+        Logger.Log('WFLOWNOT', Logger.Type::Debug, STRSUBSTNO(TxtTryingToSend, WFlowNotification."Entry No."), USERID);
+        COMMIT;
+        IF WorkflowNotSendSMTP.RUN(WFlowNotification) THEN BEGIN
+          WFlowNotification2.GET(WFlowNotification."Entry No.");
+          WFlowNotification2.Sent := TRUE;
+          WFlowNotification2."Sent Date" := TODAY;
+          WFlowNotification2."Sent Time" := TIME;
+          WFlowNotification2.MODIFY;
+          COMMIT;
+          Logger.Log('WFLOWNOT', Logger.Type::Information, STRSUBSTNO(TxtSent, WFlowNotification."Entry No."), USERID);
+        END ELSE BEGIN
+          Logger.Log('WFLOWNOT', Logger.Type::Error, STRSUBSTNO(TxtFailedToSend, WFlowNotification."Entry No."), USERID);
+          WFlowNotification2.GET(WFlowNotification."Entry No.");
+          IF (WFlowNotification2."No. of Retries" > 0) THEN
+          BEGIN
+            IF (WFlowNotification2."No. of Retries Completed" < WFlowNotification2."No. of Retries") THEN
+              WFlowNotification2."No. of Retries Completed" += 1
+            ELSE
+              WFlowNotification2.Errored := TRUE;
+          END
+          ELSE
+            WFlowNotification2.Errored := TRUE;
+          WFlowNotification2."Error Description" := COPYSTR(GETLASTERRORTEXT,1,250);
+          WFlowNotification2.MODIFY;
+          COMMIT;
+          IF (WFlowNotification2.Errored) THEN
+          BEGIN
+            ErrorWFlow := SysB.GetText('WORKFLOW_NOT_ERR_WF');
+            IF ErrorWFlow <> '' THEN BEGIN
+              IF WFlowLine.GET(COPYSTR(WFlowNotification."Workflow GUID",1,MAXSTRLEN(WFlowLine."GUID No."))) THEN BEGIN
+                IF WFlowLine."Workflow No." = ErrorWFlow THEN ErrorWFlow := '';
+              END;
+              IF ErrorWFlow <> '' THEN WFlowIn.Simple(ErrorWFlow,WFlowNotification.GETPOSITION);
+            END;
+          END;
+        END;
+      UNTIL WFlowNotification.NEXT = 0;
+      END ELSE
+      Logger.Log('WFLOWNOT', Logger.Type::Debug, STRSUBSTNO(TxtNoNotifications, WFlowNotification.GETFILTERS), USERID);
+    END;
+
+    PROCEDURE InsertNewMessage@1(ToName@1000000000 : Text[250];CCName@1000000001 : Text[250];Subject@1000000002 : Text[250];Body@1000000003 : Text[1024];WFlowNo@1000000005 : Code[20];WFlowGUID@1000000004 : Text[38];EmailRecLinks@1000000006 : Boolean;PrimCode@1000000007 : Code[250];Type@1000000008 : 'E-Mail,Popup';DOCSEntryId@1000000009 : Integer);
+    VAR
+      TxtAdd@1000000010 : TextConst 'ENU=Add entry To: %1 with subject %2 of type %3;ENG=Add entry To: %1 with subject %2 of type %3';
+    BEGIN
+      Logger.Log('NOTI_MGT', Logger.Type::Debug, STRSUBSTNO(TxtAdd, ToName, Subject, Type), USERID);
+
+      Body := COPYSTR(Body,1,250);
+      IF (ToName = '') THEN
+        EXIT;
+
+      IF ( NOT (VerifyIfToCurrentUser(ToName, CCName, Type, WFlowNo))) THEN
+        EXIT;
+
+      CASE Type OF
+        Type::"E-Mail":
+          BEGIN
+            IF (STRPOS(ToName,'@') = 0) THEN
+              ToName := '';
+            IF (STRPOS(CCName,'@') = 0) THEN
+              CCName := '';
+            IF ((ToName <> '') OR (CCName <> '')) THEN
+              NotifyTo(ToName, CCName, Subject, Body, '', WFlowNo, WFlowGUID, EmailRecLinks, PrimCode, Type, DOCSEntryId);
+          END;
+        Type::Popup:
+          IF (ToName <> '') THEN
+            NotifyTo(ToName, '', Subject, Body, '', WFlowNo, WFlowGUID, EmailRecLinks, PrimCode, Type, DOCSEntryId);
+      END;
+    END;
+
+    PROCEDURE QuickMessage@1000000012(ToName@1000000000 : Text[250];CCName@1000000001 : Text[250];Subject@1000000002 : Text[250];Body@1000000003 : Text[1024];Type@1000000008 : 'E-Mail,Popup');
+    BEGIN
+      InsertNewMessage(ToName, CCName, Subject, Body, '', '', FALSE, '', Type, 0);
+    END;
+
+    PROCEDURE NotifyTo@6(ToName@1000000000 : Text[250];CCName@1000000001 : Text[250];Subject@1000000002 : Text[250];Body@1000000003 : Text[250];ToGroup@1000000005 : Text[200];WFlowNo@1000000006 : Code[20];WFlowGUID@1000000008 : Text[38];EmailRecLinks@1000000009 : Boolean;PrimCode@1000000010 : Code[250];Type@1000000011 : 'E-Mail,PopUp';DOCSEntryID@1000000013 : Integer);
+    VAR
+      WFlowNotification@1000000007 : Record 9062261;
+      WFlow@1000000004 : Record 9062258;
+      GotWflow@1000000012 : Boolean;
+    BEGIN
+      //EmailTo
+      IF (ToName = '') THEN
+        EXIT;
+      WFlowNotification.RESET;
+      IF WFlowNotification.FIND('+') THEN
+        NextEntryNo := WFlowNotification."Entry No." + 1
+      ELSE
+        NextEntryNo := 1;
+
+      GotWflow := WFlow.GET(WFlowNo);
+
+      WFlowNotification.INIT;
+      WFlowNotification."Entry No." := NextEntryNo;
+
+      WFlowNotification."To Name" := ToName;
+      WFlowNotification."CC Name" := CCName;
+      WFlowNotification.Subject := Subject;
+      WFlowNotification.Body := Body + BodyText;
+      WFlowNotification."Date Created" := TODAY;
+      WFlowNotification."Time Created" := TIME;
+      WFlowNotification."Email Record Links as Attach." := EmailRecLinks;
+      WFlowNotification."Primary Code" := PrimCode;
+      WFlowNotification.Type := Type;
+      WFlowNotification."DOCS Entry ID to Send" := DOCSEntryID;
+
+      IF GotWflow THEN BEGIN
+        WFlowNotification."Workflow No." := WFlowNo;
+        WFlowNotification."Attachment File Name" := GetAttachment(WFlowNo);
+        WFlowNotification."Workflow GUID" := WFlowGUID;
+
+      END;
+      WFlowNotification.INSERT(TRUE); //DOC NA2015.2
+    END;
+
+    PROCEDURE ValidateEmailAddress@1000000000(AddressIn@1000000000 : Text[250]) : Boolean;
+    VAR
+      ValidCharacters@1000000001 : Text[250];
+      CurrentChar@1000000004 : Text[1];
+      I@1000000002 : Integer;
+      AtSignLocation@1000000003 : Integer;
+    BEGIN
+      //ValidateEmailAddress
+      ValidCharacters := 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.@$_!%^&*|';
+      AtSignLocation := 0;
+
+      FOR I := 1 TO STRLEN(AddressIn) DO BEGIN
+        CurrentChar := COPYSTR(AddressIn,I,1);
+        IF NOT (STRPOS(ValidCharacters,CurrentChar) > 0) THEN
+          EXIT(FALSE);
+        IF CurrentChar = '@' THEN
+          IF AtSignLocation > 0 THEN
+            EXIT(FALSE)
+          ELSE
+            AtSignLocation := I;
+      END;
+
+      IF (AtSignLocation = 0) OR
+         (AtSignLocation = 1) OR
+         (AtSignLocation = STRLEN(AddressIn)) THEN
+        EXIT(FALSE)
+      ELSE
+        IF (COPYSTR(AddressIn,AtSignLocation - 1,1) = '.') OR
+           (COPYSTR(AddressIn,AtSignLocation + 1,1) = '.') THEN
+          EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetAttachment@1000000001(WFlowNo@1000000000 : Code[20]) : Text[250];
+    VAR
+      WFlow@1000000001 : Record 9062258;
+      WFlowSetup@1000000003 : Record 9062229;
+      FilePathName@1000000002 : Text[250];
+    BEGIN
+      //GetAttachment
+      CLEAR(FilePathName);
+      WFlowSetup.GET;
+      IF WFlow.GET(WFlowNo) THEN BEGIN
+        IF WFlow."Attached File" = TRUE THEN BEGIN
+          FilePathName := STRSUBSTNO('%1\%2', WFlowSetup."Attachments Folder" ,WFlow."Attachment File Name");
+          WFlow.CALCFIELDS(Attachment);
+          IF WFlow.Attachment.HASVALUE THEN
+            WFlow.Attachment.EXPORT(FilePathName)
+          ELSE
+            FilePathName:= '';
+          EXIT(FilePathName);
+        END;
+      END;
+      EXIT('');
+    END;
+
+    PROCEDURE DeleteFile@10(FileName@1000000002 : Text[250]) : Boolean;
+    VAR
+      I@1002 : Integer;
+      WFlow@1000000000 : Record 9062258;
+      WFlowSetup@1000000001 : Record 9062229;
+    BEGIN
+      //DeleteFile
+      IF FileName = '' THEN
+        EXIT(FALSE);
+
+      IF NOT EXISTS(FileName) THEN
+        EXIT(TRUE);
+
+      REPEAT
+        SLEEP(250);
+        I := I + 1;
+      UNTIL ERASE(FileName) OR (I = 25);
+      EXIT(NOT EXISTS(FileName));
+    END;
+
+    PROCEDURE NewMessage@1000000002(ToName@1001 : Text[80];CCName@1002 : Text[80];Subject@1003 : Text[260];Body@1004 : Text[250];AttachFileName@1005 : Text[260];WFlowLineGUID@1000000006 : Text[38];EmailRecLinks@1000000003 : Boolean;DOCSEntryId@1000000016 : Integer) MailSent@1000 : Boolean;
+    VAR
+      i@1000000000 : Integer;
+      WFlowSetup@1000000002 : Record 9062229;
+      HTMLText1@1000000004 : Text[1000];
+      BigBodyText@1000000005 : BigText;
+      bbCounter@1000000007 : Integer;
+      bbText@1000000008 : Text;
+      bbLastGet@1000000009 : Integer;
+      PrevWFlow@1000000010 : Record 9062266;
+      Resp@1000000011 : Record 9062259;
+      WFlow@1000000012 : Record 9062258;
+      GotWFlow@1000000001 : Boolean;
+      WFlowLine@1000000013 : Record 9062266;
+      WFlowMgt@1000000014 : Codeunit 9062258;
+      JetPath@1000000015 : Text[250];
+      FAttach@1000000017 : Record 9062272;
+      ReportPath@1000000019 : Text[1024];
+      RecRef@1000000020 : RecordRef;
+      TxtUsingHtmlTemplate@1000000021 : TextConst 'ENU=Using Email HTML template;ENG=Using Email HTML template';
+      TxtUsingHtmlEMail@1000000022 : TextConst 'ENU=Using HTML Email without Template;ENG=Using HTML Email without Template';
+      TxtWorkflowNotFound@1000000023 : TextConst 'ENU=Workflow not found;ENG=Workflow not found';
+      TxtCheckingFileAttachments@1000000024 : TextConst 'ENU=Checking whether to send file attachments with e-mail;ENG=Checking whether to send file attachments with e-mail';
+      TxtNotificationInCurrentCompany@1000000025 : TextConst 'ENU=Notification is in current company;ENG=Notification is in current company';
+      TxtAddingFileAttachment@1000000026 : TextConst 'ENU=Adding file attachment no. %1 to e-mail;ENG=Adding file attachment no. %1 to e-mail';
+      TxtDidntFindFileAttachments@1000000027 : TextConst 'ENU=Didn''t find file attachments for record "%1";ENG=Didn''t find file attachments for record "%1"';
+      TxtSentEMail@1000000028 : TextConst 'ENU=Successfully sent e-mail to "%1";ENG=Successfully sent e-mail to "%1"';
+      TxtFailedToSendEMail@1000000029 : TextConst 'ENU=Failed to send e-mail to "%1". %2;ENG=Failed to send e-mail to "%1". %2';
+      TxtAddingNAVReport@1000000030 : TextConst 'ENU=Adding NAV Report %1 for Position %2 to e-mail;ENG=Adding NAV Report %1 for Position %2 to e-mail';
+      FileSystem@1000000031 : Codeunit 9062264;
+      AllObjWithCaption@1000000032 : Record 2000000058;
+    BEGIN
+      InitCRLF;
+      EnablementSetup.GET();
+      GotWFlow := WFlowLine.GET(WFlowLineGUID);
+      IF GotWFlow THEN BEGIN
+        WFlow.GET(WFlowLine."Workflow No.");
+        IF WFlow."Enable Email Response" THEN
+          Subject := Subject + ' (#WFLOWRESPONSE)';
+      END;
+
+      TNLMail.NewMessage(EnablementSetup."Reply From Email Username",
+                         EnablementSetup."Reply From Email Address",
+                        ToName,Subject,'');
+
+      IF GotWFlow THEN BEGIN
+        IF WFlow."Email HTML Template".HASVALUE THEN BEGIN
+          Logger.Log('WFLOWNOT', Logger.Type::Debug, TxtUsingHtmlTemplate, USERID);
+          ProcessEmailHTML(WFlowLine,BigBodyText);
+        END ELSE BEGIN
+          Logger.Log('WFLOWNOT', Logger.Type::Debug, TxtUsingHtmlEMail, USERID);
+
+          HeaderContent(BigBodyText,SysB.GetBoolean('USE_WORKFLOWS_5+'));
+          InfoTextContent(BigBodyText,WFlowLine,SysB.GetBoolean('USE_WORKFLOWS_5+'));
+          PrevWFlowResponses(BigBodyText,WFlowLine,SysB.GetBoolean('USE_WORKFLOWS_5+'));
+
+          IF WFlow."Enable Email Response" THEN
+            ResponsesContent(BigBodyText,WFlowLine,SysB.GetBoolean('USE_WORKFLOWS_5+'));
+        END;
+      END ELSE BEGIN
+        Logger.Log('WFLOWNOT', Logger.Type::Debug, TxtWorkflowNotFound, USERID);
+        TNLMail.AddBodyLine(Body);
+      END;
+
+      IF BigBodyText.LENGTH > 0 THEN BEGIN
+        bbCounter := 1;
+        REPEAT
+          bbText:='';
+          bbLastGet := BigBodyText.GETSUBTEXT(bbText, bbCounter,250);
+          TNLMail.AddBodyLine(bbText);
+          bbCounter := bbCounter + 250;
+        UNTIL bbLastGet <250;
+      END;
+
+      //Attach Jet Report
+      IF GotWFlow THEN BEGIN
+        JetPath := WFlowMgt.GetJetReport(WFlowLine."Group Workflow No.",FALSE);
+        IF JetPath <> '' THEN TNLMail.AddTempAttachment(JetPath);
+      END;
+
+      //Attach NAV Report
+      IF GotWFlow THEN BEGIN
+        IF WFlowLine.GET(WFlowLineGUID) THEN BEGIN
+          IF WFlow."Report ID" <> 0 THEN BEGIN
+            RecRef.OPEN(WFlow."Table ID");
+            RecRef.SETPOSITION(WFlowLine."Get Position Text");
+            IF RecRef.GET(RecRef.RECORDID) THEN BEGIN
+              RecRef.SETRECFILTER;
+              Logger.Log('WFLOWNOT', Logger.Type::Debug, STRSUBSTNO(TxtAddingNAVReport,WFlow."Report ID",WFlowLine."Get Position Text"), USERID);
+              IF (AllObjWithCaption.GET(AllObjWithCaption."Object Type"::Report, WFlow."Report ID")) THEN
+              BEGIN
+                ReportPath := FileSystem.GetTempPathForFile(GUIALLOWED, AllObjWithCaption."Object Caption" + ' - ' +
+                  String.Replace(TNLUtils.GetRecordDescription(WFlow."Table ID",WFlowLine."Get Position Text") + '.pdf',':',''));
+                //DOC NA2016.14 PC >>>
+                //IF DocumentSending.SaveReportToPDF(WFlow."Report ID",RecRef,ReportPath) THEN
+                IF SaveReportToPDF(WFlow."Report ID",RecRef,ReportPath) THEN
+                //DOC NA2016.14 PC <<<
+                  TNLMail.AddTempAttachment(ReportPath);
+              END;
+            END;
+          END;
+        END;
+      END;
+
+      //Attach File Attachments
+      IF GotWFlow THEN BEGIN
+        Logger.Log('WFLOWNOT', Logger.Type::Debug, TxtCheckingFileAttachments, USERID);
+        IF WFlowLine."Company Name" = COMPANYNAME THEN BEGIN
+          Logger.Log('WFLOWNOT', Logger.Type::Debug, TxtNotificationInCurrentCompany, USERID);
+          IF WFlow."Send FAttachments with Not." THEN BEGIN
+            FAttach.SETRANGE("Table ID",WFlow."Table ID");
+            FAttach.SETRANGE("Primary Key Value 1",TNLUtils.GetPrimaryKey(WFlow."Table ID",WFlowLine."Get Position Text",1));
+            FAttach.SETRANGE("Primary Key Value 2",TNLUtils.GetPrimaryKey(WFlow."Table ID",WFlowLine."Get Position Text",2));
+            FAttach.SETRANGE("Primary Key Value 3",TNLUtils.GetPrimaryKey(WFlow."Table ID",WFlowLine."Get Position Text",3));
+            FAttach.SETFILTER(FAttach.Type,WFlow."FAttachment Type Filter");
+            FAttach.SETRANGE("Current Version",TRUE); //DOC PC NA2015.1
+            IF (WFlow."FAttachment Type Filter" <> '') AND FAttach.FINDSET THEN BEGIN
+              REPEAT
+                Logger.Log('WFLOWNOT', Logger.Type::Debug, STRSUBSTNO(TxtAddingFileAttachment, FAttach."No."), USERID);
+                TNLMail.AddFAttach(FAttach."No.");
+              UNTIL FAttach.NEXT = 0;
+            END ELSE
+              Logger.Log('WFLOWNOT', Logger.Type::Debug, STRSUBSTNO(TxtDidntFindFileAttachments, FAttach.GETFILTERS), USERID);
+          END;
+        END;
+      END;
+      //Attach File Attachments
+
+      //Attach DOCS Entry
+      IF DOCSEntryId <> 0 THEN
+        TNLMail.AddDOCSEntry(DOCSEntryId);
+
+      MailSent := TNLMail.Send;
+      IF MailSent THEN
+        Logger.Log('WFLOWNOT', Logger.Type::Debug, STRSUBSTNO(TxtSentEMail, ToName), USERID)
+      ELSE
+      BEGIN
+        LastErrorMessage := GETLASTERRORTEXT();
+        IF (LastErrorMessage = '') THEN
+          LastErrorMessage := TNLMail.GetLastErrorMessage();
+        Logger.Log('WFLOWNOT', Logger.Type::Error, COPYSTR(STRSUBSTNO(TxtFailedToSendEMail, ToName, LastErrorMessage), 1, 250), USERID);
+      END;
+
+      CLEAR(TNLMail);
+
+      EXIT(MailSent);
+    END;
+
+    PROCEDURE SendMessageViaSMTP@1000000003(VAR WFlowNotification@1000 : Record 9062261;WFlowLineGUID@1000000000 : Text[38]) Ret : Boolean;
+    BEGIN
+      //SendMessage
+      IF WFlowNotification.Sent THEN
+        EXIT(FALSE);
+
+      WITH WFlowNotification DO BEGIN
+        Ret := NewMessage("To Name","CC Name",WFlowNotification.Subject,Body,"Attachment File Name",WFlowLineGUID,
+              "Email Record Links as Attach.",WFlowNotification."DOCS Entry ID to Send");
+      END;
+    END;
+
+    PROCEDURE ConvertHTMLToAttachment@1000000005(pFileNo@1000000000 : Text[50];pHTML@1000000001 : Text[1024]) : Text[250];
+    VAR
+      tFile@1000000003 : File;
+      FileName@1000000002 : Text[250];
+      Slash@1000000005 : Text[1];
+      WFlowSetup@1000000006 : Record 9062229;
+    BEGIN
+      WFlowSetup.GET;
+      Slash :='';
+      IF COPYSTR(WFlowSetup."Attachments Folder",STRLEN(WFlowSetup."Attachments Folder"),1) <> '\'
+        THEN Slash := '\';
+      FileName := WFlowSetup."Attachments Folder" + Slash + pFileNo + '.HTML';
+
+      IF EXISTS(FileName) THEN ERASE(FileName);
+
+      tFile.TEXTMODE := TRUE;
+      tFile.CREATE(FileName);
+      tFile.WRITE(pHTML);
+      tFile.CLOSE;
+
+      EXIT(FileName)
+    END;
+
+    PROCEDURE SQuoteHTML@1000000004("Quote No."@1000000001 : Code[20];VAR BodyHTML@1000000000 : BigText;ShowCost@1000000004 : Boolean);
+    VAR
+      SQuote@1000000002 : Record 36;
+      SQuoteLine@1000000003 : Record 37;
+    BEGIN
+      IF SQuote.GET(0,"Quote No.") THEN BEGIN
+        SQuote.CALCFIELDS(Amount);
+
+        BodyHTML.ADDTEXT('<p>');
+        BodyHTML.ADDTEXT('<table class=''wikitable''>');
+        BodyHTML.ADDTEXT('<th colspan=''6''>Header</th>');
+        BodyHTML.ADDTEXT('<tr>');
+        BodyHTML.ADDTEXT('<th>' + 'No.' + '</th>');
+        BodyHTML.ADDTEXT('<th>' + 'Customer No.' + '</th>');
+        BodyHTML.ADDTEXT('<th>' + 'Date' + '</th>');
+        BodyHTML.ADDTEXT('<th>' + 'Amount' + '</th>');
+        BodyHTML.ADDTEXT('</tr>');
+        BodyHTML.ADDTEXT('<tr>');
+        BodyHTML.ADDTEXT('<td>' + SQuote."No." + '</td>');
+        BodyHTML.ADDTEXT('<td>' + SQuote."Sell-to Customer No." + '</td>');
+        BodyHTML.ADDTEXT('<td>' + FORMAT(SQuote."Document Date") + '</td>');
+        BodyHTML.ADDTEXT('<td>' + FORMAT(SQuote.Amount) + '</td>');
+        BodyHTML.ADDTEXT('</tr>');
+        BodyHTML.ADDTEXT('</table>');
+        SQuoteLine.SETFILTER("Document No.","Quote No.");
+        IF SQuoteLine.COUNT > 0 THEN BEGIN
+          BodyHTML.ADDTEXT('<table class=''wikitable''>');
+          BodyHTML.ADDTEXT('<th colspan=''6''>Lines</th>');
+          BodyHTML.ADDTEXT('<tr>');
+
+          BodyHTML.ADDTEXT('<th>' + 'Line No.' + '</th>');
+          BodyHTML.ADDTEXT('<th>' + 'No.' + '</th>');
+          BodyHTML.ADDTEXT('<th>' + 'Qty' + '</th>');
+          BodyHTML.ADDTEXT('<th>' + 'Price' + '</th>');
+          BodyHTML.ADDTEXT('<th>' + 'Amount' + '</th></tr>');
+
+          SQuoteLine.FINDFIRST;
+          REPEAT
+            BodyHTML.ADDTEXT('<tr>');
+            BodyHTML.ADDTEXT('<td>' + FORMAT(SQuoteLine."Line No.") + '</td>');
+            BodyHTML.ADDTEXT('<td>' + SQuoteLine."No." + '</td>');
+            BodyHTML.ADDTEXT('<td>' + FORMAT(SQuoteLine.Quantity) + '</td>');
+            BodyHTML.ADDTEXT('<td>' + FORMAT(SQuoteLine."Unit Price",0,'<Sign><Integer Thousand><Decimals>') + '</td>');
+            BodyHTML.ADDTEXT('<td>' + FORMAT(SQuoteLine.Amount,0,'<Sign><Integer Thousand><Decimals>') + '</td>');
+            BodyHTML.ADDTEXT('</tr>');
+          UNTIL SQuoteLine.NEXT =0;
+          BodyHTML.ADDTEXT('</table>');
+          BodyHTML.ADDTEXT('</p>');
+        END;
+
+      END;
+    END;
+
+    PROCEDURE SOrderHTML@1000000009("Order No."@1000000002 : Code[20];VAR BodyHTML@1000000001 : BigText;ShowCost@1000000000 : Boolean);
+    VAR
+      SOrder@1000000004 : Record 36;
+      SOrderLine@1000000003 : Record 37;
+    BEGIN
+
+      IF SOrder.GET(1,"Order No.") THEN BEGIN
+        SOrder.CALCFIELDS(Amount);
+
+        BodyHTML.ADDTEXT('<p>');
+        BodyHTML.ADDTEXT('<table class=''wikitable''>');
+        BodyHTML.ADDTEXT('<th colspan=''6''>Header</th>');
+        BodyHTML.ADDTEXT('<tr>');
+
+        BodyHTML.ADDTEXT('<th>' + 'No.' + '</th>');
+        BodyHTML.ADDTEXT('<th>' + 'Customer No.' + '</th>');
+        BodyHTML.ADDTEXT('<th>' + 'Date' + '</th>');
+        BodyHTML.ADDTEXT('<th>' + 'Amount' + '</th>');
+        BodyHTML.ADDTEXT('<tr>');
+        BodyHTML.ADDTEXT('<td>' + SOrder."No." + '</td>');
+        BodyHTML.ADDTEXT('<td>' + SOrder."Sell-to Customer No." + '</td>');
+        BodyHTML.ADDTEXT('<td>' + FORMAT(SOrder."Document Date") + '</td>');
+        BodyHTML.ADDTEXT('<td>' + FORMAT(SOrder.Amount) + '</td>');
+        BodyHTML.ADDTEXT('</tr>');
+        BodyHTML.ADDTEXT('</table>');
+        BodyHTML.ADDTEXT('</p>');
+        SOrderLine.SETFILTER("Document No.","Order No.");
+        IF SOrderLine.COUNT > 0 THEN BEGIN
+          BodyHTML.ADDTEXT('<p>');
+          BodyHTML.ADDTEXT('<table class=''wikitable''>');
+          BodyHTML.ADDTEXT('<th colspan=''6''>Lines</th>');
+          BodyHTML.ADDTEXT('<tr>');
+
+          BodyHTML.ADDTEXT('<th>' + 'Line No.' + '</th>');
+          BodyHTML.ADDTEXT('<th>' + 'No.' + '</th>');
+          BodyHTML.ADDTEXT('<th>' + 'Qty' + '</th>');
+          BodyHTML.ADDTEXT('<th>' + 'Price' + '</th>');
+          BodyHTML.ADDTEXT('<th>' + 'Amount' + '</th></tr>');
+
+          SOrderLine.FINDFIRST;
+          REPEAT
+            BodyHTML.ADDTEXT('<tr>');
+            BodyHTML.ADDTEXT('<td>' + FORMAT(SOrderLine."Line No.") + '</td>');
+            BodyHTML.ADDTEXT('<td>' + SOrderLine."No." + '</td>');
+            BodyHTML.ADDTEXT('<td>' + FORMAT(SOrderLine.Quantity) + '</td>');
+            BodyHTML.ADDTEXT('<td>' + FORMAT(SOrderLine."Unit Price",0,'<Sign><Integer Thousand><Decimals>') + '</td>');
+            BodyHTML.ADDTEXT('<td>' + FORMAT(SOrderLine.Amount,0,'<Sign><Integer Thousand><Decimals>') + '</td>');
+            BodyHTML.ADDTEXT('</tr>');
+          UNTIL SOrderLine.NEXT =0;
+          BodyHTML.ADDTEXT('</table>');
+          BodyHTML.ADDTEXT('</p>');
+        END;
+
+      END;
+    END;
+
+    PROCEDURE HeaderContent@1000000008(VAR BodyHTML@1000000000 : BigText;UseHTML@1000000001 : Boolean);
+    VAR
+      SQuote@1000000002 : Record 36;
+    BEGIN
+      IF NOT UseHTML THEN EXIT;
+      BodyHTML.ADDTEXT('<html>');
+      EmailCSS(BodyHTML);
+      BodyHTML.ADDTEXT('<body style="font-family:Verdana;font-size:12px">');
+    END;
+
+    PROCEDURE LinksHTML@1000000006(VAR BodyHTML@1000000000 : BigText;WFlowLine@1000000001 : Record 9062266);
+    VAR
+      WFlowType@1000000003 : Record 9062258;
+      RecRef@1000000002 : RecordRef;
+      RecRefText@1000000004 : Text[150];
+    BEGIN
+      WFlowType.GET(WFlowLine."Workflow No.");
+
+      IF WFlowLine."Link 1" <>'' THEN BEGIN
+        BodyHTML.ADDTEXT('<p>');
+        BodyHTML.ADDTEXT('Link 1: <A HREF="');
+        BodyHTML.ADDTEXT(WFlowLine."Link 1");
+        BodyHTML.ADDTEXT('">' + WFlowLine."Link 1 Caption" + '</a>');
+      END;
+
+      IF WFlowLine."Link 2" <>'' THEN BEGIN
+        BodyHTML.ADDTEXT('<br>');
+        BodyHTML.ADDTEXT('Link 2: <a href="');
+        BodyHTML.ADDTEXT(WFlowLine."Link 2");
+        BodyHTML.ADDTEXT('">' + WFlowLine."Link 2 Caption" + '</a>');
+      END;
+
+      IF WFlowLine."Link 3" <>'' THEN BEGIN
+        BodyHTML.ADDTEXT('<br>');
+        BodyHTML.ADDTEXT('Link 3: <a href="');
+        BodyHTML.ADDTEXT(WFlowLine."Link 3");
+        BodyHTML.ADDTEXT('">' + WFlowLine."Link 3 Caption" + '</a>');
+      END;
+      BodyHTML.ADDTEXT('</p>');
+    END;
+
+    PROCEDURE InfoTextContent@1000000007(VAR BodyHTML@1000000001 : BigText;WFlowLine@1000000000 : Record 9062266;UseHTML@1000000002 : Boolean);
+    BEGIN
+      IF WFlowLine."Information Text" <>'' THEN BEGIN
+        BodyHTML.ADDTEXT(WFlowLine."Information Text");
+        BodyHTML.ADDTEXT(CRLF);
+      END;
+    END;
+
+    PROCEDURE EmailCSS@1000000010(VAR BodyHTML@1000000000 : BigText);
+    BEGIN
+      BodyHTML.ADDTEXT('<style type="text/css"><!--');
+      BodyHTML.ADDTEXT('body {');
+      BodyHTML.ADDTEXT('  font-family:Verdana;');
+      BodyHTML.ADDTEXT('  font-size:12px;');
+      BodyHTML.ADDTEXT('}');
+      BodyHTML.ADDTEXT('table.wikitable {');
+      BodyHTML.ADDTEXT('    background: #f9f9f9;');
+      BodyHTML.ADDTEXT('    border: 1px #aaa solid;');
+      BodyHTML.ADDTEXT('    border-collapse: collapse;');
+      BodyHTML.ADDTEXT('    border-spacing: 0px 0px;');
+      BodyHTML.ADDTEXT('}');
+      BodyHTML.ADDTEXT('.wikitable th, .wikitable td {');
+      BodyHTML.ADDTEXT('    border: 1px #aaa solid;');
+      BodyHTML.ADDTEXT('    padding: 0.2em;');
+      BodyHTML.ADDTEXT('}');
+      BodyHTML.ADDTEXT('.wikitable th {');
+      BodyHTML.ADDTEXT('    background: #f2f2f2;');
+      BodyHTML.ADDTEXT('    text-align: center;');
+      BodyHTML.ADDTEXT('}');
+      BodyHTML.ADDTEXT('.wikitable caption {');
+      BodyHTML.ADDTEXT('    font-weight: bold;');
+      BodyHTML.ADDTEXT('}');
+      BodyHTML.ADDTEXT('--></style>');
+    END;
+
+    PROCEDURE ResponsesContent@1000000011(VAR BodyHTML@1000000000 : BigText;WFlowLine@1000000001 : Record 9062266;UseHTML@1000000004 : Boolean);
+    VAR
+      WFlowResp@1000000002 : Record 9062259;
+      WFlowType@1000000003 : Record 9062258;
+      eResponses@1000000005 : TextConst 'ENU=Responses;ENG=Responses';
+      lHref@1000000006 : Text;
+      lDescription@1000000007 : Text;
+      ePleaseReply@1000000008 : TextConst 'ENU=Please reply to this email with your response code followed by the comment/value if required;ENG=Please reply to this email with your response code followed by the comment/value if required';
+    BEGIN
+      WFlowType.GET(WFlowLine."Workflow No.");
+      IF NOT WFlowType."Enable Email Response" THEN
+        EXIT;
+
+      EnablementSetup.GET();
+      WFlowResp.SETRANGE("Workflow No.",WFlowLine."Workflow No.");
+      WFlowResp.SETRANGE("Cancelled Response",FALSE);
+      IF WFlowResp.FINDSET THEN
+        IF UseHTML THEN
+        BEGIN
+          BodyHTML.ADDTEXT(STRSUBSTNO('<P CLASS="RespHeader">%1:</P>', eResponses));
+          REPEAT
+            lHref := ResponseHref(WFlowLine, WFlowResp);
+            lDescription := WFlowResp."Response Description";
+            BodyHTML.ADDTEXT(STRSUBSTNO('<P CLASS="Resp"><A CLASS="Resp" HREF="%1">%2</A></P>', lHref, lDescription));
+          UNTIL WFlowResp.NEXT = 0;
+        END
+        ELSE
+        BEGIN
+          BodyHTML.ADDTEXT(CRLF + eResponses + ': ' + CRLF);
+          REPEAT
+            BodyHTML.ADDTEXT(STRSUBSTNO('%1: %2', WFlowResp.Code, WFlowResp."Response Description"));
+            BodyHTML.ADDTEXT(CRLF);
+          UNTIL WFlowResp.NEXT = 0;
+          BodyHTML.ADDTEXT(CRLF);
+          BodyHTML.ADDTEXT(ePleaseReply);
+          BodyHTML.ADDTEXT(CRLF);
+          BodyHTML.ADDTEXT(CRLF + '#WFLOWGUID ' + WFlowLine."GUID No.");
+          BodyHTML.ADDTEXT(CRLF + '#COMPANY ' + WFlowLine."Company Name");
+        END;
+    END;
+
+    LOCAL PROCEDURE ResponseHref@1000000020(pWorkflowActivityLine@1000000012 : Record 9062266;pWorkflowResponse@1000000011 : Record 9062259) : Text;
+    VAR
+      lHash@1000000004 : Text;
+      lNewLine@1000000005 : Text;
+      lSpace@1000000010 : Text;
+      lAddress@1000000002 : Text;
+      lSubject@1000000001 : Text;
+      lBody@1000000003 : Text;
+      lHref@1000000000 : Text;
+      eInsertCommentHere@1000000006 : TextConst 'ENU=Insert Comment Here;ENG=Insert Comment Here';
+      eFooter1@1000000007 : TextConst 'ENU=This e-mail will be automatically processed by the Microsoft Dynamics NAV system.;ENG=This e-mail will be automatically processed by the Microsoft Dynamics NAV system.';
+      eFooter2@1000000008 : TextConst 'ENU=Please, do not amend the format.;ENG=Please, do not amend the format.';
+      lAmp@1000000009 : Text;
+    BEGIN
+      //DOC NA2015.4 - Creating response HREF
+      //  -> pWorkflowActivityLine: The current workflow activity line
+      //  -> pWorkflowResponse: The current response
+      //  <- The HREF
+
+      lHash := '%23';
+      lNewLine := '%0A';
+      lSpace := '%20';
+      lAmp := '%26';
+
+      lAddress := EnablementSetup."Reply From Email Address";
+      lSubject := lHash + 'WFLOWRESPONSE';
+      lBody :=
+        STRSUBSTNO('%1 (%2)', pWorkflowResponse.Code, eInsertCommentHere) + lNewLine + lNewLine +
+        lHash + STRSUBSTNO('WFLOWGUID %1', pWorkflowActivityLine."GUID No.") + lNewLine +
+        lHash + STRSUBSTNO('COMPANY (%1)', pWorkflowActivityLine."Company Name") + lNewLine + lNewLine +
+        eFooter1 + lNewLine + eFooter2;
+
+      lSubject := String.ReplaceAll(lSubject, ' ', lSpace);
+      lSubject := String.ReplaceAll(lSubject, '&', lAmp);
+      lBody := String.ReplaceAll(lBody, ' ', lSpace);
+      lBody := String.ReplaceAll(lBody, '&', lAmp);
+      lHref := STRSUBSTNO('mailto:%1?subject=%2&body=%3', lAddress, lSubject, lBody);
+
+      EXIT(lHref);
+    END;
+
+    PROCEDURE ProcessEmailHTML@1000000013(WFlowLine@1000000000 : Record 9062266;VAR BigBody@1000000005 : BigText);
+    VAR
+      instr@1000000001 : InStream;
+      WFlowType@1000000002 : Record 9062258;
+      CurrLine@1000000003 : Text;
+      bt@1000000004 : BigText;
+      outfile@1000000006 : File;
+      outstr@1000000007 : OutStream;
+      AddedInfo@1000000008 : Boolean;
+      InfoEndPos@1000000009 : Integer;
+      Originator@1000000010 : Text[256];
+      PrevResp@1000000011 : Text;
+      CurrLine2@1000000012 : Text[1024];
+      i@1000000013 : Integer;
+      InBrackets@1000000014 : Boolean;
+      FieldName@1000000015 : Text;
+      FieldValue@1000000016 : Text;
+      ResponsesHTML@1000000017 : BigText;
+      CurrLine3@1000000018 : Text;
+      OpenBracketPos@1000000019 : Integer;
+      CloseBracketPos@1000000020 : Integer;
+      PrevWorkflow@1000000021 : Record 9062265;
+      EnhancedFieldManagement@1000000022 : Codeunit 9062298;
+      FieldProcessed@1000000023 : Boolean;
+    BEGIN
+      IF NOT WFlowType.GET(WFlowLine."Workflow No.") THEN ERROR(Text0003);
+      WFlowType.CALCFIELDS("Email HTML Template");
+      IF NOT WFlowType."Email HTML Template".HASVALUE THEN EXIT;
+
+      PrevResp := PrevWFlowResponses(BigBody,WFlowLine,TRUE);
+
+      IF (WFlowLine."Previous Workflow" <> '') THEN
+        IF ( NOT (PrevWorkflow.GET(WFlowLine."Previous Workflow"))) THEN
+          CLEAR(PrevWorkflow);
+
+      WFlowType."Email HTML Template".CREATEINSTREAM(instr);
+      REPEAT
+        instr.READTEXT(CurrLine2,1024);
+        CurrLine := '';
+
+        OpenBracketPos := STRPOS(CurrLine2,'[[');
+
+        IF OpenBracketPos <> 0 THEN BEGIN
+          REPEAT
+            IF OpenBracketPos > 1 THEN CurrLine += COPYSTR(CurrLine2,1,OpenBracketPos-1); //Copy everything before the brackets
+            CurrLine2 := COPYSTR(CurrLine2,OpenBracketPos+2); //Remove everything before the brackets
+
+            CloseBracketPos := STRPOS(CurrLine2,']]');
+            IF CloseBracketPos <> 0 THEN BEGIN
+              //Contents of brackets should be field
+              FieldName := COPYSTR(CurrLine2,1,CloseBracketPos-1);
+              IF FieldName = 'RESPONSES' THEN BEGIN
+                CLEAR(ResponsesHTML);
+                CurrLine3 := '';
+                ResponsesContent(ResponsesHTML,WFlowLine,TRUE);
+                ResponsesHTML.GETSUBTEXT(CurrLine3,1);
+                CurrLine += CurrLine3;
+              END ELSE IF FieldName = 'PREVRESP' THEN BEGIN
+                CurrLine += PrevResp;
+              END ELSE IF (STRPOS(FieldName,'WORKFLOW.') = 1) AND (FieldName <> 'WORKFLOW.') THEN BEGIN
+                FieldName := COPYSTR(FieldName,STRPOS(FieldName,'WORKFLOW.')+STRLEN('WORKFLOW.'));
+                CurrLine += TNLUtils.GetFieldValue_Simple(DATABASE::"Enhanced Workflow Activity Ln.",WFlowLine.GETPOSITION,FieldName);
+              END ELSE IF (STRPOS(FieldName,'PREVWORKFLOW.') = 1) AND (FieldName <> 'PREVWORKFLOW.') THEN BEGIN
+                FieldName := COPYSTR(FieldName,STRPOS(FieldName,'PREVWORKFLOW.')+STRLEN('PREVWORKFLOW.'));
+                CurrLine += TNLUtils.GetFieldValue_Simple(DATABASE::"Enhanced Group Workflow",PrevWorkflow.GETPOSITION,FieldName);
+              END ELSE IF (STRPOS(FieldName,'RECORD.') = 1) AND (FieldName <> 'RECORD.') THEN BEGIN
+                FieldName := COPYSTR(FieldName,STRPOS(FieldName,'RECORD.')+STRLEN('RECORD.'));
+                CurrLine += TNLUtils.GetFieldValue_Simple(WFlowLine."Table Id",WFlowLine."Get Position Text",FieldName);
+              END ELSE IF (STRPOS(FieldName,'CUSTOM.') = 1) AND (FieldName <> 'CUSTOM.') THEN BEGIN
+                FieldName := COPYSTR(FieldName,STRPOS(FieldName,'CUSTOM.')+STRLEN('CUSTOM.'));
+                CLEAR(FieldValue);
+                CLEAR(FieldProcessed);
+                ProcessCustomHTML(WFlowLine, FieldName, FieldValue, FieldProcessed);
+                IF (FieldProcessed) THEN
+                  CurrLine += FieldValue;
+              END ELSE BEGIN
+                FieldValue := TNLUtils.GetFieldValue_Simple(WFlowLine."Table Id",WFlowLine."Get Position Text",FieldName);
+                IF FieldValue = '' THEN
+                  FieldValue := TNLUtils.GetFieldValue_Simple(DATABASE::"Enhanced Workflow Activity Ln.",WFlowLine.GETPOSITION,FieldName);
+                CurrLine += FieldValue;
+              END;
+
+              //Everything afterwards still needs to be processed
+              IF CloseBracketPos + 2 <> STRLEN(CurrLine2) THEN BEGIN
+                CurrLine2 := COPYSTR(CurrLine2,CloseBracketPos+2);
+              END ELSE BEGIN
+                CurrLine2 := '';
+              END;
+            END ELSE BEGIN
+              //Brackets didn't close, so just use as text
+              CurrLine += CurrLine2;
+              CurrLine2 := '';
+            END;
+
+            OpenBracketPos := STRPOS(CurrLine2,'[[');
+          UNTIL OpenBracketPos = 0;
+
+          CurrLine += CurrLine2;  //append remaining line text
+          CurrLine2 := '';
+
+        END ELSE CurrLine := CurrLine2;
+
+        //Support Legacy Syntax >>
+        StringReplace(CurrLine,'$1',WFlowLine."Email HTML Param 1");
+        StringReplace(CurrLine,'$2',WFlowLine."Email HTML Param 2");
+        StringReplace(CurrLine,'$3',WFlowLine."Email HTML Param 3");
+        StringReplace(CurrLine,'$4',WFlowLine."Email HTML Param 4");
+        StringReplace(CurrLine,'$5',WFlowLine."Email HTML Param 5");
+        StringReplace(CurrLine,'$PK1',WFlowLine."Primary Code Field 1");
+        StringReplace(CurrLine,'$PK2',WFlowLine."Primary Code Field 2");
+        StringReplace(CurrLine,'$PK3',WFlowLine."Primary Code Field 3");
+        StringReplace(CurrLine,'$PK4',WFlowLine."Primary Code Field 4");
+
+        StringReplace(CurrLine,'$DESC',WFlowLine."Workflow Description");
+        StringReplace(CurrLine,'$INFO',WFlowLine."Information Text");
+        StringReplace(CurrLine,'$INSTR',WFlowType."Instruction Text");
+        StringReplace(CurrLine,'$RAISED',FORMAT(WFlowLine."Raised DateTime", 0, 0));
+        WFlowLine.CALCFIELDS("Originator Name");
+        IF (WFlowLine."Originator Name" <> '') THEN
+          Originator := WFlowLine."Originator Name"
+        ELSE
+          Originator := WFlowLine.Originator;
+        StringReplace(CurrLine,'$ORIGINATOR',Originator);
+
+        StringReplace(CurrLine,'$PREVRESP', PrevResp);
+
+        IF STRPOS(CurrLine,'$RESPONSES') <> 0 THEN BEGIN
+          CLEAR(ResponsesHTML);
+          CurrLine3 := '';
+          ResponsesContent(ResponsesHTML,WFlowLine,TRUE);
+
+          ResponsesHTML.GETSUBTEXT(CurrLine3,1);
+          CurrLine += CurrLine3;
+        END;
+        //Support Legacy Syntax <<
+
+        BigBody.ADDTEXT(CurrLine);
+
+      UNTIL instr.EOS;
+
+      outfile.CREATE(TEMPORARYPATH + '\' + WFlowLine."GUID No.");
+      outfile.CREATEOUTSTREAM(outstr);
+      BigBody.WRITE(outstr);
+      outfile.CLOSE;
+    END;
+
+    [Business]
+    LOCAL PROCEDURE ProcessCustomHTML@1000000024(pEnhancedWorkflowActivityLn@1000000000 : Record 9062266;pPlaceholder@1000000003 : Text;VAR pHtml@1000000002 : Text;VAR pProcessed@1000000001 : Boolean);
+    BEGIN
+      //DOC NA2016.16.1 - Processing custom HTML
+      //  -> pEnhancedWorkflowActivityLn: Enhanced workflow activity line
+      //  -> pPlaceholder: Placeholder
+      //  <> pHtml: Target HTML
+      //  <> pProcessed: Processed
+    END;
+
+    PROCEDURE StringReplace@1000000014(VAR PassedText@1000000000 : Text;ToReplace@1000000003 : Text[20];ReplaceWith@1000000006 : Text);
+    BEGIN
+      IF PassedText = '' THEN
+        EXIT;
+      IF STRPOS(PassedText,ToReplace) = 0 THEN
+        EXIT;
+
+      PassedText := COPYSTR(PassedText,1,STRPOS(PassedText,ToReplace)-1) +    //Bit of Passedtext up to ToReplace
+      ReplaceWith +
+      COPYSTR(PassedText,STRPOS(PassedText,ToReplace) + STRLEN(ToReplace)); //Bit of Passedtext after ToReplace
+    END;
+
+    PROCEDURE InitCRLF@1000000015();
+    BEGIN
+      CRLF := '';
+      CRLF[1] := 13;
+      CRLF[2] := 10;
+    END;
+
+    PROCEDURE PrevWFlowResponses@1000000018(VAR BodyHTML@1000000001 : BigText;WFlowLine@1000000000 : Record 9062266;UseHTML@1000000004 : Boolean) : Text;
+    VAR
+      GroupWFlow@1000000003 : Record 9062265;
+      WFActLine@1000000002 : Record 9062266;
+      PrevWFlowResp@1000000006 : Text;
+      eHeader@1000000007 : TextConst 'ENU=Responses given to the workflow were:;ENG=Responses given to the workflow were:';
+      eContactHeader@1000000009 : TextConst 'ENU=Contact;ENG=Contact';
+      eDateTimeHeader@1000000005 : TextConst 'ENU=Date/Time;ENG=Date/Time';
+      eResponseHeader@1000000010 : TextConst 'ENU=Response;ENG=Response';
+      eCommentsHeader@1000000011 : TextConst 'ENU=Comments;ENG=Comments';
+      eNonHtmlText@1000000008 : TextConst 'ENU=%1: %2 (%3);ENG=%1: %2 (%3)';
+    BEGIN
+      IF NOT GroupWFlow.GET(WFlowLine."Group Workflow No.") THEN EXIT;
+
+      IF GroupWFlow."Prev Workflow" = '' THEN EXIT;
+
+      WFActLine.RESET();
+      WFActLine.SETCURRENTKEY("Group Workflow No.");
+      WFActLine.SETRANGE("Group Workflow No.",GroupWFlow."Prev Workflow");
+      IF NOT WFActLine.FINDSET THEN EXIT;
+
+      IF (UseHTML) THEN
+      BEGIN
+        PrevWFlowResp := PrevWFlowResp + STRSUBSTNO('<P CLASS="PrevRespHeader">%1</P>', eHeader);
+        PrevWFlowResp := PrevWFlowResp + '<TABLE CLASS="PrevResp">';
+        PrevWFlowResp := PrevWFlowResp + '<TR CLASS="PrevResp">' +
+          STRSUBSTNO('<TH CLASS="PrevResp"><P CLASS="PrevRespTableHeader">%1</P></TH>', eContactHeader) +
+          STRSUBSTNO('<TH CLASS="PrevResp"><P CLASS="PrevRespTableHeader">%1</P></TH>', eDateTimeHeader) +
+          STRSUBSTNO('<TH CLASS="PrevResp"><P CLASS="PrevRespTableHeader">%1</P></TH>', eResponseHeader) +
+          STRSUBSTNO('<TH CLASS="PrevResp"><P CLASS="PrevRespTableHeader">%1</P></TH>', eCommentsHeader) + '</TR>';
+      END
+      ELSE
+        PrevWFlowResp := PrevWFlowResp + eHeader + CRLF;
+
+      REPEAT
+        WFActLine.CALCFIELDS("Contact Name");
+        IF (UseHTML) THEN
+        BEGIN
+          PrevWFlowResp := PrevWFlowResp + '<TR CLASS="PrevResp">';
+          PrevWFlowResp := PrevWFlowResp + STRSUBSTNO('<TD CLASS="PrevResp"><P CLASS="PrevResp">%1</P></TD>', WFActLine."Contact Name");
+          PrevWFlowResp := PrevWFlowResp + STRSUBSTNO('<TD CLASS="PrevResp"><P CLASS="PrevResp">%1</P></TD>', FORMAT(WFActLine."Raised DateTime", 0, 0));
+          PrevWFlowResp := PrevWFlowResp + STRSUBSTNO('<TD CLASS="PrevResp"><P CLASS="PrevResp">%1</P></TD>', WFActLine.Response);
+          PrevWFlowResp := PrevWFlowResp + STRSUBSTNO('<TD CLASS="PrevResp"><P CLASS="PrevResp">%1</P></TD>', WFActLine."Response Value");
+          PrevWFlowResp := PrevWFlowResp + '</TR>';
+        END
+        ELSE
+          PrevWFlowResp := PrevWFlowResp + '  ' + STRSUBSTNO(eNonHtmlText, WFActLine."Contact Name", WFActLine.Response,
+            WFActLine."Response Value") + CRLF;
+      UNTIL WFActLine.NEXT = 0;
+
+      IF (UseHTML) THEN
+        PrevWFlowResp := PrevWFlowResp + '</TABLE>';
+      EXIT(PrevWFlowResp);
+    END;
+
+    PROCEDURE ResendNotifications@1000000019(VAR pWorkflowNotification@1000000000 : Record 9062261;pInteraction@1000000001 : Boolean) : Boolean;
+    VAR
+      eConfirmation@1000000002 : TextConst 'ENU=Do you want to resend %1 notification(s)?;ENG=Do you want to resend %1 notification(s)?';
+      eFinalMessage@1000000003 : TextConst 'ENU=Notifications have been marked to be re-sent.;ENG=Notifications have been marked to be re-sent.';
+    BEGIN
+      //DOC NA2015.4 - Resending notifications passed
+      //  <> pWorkflowNotification: Notifications to be resent
+      //  -> pInteraction: Interaction flag
+      //  <- Result
+
+      IF (pWorkflowNotification.ISEMPTY) THEN
+        EXIT(FALSE);
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+      IF (pInteraction) THEN
+        IF ( NOT (CONFIRM(eConfirmation, FALSE, pWorkflowNotification.COUNT))) THEN
+          EXIT(FALSE);
+
+      pWorkflowNotification.MODIFYALL(Sent, FALSE);
+      pWorkflowNotification.MODIFYALL("Sent Date", 0D);
+      pWorkflowNotification.MODIFYALL("Sent Time", 0T);
+      pWorkflowNotification.MODIFYALL(Errored, FALSE);
+      pWorkflowNotification.MODIFYALL("Error Message", '');
+      pWorkflowNotification.MODIFYALL("Error Description", '');
+
+      IF (pInteraction) THEN
+        MESSAGE(eFinalMessage);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CancelNotifications@1000000021(VAR pWorkflowNotification@1000000000 : Record 9062261;pInteraction@1000000001 : Boolean) : Boolean;
+    VAR
+      eConfirmation@1000000002 : TextConst 'ENU=Do you want to cancel %1 notification(s)?;ENG=Do you want to cancel %1 notification(s)?';
+      eFinalMessage@1000000003 : TextConst 'ENU=Notifications have been cancelled.;ENG=Notifications have been cancelled.';
+    BEGIN
+      //DOC NA2015.7 - Cancelling notifications passed
+      //  <> pWorkflowNotification: Notifications to be resent
+      //  -> pInteraction: Interaction flag
+      //  <- Result
+
+      IF (pWorkflowNotification.ISEMPTY) THEN
+        EXIT(FALSE);
+
+      pInteraction := ((pInteraction) AND (GUIALLOWED));
+      IF (pInteraction) THEN
+        IF ( NOT (CONFIRM(eConfirmation, FALSE, pWorkflowNotification.COUNT))) THEN
+          EXIT(FALSE);
+
+      pWorkflowNotification.SETRANGE(Sent, FALSE);
+      pWorkflowNotification.SETRANGE(Cancelled, FALSE);
+      pWorkflowNotification.MODIFYALL(Cancelled, TRUE);
+
+      IF (pInteraction) THEN
+        MESSAGE(eFinalMessage);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE VerifyIfToCurrentUser@1000000022(VAR pToName@1000000002 : Text[250];VAR pCcName@1000000001 : Text[250];pType@1000000000 : 'E-Mail,Popup';pWorkflowNo@1000000013 : Code[20]) : Boolean;
+    VAR
+      lContact@1000000007 : Record 5050;
+      lNablementUser@1000000006 : Record 9062729;
+      lToCurrentUserOnly@1000000003 : Boolean;
+      lCurrentUserEMail@1000000004 : Text;
+      lCurrentUserContactNo@1000000005 : Code[20];
+      lResult@1000000008 : Boolean;
+      lToName@1000000010 : Text[250];
+      lCcName@1000000009 : Text[250];
+      eNotCurrentUser@1000000012 : TextConst 'ENU=%1 hasn''t been sent to "%2" because it is not the current user.;ENG=%1 hasn''t been sent to "%2" because it is not the current user.';
+      eWorkflow@1000000014 : TextConst 'ENU=Workflow "%1" notification;ENG=Workflow "%1" notification';
+      eNotification@1000000015 : TextConst 'ENU=Notification;ENG=Notification';
+      lNotificationText@1000000011 : Text;
+    BEGIN
+      //DOC NA2015.4 - Verifying if
+      //  <> pToName: Recipient name
+      //  <> pCcName: Carbon copy name
+      //  -> pType: Notification type (e-mail / popup)
+      //  -> pWorkflowNo: Workflow no.
+      //  <- TRUE: Addresses OK, notification should be sent, FALSE: Not the current user, abort
+
+      lResult := FALSE;
+
+      lToCurrentUserOnly := SysB.GetBoolean('WF_NOT_TO_CURR_USER');
+      IF ( NOT (lToCurrentUserOnly)) THEN
+        EXIT(TRUE);
+
+      IF NOT(lNablementUser.GET(TNLUtils.CurrentUser)) THEN
+        CLEAR(lNablementUser);
+
+      lCurrentUserContactNo := lNablementUser."Contact No.";
+      IF (lCurrentUserContactNo <> '') THEN
+        IF (lContact.GET(lCurrentUserContactNo)) THEN
+          lCurrentUserEMail := lContact."E-Mail";
+      IF (lCurrentUserEMail = '') THEN
+        lCurrentUserEMail := lNablementUser."E-Mail";
+
+      lCurrentUserEMail := DELCHR(LOWERCASE(lCurrentUserEMail), '<>', ' ');
+
+      lToName := pToName;
+      lCcName := pCcName;
+
+      CASE (pType) OF
+        pType::"E-Mail":
+          BEGIN
+            IF (DELCHR(LOWERCASE(pToName), '<>', ' ') <> lCurrentUserEMail) THEN
+              pToName := '';
+            IF (DELCHR(LOWERCASE(pCcName), '<>', ' ') <> lCurrentUserEMail) THEN
+              pCcName := '';
+            lResult := ((pToName <> '') OR (pCcName <> ''));
+          END;
+        pType::Popup :
+          BEGIN
+            IF (DELCHR(UPPERCASE(pToName), '<>', ' ') <> lCurrentUserContactNo) THEN
+              pToName := '';
+            lResult := (pToName <> '');
+          END;
+      END;
+
+      lNotificationText := TnpToolkit.IIFText(pWorkflowNo <> '', STRSUBSTNO(eWorkflow, pWorkflowNo), eNotification);
+
+      IF ((lToName <> '') AND (pToName = '')) THEN
+        Logger.Log('WFLOWNOT', Logger.Type::Information, STRSUBSTNO(eNotCurrentUser, lNotificationText, lToName), USERID);
+      IF ((lCcName <> '') AND (pCcName = '')) THEN
+        Logger.Log('WFLOWNOT', Logger.Type::Information, STRSUBSTNO(eNotCurrentUser, lNotificationText, lCcName), USERID);
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE GetLastErrorMessage@1000000023() : Text;
+    BEGIN
+      //DOC NA2015.7 - Returning last error message
+      //  <- The message
+
+      EXIT(LastErrorMessage);
+    END;
+
+    PROCEDURE SaveReportToPDF@1000000016(ReportID@1000000000 : Integer;VAR Record@1000000001 : RecordRef;SaveToPath@1000000002 : Text) OK : Boolean;
+    VAR
+      RecRefVariant@1000000003 : Variant;
+      ServerTempPath@1000000004 : Text;
+      TxtSaving@1000000007 : TextConst 'ENU=Saving report %1 for position %2 to path %3;ENG=Saving report %1 for position %2 to path %3';
+      TxtProblemSavingReport@1000000005 : TextConst 'ENU=There was a problem saving report %1 for position %2 to path %3'';ENG=There was a problem saving report %1 for position %2 to path %3''';
+      TxtReportSaved@1000000006 : TextConst 'ENU=Report %1 for position %2 saved to path %3;ENG=Report %1 for position %2 saved to path %3';
+      TxtDocSend@1000000008 : TextConst 'ENU=DOCSEND;ENG=DOCSEND';
+      FileSystem@1000000009 : Codeunit 9062264;
+    BEGIN
+      Logger.Log(TxtDocSend, Logger.Type::Debug, STRSUBSTNO(TxtSaving, ReportID, Record.GETPOSITION, SaveToPath), USERID);
+      Record.SETRECFILTER;
+      RecRefVariant := Record;
+      ServerTempPath := FileMgt.ServerTempFileName('pdf');
+
+      OK := REPORT.SAVEASPDF(ReportID, ServerTempPath, RecRefVariant);
+
+      IF NOT OK THEN BEGIN
+        Logger.Log(TxtDocSend, Logger.Type::Error, STRSUBSTNO(TxtProblemSavingReport, ReportID, Record.GETPOSITION, ServerTempPath), USERID);
+        EXIT(FALSE);
+      END ELSE BEGIN
+        Logger.Log(TxtDocSend, Logger.Type::Debug, STRSUBSTNO(TxtReportSaved, ReportID, Record.GETPOSITION, ServerTempPath), USERID);
+      END;
+
+      FileSystem.DeleteFileIfExists(GUIALLOWED,SaveToPath);
+
+      IF GUIALLOWED THEN BEGIN
+        FileMgt.DownloadToFile(ServerTempPath,SaveToPath);
+        FileMgt.DeleteServerFile(ServerTempPath);
+      END ELSE BEGIN
+        IF NOT FileSystem.FileExists(GUIALLOWED,ServerTempPath) THEN EXIT(FALSE);
+        RENAME(ServerTempPath, SaveToPath);
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.1    PC 24/02/2012 - Added code to specify DOCS Entry ID to send with message
+      //DOC NA2015.1    JH 10/08/2012 - Migrated to 2013, amended for job queue
+      //DOC NA2015.1    PC 25/03/2014 - Removed reliance on AutoNAV Tasks
+      //DOC NA2015.1    PC 26/03/2014 - Added Filter to File Attachments when sending to only send current version
+      //DOC NA2015.1    PC 03/04/2014 - Workflow sending is run in different codeunit so that errors are caught
+      //DOC NA2015.2    JH 01/07/2014 - Inserting notifications with insert trigger, retrying processing
+      //DOC NA2015.4    JH 03/11/2014 - Upgraded to 2015
+      //DOC NA2015.4    JH 28/12/2014 - System behaviours renamed
+      //DOC NA2015.4    JH 09/02/2015 - System behaviour to send notifications only back to the current user
+      //DOC NA2015.6    JH 24/04/2015 - Clearing error flags and messages while marking notifications to be resent
+      //DOC NA2015.7    JH 12/05/2015 - Proper error messaging added, "CancelNotifications" added
+      //DOC NA2016.10   JH 26/08/2015 - Upgraded to 2016
+      //DOC NA2016.12   JH 16/12/2015 - Bugfixes
+      //DOC NA2016.12   JH 28/01/2016 - New string codeunit used
+      //DOC NA2016.14   PC 23/02/2016 - Moved "SendReportAsPDF" from Document Sending CU to here and removed ref. to Document Sending CU
+      //DOC NA2016.15   JH 18/04/2016 - CfMD amendments
+      //DOC NA2016.16.1 JH 15/07/2016 - Custom HTML event
+      //DOC NA2016.16.2 JH 30/08/2016 - & decoded properly in e-mail URL
+    }
+    END.
+  }
+}
+

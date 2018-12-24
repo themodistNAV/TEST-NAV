@@ -1,0 +1,335 @@
+OBJECT Codeunit 9062325 Migration Export Import Tools
+{
+  OBJECT-PROPERTIES
+  {
+    Date=15/02/16;
+    Time=[ 3:46:08 PM];
+    Version List=NA2016.14;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      MigrationHeader@1000000006 : Record 9062373;
+      MigrationParameters@1000000013 : Record 9062376;
+      AutoNavLogEntry@1000000002 : Record 9062280;
+      FileSystem@1000000015 : Codeunit 9062264;
+      AutoNavLogEntryTransactionId@1000000001 : Integer;
+      AutoNavLogEntryErrorsDetected@1000000000 : Boolean;
+      LogLevel@1000000004 : Integer;
+      OpenLog@1000000003 : Integer;
+      tLogSource@1000000005 : TextConst 'ENU=MIGRATION;ENG=MIGRATION';
+      DialogInteraction@1000000012 : Boolean;
+      DialogUseSteps@1000000011 : Boolean;
+      DialogManagement@1000000009 : Codeunit 9062249;
+      DialogIndex@1000000008 : ' ,Stage Progress,Stage,Step Progress,Step';
+      DialogOpened@1000000007 : Boolean;
+      MigrationsFolderPath@1000000014 : Text;
+
+    LOCAL PROCEDURE "--- Log ---"@1000000010();
+    BEGIN
+    END;
+
+    PROCEDURE InitialiseLog@1000000011(pLogLevel@1000000000 : Integer;pOpenLog@1000000001 : Integer);
+    BEGIN
+      //DOC NA2016.11 - Initialising log
+      //  -> pLogLevel: Log level
+      //  -> pOpenLog: Open log (see "Migration Header"."Open Log" for options
+
+      LogLevel := pLogLevel;
+      OpenLog := pOpenLog;
+
+      CLEAR(AutoNavLogEntryTransactionId);
+      CLEAR(AutoNavLogEntryErrorsDetected);
+    END;
+
+    PROCEDURE LogMessage@1000000024(pDescription@1000000000 : Text;pXmlPortId@1000000001 : Integer);
+    BEGIN
+      //DOC NA2016.11 - Logging a message
+      //  -> pDescription: Log entry description
+      //  -> pXmlPortId: XMLport ID
+
+      IF (LogLevel <> MigrationParameters."Log Level"::Full) THEN
+        EXIT;
+
+      Log(AutoNavLogEntry.Type::Information, pDescription, pXmlPortId);
+    END;
+
+    PROCEDURE LogError@1000000023(pDescription@1000000000 : Text;pXmlPortId@1000000001 : Integer);
+    BEGIN
+      //DOC NA2016.11 - Logging an error
+      //  -> pDescription: Log entry description
+      //  -> pXmlPortId: XMLport ID
+
+      Log(AutoNavLogEntry.Type::Error, pDescription, pXmlPortId);
+      AutoNavLogEntryErrorsDetected := TRUE;
+    END;
+
+    LOCAL PROCEDURE Log@1000000026(pType@1000000000 : Integer;pDescription@1000000001 : Text;pXmlPortId@1000000002 : Integer);
+    BEGIN
+      //DOC NA2016.11 - Logging something
+      //  -> pType: Type (see "AutoNAV Log Entry"."Type" field for options)
+      //  -> pDescription: Log entry description
+      //  -> pXmlPortId: XMLport ID
+
+      IF (AutoNavLogEntryTransactionId = 0) THEN
+        AutoNavLogEntryTransactionId := AutoNavLogEntry.GetNewTransactionId();
+
+      AutoNavLogEntry.Log(tLogSource, pType, pDescription, '');
+      AutoNavLogEntry.VALIDATE("Transaction ID", AutoNavLogEntryTransactionId);
+      IF (pXmlPortId <> 0) THEN
+      BEGIN
+        AutoNavLogEntry.VALIDATE("Object Type", AutoNavLogEntry."Object Type"::XMLport);
+        AutoNavLogEntry.VALIDATE("Object ID", pXmlPortId);
+      END;
+      AutoNavLogEntry.MODIFY(TRUE);
+    END;
+
+    PROCEDURE ShowLog@1000000039();
+    VAR
+      lShowLog@1000000000 : Boolean;
+    BEGIN
+      //DOC NA2016.11 - Showing log at the end of export
+
+      CLEAR(lShowLog);
+      CASE (OpenLog) OF
+        MigrationParameters."Open Log"::Always:
+          lShowLog := TRUE;
+        MigrationParameters."Open Log"::"Only if Errors Detected":
+          lShowLog := AutoNavLogEntryErrorsDetected;
+      END;
+
+      IF ( NOT (lShowLog)) THEN
+        EXIT;
+
+      AutoNavLogEntry.RESET();
+      AutoNavLogEntry.SETCURRENTKEY("Transaction ID");
+      AutoNavLogEntry.FILTERGROUP(2);
+      AutoNavLogEntry.SETRANGE("Transaction ID", AutoNavLogEntryTransactionId);
+      AutoNavLogEntry.FILTERGROUP(0);
+      PAGE.RUN(0, AutoNavLogEntry);
+    END;
+
+    LOCAL PROCEDURE "--- Dialog ---"@1000000001();
+    BEGIN
+    END;
+
+    PROCEDURE InitialiseDialog@1000000004(pDialogInteraction@1000000001 : Boolean;pDialogUseSteps@1000000000 : Boolean);
+    BEGIN
+      //DOC NA2016.11 - Initialising dialog
+      //  -> pDialogInteraction: Dialog interaction flag
+      //  -> pDialogUseSteps: Flag to use dialog steps
+
+      DialogInteraction := pDialogInteraction;
+      DialogUseSteps := pDialogUseSteps;
+    END;
+
+    PROCEDURE OpenDialog@1000000013(pTitle@1000000007 : Text);
+    VAR
+      eStageProgress@1000000000 : TextConst 'ENU=Stage Progress;ENG=Stage Progress';
+      lCaptionLength@1000000001 : Integer;
+      lCounterLength@1000000002 : Integer;
+      eStage@1000000005 : TextConst 'ENU=Stage;ENG=Stage';
+      eStepProgress@1000000008 : TextConst 'ENU=Step Progress;ENG=Step Progress';
+      eStep@1000000006 : TextConst 'ENU=Step;ENG=Step';
+    BEGIN
+      //DOC NA2016.11 - Opening dialog
+      //  -> pTitle: Title
+
+      IF ( NOT (DialogInteraction)) THEN
+        EXIT;
+      IF (DialogOpened) THEN
+        EXIT;
+
+      lCaptionLength := 30;
+      lCounterLength := 30;
+
+      CLEAR(DialogManagement);
+      DialogManagement.Add(eStageProgress, lCaptionLength, DialogIndex::"Stage Progress", lCounterLength, TRUE, TRUE);
+      DialogManagement.Add(eStage, lCaptionLength, DialogIndex::Stage, lCounterLength, FALSE, FALSE);
+      IF (DialogUseSteps) THEN
+      BEGIN
+        DialogManagement.Add(eStepProgress, lCaptionLength, DialogIndex::"Step Progress", lCounterLength, TRUE, TRUE);
+        DialogManagement.Add(eStep, lCaptionLength, DialogIndex::Step, lCounterLength, FALSE, FALSE);
+      END;
+      DialogManagement.Open(pTitle);
+
+      DialogOpened := TRUE;
+    END;
+
+    PROCEDURE SetDialogStageCount@1000000005(pCount@1000000000 : Integer);
+    BEGIN
+      //DOC NA2016.11 - Setting dialog stage count
+      //  -> pCount: The count
+
+      IF ( NOT (DialogInteraction)) THEN
+        EXIT;
+
+      DialogManagement.SetCounterCount(DialogIndex::"Stage Progress", pCount);
+    END;
+
+    PROCEDURE UpdateDialogBeforeStage@1000000027(pStage@1000000000 : Text);
+    BEGIN
+      //DOC NA2016.11 - Updating dialog before stage
+      //  -> pStage: Stage (text)
+
+      IF ( NOT (DialogInteraction)) THEN
+        EXIT;
+
+      DialogManagement.SetCounterTextValue(DialogIndex::Stage, pStage);
+      IF (DialogUseSteps) THEN
+      BEGIN
+        DialogManagement.ResetCounter(DialogIndex::"Step Progress");
+        DialogManagement.SetCounterTextValue(DialogIndex::Step, '');
+      END;
+    END;
+
+    PROCEDURE UpdateDialogAfterStage@1000000002();
+    BEGIN
+      //DOC NA2016.11 - Updating dialog after stage
+
+      IF ( NOT (DialogInteraction)) THEN
+        EXIT;
+
+      DialogManagement.StepCounter(DialogIndex::"Stage Progress");
+    END;
+
+    PROCEDURE SetDialogStepCount@1000000007(pCount@1000000000 : Integer);
+    BEGIN
+      //DOC NA2016.11 - Setting dialog step count
+      //  -> pCount: The count
+
+      IF ( NOT (DialogInteraction)) THEN
+        EXIT;
+
+      DialogManagement.SetCounterCount(DialogIndex::"Step Progress", pCount);
+    END;
+
+    PROCEDURE UpdateDialogBeforeStep@1000000000(pStep@1000000000 : Text);
+    BEGIN
+      //DOC NA2016.11 - Updating dialog before step
+      //  -> pStep: Step (text)
+
+      IF ( NOT (DialogInteraction)) THEN
+        EXIT;
+
+      IF (DialogUseSteps) THEN
+        DialogManagement.SetCounterTextValue(DialogIndex::Step, pStep);
+    END;
+
+    PROCEDURE UpdateDialogAfterStep@1000000003();
+    BEGIN
+      //DOC NA2016.11 - Updating dialog after step
+
+      IF ( NOT (DialogInteraction)) THEN
+        EXIT;
+
+      IF (DialogUseSteps) THEN
+        DialogManagement.StepCounter(DialogIndex::"Step Progress");
+    END;
+
+    PROCEDURE CloseDialog@1000000012();
+    BEGIN
+      //DOC NA2016.11 - Closing dialog
+
+      IF ( NOT (DialogInteraction)) THEN
+        EXIT;
+
+      IF (DialogOpened) THEN
+        DialogManagement.Close();
+
+      DialogOpened := FALSE;
+    END;
+
+    LOCAL PROCEDURE "--- File System ---"@1000000008();
+    BEGIN
+    END;
+
+    PROCEDURE GetMigrationsFolderPath@1000000014() : Text;
+    BEGIN
+      //DOC NA2016.11 - Returning migrations folder path
+      //  <- The path
+
+      EXIT(MigrationsFolderPath);
+    END;
+
+    PROCEDURE PrepareMigrationsFolder@1000000006() : Boolean;
+    VAR
+      lFolderName@1000000001 : Text;
+      eFolderName@1000000002 : TextConst 'ENU=Migration %1;ENG=Migration %1';
+      lResult@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2016.11 - Preparing migrations folder
+      //  <- TRUE = Migrations folder prepared now, FALSE = Migrations folder existed before
+
+      IF (MigrationsFolderPath = '') THEN
+      BEGIN
+        lFolderName := STRSUBSTNO(eFolderName, CurrentDateTimeText());
+        lFolderName := FileSystem.ToFolderName(lFolderName);
+        MigrationsFolderPath := FileSystem.Combine(FALSE, FileSystem.GetTempPath(FALSE), lFolderName);
+        FileSystem.DeleteFolderIfExists(FALSE, MigrationsFolderPath, TRUE);
+        FileSystem.CreateFolder(FALSE, MigrationsFolderPath);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE DeleteMigrationsFolder@1000000018();
+    BEGIN
+      //DOC NA2016.11 - Deleting migrations folder
+
+      IF (MigrationsFolderPath <> '') THEN
+        FileSystem.DeleteFolderIfExists(FALSE, MigrationsFolderPath, TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Date and Time ---"@1000000009();
+    BEGIN
+    END;
+
+    PROCEDURE CurrentDateText@1000000032() : Text;
+    VAR
+      lText@1000000000 : Text;
+    BEGIN
+      //DOC NA2016.11 - Returning current date text
+      //  <- The text
+
+      lText := FORMAT(CURRENTDATETIME(), 0, 9);
+      lText := COPYSTR(lText, 1, 4) + COPYSTR(lText, 6, 2) + COPYSTR(lText, 9, 2);
+      EXIT(lText);
+    END;
+
+    PROCEDURE CurrentTimeText@1000000034() : Text;
+    VAR
+      lText@1000000000 : Text;
+    BEGIN
+      //DOC NA2016.11 - Returning current time text
+      //  <- The text
+
+      lText := FORMAT(CURRENTDATETIME(), 0, 9);
+      lText := COPYSTR(lText, 12, 2) + COPYSTR(lText, 15, 2) + COPYSTR(lText, 18, 2) + COPYSTR(lText, 21, 3);
+      EXIT(lText);
+    END;
+
+    PROCEDURE CurrentDateTimeText@1000000033() : Text;
+    BEGIN
+      //DOC NA2016.11 - Returning current datetime text
+      //  <- The text
+
+      EXIT(CurrentDateText() + ' ' + CurrentTimeText());
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.11 JH 27/11/2015 - Created
+      //DOC NA2016.12 JH 17/01/2016 - Bugfixes
+    }
+    END.
+  }
+}
+

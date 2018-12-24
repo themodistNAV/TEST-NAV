@@ -1,0 +1,792 @@
+OBJECT Codeunit 9086954 nF. MenuSuite Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=22/12/16;
+    Time=11:07:31 AM;
+    Version List=NF2016.17.11;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      NfSetup@1000000002 : Record 9086950;
+      AllObj@1000000017 : Record 2000000038;
+      Object@1000000016 : Record 2000000001;
+      ObjectMetadata@1000000000 : Record 2000000071;
+      NfMenuSuiteTimestamp@1000000004 : Record 9086952;
+      NfLog@1000000011 : Record 9086967;
+      NfDialogManagement@1000000019 : Codeunit 9086952;
+      NfIif@1000000015 : Codeunit 9086975;
+      NfString@1000000005 : Codeunit 9086971;
+      XmlDocument@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XmlNamespaceManager@1000000007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+      PermissionGroupGuids@1000000009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      PermissionGuids@1000000008 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      ObjectTypes@1000000001 : TEMPORARY Record 823;
+      EmptyGuid@1000000003 : GUID;
+      MenuSuiteMapping@1000000010 : Option;
+      tDefaultNamespace@1000000021 : TextConst 'ENU=d;ENG=d';
+      tDefaultLanguageCode@1000000022 : TextConst 'ENU=ENU;ENG=ENU';
+      tLogActivity@1000000012 : TextConst 'ENU=MenuSuite Processing;ENG=MenuSuite Processing';
+      NfLogActivityId@1000000013 : Integer;
+      NfLogResult@1000000014 : Option;
+      LanguageCode@1000000018 : Code[10];
+      DialogControlIndex@1000000020 : ' ,ProcessingMenuSuite,FindingOldPermissionGroups,DeletingOldPermissionGroups,FindingOldPermissions,DeletingOldPermissions';
+      TryToCreatePermissionsFromMenuSuitesSafe@1000000023 : DotNet "'TheNavPeople.TryCatch.9.0.2.0, Version=9.0.2.0, Culture=neutral, PublicKeyToken=eb0b45524ef42a5f'.TheNavPeople.TryCatch.TryCatch" WITHEVENTS;
+
+    LOCAL PROCEDURE "--- General ---"@1000000002();
+    BEGIN
+    END;
+
+    PROCEDURE ProcessMenuSuites@1000000000(pMenuSuiteMapping@1000000000 : Option;pForce@1000000004 : Boolean) : Boolean;
+    VAR
+      lMenuSuitesNeedProcessing@1000000001 : Boolean;
+      eMenuSuitesDontNeedProcessing@1000000002 : TextConst 'ENU=Menu suites don''t need processing.;ENG=Menu suites don''t need processing.';
+      lResult@1000000003 : Boolean;
+    BEGIN
+      ///<summary>Processing menu suites</summary>
+      ///<param name="pMenuSuiteMapping">Menu suite mapping</param>
+      ///<param name="pForce">Force update</param>
+      ///<returns>TRUE = Menu suites processed, FALSE = Errors detected</returns>
+
+      MenuSuiteMapping := pMenuSuiteMapping;
+
+      NfSetup.VerifyAndGet();
+
+      LogMenuSuiteBegin();
+
+      lResult := FALSE;
+
+      IF (pForce) THEN
+      BEGIN
+        NfMenuSuiteTimestamp.RESET();
+        NfMenuSuiteTimestamp.DELETEALL(TRUE);
+      END;
+
+      lMenuSuitesNeedProcessing := MenuSuitesNeedProcessing();
+
+      IF (lMenuSuitesNeedProcessing) THEN
+      BEGIN
+        ClearBuffers();
+        DetectLanguage();
+        OpenDialog();
+        IF (GetResult()) THEN
+          ExtractMenuSuites();
+        IF (GetResult()) THEN
+        BEGIN
+          CreatePermissionsFromMenuSuites();
+          DeleteOldPermissionGroups();
+          DeleteOldPermissions();
+        END;
+        UpdateSetup();
+        CloseDialog();
+        lResult := GetResult();
+      END
+      ELSE
+      BEGIN
+        lResult := TRUE;
+        LogMenuSuiteEvent(eMenuSuitesDontNeedProcessing, NfLog.Result::Success, FALSE);
+      END;
+
+      LogMenuSuiteEnd();
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE MenuSuitesNeedProcessing@1000000004() : Boolean;
+    VAR
+      lNeedProcessing@1000000003 : Boolean;
+      lMenuSuitesCompiled@1000000000 : Boolean;
+      lTimestamp@1000000002 : DateTime;
+      eNotCompiledMenuSuites@1000000005 : TextConst 'ENU="There are not compiled menu suites; permissions can''t be extracted.";ENG="There are not compiled menu suites; permissions can''t be extracted."';
+      eNoMenuSuites@1000000004 : TextConst 'ENU=There are no menu suites to extract permissions from.;ENG=There are no menu suites to extract permissions from.';
+    BEGIN
+      ///<summary>Answers whether menu suites need processing</summary>
+      ///<returns>The answer</returns>
+
+      lNeedProcessing := FALSE;
+
+      NfSetup.VerifyAndGet();
+
+      lMenuSuitesCompiled := FALSE;
+      Object.RESET();
+      Object.SETRANGE(Type, Object.Type::MenuSuite);
+      Object.SETRANGE(Compiled, FALSE);
+      lMenuSuitesCompiled := Object.ISEMPTY();
+      IF ( NOT (lMenuSuitesCompiled)) THEN
+        LogMenuSuiteEvent(eNotCompiledMenuSuites, NfLog.Result::Error, FALSE);
+
+      IF (lMenuSuitesCompiled) THEN
+      BEGIN
+        Object.RESET();
+        Object.SETRANGE(Type, Object.Type::MenuSuite);
+        IF (Object.FINDSET()) THEN
+        REPEAT
+          IF (NfMenuSuiteTimestamp.GET(Object.ID)) THEN
+            lNeedProcessing := ((Object.Date <> NfMenuSuiteTimestamp."Saved Date") OR (Object.Time <> NfMenuSuiteTimestamp."Saved Time"))
+          ELSE
+            lNeedProcessing := TRUE;
+        UNTIL ((Object.NEXT() = 0) OR (lNeedProcessing))
+        ELSE
+        BEGIN
+          LogMenuSuiteEvent(eNoMenuSuites, NfLog.Result::Error, FALSE);
+          lNeedProcessing := FALSE;
+        END;
+
+        IF ( NOT (lNeedProcessing)) THEN
+        BEGIN
+          Object.RESET();
+          Object.SETRANGE(Type, Object.Type::MenuSuite);
+          NfMenuSuiteTimestamp.RESET();
+          lNeedProcessing := (Object.COUNT() <> NfMenuSuiteTimestamp.COUNT());
+          IF (lNeedProcessing) THEN
+            NfMenuSuiteTimestamp.DELETEALL(TRUE);
+        END;
+      END;
+
+      EXIT(lNeedProcessing);
+    END;
+
+    PROCEDURE ShowLogWithErrorMessage@1000000017();
+    VAR
+      eMessage@1000000000 : TextConst 'ENU=MenuSuite processing finished with errors. Please, examine the log to find error details.;ENG=MenuSuite processing finished with errors. Please, examine the log to find error details.';
+    BEGIN
+      ///<summary>Showing log after processing</summary>
+
+      MESSAGE(eMessage);
+
+      COMMIT;
+
+      NfLog.RESET();
+      NfLog.FILTERGROUP(2);
+      NfLog.SETRANGE("Activity ID", NfLogActivityId);
+      NfLog.FILTERGROUP(0);
+      NfLog.SETFILTER(Result, '%1|%2', NfLog.Result::Error, NfLog.Result::Warning);
+      PAGE.RUNMODAL(0, NfLog);
+    END;
+
+    LOCAL PROCEDURE "--- Internal ---"@1000000005();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ClearBuffers@1000000009();
+    BEGIN
+      ///<summary>Clearing buffers</summary>
+
+      PermissionGroupGuids := PermissionGroupGuids.List();
+      PermissionGuids := PermissionGuids.List();
+    END;
+
+    LOCAL PROCEDURE DetectLanguage@1000000014();
+    VAR
+      lWindowsLanguage@1000000001 : Record 2000000045;
+      lLanguageId@1000000000 : Integer;
+      eLanguageDetected@1000000004 : TextConst 'ENU=Detected language %1.;ENG=Detected language %1.';
+      eLanguageCantBeDetected@1000000002 : TextConst 'ENU="The language of your system can''t be detected; using the default one (%1).";ENG="The language of your system can''t be detected; using the default one (%1)."';
+    BEGIN
+      ///<summary>Detecting current language</summary>
+
+      lLanguageId := GLOBALLANGUAGE();
+      IF (lWindowsLanguage.GET(lLanguageId)) THEN
+        LanguageCode := lWindowsLanguage."Abbreviated Name"
+      ELSE
+        LanguageCode := '';
+
+      IF (LanguageCode <> '') THEN
+        LogMenuSuiteEvent(STRSUBSTNO(eLanguageDetected, LanguageCode), NfLog.Result::Success, FALSE)
+      ELSE
+      BEGIN
+        LanguageCode := tDefaultLanguageCode;
+        LogMenuSuiteEvent(STRSUBSTNO(eLanguageCantBeDetected, LanguageCode), NfLog.Result::Warning, FALSE);
+      END;
+    END;
+
+    LOCAL PROCEDURE ExtractMenuSuites@1000000003();
+    BEGIN
+      ///<summary>Extracting menu suites into XML document</summary>
+
+      CLEARLASTERROR();
+      IF ( NOT (TryToExtractMenuSuites())) THEN
+        LogMenuSuiteEvent(GETLASTERRORTEXT(), NfLog.Result::Error, FALSE);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryToExtractMenuSuites@1000000019();
+    VAR
+      eMenuSuiteExtractFailed@1000000000 : TextConst 'ENU=Menu suite extract has failed (menu suite metadata are empty).;ENG=Menu suite extract has failed (menu suite metadata are empty).';
+      lInStream@1000000001 : InStream;
+    BEGIN
+      ///<summary>Trying to extract menu suites into XML document</summary>
+
+      ObjectMetadata.RESET();
+      ObjectMetadata.SETRANGE("Object Type", ObjectMetadata."Object Type"::MenuSuite);
+      ObjectMetadata.FINDLAST();
+      ObjectMetadata.CALCFIELDS(Metadata);
+      IF ( NOT (ObjectMetadata.Metadata.HASVALUE())) THEN
+        ERROR(eMenuSuiteExtractFailed);
+
+      ObjectMetadata.Metadata.CREATEINSTREAM(lInStream);
+      XmlDocument := XmlDocument.XmlDocument();
+      XmlDocument.Load(lInStream);
+      GetXmlDocumentNamespaces();
+    END;
+
+    LOCAL PROCEDURE CreatePermissionsFromMenuSuites@1000000006();
+    BEGIN
+      ///<summary>Creating permissions from menu suites</summary>
+
+      TryToCreatePermissionsFromMenuSuitesSafe := TryToCreatePermissionsFromMenuSuitesSafe.TryCatch();
+      IF ( NOT (TryToCreatePermissionsFromMenuSuitesSafe.Run())) THEN
+      BEGIN
+        LogMenuSuiteEvent(TryToCreatePermissionsFromMenuSuitesSafe.LastErrorText, NfLog.Result::Error, TRUE);
+        CloseDialog();
+        ERROR('');
+      END;
+    END;
+
+    LOCAL PROCEDURE TryToCreatePermissionsFromMenuSuites@1000000027();
+    VAR
+      lXPath@1000000002 : Text;
+      lDepartmentsXmlNode@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      eDepartmentsCantBeFound@1000000001 : TextConst 'ENU=''Departments'' menu can''t be found (in menu suite metadata).;ENG=''Departments'' menu can''t be found (in menu suite metadata).';
+    BEGIN
+      ///<summary>Trying to create permissions from menu suites</summary>
+
+      lXPath := STRSUBSTNO('/%1:NavigationDefinition/%1:ActionContainers[@ActionContainerType=''Departments'']', tDefaultNamespace);
+      lDepartmentsXmlNode := XmlDocument.SelectSingleNode(lXPath, XmlNamespaceManager);
+      IF (ISNULL(lDepartmentsXmlNode)) THEN
+        ERROR(eDepartmentsCantBeFound);
+      CreatePermissionsFromMenuSuiteGroup(lDepartmentsXmlNode, 0, 0, '');
+    END;
+
+    LOCAL PROCEDURE CreatePermissionsFromMenuSuiteGroup@1000000018(pRootXmlNode@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";pLevel@1000000001 : Integer;pParentId@1000000004 : Integer;pMenuSuitePath@1000000017 : Text);
+    VAR
+      lNfPermissionGroup@1000000002 : Record 9086960;
+      lNfPermission@1000000014 : Record 9086958;
+      lRootXmlElement@1000000003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlElement";
+      lGroupXmlNodes@1000000007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      lGroupXmlNode@1000000008 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      lActionXmlNodes@1000000010 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      lActionXmlNode@1000000009 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      lActionXmlElement@1000000011 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlElement";
+      lName@1000000005 : Text;
+      lMenuSuiteControlGuid@1000000006 : GUID;
+      lObjectType@1000000012 : Option;
+      lObjectId@1000000013 : Integer;
+      lParentId@1000000015 : Integer;
+      lLevel@1000000016 : Integer;
+      lMenuSuitePath@1000000018 : Text;
+      lXPath@1000000019 : Text;
+      eUnknownObject@1000000020 : TextConst 'ENU=Unknown object in action "%1".;ENG=Unknown object in action "%1".';
+    BEGIN
+      ///<summary>Creating permissions from given menu suite group</summary>
+      ///<param name="pRootXmlNode">Root XML node</param>
+      ///<param name="pLevel">Level</param>
+      ///<param name="pParentId">Parent ID</param>
+      ///<param name="pMenuSuitePath">Menu suite path</param>
+
+      IF (pLevel > 0) THEN
+      BEGIN
+        IF ((pLevel <= MenuSuiteMapping) OR (MenuSuiteMapping = NfSetup."MenuSuite Mapping"::"All Levels")) THEN
+        BEGIN
+          lRootXmlElement := pRootXmlNode;
+          lName := GetCaption(lRootXmlElement.GetAttribute('CaptionML'));
+          lMenuSuiteControlGuid := GetGuid(lRootXmlElement.GetAttribute('ControlGUID'));
+          IF (lName = '') THEN
+            lName := FORMAT(lMenuSuiteControlGuid);
+          CreateNfPermissionGroup(lName, pLevel - 1, pParentId, lMenuSuiteControlGuid, lNfPermissionGroup);
+          lParentId := lNfPermissionGroup.ID;
+          lLevel := pLevel + 1;
+          lMenuSuitePath := pMenuSuitePath + '\' + lName;
+        END
+        ELSE
+        BEGIN
+          lParentId := pParentId;
+          lLevel := pLevel;
+          lMenuSuitePath := pMenuSuitePath;
+        END;
+      END
+      ELSE
+      BEGIN
+        lLevel := pLevel + 1;
+        lMenuSuitePath := pMenuSuitePath;
+      END;
+
+      NfDialogManagement.SetValue(DialogControlIndex::ProcessingMenuSuite, lMenuSuitePath);
+
+      lXPath := STRSUBSTNO('%1:Actions[@xsi:type = ''ActionGroupDefinition'']', tDefaultNamespace);
+      lGroupXmlNodes := pRootXmlNode.SelectNodes(lXPath, XmlNamespaceManager);
+      IF ( NOT (ISNULL(lGroupXmlNodes))) THEN
+        FOREACH lGroupXmlNode IN lGroupXmlNodes DO
+          CreatePermissionsFromMenuSuiteGroup(lGroupXmlNode, lLevel, lParentId, lMenuSuitePath);
+
+      lXPath := STRSUBSTNO('%1:Actions[(@xsi:type = ''ActionDefinition'')]', tDefaultNamespace);
+      lActionXmlNodes := pRootXmlNode.SelectNodes(lXPath, XmlNamespaceManager);
+      IF ( NOT (ISNULL(lActionXmlNodes))) THEN
+        FOREACH lActionXmlNode IN lActionXmlNodes DO
+        BEGIN
+          lActionXmlElement := lActionXmlNode;
+          lName := GetCaption(lActionXmlElement.GetAttribute('CaptionML'));
+          lObjectType := GetObjectType(lActionXmlElement.GetAttribute('RunObjectType'));
+          lObjectId := GetObjectId(lObjectType, lActionXmlElement.GetAttribute('TargetID'));
+          lMenuSuiteControlGuid := GetGuid(lActionXmlElement.GetAttribute('ControlGUID'));
+          IF (lName = '') THEN
+            lName := FORMAT(lMenuSuiteControlGuid);
+          IF ((lObjectType <> 0) AND (lObjectId <> 0)) THEN
+            CreateNfPermission(lParentId, lObjectType, lObjectId, lMenuSuiteControlGuid, lNfPermission)
+          ELSE
+            LogMenuSuiteEvent(STRSUBSTNO(eUnknownObject, lName), NfLog.Result::Warning, FALSE);
+        END;
+    END;
+
+    LOCAL PROCEDURE CreateNfPermissionGroup@1000000021(pName@1000000000 : Text;pIndentation@1000000001 : Integer;pParentId@1000000002 : Integer;pMenuSuiteControlGuid@1000000004 : GUID;VAR pNfPermissionGroup@1000000003 : Record 9086960);
+    VAR
+      eLogMessage@1000000005 : TextConst 'ENU=Permission Group "%1" (Indentation %2) created.;ENG=Permission Group "%1" (Indentation %2) created.';
+    BEGIN
+      ///<summary>Creating nForcement permission group</summary>
+      ///<param name="pName">Group name</param>
+      ///<param name="pIndentation">Indentation</param>
+      ///<param name="pParentId">Parent ID</param>
+      ///<param name="pMenuSuiteControlGuid">Menu suite control GUID</param>
+      ///<param name="pNfPermissionGroup">Target nForcement permission group</param>
+
+      CLEAR(pNfPermissionGroup);
+      pNfPermissionGroup.INIT();
+      pNfPermissionGroup.VALIDATE(Name, pName);
+      pNfPermissionGroup.VALIDATE(Indentation, pIndentation);
+      pNfPermissionGroup.VALIDATE("Parent ID", pParentId);
+      pNfPermissionGroup.VALIDATE("MenuSuite Control GUID", pMenuSuiteControlGuid);
+      pNfPermissionGroup.INSERT(TRUE);
+
+      IF (pMenuSuiteControlGuid <> EmptyGuid) THEN
+        PermissionGroupGuids.Add(pMenuSuiteControlGuid);
+
+      LogMenuSuiteEvent(STRSUBSTNO(eLogMessage, pNfPermissionGroup.Name, pNfPermissionGroup.Indentation), NfLog.Result::Success, FALSE);
+    END;
+
+    LOCAL PROCEDURE CreateNfPermission@1000000028(pPermissionGroupId@1000000001 : Integer;pObjectType@1000000002 : Option;pObjectId@1000000003 : Integer;pMenuSuiteControlGuid@1000000004 : GUID;VAR pNfPermission@1000000000 : Record 9086958);
+    VAR
+      eLogMessage@1000000005 : TextConst 'ENU=%1 "%2" (%3) permission created.;ENG=%1 "%2" (%3) permission created.';
+    BEGIN
+      ///<summary>Creating nForcement permission</summary>
+      ///<param name="pPermissionGroupId">Permission group ID</param>
+      ///<param name="pObjectType">Object type</param>
+      ///<param name="pObjectId">Object ID</param>
+      ///<param name="pMenuSuiteControlGuid">Menu suite control GUID</param>
+      ///<param name="pNfPermission">Target nForcement permission</param>
+
+      CLEAR(pNfPermission);
+      pNfPermission.INIT();
+      pNfPermission.VALIDATE("nF. Permission Group ID", pPermissionGroupId);
+      pNfPermission.VALIDATE("Object Type", pObjectType);
+      pNfPermission.VALIDATE("Object ID", pObjectId);
+      pNfPermission.VALIDATE("MenuSuite Control GUID", pMenuSuiteControlGuid);
+      pNfPermission.INSERT(TRUE);
+
+      IF (pMenuSuiteControlGuid <> EmptyGuid) THEN
+        PermissionGuids.Add(pMenuSuiteControlGuid);
+
+      pNfPermission.CALCFIELDS("Object Name");
+      LogMenuSuiteEvent(STRSUBSTNO(eLogMessage, pNfPermission."Object Type", pNfPermission."Object Name", pNfPermission."Object ID"), NfLog.Result::Success, FALSE);
+    END;
+
+    LOCAL PROCEDURE DeleteOldPermissionGroups@1000000011();
+    VAR
+      lNfPermissionGroup@1000000000 : Record 9086960;
+      lNfPermissionGroupToDelete@1000000001 : TEMPORARY Record 9086960;
+      eLogMessage@1000000002 : TextConst 'ENU=Permission Group "%1" deleted.;ENG=Permission Group "%1" deleted.';
+    BEGIN
+      ///<summary>Deleting old permission groups</summary>
+
+      lNfPermissionGroup.RESET();
+      lNfPermissionGroup.SETCURRENTKEY("MenuSuite Control GUID");
+      lNfPermissionGroup.SETFILTER("MenuSuite Control GUID", '<>%1', EmptyGuid);
+      IF (lNfPermissionGroup.FINDSET()) THEN
+      BEGIN
+        NfDialogManagement.SetCount(DialogControlIndex::FindingOldPermissionGroups, lNfPermissionGroup.COUNT());
+        REPEAT
+          NfDialogManagement.Step(DialogControlIndex::FindingOldPermissionGroups);
+          IF ( NOT (PermissionGroupGuids.Contains(lNfPermissionGroup."MenuSuite Control GUID"))) THEN
+          BEGIN
+            lNfPermissionGroupToDelete := lNfPermissionGroup;
+            lNfPermissionGroupToDelete.INSERT();
+          END;
+        UNTIL (lNfPermissionGroup.NEXT() = 0);
+      END
+      ELSE
+        NfDialogManagement.MoveToEnd(DialogControlIndex::FindingOldPermissionGroups);
+
+      IF (lNfPermissionGroupToDelete.FINDSET()) THEN
+      BEGIN
+        NfDialogManagement.SetCount(DialogControlIndex::DeletingOldPermissionGroups, lNfPermissionGroupToDelete.COUNT());
+        REPEAT
+          NfDialogManagement.Step(DialogControlIndex::DeletingOldPermissionGroups);
+          lNfPermissionGroup.GET(lNfPermissionGroupToDelete.ID);
+          lNfPermissionGroup.DELETE(TRUE);
+          LogMenuSuiteEvent(STRSUBSTNO(eLogMessage, lNfPermissionGroup.Name), NfLog.Result::Success, FALSE);
+        UNTIL (lNfPermissionGroupToDelete.NEXT() = 0);
+      END
+      ELSE
+        NfDialogManagement.MoveToEnd(DialogControlIndex::DeletingOldPermissionGroups);
+    END;
+
+    LOCAL PROCEDURE DeleteOldPermissions@1000000008();
+    VAR
+      lNfPermissionGroup@1000000003 : Record 9086960;
+      lNfPermission@1000000000 : Record 9086958;
+      lNfPermissionToDelete@1000000001 : TEMPORARY Record 9086958;
+      eLogMessage@1000000002 : TextConst 'ENU=Permission group "%1" %2 "%3" (%4) permission deleted.;ENG=Permission group "%1" %2 "%3" (%4) permission deleted.';
+    BEGIN
+      ///<summary>Deleting old permissions</summary>
+
+      lNfPermission.RESET();
+      lNfPermission.SETCURRENTKEY("MenuSuite Control GUID");
+      lNfPermission.SETFILTER("MenuSuite Control GUID", '<>%1', EmptyGuid);
+      IF (lNfPermission.FINDSET()) THEN
+      BEGIN
+        NfDialogManagement.SetCount(DialogControlIndex::FindingOldPermissions, lNfPermission.COUNT());
+        REPEAT
+          NfDialogManagement.Step(DialogControlIndex::FindingOldPermissions);
+          IF ( NOT (PermissionGuids.Contains(lNfPermission."MenuSuite Control GUID"))) THEN
+          BEGIN
+            lNfPermissionToDelete := lNfPermission;
+            lNfPermissionToDelete.INSERT();
+          END;
+        UNTIL (lNfPermission.NEXT() = 0);
+      END
+      ELSE
+        NfDialogManagement.MoveToEnd(DialogControlIndex::FindingOldPermissions);
+
+      IF (lNfPermissionToDelete.FINDSET()) THEN
+      BEGIN
+        NfDialogManagement.SetCount(DialogControlIndex::DeletingOldPermissions, lNfPermissionToDelete.COUNT());
+        REPEAT
+          NfDialogManagement.Step(DialogControlIndex::DeletingOldPermissions);
+          IF ( NOT (lNfPermissionGroup.GET(lNfPermissionToDelete."nF. Permission Group ID"))) THEN
+            CLEAR(lNfPermissionGroup);
+          lNfPermission.GET(lNfPermissionToDelete.ID);
+          lNfPermission.DELETE(TRUE);
+          lNfPermission.CALCFIELDS("Object Name");
+          LogMenuSuiteEvent(STRSUBSTNO(eLogMessage, lNfPermissionGroup.Name, lNfPermission."Object Type", lNfPermission."Object Name",
+            lNfPermission."Object ID"), NfLog.Result::Success, FALSE);
+        UNTIL (lNfPermissionToDelete.NEXT() = 0);
+      END
+      ELSE
+        NfDialogManagement.MoveToEnd(DialogControlIndex::DeletingOldPermissions);
+    END;
+
+    LOCAL PROCEDURE UpdateSetup@1000000007();
+    BEGIN
+      ///<summary>Updating setup</summary>
+
+      NfSetup.VALIDATE("MenuSuite Mapping", MenuSuiteMapping);
+      NfSetup.MODIFY(TRUE);
+
+      Object.RESET();
+      Object.SETRANGE(Type, Object.Type::MenuSuite);
+      IF (Object.FINDSET()) THEN
+      REPEAT
+        IF (NfMenuSuiteTimestamp.GET(Object.ID)) THEN
+        BEGIN
+          IF ((NfMenuSuiteTimestamp."Saved Date" <> Object.Date) OR
+              (NfMenuSuiteTimestamp."Saved Time" <> Object.Time)) THEN
+          BEGIN
+            NfMenuSuiteTimestamp.VALIDATE("Saved Date", Object.Date);
+            NfMenuSuiteTimestamp.VALIDATE("Saved Time", Object.Time);
+            NfMenuSuiteTimestamp.MODIFY(TRUE);
+          END;
+        END
+        ELSE
+        BEGIN
+          CLEAR(NfMenuSuiteTimestamp);
+          NfMenuSuiteTimestamp.INIT();
+          NfMenuSuiteTimestamp.VALIDATE("MenuSuite ID", Object.ID);
+          NfMenuSuiteTimestamp.VALIDATE("MenuSuite Name", Object.Name);
+          NfMenuSuiteTimestamp.VALIDATE("Saved Date", Object.Date);
+          NfMenuSuiteTimestamp.VALIDATE("Saved Time", Object.Time);
+          NfMenuSuiteTimestamp.INSERT(TRUE);
+        END;
+      UNTIL (Object.NEXT() = 0);
+    END;
+
+    LOCAL PROCEDURE GetResult@1000000012() : Boolean;
+    VAR
+      lResult@1000000000 : Boolean;
+    BEGIN
+      ///<summary>Returning result of processing</summary>
+      ///<returns>The result</returns>
+
+      EXIT(NfLogResult = NfLog.Result::Success);
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@9062234();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE GetXmlDocumentNamespaces@9062230();
+    VAR
+      lXmlNamespaceScope@9062235 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceScope";
+      lXPathNavigator@9062233 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XPath.XPathNavigator";
+      lNamespacesEnumerator@9062232 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.IDictionaryEnumerator";
+      lNamespaceName@9062231 : Text;
+      lNamespaceValue@9062230 : Text;
+    BEGIN
+      ///<summary>Retrieving XML document namespaces of and creating namespace manager for them</summary>
+
+      lXPathNavigator := XmlDocument.DocumentElement.CreateNavigator();
+      XmlNamespaceManager := XmlNamespaceManager.XmlNamespaceManager(XmlDocument.NameTable);
+      lNamespacesEnumerator := lXPathNavigator.GetNamespacesInScope(lXmlNamespaceScope.All).GetEnumerator();
+      WHILE (lNamespacesEnumerator.MoveNext()) DO
+      BEGIN
+        lNamespaceName := lNamespacesEnumerator.Key;
+        IF (lNamespaceName = '') THEN
+          lNamespaceName := tDefaultNamespace;
+        lNamespaceValue := lNamespacesEnumerator.Value;
+        XmlNamespaceManager.AddNamespace(lNamespaceName, lNamespaceValue);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetCaption@1000000024(pMultilanguageCaption@1000000000 : Text) : Text;
+    VAR
+      lCaptionBuffer@1000000001 : TEMPORARY Record 823;
+      lCaptionBufferText@1000000003 : Text;
+      lCaptionLanguageCode@1000000005 : Code[10];
+      lCaption@1000000004 : Text;
+      lIndex@1000000002 : Integer;
+    BEGIN
+      ///<summary>Returning caption from multi-language caption text</summary>
+      ///<param name="pMultilanguageCaption">Multilanguage caption</param>
+      ///<returns>The caption</returns>
+
+      lCaption := '';
+
+      NfString.Split(pMultilanguageCaption, ';', lCaptionBuffer);
+      IF (lCaptionBuffer.FINDSET()) THEN
+      REPEAT
+        lCaptionBufferText := lCaptionBuffer.Value;
+        lIndex := STRPOS(lCaptionBufferText, '=');
+        IF (lIndex > 1) THEN
+        BEGIN
+          lCaptionLanguageCode := COPYSTR(lCaptionBufferText, 1, lIndex - 1);
+          IF (lCaptionLanguageCode = LanguageCode) THEN
+            EXIT(COPYSTR(lCaptionBufferText, lIndex + 1))
+          ELSE IF (lCaptionLanguageCode = tDefaultLanguageCode) THEN
+            lCaption := COPYSTR(lCaptionBufferText, lIndex + 1);
+        END
+      UNTIL (lCaptionBuffer.NEXT() = 0);
+
+      EXIT(lCaption);
+    END;
+
+    LOCAL PROCEDURE GetGuid@1000000025(pGuidText@1000000000 : Text) : GUID;
+    VAR
+      lGuid@1000000001 : GUID;
+      eTextCantBeParsedToGuid@1000000002 : TextConst 'ENU=Text "%1" can''t be parsed to a GUID.;ENG=Text "%1" can''t be parsed to a GUID.';
+    BEGIN
+      ///<summary>Returning GUID parsed from text</summary>
+      ///<param name="pGuidText">Guid text</param>
+      ///<returns>Guid parsed</returns>
+
+      IF ( NOT (EVALUATE(lGuid, pGuidText))) THEN
+        LogMenuSuiteEvent(STRSUBSTNO(eTextCantBeParsedToGuid, pGuidText), NfLog.Result::Warning, FALSE);
+      EXIT(lGuid);
+    END;
+
+    LOCAL PROCEDURE GetObjectType@1000000037(pObjectTypeText@1000000000 : Text) : Integer;
+    VAR
+      lObjectTypeText@1000000003 : Text;
+      lObjectType@1000000001 : Integer;
+      eTextCantBeParsedToObjectType@1000000002 : TextConst 'ENU=Text "%1" can''t be parsed to object type.;ENG=Text "%1" can''t be parsed to object type.';
+    BEGIN
+      ///<summary>Returning object type parsed from text</summary>
+      ///<param name="pObjectTypeText">Object type text</param>
+      ///<returns>Object type</returns>
+
+      CollectObjectTypes();
+      lObjectTypeText := DELCHR(LOWERCASE(pObjectTypeText), '<=>', ' ');
+      ObjectTypes.RESET();
+      ObjectTypes.SETRANGE(Value, lObjectTypeText);
+      IF (ObjectTypes.FINDFIRST()) THEN
+        lObjectType := ObjectTypes.ID;
+      IF (lObjectType = 0) THEN
+        LogMenuSuiteEvent(STRSUBSTNO(eTextCantBeParsedToObjectType, pObjectTypeText), NfLog.Result::Warning, FALSE);
+      EXIT(lObjectType);
+    END;
+
+    LOCAL PROCEDURE GetObjectId@1000000038(pObjectType@1000000002 : Option;pObjectIdText@1000000000 : Text) : Integer;
+    VAR
+      lObjectId@1000000001 : Integer;
+      eObjectCantBeFound@1000000003 : TextConst 'ENU=Object with type "%1" and ID %2 can''t be found.;ENG=Object with type "%1" and ID %2 can''t be found.';
+    BEGIN
+      ///<summary>Returning object ID parsed from text</summary>
+      ///<param name="pObjectType">Object type</param>
+      ///<param name="pObjectIdText">The text</param>
+      ///<returns>The ID</returns>
+
+      Object.Type := pObjectType;
+      IF ((pObjectType > 0) AND (EVALUATE(lObjectId, pObjectIdText))) THEN
+      BEGIN
+        IF ( NOT (AllObj.GET(pObjectType, lObjectId))) THEN
+        BEGIN
+          lObjectId := 0;
+          LogMenuSuiteEvent(STRSUBSTNO(eObjectCantBeFound, FORMAT(Object.Type), pObjectIdText), NfLog.Result::Warning, FALSE);
+        END;
+      END
+      ELSE
+        LogMenuSuiteEvent(STRSUBSTNO(eObjectCantBeFound, FORMAT(Object.Type), pObjectIdText), NfLog.Result::Warning, FALSE);
+
+      EXIT(lObjectId);
+    END;
+
+    LOCAL PROCEDURE CollectObjectTypes@1000000035();
+    VAR
+      lRecRef@1000000000 : RecordRef;
+      lFldRef@1000000001 : FieldRef;
+      eEmptyObjectTypes@1000000003 : TextConst 'ENU=Can''t detect available object types.;ENG=Can''t detect available object types.';
+    BEGIN
+      ///<summary>Collecting object types</summary>
+
+      IF ( NOT (ObjectTypes.ISEMPTY())) THEN
+        EXIT;
+
+      lRecRef.OPEN(DATABASE::Object);
+      lFldRef := lRecRef.FIELD(Object.FIELDNO(Type));
+      NfString.SplitAdvanced(LOWERCASE(lFldRef.OPTIONSTRING()), ',', FALSE, TRUE, ObjectTypes);
+      IF (ObjectTypes.COUNT = 0) THEN
+        LogMenuSuiteEvent(eEmptyObjectTypes, NfLog.Result::Error, FALSE);
+      lRecRef.CLOSE();
+    END;
+
+    LOCAL PROCEDURE "--- Logging ---"@1000000022();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE LogMenuSuiteBegin@1000000023();
+    VAR
+      eMessage@1000000000 : TextConst 'ENU=Permissions creation from MenuSuites.;ENG=Permissions creation from MenuSuites.';
+    BEGIN
+      ///<summary>Logging "Menu Suite" begin</summary>
+
+      NfLogActivityId := NfLog.AddNoResultActivity(tLogActivity, eMessage, FALSE);
+      NfLogResult := NfLog.Result::Success;
+    END;
+
+    LOCAL PROCEDURE LogMenuSuiteEnd@1000000026();
+    BEGIN
+      ///<summary>Logging "Menu Suite" end</summary>
+
+      NfLog.GET(NfLogActivityId);
+      NfLog.VALIDATE(Result, NfLogResult);
+      NfLog.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE LogMenuSuiteEvent@1000000034(pMessage@1000000000 : Text;pResult@1000000001 : Option;pBackgroundSession@1000000002 : Boolean);
+    BEGIN
+      ///<summary>Logging menu suite event</summary>
+      ///<param name="pMessage">Message</param>
+      ///<param name="pResult">Result</param>
+      ///<param name="pBackgroundSession">Flag to log error in background session</param>
+
+      NfLog.AddEvent(tLogActivity, NfLogActivityId, pMessage, pResult, pBackgroundSession);
+
+      CASE (NfLogResult) OF
+        NfLog.Result::" ", NfLog.Result::Success:
+          NfLogResult := NfIif.Integer(pResult <> NfLog.Result::" ", pResult, NfLog.Result::Success);
+        NfLog.Result::Warning:
+          NfLogResult := NfIif.Integer(pResult = NfLog.Result::Error, pResult, NfLogResult);
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- Dialog ---"@1000000020();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE OpenDialog@1000000029();
+    VAR
+      eDialogTitle@1000000003 : TextConst 'ENU=Creating permissions from MenuSuites...;ENG=Creating permissions from MenuSuites...';
+      eProcessingMenuSuite@1000000000 : TextConst 'ENU=Processing MenuSuite;ENG=Processing MenuSuite';
+      eFindingOldPermissionGroups@1000000004 : TextConst 'ENU=Finding Old Permission Groups;ENG=Finding Old Permission Groups';
+      eDeletingOldPermissionGroups@1000000001 : TextConst 'ENU=Deleting Old Permission Groups;ENG=Deleting Old Permission Groups';
+      eFindingOldPermissions@1000000005 : TextConst 'ENU=Finding Old Permissions;ENG=Finding Old Permissions';
+      eDeletingOldPermissions@1000000002 : TextConst 'ENU=Deleting Old Permissions;ENG=Deleting Old Permissions';
+    BEGIN
+      ///<summary>Opening dialog</summary>
+
+      CLEAR(NfDialogManagement);
+      NfDialogManagement.SetCaptionLength(50);
+      NfDialogManagement.SetValueLength(50);
+      NfDialogManagement.AddTextControl(DialogControlIndex::ProcessingMenuSuite, eProcessingMenuSuite);
+      NfDialogManagement.AddProgressControl(DialogControlIndex::FindingOldPermissionGroups, eFindingOldPermissionGroups);
+      NfDialogManagement.AddProgressControl(DialogControlIndex::DeletingOldPermissionGroups, eDeletingOldPermissionGroups);
+      NfDialogManagement.AddProgressControl(DialogControlIndex::FindingOldPermissions, eFindingOldPermissions);
+      NfDialogManagement.AddProgressControl(DialogControlIndex::DeletingOldPermissions, eDeletingOldPermissions);
+      NfDialogManagement.Open(eDialogTitle);
+    END;
+
+    LOCAL PROCEDURE CloseDialog@1000000030();
+    BEGIN
+      ///<summary>Closing dialog</summary>
+
+      NfDialogManagement.Close();
+      CLEAR(NfDialogManagement);
+    END;
+
+    LOCAL PROCEDURE "--- Diagnostics ---"@1000000010();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ExportAllMenuSuiteMetadata@1000000001();
+    VAR
+      lObjectMetadata@1000000000 : Record 2000000071;
+      lFilePath@1000000001 : Text;
+      lFile@1000000002 : File;
+      lOutStream@1000000003 : OutStream;
+      lInStream@1000000004 : InStream;
+    BEGIN
+      ///<summary>Exporting all menu suite mentadata (diagnostic function)</summary>
+
+      lObjectMetadata.RESET();
+      lObjectMetadata.SETRANGE("Object Type", lObjectMetadata."Object Type"::MenuSuite);
+      IF (lObjectMetadata.FINDSET()) THEN
+      REPEAT
+        lObjectMetadata.CALCFIELDS(Metadata);
+        IF (lObjectMetadata.Metadata.HASVALUE()) THEN
+        BEGIN
+          lFilePath := STRSUBSTNO('D:\Temp\MenuSuite%1.xml', lObjectMetadata."Object ID");
+          IF (FILE.EXISTS(lFilePath)) THEN
+            FILE.ERASE(lFilePath);
+          lFile.CREATE(lFilePath);
+          lFile.CREATEOUTSTREAM(lOutStream);
+          lObjectMetadata.Metadata.CREATEINSTREAM(lInStream);
+          COPYSTREAM(lOutStream, lInStream);
+          lFile.CLOSE();
+        END;
+      UNTIL (lObjectMetadata.NEXT() = 0);
+      MESSAGE('Done');
+    END;
+
+    EVENT TryToCreatePermissionsFromMenuSuitesSafe@1000000023::Try@15(sender@1000000001 : Variant;e@1000000000 : DotNet "'TheNavPeople.TryCatch.9.0.2.0, Version=9.0.2.0, Culture=neutral, PublicKeyToken=eb0b45524ef42a5f'.TheNavPeople.TryCatch.TryEventArgs");
+    BEGIN
+      TryToCreatePermissionsFromMenuSuites();
+    END;
+
+    EVENT TryToCreatePermissionsFromMenuSuitesSafe@1000000023::Catch@16(sender@1000000001 : Variant;e@1000000000 : DotNet "'TheNavPeople.TryCatch.9.0.2.0, Version=9.0.2.0, Culture=neutral, PublicKeyToken=eb0b45524ef42a5f'.TheNavPeople.TryCatch.CatchEventArgs");
+    BEGIN
+    END;
+
+    BEGIN
+    {
+      ///<summary>Extracting objects from MenuSuite to build permission groups and permissions</summary>
+      ///<change version="NF2016.17" initials="JH" date="2016-06-24">Created</change>
+      ///<change version="NF2016.17.11" initials="JH" date="2016-11-03">Try function removed, replaced with .NET</change>
+    }
+    END.
+  }
+}
+

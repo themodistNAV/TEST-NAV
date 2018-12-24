@@ -1,0 +1,441 @@
+OBJECT Codeunit 50060 Farfetch - Order Import
+{
+  OBJECT-PROPERTIES
+  {
+    Date=17/12/18;
+    Time=[ 6:33:03 PM];
+    Modified=Yes;
+    Version List=TM0200;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            ModistSetup.GET;
+            GeneralLedgerSetup.GET;
+
+            ModistSetup.TESTFIELD("Farfetch Order Import Group");
+            ModistSetup.TESTFIELD("Farfetch Default Location");
+            ModistSetup.TESTFIELD("Farfetch SFTP Server");
+            ModistSetup.TESTFIELD("Farfetch Shipment Method");
+            ModistSetup.TESTFIELD("Farfetch Payment Method");
+            ModistSetup.TESTFIELD("Farfetch Package Type");
+            ModistSetup.TESTFIELD("Farfetch Promotion ID");
+
+            ShipmentMethod.GET(ModistSetup."Farfetch Shipment Method");
+            SalesPromotions.GET(ModistSetup."Farfetch Promotion ID");
+
+            IntegrationProcessingGroup.GET(ModistSetup."Farfetch Integration Type",ModistSetup."Farfetch Order Import Group");
+            IntegrationProcessingGroup.TESTFIELD("Working Location");
+            IntegrationProcessingGroup.TESTFIELD("Archive Location");
+            IntegrationProcessingGroup.TESTFIELD("Error Location");
+
+            IF IntegrationProcessingGroup."Enable SFTP Connect" THEN
+              DownloadftpFiles;
+            ProcessFTPFiles;
+            MoveSuccessFileToArchLocation;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ModistSetup@1000000000 : Record 50000;
+      IntegrationProcessingGroup@1000000001 : Record 50007;
+      IntegrationErrorLog@1000000004 : Record 50011;
+      AutoNAVTask@1000000008 : Record 9062734;
+      GeneralLedgerSetup@1000000009 : Record 98;
+      ShipmentMethod@1000000010 : Record 10;
+      CSVBuffer@1000000011 : TEMPORARY Record 1234;
+      CSVBuffer2@1000000012 : TEMPORARY Record 1234;
+      Item@1000000013 : Record 27;
+      InternetOrderHeader@1000000014 : Record 9021666;
+      InternetOrderHeader2@1000000020 : Record 9021666;
+      InternetOrderLine@1000000015 : Record 9021667;
+      InternetOrderLine2@1000000017 : Record 9021667;
+      InternetOrderLineShipping@1000000016 : Record 9021667;
+      InternetOrderLinePromotion@1000000022 : Record 9021667;
+      InternetOrderLinePromotion2@1000000024 : Record 9021667;
+      ItemUnitofMeasure@1000000019 : Record 5404;
+      SalesPromotions@1000000023 : Record 50006;
+      ItemVariant@1170000000 : Record 5401;
+      AutoNAVToolkit@1000000007 : Codeunit 9062602;
+      FileManagement@1000000006 : Codeunit 419;
+      FileSystem@1000000005 : Codeunit 9062264;
+      IntegrationFunctions@1170000001 : Codeunit 50008;
+      SuccessList@1000000003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      LineNo@1000000018 : Integer;
+      ParentLineNo@1000000025 : Integer;
+      SuccessFile@1000000002 : Text;
+      InsertShippingLine@1000000021 : Boolean;
+
+    LOCAL PROCEDURE DownloadftpFiles@1000000001();
+    VAR
+      lWebIntegrationManagement@1000000000 : Codeunit 50100;
+    BEGIN
+      IF NOT lWebIntegrationManagement.DownloadFTPFiles2(IntegrationProcessingGroup."Working Location",
+                                                        ModistSetup."Farfetch SFTP Server",
+                                                        IntegrationProcessingGroup."FTP Folder",
+                                                        IntegrationProcessingGroup."FTP Archive Folder")
+      THEN BEGIN
+        AutoNAVToolkit.AddEntryForTask(AutoNAVTask,GETLASTERRORTEXT,2);
+        ERROR(GETLASTERRORTEXT);
+      END;
+    END;
+
+    LOCAL PROCEDURE ProcessFTPFiles@1000000003();
+    VAR
+      lFile@1000000000 : Record 2000000022;
+    BEGIN
+      CLEARLASTERROR;
+      SuccessList := SuccessList.List;
+      lFile.SETRANGE(Path,IntegrationProcessingGroup."Working Location");
+      lFile.SETRANGE("Is a file",TRUE);
+      lFile.SETFILTER(Name,'%1','*.csv');
+      IF lFile.FINDSET THEN BEGIN
+        ClearErrorLogs;
+        REPEAT
+          IF ImportFarfetchOrders(IntegrationProcessingGroup."Working Location" + lFile.Name,lFile.Name) THEN
+            SuccessList.Add(IntegrationProcessingGroup."Working Location" + lFile.Name)
+          ELSE
+            LogError('',0,GETLASTERRORTEXT,'Import FF Order File',GETLASTERRORCODE,lFile.Name);
+        UNTIL lFile.NEXT=0;
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ImportFarfetchOrders@1000000000(pFilePath@1000000001 : Text;pFileName@1000000000 : Text);
+    VAR
+      lReader@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlTextReader";
+      lItemNo@1170000001 : Code[20];
+      lVariantCode@1170000002 : Code[10];
+      lReaderName@1000000005 : Text;
+      lReaderValue@1000000004 : Text;
+      lNodeTypeTxt@1000000003 : Text;
+      lLineNo@1000000002 : Integer;
+      lPromoDiscountAmnt@1000000007 : Decimal;
+      lShippingValue@1170000000 : Decimal;
+    BEGIN
+      CSVBuffer.RESET;
+      CSVBuffer.DELETEALL;
+      CSVBuffer2.RESET;
+      CSVBuffer2.DELETEALL;
+
+      CSVBuffer.LoadData2(pFilePath,'|');
+      CSVBuffer2.COPY(CSVBuffer,TRUE);
+
+      CSVBuffer.RESET;
+      CSVBuffer.FINDSET;
+      REPEAT
+        CSVBuffer.SETRANGE("Line No.",CSVBuffer."Line No.");
+        CSVBuffer.FINDLAST;
+        CSVBuffer2.RESET;
+        CSVBuffer2.SETRANGE("Line No.",CSVBuffer."Line No.");
+        CSVBuffer2.FINDSET;
+        REPEAT
+          CLEAR(Item);
+          CASE CSVBuffer2."Field No." OF
+            1: //type - new line
+              BEGIN
+                CASE CSVBuffer2.Value OF
+                  'SALE':
+                    BEGIN
+                      InternetOrderHeader.INIT;
+                      InternetOrderLine.INIT;
+                      InternetOrderLineShipping.INIT;
+                      InternetOrderLinePromotion.INIT;
+                      InternetOrderHeader."Document Type" := 'Order';
+                      InternetOrderHeader."Inventory Location" := ModistSetup."Farfetch Default Location";
+                      InternetOrderHeader."File Name" := pFileName;
+                      InternetOrderHeader."Prices Including VAT" := TRUE;
+                      InternetOrderHeader."Package Type" := ModistSetup."Farfetch Package Type";
+                      InternetOrderHeader.Status := InternetOrderHeader.Status::New;
+                      InternetOrderHeader."Payment Method Code" := ModistSetup."Farfetch Payment Method";
+                      InternetOrderHeader."Shipment Method" := ModistSetup."Farfetch Shipment Method";
+                      InternetOrderHeader."Farfetch Order" := TRUE;
+                      InternetOrderLine."Order Line Guid" := CREATEGUID;
+                      InternetOrderLineShipping."Order Line Guid" := CREATEGUID;
+                      InternetOrderLinePromotion."Order Line Guid" := CREATEGUID;
+                    END;
+                  'RETURN':
+                    BEGIN
+                    END;
+                  'CANCEL':
+                    BEGIN
+                      InternetOrderHeader.INIT;
+                      InternetOrderLine.INIT;
+                      InternetOrderLineShipping.INIT;
+                      InternetOrderLinePromotion.INIT;
+                      InternetOrderHeader."Document Type" := 'Order';
+                      InternetOrderHeader."Inventory Location" := ModistSetup."Farfetch Default Location";
+                      InternetOrderHeader."File Name" := pFileName;
+                      InternetOrderHeader."Prices Including VAT" := TRUE;
+                      InternetOrderHeader."Package Type" := ModistSetup."Farfetch Package Type";
+                      InternetOrderHeader.Status := InternetOrderHeader.Status::Rejected;
+                      InternetOrderHeader."Payment Method Code" := ModistSetup."Farfetch Payment Method";
+                      InternetOrderHeader."Shipment Method" := ModistSetup."Farfetch Shipment Method";
+                      InternetOrderHeader."Farfetch Order" := TRUE;
+                      InternetOrderLine."Order Line Guid" := CREATEGUID;
+                      InternetOrderLineShipping."Order Line Guid" := CREATEGUID;
+                      InternetOrderLinePromotion."Order Line Guid" := CREATEGUID;
+                    END;
+                END;
+              END;
+            4: //orderNumber
+              BEGIN
+                InsertShippingLine := FALSE;
+                InternetOrderHeader.RESET;
+                InternetOrderHeader.SETRANGE("Internet Order Reference",CSVBuffer2.Value);
+                IF NOT InternetOrderHeader.FINDFIRST THEN BEGIN
+                  InternetOrderHeader."Order Guid" := CREATEGUID;
+                  InternetOrderHeader."Internet Order Reference" := CSVBuffer2.Value;
+                  InternetOrderLine2.RESET;
+                  InternetOrderLine2.SETRANGE("Order Guid",InternetOrderHeader."Order Guid");
+                  InternetOrderLineShipping."Order Guid" := InternetOrderHeader."Order Guid";
+                  InternetOrderLineShipping."Internet Order Reference" := InternetOrderHeader."Internet Order Reference";
+      //            InternetOrderLinePromotion."Order Guid" := InternetOrderHeader."Order Guid";
+      //            InternetOrderLinePromotion."Internet Order Reference" := InternetOrderHeader."Internet Order Reference";
+                  LineNo := 10000;
+                  InsertShippingLine := TRUE;
+                END;
+                InternetOrderLine."Order Guid" := InternetOrderHeader."Order Guid";
+                InternetOrderLine."Internet Order Reference" := InternetOrderHeader."Internet Order Reference";
+                InternetOrderLinePromotion."Order Guid" := InternetOrderHeader."Order Guid";
+                InternetOrderLinePromotion."Internet Order Reference" := InternetOrderHeader."Internet Order Reference";
+              END;
+            5: //orderId
+              BEGIN
+                InternetOrderHeader."Your Reference" := CSVBuffer2.Value;
+              END;
+            10: //userID
+              BEGIN
+                InternetOrderHeader."Bill-to Net Customer No." := CSVBuffer2.Value;
+              END;
+            11: //customerEmail
+              BEGIN
+                InternetOrderHeader."Bill-to E-Mail" := CSVBuffer2.Value;
+                InternetOrderHeader."Ship-to E-Mail" := CSVBuffer2.Value;
+              END;
+            12: //customerNickName
+              BEGIN
+                InternetOrderHeader."Ship-to Name" := CSVBuffer2.Value;
+                InternetOrderHeader."Bill-to Name" := CSVBuffer2.Value;
+              END;
+            13: //customerAddress1
+              BEGIN
+                InternetOrderHeader."Ship-to Address" := CSVBuffer2.Value;
+                InternetOrderHeader."Bill-to Address" := CSVBuffer2.Value;
+              END;
+            14: //customerAddress2
+              BEGIN
+                InternetOrderHeader."Ship-to Address 2" := CSVBuffer2.Value;
+                InternetOrderHeader."Bill-to Address 2" := CSVBuffer2.Value;
+              END;
+            15: //customerCountry
+              BEGIN
+                InternetOrderHeader."Ship-to Country Code" := CSVBuffer2.Value;
+                InternetOrderHeader."Bill-to Country Code" := CSVBuffer2.Value;
+              END;
+            16: //customerCity
+              BEGIN
+                InternetOrderHeader."Ship-to City" := COPYSTR(CSVBuffer2.Value,1,30);
+                InternetOrderHeader."Bill-to City" := COPYSTR(CSVBuffer2.Value,1,30);
+              END;
+            17: //customerState
+              BEGIN
+                InternetOrderHeader."Ship-to State" := COPYSTR(CSVBuffer2.Value,1,30);
+                InternetOrderHeader."Bill-to State" := COPYSTR(CSVBuffer2.Value,1,30);
+              END;
+            18: //customerZip
+              BEGIN
+                InternetOrderHeader."Ship-to Post Code" := COPYSTR(CSVBuffer2.Value,1,20);
+                InternetOrderHeader."Bill-to Post Code" := COPYSTR(CSVBuffer2.Value,1,20);
+              END;
+            19: //orderTotalWithoutShip
+              BEGIN
+                EVALUATE(InternetOrderHeader."Amount Including Tax",CSVBuffer2.Value);
+              END;
+            20: //orderShippingValue:
+              BEGIN
+                EVALUATE(lShippingValue,CSVBuffer2.Value);
+                IF (InsertShippingLine) AND (lShippingValue <> 0) THEN BEGIN
+                  InternetOrderLineShipping.Type := InternetOrderLineShipping.Type::"G/L Account";
+                  InternetOrderLineShipping."Line Type" := InternetOrderLineShipping."Line Type"::Shipping;
+                  InternetOrderLineShipping."Line ID" := ShipmentMethod."Ecom Item ID";
+                  InternetOrderLineShipping."Line No." := LineNo;
+                  InternetOrderLineShipping."No." := ShipmentMethod."G/L Account No.";
+                  InternetOrderLineShipping.Description := ShipmentMethod.Description;
+                  InternetOrderLineShipping.Quantity := 1;
+                  InternetOrderLineShipping."Qty. Per UOM" := 1;
+                  EVALUATE(InternetOrderLineShipping."Unit Price",CSVBuffer2.Value);
+                  EVALUATE(InternetOrderLineShipping."Unit Price Including Tax",CSVBuffer2.Value);
+                  EVALUATE(InternetOrderLineShipping.Amount,CSVBuffer2.Value);
+                  EVALUATE(InternetOrderLineShipping."Amount Including Tax",CSVBuffer2.Value);
+                  InternetOrderLineShipping.INSERT;
+                  LineNo += 10000;
+                END;
+              END;
+            21: //orderTotalWithShip
+              BEGIN
+                EVALUATE(InternetOrderHeader.Amount,CSVBuffer2.Value);
+              END;
+            22: //orderLineID
+              BEGIN
+              END;
+            23: //itemId
+              BEGIN
+              END;
+            24://ItemRef
+              BEGIN
+              END;
+            25: //storeBarcode
+              BEGIN
+                lItemNo := '';
+                lVariantCode := '';
+                InternetOrderLine."Line ID" := CSVBuffer2.Value;
+                IntegrationFunctions.SplitSKUno(InternetOrderLine."Line ID",lItemNo,lVariantCode);
+                InternetOrderLine."Variant Code" := lVariantCode;
+              END;
+            26: //sku
+              BEGIN
+                Item.GET(CSVBuffer2.Value);
+                InternetOrderLine.Type := InternetOrderLine.Type::Item;
+                InternetOrderLine."Line Type" := InternetOrderLine."Line Type"::Item;
+                InternetOrderLine."No." := CSVBuffer2.Value;
+              END;
+            27: //size
+              BEGIN
+                //InternetOrderLine."Variant Code" := CSVBuffer2.Value;
+              END;
+            28: //currency
+              BEGIN
+                InternetOrderHeader."Currency Code" := CSVBuffer2.Value;
+                IF InternetOrderHeader."Currency Code" = '' THEN
+                  InternetOrderHeader."Currency Code" := GeneralLedgerSetup."LCY Code";
+              END;
+            29: //orderLineTotal (Unit Price - Full Price Including Discount)
+              BEGIN
+                EVALUATE(InternetOrderLine."Unit Price",CSVBuffer2.Value);
+                EVALUATE(InternetOrderLine."Unit Price Including Tax",CSVBuffer2.Value); //DOC TM0200.01 AW 04/09/2018 -
+              END;
+            31: //OrderLineDiscountPromocode
+              BEGIN
+                EVALUATE(lPromoDiscountAmnt,CSVBuffer2.Value);
+                IF lPromoDiscountAmnt <> 0 THEN BEGIN
+                  InternetOrderLinePromotion.Type := InternetOrderLinePromotion.Type::"G/L Account";
+                  InternetOrderLinePromotion."Line Type" := InternetOrderLinePromotion."Line Type"::Promotion;
+                  InternetOrderLinePromotion."Line ID" := ModistSetup."Farfetch Promotion ID";
+                  InternetOrderLinePromotion."No." := SalesPromotions."G/L Account No.";
+                  InternetOrderLinePromotion.Description := SalesPromotions.Description;
+                  InternetOrderLinePromotion.Quantity := 1;
+                  InternetOrderLinePromotion."Qty. Per UOM" := 1;
+                  InternetOrderLinePromotion."Unit Price" := -lPromoDiscountAmnt;
+                  InternetOrderLinePromotion."Unit Price Including Tax" := -lPromoDiscountAmnt;
+                  InternetOrderLinePromotion.Amount := -lPromoDiscountAmnt;
+                  InternetOrderLinePromotion."Amount Including Tax" := -lPromoDiscountAmnt;
+                  InternetOrderLinePromotion."Line No." := LineNo;
+                  //InternetOrderLinePromotion."Parent Line No." := ParentLineNo;
+                  InternetOrderLinePromotion.INSERT;
+                  LineNo += 10000;
+                END;
+              END;
+            32: //orderLineTaxValue
+              BEGIN
+                IF CSVBuffer2.Value <> '' THEN BEGIN
+                  EVALUATE(InternetOrderLine."Product Tax Amount",CSVBuffer2.Value);
+                  InternetOrderLine."Unit Price Including Tax" := InternetOrderLine."Unit Price" + InternetOrderLine."Product Tax Amount";
+                  InternetOrderHeader."Total Tax Amount" += InternetOrderLine."Product Tax Amount";
+                END;
+              END;
+            34: //orderLineQuantity
+              BEGIN
+                EVALUATE(InternetOrderLine.Quantity,CSVBuffer2.Value);
+                IF Item."Base Unit of Measure" <> '' THEN BEGIN
+                  ItemUnitofMeasure.GET(Item."No.");
+                  InternetOrderLine."Qty. Per UOM" := ItemUnitofMeasure."Qty. per Unit of Measure";
+                END ELSE
+                  InternetOrderLine."Qty. Per UOM" := 1;
+                InternetOrderLine.Amount := InternetOrderLine.Quantity * InternetOrderLine."Unit Price";
+              END;
+            36: //returnReasonCode
+              BEGIN
+                InternetOrderLine.Comment := CSVBuffer2.Value;
+              END;
+            40: //dateCreated
+              BEGIN
+                EVALUATE(InternetOrderHeader."Order Date",COPYSTR(DELCHR(CSVBuffer2.Value),1,10),9);
+              END;
+          END;
+        UNTIL CSVBuffer2.NEXT=0;
+        CSVBuffer.SETRANGE("Line No.");
+
+        InternetOrderHeader2.RESET;
+        InternetOrderHeader2.SETRANGE("Order Guid",InternetOrderHeader."Order Guid");
+        IF InternetOrderHeader2.ISEMPTY THEN
+          InternetOrderHeader.INSERT
+        ELSE
+          InternetOrderHeader.MODIFY;
+
+        IF (InternetOrderLine."Line ID" = '') AND (InternetOrderLine.Type = InternetOrderLine.Type::Item) THEN
+          InternetOrderLine."Line ID" := InternetOrderLine."No." + '-' + InternetOrderLine."Variant Code";
+        InternetOrderLine2.SETRANGE("Line ID",InternetOrderLine."Line ID");
+        InternetOrderLine2.SETRANGE("Order Guid",InternetOrderHeader."Order Guid");
+        IF InternetOrderLine2.FINDFIRST THEN BEGIN
+          InternetOrderLine2.Quantity += InternetOrderLine.Quantity;
+          InternetOrderLine2.Amount += InternetOrderLine.Amount;
+          InternetOrderLine2."Amount Including Tax" += InternetOrderLine."Amount Including Tax";
+          InternetOrderLine2.MODIFY;
+          ParentLineNo := InternetOrderLine2."Line No.";
+        END ELSE BEGIN
+          InternetOrderLine."Line No." := LineNo;
+          InternetOrderLine.INSERT;
+          ParentLineNo := InternetOrderLine."Line No.";
+          LineNo += 10000;
+        END;
+
+      UNTIL CSVBuffer.NEXT=0;
+    END;
+
+    LOCAL PROCEDURE MoveSuccessFileToArchLocation@1000000017();
+    BEGIN
+      FOREACH SuccessFile IN SuccessList DO BEGIN
+        IF SuccessFile <> '' THEN
+          FileSystem.MoveFile(FALSE,SuccessFile,IntegrationProcessingGroup."Archive Location" + FileManagement.GetFileName(SuccessFile));
+      END;
+    END;
+
+    LOCAL PROCEDURE LogError@1000000015(OrderRef@1000000001 : Code[20];LineNo@1000000006 : Integer;ErrMessage@1000000002 : Text;ErrorLocation@1000000004 : Text;ErrCode@1000000005 : Text;pFileName@1000000007 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+    BEGIN
+      ErrorHandler.LogError(ModistSetup."Farfetch Integration Type",
+                            ModistSetup."Farfetch Order Import Group",
+                            '',
+                            DATABASE::"Internet Order Line",
+                            OrderRef,
+                            LineNo,
+                            ErrMessage,
+                            ErrorLocation,
+                            0,
+                            ErrCode,
+                            pFileName);
+    END;
+
+    LOCAL PROCEDURE ClearErrorLogs@1000000005();
+    BEGIN
+      IntegrationErrorLog.RESET;
+      IntegrationErrorLog.SETCURRENTKEY("Integration Type","Integration Process Group");
+      IntegrationErrorLog.SETRANGE("Integration Type",IntegrationProcessingGroup."Platform Code");
+      IntegrationErrorLog.SETRANGE("Integration Process Group",IntegrationProcessingGroup.Code);
+      IF NOT IntegrationErrorLog.ISEMPTY THEN
+        IntegrationErrorLog.DELETEALL;
+    END;
+
+    BEGIN
+    {
+      //DOC TM0200 AW 25/06/2018 - Farfetch Order Mgmt.
+      //DOC TM0200.01 AW 04/09/2018 - Bug Fix: Price not coming in Sales Order.
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,494 @@
+OBJECT Codeunit 9062651 POS Session Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=16/06/16;
+    Time=[ 1:47:32 PM];
+    Version List=NH2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      HtmlControlRequestProxy@1000000014 : Codeunit 9062665;
+      Initialized@1000000013 : Boolean;
+      "--- POS Implementation ---"@1000000012 : Integer;
+      POSSession@1000000003 : TEMPORARY Record 9062793;
+      POSTransaction@1000000004 : Record 9062778;
+      POSView@1000000000 : Record 9062782;
+      ButtonsGroupStack@1000000002 : TEMPORARY Record 9062789;
+      POSProcessing@1000000006 : Codeunit 9062647;
+      RefreshDocument@1000000008 : Boolean;
+      RefreshButtons@1000000009 : Boolean;
+      RefreshButtonsFilter@1000000010 : Text;
+      POSViewCode@1000000005 : Code[20];
+
+    PROCEDURE Initialize@1000000000(VAR value@1000000002 : DotNet "'TheNavPeople.HtmlControlCommunication.9.0.0.0, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7c0c47cc7f65ff95'.TheNavPeople.HtmlControlCommunication.RequestMessageEvent");
+    VAR
+      UIManipulationMgt@1000000003 : Codeunit 9062672;
+    BEGIN
+      Initialized := FALSE;
+      //initialize control and libraries
+      HtmlControlRequestProxy.SetRequestEvent(value);
+      HtmlControlRequestProxy.AddScriptLink('libraries/jquery-ui-1.11.4/jquery-ui.js');
+      HtmlControlRequestProxy.AddScriptLink('libraries/bootstrap-3.3.6/js/bootstrap.min.js');
+      //HtmlControlRequestProxy.AddScriptLink('libraries/jquery.ui.touch-punch/jquery.ui.touch-punch.js');
+      HtmlControlRequestProxy.AddStyleSheetLink('libraries/bootstrap-3.3.6/css/bootstrap.min.css');
+      HtmlControlRequestProxy.SendResourceLinkRequest();
+
+      //update client ui
+      UIManipulationMgt.ClearScript();
+      UIManipulationMgt.UseWindowHeight();
+      IF (UIManipulationMgt.HasScript) THEN
+        HtmlControlRequestProxy.SendJavaScriptRequest(UIManipulationMgt.GetScript);
+
+      //Initialize POS Session
+      InitSession();
+
+      //Initialization finished
+      Initialized := TRUE;
+
+      //initailize POS View
+      IF (POSViewCode <> '') THEN
+        SetView(POSViewCode);
+    END;
+
+    PROCEDURE SetView@1000000006(ViewCode@1000000000 : Code[20]);
+    BEGIN
+      POSViewCode := ViewCode;
+
+      IF (Initialized) AND (POSSession."View Code" <> ViewCode) THEN BEGIN
+        POSSession."View Code" := ViewCode;
+        POSSession.MODIFY();
+
+        ResetButtonsStack('');
+        POSView.GET(ViewCode);
+
+        UpdateTemplate();
+      END;
+    END;
+
+    LOCAL PROCEDURE "--- POS Functionality ---"@1000000002();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE InitSession@1000000013();
+    VAR
+      POSTransactionMgt@1000000001 : Codeunit 9062643;
+      VariantValue@1000000000 : Variant;
+    BEGIN
+      //init pos session
+      POSTransactionMgt.StartTransaction(VariantValue);
+
+      POSSession.RESET();
+      POSSession.DELETEALL();
+
+      POSSession.INIT();
+      POSSession.ID := 1;
+      POSSession."User ID" := USERID;
+      POSSession."Device Code" := '';
+      POSSession."View Code" := '';
+      FindActiveTransaction();
+      POSSession.INSERT();
+
+      ResetTransaction();
+    END;
+
+    LOCAL PROCEDURE FindActiveTransaction@1000000001() : Boolean;
+    VAR
+      POSGlobals@1000000001 : Codeunit 9062662;
+      CurrTransactionNo@1000000000 : Integer;
+    BEGIN
+      CurrTransactionNo := POSSession."Transaction No.";
+      POSTransaction.RESET();
+      POSTransaction.SETRANGE("User ID", POSSession."User ID");
+      POSTransaction.SETRANGE(Status, POSTransaction.Status::Active);
+
+      IF POSGlobals.GetPOSUser<> '' THEN
+        POSTransaction.SETRANGE(POSTransaction."POS User",POSGlobals.GetPOSUser);
+
+      IF (POSTransaction.FINDFIRST()) THEN
+        POSSession.VALIDATE("Transaction No.", POSTransaction."Entry No")
+      ELSE
+        POSSession.VALIDATE("Transaction No.", 0);
+
+      EXIT(CurrTransactionNo <> POSSession."Transaction No.");
+    END;
+
+    LOCAL PROCEDURE ResetTransaction@1000000021();
+    VAR
+      VariantValue@1000000000 : Variant;
+    BEGIN
+      IF (POSSession."Transaction No." <> 0) THEN
+        CallPOSAction('RESET', '', '', '', VariantValue);
+    END;
+
+    LOCAL PROCEDURE "--- Button Groups ---"@1000000022();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ResetButtonsStack@1000000003(ViewPartCode@1000000000 : Code[20]);
+    BEGIN
+      ButtonsGroupStack.RESET();
+      IF (ViewPartCode <> '') THEN
+        ButtonsGroupStack.SETRANGE("View Part Code", ViewPartCode);
+      ButtonsGroupStack.DELETEALL();
+
+      RefreshButtons := TRUE;
+      RefreshButtonsFilter := '';
+    END;
+
+    LOCAL PROCEDURE PushButtonGroup@1000000004(ViewPartCode@1000000000 : Code[20];ButtonsGroupCode@1000000001 : Code[20]);
+    VAR
+      NewIndex@1000000002 : Integer;
+    BEGIN
+      ButtonsGroupStack.RESET();
+      ButtonsGroupStack.SETRANGE("View Part Code", ViewPartCode);
+      IF (ButtonsGroupStack.FINDLAST()) THEN BEGIN
+        IF (ButtonsGroupStack."Buttons Group Code" = ButtonsGroupCode) THEN
+          EXIT;
+        NewIndex := ButtonsGroupStack.Index + 1;
+      END ELSE
+        NewIndex := 1;
+
+      ButtonsGroupStack."View Part Code" := ViewPartCode;
+      ButtonsGroupStack.Index := NewIndex;
+      ButtonsGroupStack."Buttons Group Code" := ButtonsGroupCode;
+      ButtonsGroupStack.INSERT();
+
+      AddToRefreshButtons(ViewPartCode);
+    END;
+
+    LOCAL PROCEDURE PopButtonGroup@1000000005(ViewPartCode@1000000000 : Code[20]);
+    BEGIN
+      ButtonsGroupStack.RESET();
+      ButtonsGroupStack.SETRANGE("View Part Code", ViewPartCode);
+      IF (ButtonsGroupStack.FINDLAST()) THEN
+        ButtonsGroupStack.DELETE();
+
+      AddToRefreshButtons(ViewPartCode);
+    END;
+
+    LOCAL PROCEDURE GetButtonGroupCode@1000000016(ViewPartCode@1000000000 : Code[20];DefaultGroupCode@1000000001 : Code[20]) : Code[20];
+    BEGIN
+      ButtonsGroupStack.RESET();
+      ButtonsGroupStack.SETRANGE("View Part Code", ViewPartCode);
+      IF (ButtonsGroupStack.FINDLAST()) THEN
+        EXIT(ButtonsGroupStack."Buttons Group Code");
+      EXIT(DefaultGroupCode);
+    END;
+
+    LOCAL PROCEDURE "--- Rendering ---"@1000000023();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE UpdateTemplate@1000000008();
+    VAR
+      InputStream@1000000000 : InStream;
+      BigText@1000000001 : BigText;
+      Text@1000000002 : Text;
+    BEGIN
+      HtmlControlRequestProxy.LoadView(POSView."Control Template Code", POSView."Control View Code");
+
+      //reload content
+      UpdateContent(TRUE, TRUE, '', '');
+    END;
+
+    LOCAL PROCEDURE UpdateContent@1000000009(UpdateData@1000000003 : Boolean;UpdateButtons@1000000004 : Boolean;DataPartFilter@1000000005 : Text;ButtonsPartFilter@1000000006 : Text);
+    VAR
+      DataSource@1000000008 : TEMPORARY Record 9062810;
+      OutputStream@1000000009 : OutStream;
+      "-----"@1000000007 : Integer;
+      POSViewButtonGroup@1000000000 : Record 9062794;
+      ButtonGroup@1000000001 : Record 9062787;
+      ButtonGroupCode@1000000002 : Code[20];
+    BEGIN
+      DataSource.InitDataSources();
+
+      //get transaction data source
+      IF (UpdateData) THEN BEGIN
+        SessionToFilter(POSSession);
+        DataSource.InitNewDataSource('', '', OutputStream);
+        XMLPORT.EXPORT(XMLPORT::"POS Session", OutputStream, POSSession);
+        DataSource.INSERT();
+      END;
+
+      //get button groups data sources
+      IF (UpdateButtons) THEN BEGIN
+        POSViewButtonGroup.RESET();
+        POSViewButtonGroup.SETRANGE("POS View Code", POSSession."View Code");
+        IF (DataPartFilter <> '') THEN
+          POSViewButtonGroup.SETFILTER(Code, ButtonsPartFilter);
+        IF (POSViewButtonGroup.FINDSET()) THEN BEGIN
+          REPEAT
+            //Send button group to razor engine
+            ButtonGroupCode := GetButtonGroupCode(POSViewButtonGroup.Code, POSViewButtonGroup."Button Group Code");
+
+            ButtonGroup.RESET();
+            ButtonGroup.SETRANGE(Code, ButtonGroupCode);
+            ButtonGroup.SETRANGE("For UI Part Code", POSViewButtonGroup.Code);
+            ButtonGroup.SETRANGE("For Design Mode", POSSession."Design Mode");
+
+            DataSource.InitNewDataSource('Buttons',POSViewButtonGroup."Target Part Name",OutputStream);
+            XMLPORT.EXPORT(XMLPORT::"POS Button Group", OutputStream, ButtonGroup);
+            DataSource.INSERT();
+
+          UNTIL (POSViewButtonGroup.NEXT() = 0);
+        END;
+      END;
+
+      //send data sources to html control
+      HtmlControlRequestProxy.RenderViewData(DataSource);
+    END;
+
+    LOCAL PROCEDURE AddToRefreshButtons@1000000029(PartCode@1000000000 : Code[20]);
+    BEGIN
+      IF (RefreshButtonsFilter <> '') THEN
+        RefreshButtonsFilter := RefreshButtonsFilter + '|' + PartCode
+      ELSE
+        RefreshButtonsFilter := PartCode;
+      RefreshButtons := TRUE;
+    END;
+
+    LOCAL PROCEDURE "--- Event Processing ---"@1000000024();
+    BEGIN
+    END;
+
+    PROCEDURE HandleControlMessage@1000000028(ControlMessage@1000000000 : DotNet "'TheNavPeople.HtmlControlCommunication.9.0.0.0, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7c0c47cc7f65ff95'.TheNavPeople.HtmlControlCommunication.ControlMessage");
+    VAR
+      HttpUtility@1000000003 : DotNet "'System.Web, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Web.HttpUtility";
+      NameValueCollection@1000000002 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NameValueCollection";
+      TransactionChanged@1000000001 : Boolean;
+    BEGIN
+      //initialize UI refreshing
+      RefreshDocument := FALSE;
+      RefreshButtons := FALSE;
+      RefreshButtonsFilter := '';
+
+      //deserialize parameters
+      NameValueCollection := HttpUtility.ParseQueryString(ControlMessage.FormDataString);
+
+      //process parameters
+      FindActiveTransaction();
+      POSSession.MODIFY();
+
+      IF (POSSession."Transaction No." <> 0) THEN BEGIN
+        POSTransaction.GET(POSSession."Transaction No.");
+        POSTransaction.EntryText := NameValueCollection.Get('input');
+        POSTransaction.MODIFY();
+      END;
+
+      //process event
+      CASE (ControlMessage.Type) OF
+        'SelectLine': SelectLine(ControlMessage.SafeGetContent('Result'));
+        'ButtonClick': ProcessButton(ControlMessage.Source, ControlMessage.SafeGetContent('Result'));
+        'Input': ProcessInput();
+      END;
+
+      TransactionChanged := FindActiveTransaction();
+      POSSession.MODIFY();
+
+      //Refresh UI parts
+      IF (TransactionChanged) THEN
+        ResetButtonsStack('');
+      RefreshDocument := RefreshDocument OR TransactionChanged;
+
+      UpdateContent(RefreshDocument, RefreshButtons, '', RefreshButtonsFilter);
+    END;
+
+    LOCAL PROCEDURE SelectLine@1000000025(LineNoText@1000000000 : Text);
+    VAR
+      SalesLine@1000000001 : Record 37;
+      LineNo@1000000002 : Integer;
+    BEGIN
+      RefreshDocument := TRUE;
+
+      IF (POSSession."Transaction No." = 0) THEN
+        EXIT;
+
+      IF (EVALUATE(LineNo, LineNoText)) THEN BEGIN
+        IF (SalesLine.GET(POSTransaction."Sales Document Type", POSTransaction."Sales Document No.", LineNoText)) THEN BEGIN
+          POSTransaction."Current Line" := LineNo;
+          POSTransaction.MODIFY();
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ProcessInput@1000000026();
+    VAR
+      Variant@1000000000 : Variant;
+    BEGIN
+      CallPOSAction('ENTER', '', '', '', Variant);
+    END;
+
+    LOCAL PROCEDURE ProcessButton@1000000027(source@1000000000 : Text;name@1000000001 : Text);
+    VAR
+      POSButton@1000000002 : Record 9062788;
+      SourceCommands@1000000003 : Record 9062790;
+      ButtonCommand@1000000004 : TEMPORARY Record 9062790;
+      eTemporary@1000000005 : TextConst 'ENU=TEMPORARY!!!;ENG=TEMPORARY!!!';
+    BEGIN
+      IF (source = '') OR (name = '') THEN
+        EXIT;
+
+      POSButton.RESET();
+      POSButton.SETPOSITION(name);
+      IF (POSButton.FIND('=')) THEN BEGIN
+        IF (POSSession."Design Mode") THEN BEGIN
+          COMMIT; //We need commit here because event handling procedure updates current transaction state (i.e. Input Text)
+          PAGE.RUNMODAL(PAGE::"POS Button Card", POSButton);
+        END ELSE BEGIN
+          //just check
+          //in case somebody changes variable property
+          IF (NOT(ButtonCommand.ISTEMPORARY)) THEN
+            ERROR(eTemporary);
+
+          ButtonCommand.RESET();
+          ButtonCommand.DELETEALL();
+
+          //collect commands
+          SourceCommands.RESET();
+          SourceCommands.SETRANGE("Button Group Code", POSButton."Button Group Code");
+          SourceCommands.SETRANGE("Button No.", POSButton."No.");
+          IF (SourceCommands.FINDSET()) THEN BEGIN
+            REPEAT
+              ButtonCommand.TRANSFERFIELDS(SourceCommands);
+              ButtonCommand.Handled := FALSE;
+              ButtonCommand.INSERT();
+            UNTIL (SourceCommands.NEXT() = 0);
+          END;
+
+          //process commands
+          IF (ButtonCommand.FINDSET()) THEN BEGIN
+            REPEAT
+              ProcessButtonCommand(source, ButtonCommand);
+            UNTIL (ButtonCommand.NEXT() = 0);
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE ProcessButtonCommand@9062249(PartCode@1000000000 : Code[20];VAR ButtonCommand@9062230 : Record 9062790);
+    VAR
+      Handled@1000000002 : Boolean;
+      VariantValue@1000000001 : Variant;
+    BEGIN
+      Handled := FALSE;
+      CASE (ButtonCommand."Action Type") OF
+        ButtonCommand."Action Type"::"Switch Button Group":
+          BEGIN
+            Handled := TRUE;
+            PushButtonGroup(PartCode, ButtonCommand."Command Code");
+          END;
+        ButtonCommand."Action Type"::"Go Back":
+          BEGIN
+            Handled := TRUE;
+            PopButtonGroup(PartCode);
+          END;
+        ButtonCommand."Action Type"::"Open Panel":
+          BEGIN
+            Handled := TRUE;
+            OpenPanel(ButtonCommand."Command Code");
+          END;
+        ButtonCommand."Action Type"::"Run Codeunit":
+          BEGIN
+            Handled := TRUE;
+            CODEUNIT.RUN(ButtonCommand."Run Object ID");
+          END;
+        ButtonCommand."Action Type"::"Run Page":
+          BEGIN
+            Handled := TRUE;
+            PAGE.RUN(ButtonCommand."Run Object ID");
+          END;
+        ButtonCommand."Action Type"::"POS Command":
+          BEGIN
+            Handled := TRUE;
+            CallPOSAction(ButtonCommand."Command Code", ButtonCommand."Action Parameter 1",
+              ButtonCommand."Action Parameter 2", ButtonCommand."Action Parameter 3", VariantValue);
+          END;
+        {//How to get back out of this mode
+        ButtonCommand."Action Type"::"Set Design Mode":
+          BEGIN
+            SetDesignMode(NOT POSSession."Design Mode");
+           END;
+         }
+      END;
+
+      IF (Handled) THEN BEGIN
+        ButtonCommand.Handled := TRUE;
+        ButtonCommand.MODIFY();
+      END;
+    END;
+
+    LOCAL PROCEDURE OpenPanel@1000000011(PanelCode@1000000000 : Code[20]);
+    VAR
+      Panel@1000000001 : Record 9062363;
+    BEGIN
+      IF (Panel.GET(PanelCode)) THEN
+        Panel.ShowPanel();
+    END;
+
+    LOCAL PROCEDURE CallPOSAction@1000000012(CommandCode@1000000003 : Code[20];Parameter1@1000000002 : Text;Parameter2@1000000001 : Text;Parameter3@1000000000 : Text;VAR VariantValue@1000000006 : Variant);
+    VAR
+      POSCommand@1000000005 : TEMPORARY Record 9062780;
+    BEGIN
+      RefreshDocument := TRUE;
+      POSCommand.INIT();
+      POSCommand.Command := CommandCode;
+      POSCommand."Parameter 1" := Parameter1;
+      POSCommand."Parameter 2" := Parameter2;
+      POSCommand."Parameter 3" := Parameter3;
+
+      POSProcessing.ProcessPOSCommandInput(POSTransaction, POSCommand, VariantValue);
+    END;
+
+    LOCAL PROCEDURE "--- Passing Session to XmlPorts ---"@1000000018();
+    BEGIN
+    END;
+
+    PROCEDURE SessionToFilter@1000000019(VAR SessionData@1000000000 : Record 9062793);
+    BEGIN
+      SessionData.SETRANGE(ID, SessionData.ID);
+      SessionData.SETRANGE("User ID", SessionData."User ID");
+      SessionData.SETRANGE("Device Code", SessionData."Device Code");
+      SessionData.SETRANGE("View Code", SessionData."View Code");
+      SessionData.SETRANGE("Transaction No.", SessionData."Transaction No.");
+      SessionData.SETRANGE("Design Mode", SessionData."Design Mode");
+    END;
+
+    PROCEDURE SessionFromFilter@1000000020(VAR SessionData@1000000000 : Record 9062793);
+    BEGIN
+      SessionData.ID := SessionData.GETRANGEMIN(ID);
+      SessionData."User ID" := SessionData.GETRANGEMIN("User ID");
+      SessionData."Device Code" := SessionData.GETRANGEMIN("Device Code");
+      SessionData."View Code" := SessionData.GETRANGEMIN("View Code");
+      SessionData."Transaction No." := SessionData.GETRANGEMIN("Transaction No.");
+      SessionData."Design Mode" := SessionData.GETRANGEMIN("Design Mode");
+    END;
+
+    LOCAL PROCEDURE "--- Other ---"@1000000015();
+    BEGIN
+    END;
+
+    PROCEDURE SetDesignMode@1000000017(Value@1000000000 : Boolean);
+    BEGIN
+      POSSession."Design Mode" := Value;
+      POSSession.MODIFY();
+      UpdateContent(TRUE, TRUE, '', '');
+    END;
+
+    BEGIN
+    {
+      //DOC NH2016.12 BM 11/02/2016 - Created
+      //DOC NH2016.15 JH 10/05/2016 - CfMD amendments
+      //DOC NA2016.16 AZ 24/05/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

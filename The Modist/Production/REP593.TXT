@@ -1,0 +1,214 @@
+OBJECT Report 593 Intrastat - Make Disk Tax Auth
+{
+  OBJECT-PROPERTIES
+  {
+    Date=15/09/15;
+    Time=12:00:00 PM;
+    Version List=NAVW19.00,NAVGB9.00;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Intrastat - Make Disk Tax Auth;
+               ENG=Intrastat - Make Disk VAT Auth];
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  FileName := FileMgt.ServerTempFileName('');
+                END;
+
+  }
+  DATASET
+  {
+    { 1170000000;;DataItem;                  ;
+               DataItemTable=Table263;
+               DataItemTableView=SORTING(Journal Template Name,Journal Batch Name,Line No.);
+               OnPreDataItem=BEGIN
+                               IF NOT (GETRANGEMIN(Type) = GETRANGEMAX(Type)) THEN
+                                 FIELDERROR(Type,Text1040013);
+
+                               LOCKTABLE;
+                               IntrastatJnlBatch.GET(
+                                 GETFILTER("Journal Template Name"),
+                                 GETFILTER("Journal Batch Name"));
+                               IntrastatJnlBatch.TESTFIELD(Reported,FALSE);
+                               Type := Type::Receipt;
+                               IF GETFILTER(Type) = FORMAT(Type) THEN BEGIN
+                                 IntrastatJnlBatch.TESTFIELD("Arrivals Reported",FALSE);
+                                 IntrastatJnlBatch.VALIDATE("Arrivals Reported",TRUE);
+                               END ELSE BEGIN
+                                 IntrastatJnlBatch.TESTFIELD("Dispatches Reported",FALSE);
+                                 IntrastatJnlBatch.VALIDATE("Dispatches Reported",TRUE);
+                               END;
+                               IntrastatJnlBatch.MODIFY;
+
+                               CompanyInfo.GET;
+                               IF FileName = '' THEN
+                                 ERROR(Text1040014);
+                               CLEAR(CurrFile);
+                               CurrFile.TEXTMODE := TRUE;
+                               CurrFile.WRITEMODE := TRUE;
+                               CurrFile.CREATE(FileName);
+
+                               Window.OPEN(
+                                 '#1############################################\\' +
+                                 Text1040015 +
+                                 Text1040016);
+
+                               Window.UPDATE(1,Text1040017 + FileName);
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  LineCount := LineCount + 1;
+                                  Window.UPDATE(2,LineCount);
+                                  TESTFIELD("Tariff No.");
+                                  TESTFIELD("Country/Region Code");
+                                  TESTFIELD("Transaction Type");
+                                  TESTFIELD("Total Weight");
+                                  TESTFIELD("Shipment Method Code");
+                                  IF "Supplementary Units" THEN
+                                    TESTFIELD(Quantity);
+                                  "Internal Ref. No." := "Document No.";
+                                  MODIFY;
+
+                                  IntrastatJnlLineTemp := "Intrastat Jnl. Line";
+                                  IntrastatJnlLineTemp.INSERT;
+                                END;
+
+               OnPostDataItem=VAR
+                                ToFile@1000 : Text[1024];
+                                JournalType@1040000 : Text[1];
+                              BEGIN
+                                NoOfRecords := LineCount + 1;
+                                LineCount := 1;
+
+                                NilReturn := NOT IntrastatJnlLineTemp.FIND('-');
+                                IF NilReturn THEN
+                                  NilReturnCode := 'N'
+                                ELSE
+                                  NilReturnCode := 'X';
+
+                                Window.UPDATE(3,LineCount);
+                                Window.UPDATE(4,ROUND(LineCount / NoOfRecords * 10000,1));
+                                IF Type = Type::Shipment THEN
+                                  JournalType := 'D'
+                                ELSE
+                                  JournalType := 'A';
+                                CurrFile.WRITE(
+                                  'T' + ',' +
+                                  DELCHR(CompanyInfo."VAT Registration No.",'=',DELCHR(CompanyInfo."VAT Registration No.",'=','0123456789')) + ',' +
+                                  ',' +
+                                  COPYSTR(CompanyInfo.Name,1,30) + ',' +
+                                  NilReturnCode + ',' +
+                                  JournalType + ',' +
+                                  FORMAT(WORKDATE,0,Text1040021) + ',' +
+                                  IntrastatJnlBatch."Statistics Period" + ',' +
+                                  'CSV02');
+                                IF NOT NilReturn THEN
+                                  WriteFile;
+
+                                CloseFile;
+
+                                IF ServerFileName <> '' THEN
+                                  FileMgt.CopyServerFile(FileName,ServerFileName,TRUE)
+                                ELSE
+                                  IF NOT FileMgt.DownloadHandler(FileName,'','',FileMgt.GetToFilterText('',DefaultFilenameTxt),DefaultFilenameTxt) AND NilReturn THEN
+                                    MESSAGE(Text1040018,FIELDNAME(Type),GETFILTER(Type));
+                              END;
+
+               ReqFilterFields=Type,Journal Template Name,Journal Batch Name }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+    }
+    CONTROLS
+    {
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      CompanyInfo@1006 : Record 79;
+      FileMgt@1030 : Codeunit 419;
+      IntrastatJnlBatch@1040001 : Record 262;
+      IntrastatJnlLineTemp@1040002 : TEMPORARY Record 263;
+      SupplementaryUnits@1040003 : Text[11];
+      FileName@1009 : Text;
+      Window@1040005 : Dialog;
+      NoOfRecords@1040006 : Integer;
+      LineCount@1040007 : Integer;
+      EndPos@1040008 : Integer;
+      NilReturn@1040009 : Boolean;
+      NilReturnCode@1040010 : Code[10];
+      CountryOfOriginCode@1040011 : Code[10];
+      CurrFile@1040012 : File;
+      ServerFileName@1020 : Text;
+      DefaultFilenameTxt@1022 : TextConst '@@@={Locked};ENU=Default.txt;ENG=Default.txt';
+      GroupTotal@1027 : Boolean;
+      Text1040013@1040013 : TextConst 'ENU=must be either Receipt or Shipment;ENG=must be either Receipt or Shipment';
+      Text1040014@1040014 : TextConst 'ENU=You must specify a filename.;ENG=You must specify a filename.';
+      Text1040015@1040015 : TextConst 'ENU=Checking lines        #2######################\;ENG=Checking lines        #2######################\';
+      Text1040016@1040016 : TextConst 'ENU=Writing lines to file #3###### @4@@@@@@@@@@@@@;ENG=Writing lines to file #3###### @4@@@@@@@@@@@@@';
+      Text1040017@1040017 : TextConst 'ENU="Creating file ";ENG="Creating file "';
+      Text1040018@1040018 : TextConst 'ENU=There were no records for %1 %2.;ENG=There were no records for %1 %2.';
+      Text1040021@1040021 : TextConst 'ENU=<Day,2><Month,2><Year,2>;ENG=<Day,2><Month,2><Year,2>';
+
+    PROCEDURE WriteFile@1040000();
+    BEGIN
+      WITH IntrastatJnlLineTemp DO BEGIN
+        REPEAT
+          LineCount := LineCount + 1;
+          Window.UPDATE(3,LineCount);
+          Window.UPDATE(4,ROUND(LineCount / NoOfRecords * 10000,1));
+
+          IF "Supplementary Units" THEN
+            SupplementaryUnits := FORMAT(Quantity,0,1)
+          ELSE
+            SupplementaryUnits := '';
+          IF Type = Type::Shipment THEN
+            CountryOfOriginCode := ''
+          ELSE
+            CountryOfOriginCode := "Country/Region of Origin Code";
+
+          CurrFile.WRITE(
+            DELCHR("Tariff No.") + ',' +
+            FORMAT("Statistical Value",0,1) + ',' +
+            "Shipment Method Code" + ',' +
+            "Transaction Type" + ',' +
+            FORMAT("Total Weight",0,1) + ',' +
+            SupplementaryUnits + ',' +
+            "Country/Region Code" + ',' +
+            "Document No.");
+
+        UNTIL NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE CloseFile@1040001();
+    BEGIN
+      EndPos := CurrFile.POS;
+      CurrFile.CLOSE;
+      CurrFile.OPEN(FileName);
+      CurrFile.SEEK(EndPos - 2);
+      CurrFile.TRUNC;
+      CurrFile.CLOSE;
+    END;
+
+    PROCEDURE InitializeRequest@4(newServerFileName@1000 : Text);
+    BEGIN
+      ServerFileName := newServerFileName;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

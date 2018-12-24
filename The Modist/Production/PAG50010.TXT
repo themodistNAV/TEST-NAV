@@ -1,0 +1,408 @@
+OBJECT Page 50010 Sales Payments
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/03/18;
+    Time=12:06:53 PM;
+    Modified=Yes;
+    Version List=OP9031,DEL-118,IN42562,TM0004,TM3026;
+  }
+  PROPERTIES
+  {
+    InsertAllowed=No;
+    DeleteAllowed=No;
+    SourceTable=Table50008;
+    PageType=List;
+    ActionList=ACTIONS
+    {
+      { 1000000018;  ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 1000000019;1 ;Action    ;
+                      Name=Capture;
+                      CaptionML=[ENU=Capture Authorization;
+                                 ENG=Capture Authorization];
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Payment;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 IF (Status <> Status::Authorized) AND (Status <> Status::Reauthorized) THEN
+                                   ERROR(STRSUBSTNO(AuthStatusMessage,'Capture'));
+                                 gOperation := gOperation::Capture;
+                                 IF "Payment Type" = "Payment Type"::PayPal THEN BEGIN
+                                   IF Status = Status::Reauthorized THEN
+                                     SalesPaymentProcessing.ProcessPaymentRequest(TRUE,gOperation,"Reauthorize ID","Currency Code","Capture Amount",gResponseId,gErrorText,'',gReasonCode)
+                                   ELSE
+                                     SalesPaymentProcessing.ProcessPaymentRequest(TRUE,gOperation,"Transaction ID","Currency Code","Capture Amount",gResponseId,gErrorText,'',gReasonCode);
+                                   IF gErrorText = '' THEN BEGIN
+                                     Status := Status::Captured;
+                                     "Capture ID" := gResponseId;
+                                     "Response ID" := gResponseId;
+                                     MODIFY;
+                                     COMMIT;
+                                     CreateJournal(FALSE,TRUE,"Capture Amount","Currency Code","Card Type");//DOC OP9031 RK 08/03/17 -
+                                   END ELSE BEGIN
+                                     "Error Text" := gErrorText;
+                                     Status := Status::Failed;
+                                     MODIFY;
+                                   END;
+                                 END ELSE IF "Payment Type" = "Payment Type"::CreditCard THEN BEGIN
+                                   //TESTFIELD(MerchantReferenceCode);
+                                   SalesPaymentProcessing.SetSalesPayment(Rec); //DOC TM3026 ST 03/10/2018
+                                   SalesPaymentProcessing.ProcessPaymentRequest(FALSE,gOperation,"Request ID","Currency Code","Capture Amount",gResponseId,gErrorText,"Internet Order No.",gReasonCode);
+                                   IF (gErrorText = '') AND (gReasonCode = '100') THEN BEGIN
+                                     SalesPaymentProcessing.GetSalesPayment(Rec); //DOC TM3026 ST 03/10/2018
+                                     Status := Status::Captured;
+                                     "Response ID" := gResponseId;
+                                     "Response Reason Code" := gReasonCode;
+                                     MODIFY;
+                                     COMMIT;
+                                     CreateJournal(FALSE,FALSE,"Capture Amount","Currency Code","Card Type");//DOC OP9031 RK 08/03/17 -
+                                   END ELSE BEGIN
+                                     SalesPaymentProcessing.GetSalesPayment(Rec); //DOC TM3026 ST 03/10/2018
+                                     "Error Text" := gErrorText;
+                                     Status := Status::Failed;
+                                     "Response ID" := gResponseId;
+                                     "Response Reason Code" := gReasonCode;
+                                     MODIFY;
+                                   END;
+                                 END;
+                                 CurrPage.UPDATE;
+                               END;
+                                }
+      { 1000000020;1 ;Action    ;
+                      Name=Cancel;
+                      CaptionML=[ENU=Cancel Authorization;
+                                 ENG=Cancel Authorization];
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Cancel;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 IF (Status <> Status::Authorized) AND (Status <> Status::Reauthorized) THEN
+                                   ERROR(STRSUBSTNO(AuthStatusMessage,'Capture'));
+                                 gOperation := gOperation::Cancel;
+                                 IF "Payment Type" = "Payment Type"::PayPal THEN BEGIN
+                                   IF Status = Status::Reauthorized THEN
+                                     SalesPaymentProcessing.ProcessPaymentRequest(TRUE,gOperation,"Reauthorize ID","Currency Code","Capture Amount",gResponseId,gErrorText,'',gReasonCode)
+                                   ELSE
+                                     SalesPaymentProcessing.ProcessPaymentRequest(TRUE,gOperation,"Transaction ID","Currency Code","Capture Amount",gResponseId,gErrorText,'',gReasonCode);
+                                   IF gErrorText = '' THEN BEGIN
+                                     Status := Status::Cancelled;
+                                     "Response ID" := gResponseId;
+                                     MODIFY;
+                                   END ELSE BEGIN
+                                     "Error Text" := gErrorText;
+                                     Status := Status::Failed;
+                                     MODIFY;
+                                   END;
+                                 END ELSE IF "Payment Type" = "Payment Type"::CreditCard THEN BEGIN
+                                   //TESTFIELD(MerchantReferenceCode);
+                                   SalesPaymentProcessing.SetSalesPayment(Rec); //DOC TM3026 ST 03/10/2018
+                                   SalesPaymentProcessing.ProcessPaymentRequest(FALSE,gOperation,"Request ID","Currency Code","Capture Amount",gResponseId,gErrorText,"Internet Order No.",gReasonCode);
+                                   IF (gErrorText = '') AND (gReasonCode = '100') THEN BEGIN
+                                     SalesPaymentProcessing.GetSalesPayment(Rec); //DOC TM3026 ST 03/10/2018
+                                     Status := Status::Cancelled;
+                                     "Response ID" := gResponseId;
+                                     "Response Reason Code" := gReasonCode;
+                                     MODIFY;
+                                   END ELSE BEGIN
+                                     SalesPaymentProcessing.GetSalesPayment(Rec); //DOC TM3026 ST 03/10/2018
+                                     "Error Text" := gErrorText;
+                                     Status := Status::Failed;
+                                     "Response ID" := gResponseId;
+                                     "Response Reason Code" := gReasonCode;
+                                     MODIFY;
+                                   END;
+                                 END;
+                                 CurrPage.UPDATE;
+                               END;
+                                }
+      { 1000000021;1 ;Action    ;
+                      Name=Refund;
+                      CaptionML=[ENU=Refund Capture;
+                                 ENG=Refund Capture];
+                      Promoted=Yes;
+                      Visible=FALSE;
+                      PromotedIsBig=Yes;
+                      Image=Return;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 RefundAmt@1000000000 : Decimal;
+                               BEGIN
+                                 TESTFIELD(Status,Status::Captured);
+                                 gOperation := gOperation::Refund;
+                                 IF "Refund Amount" <> 0 THEN
+                                   RefundAmt := "Refund Amount"
+                                 ELSE
+                                   RefundAmt := "Capture Amount";
+                                 IF "Payment Type" = "Payment Type"::PayPal THEN BEGIN
+                                   IF Status = Status::Reauthorized THEN
+                                     SalesPaymentProcessing.ProcessPaymentRequest(TRUE,gOperation,"Capture ID","Currency Code",RefundAmt,gResponseId,gErrorText,'',gReasonCode)
+                                   ELSE
+                                     SalesPaymentProcessing.ProcessPaymentRequest(TRUE,gOperation,"Capture ID","Currency Code",RefundAmt,gResponseId,gErrorText,'',gReasonCode);
+                                   IF gErrorText = '' THEN BEGIN
+                                     Status := Status::Refunded;
+                                     "Response ID" := gResponseId;
+                                     MODIFY;
+                                     COMMIT;
+                                     CreateJournal(TRUE,TRUE,RefundAmt,"Currency Code","Card Type");//DOC OP9031 RK 08/03/17 -
+                                   END ELSE BEGIN
+                                     "Error Text" := gErrorText;
+                                     Status := Status::Failed;
+                                     MODIFY;
+                                   END;
+                                 END ELSE IF "Payment Type" = "Payment Type"::CreditCard THEN BEGIN
+                                   //TESTFIELD(MerchantReferenceCode);
+                                   SalesPaymentProcessing.SetSalesPayment(Rec); //DOC TM3026 ST 03/10/2018
+                                   SalesPaymentProcessing.ProcessPaymentRequest(FALSE,gOperation,"Transaction ID","Currency Code",RefundAmt,gResponseId,gErrorText,"Internet Order No.",gReasonCode);
+                                   IF (gErrorText = '') AND (gReasonCode = '100') THEN BEGIN
+                                     SalesPaymentProcessing.GetSalesPayment(Rec); //DOC TM3026 ST 03/10/2018
+                                     Status := Status::Refunded;
+                                     "Response ID" := gResponseId;
+                                     "Response Reason Code" := gReasonCode;
+                                     MODIFY;
+                                     COMMIT;
+                                     CreateJournal(TRUE,FALSE,RefundAmt,"Currency Code","Card Type");//DOC OP9031 RK 08/03/17 -
+                                   END ELSE BEGIN
+                                     SalesPaymentProcessing.GetSalesPayment(Rec); //DOC TM3026 ST 03/10/2018
+                                     "Error Text" := gErrorText;
+                                     Status := Status::Failed;
+                                     "Response ID" := gResponseId;
+                                     "Response Reason Code" := gReasonCode;
+                                     MODIFY;
+                                   END;
+                                 END;
+                                 CurrPage.UPDATE;
+                               END;
+                                }
+      { 1000000026;1 ;Action    ;
+                      Name=Refund2;
+                      CaptionML=ENU=Refund;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Return;
+                      PromotedCategory=Process }
+      { 1000000022;1 ;Action    ;
+                      Name=ReAuthorize;
+                      CaptionML=[ENU=ReAuthorize;
+                                 ENG=ReAuthorize];
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Approve;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 TESTFIELD(Status,Status::Authorized);
+                                 TESTFIELD("Payment Type","Payment Type"::PayPal);
+                                 gOperation := gOperation::ReAuthorize;
+                                 SalesPaymentProcessing.ProcessPaymentRequest(TRUE,gOperation,"Transaction ID","Currency Code","Capture Amount",gResponseId,gErrorText,'',gReasonCode);
+                                 IF gErrorText = '' THEN BEGIN
+                                   Status := Status::Reauthorized;
+                                   "Response ID" := gResponseId;
+                                   "Reauthorize ID" := gResponseId;
+                                   MODIFY;
+                                 END ELSE BEGIN
+                                   "Error Text" := gErrorText;
+                                   Status := Status::Failed;
+                                   MODIFY;
+                                 END;
+                                 CurrPage.UPDATE;
+                               END;
+                                }
+      { 1000000028;1 ;Action    ;
+                      Name=Log;
+                      RunObject=Page 50023;
+                      RunPageLink=Document No.=FIELD(Internet Order No.);
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Log;
+                      PromotedCategory=Report;
+                      RunPageMode=View }
+    }
+  }
+  CONTROLS
+  {
+    { 1000000000;0;Container;
+                ContainerType=ContentArea }
+
+    { 1000000001;1;Group  ;
+                Name=Group;
+                GroupType=Repeater }
+
+    { 1000000024;2;Field  ;
+                SourceExpr="Internet Order No.";
+                Editable=FALSE }
+
+    { 1000000003;2;Field  ;
+                SourceExpr="Sales Order No.";
+                Editable=FALSE }
+
+    { 1000000004;2;Field  ;
+                SourceExpr="Payment Type";
+                Editable=FALSE }
+
+    { 1000000005;2;Field  ;
+                SourceExpr=Amount;
+                Editable=FALSE }
+
+    { 1000000012;2;Field  ;
+                SourceExpr="Capture Amount" }
+
+    { 1000000025;2;Field  ;
+                SourceExpr="Refund Amount" }
+
+    { 1000000027;2;Field  ;
+                SourceExpr="Total Refunded Amnt." }
+
+    { 1000000007;2;Field  ;
+                SourceExpr="Currency Code";
+                Editable=FALSE }
+
+    { 1000000008;2;Field  ;
+                SourceExpr=Status;
+                Editable=FALSE }
+
+    { 1000000013;2;Field  ;
+                SourceExpr="Card Type";
+                Editable=FALSE }
+
+    { 1000000006;2;Field  ;
+                SourceExpr="Payment Journal Created";
+                Editable=FALSE }
+
+    { 1000000023;2;Field  ;
+                SourceExpr="Payment Doc. No." }
+
+    { 1000000002;2;Field  ;
+                SourceExpr="Transaction ID";
+                Editable=FALSE }
+
+    { 1000000009;2;Field  ;
+                SourceExpr="Request ID";
+                Editable=FALSE }
+
+    { 1000000010;2;Field  ;
+                SourceExpr="Request Token";
+                Editable=FALSE }
+
+    { 1000000011;2;Field  ;
+                SourceExpr="Capture ID";
+                Editable=FALSE }
+
+    { 1000000014;2;Field  ;
+                SourceExpr=MerchantReferenceCode;
+                Editable=FALSE }
+
+    { 1000000015;2;Field  ;
+                SourceExpr="Error Text";
+                Editable=FALSE }
+
+    { 1000000016;2;Field  ;
+                SourceExpr="Response State";
+                Editable=FALSE }
+
+    { 1000000017;2;Field  ;
+                SourceExpr="Response Reason Code";
+                Editable=FALSE }
+
+    { 1000000029;2;Field  ;
+                SourceExpr="Reason Code" }
+
+  }
+  CODE
+  {
+    VAR
+      AuthStatusMessage@1000000000 : TextConst 'ENU=Payment must be authorized or reauthorized to %1.;ENG=Payment must be authorized or reauthorized to %1.';
+      Customer@1000000006 : Record 18;
+      SalesHeader@1000000008 : Record 36;
+      PaymentMethod@1000000007 : Record 289;
+      SalesPaymentProcessing@1000000001 : Codeunit 50026;
+      gResponseId@1000000002 : Text;
+      gErrorText@1000000003 : Text;
+      gReasonCode@1000000004 : Code[10];
+      gOperation@1000000005 : 'Capture,Refund,Cancel,ReAuthorize';
+
+    LOCAL PROCEDURE CreateJournal@1000000001(pRefund@1000000000 : Boolean;pPayPal@1000000001 : Boolean;pAmount@1000000002 : Decimal;pCurrCode@1000000003 : Code[10];pCardType@1000000008 : Code[20]);
+    VAR
+      SalesInvHeader@1000000007 : Record 112;
+      jnlDocNo@1000000005 : Code[20];
+      BalAcType@1000000004 : 'G/L Account,Customer,Vendor,Bank Account';
+      CustomerNo@1000000006 : Code[20];
+    BEGIN
+      //DOC OP9031 RK 08/03/17 -
+      PaymentMethod.RESET;
+      //DOC OP9031 RK 08/03/17 +
+      IF pPayPal THEN
+        PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::PayPal)
+      ELSE
+      //DOC OP9031 RK 08/03/17 -
+        //PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::CreditCard);
+        BEGIN
+        PaymentMethod.SETRANGE("Payment Type",PaymentMethod."Payment Type"::CreditCard);
+        PaymentMethod.SETRANGE("Card Type",pCardType);
+      END;
+      //DOC OP9031 RK 08/03/17 +
+      PaymentMethod.SETRANGE("Currency Code",pCurrCode);
+      //IF PaymentMethod.FINDFIRST THEN BEGIN
+      PaymentMethod.FINDFIRST;
+      PaymentMethod.TESTFIELD("Bal. Account No.");
+        //IF PaymentMethod."Bal. Account No." <> '' THEN BEGIN
+          IF PaymentMethod."Bal. Account Type" = PaymentMethod."Bal. Account Type"::"Bank Account" THEN
+            BalAcType := BalAcType::"Bank Account"
+          ELSE
+            BalAcType := BalAcType::"G/L Account";
+          SalesHeader.SETRANGE("Document Type",SalesHeader."Document Type"::Order);
+          SalesHeader.SETRANGE("No.","Sales Order No.");
+          IF SalesHeader.FINDFIRST THEN
+            CustomerNo := SalesHeader."Sell-to Customer No."
+          ELSE BEGIN
+            SalesInvHeader.SETRANGE("Order No.","Sales Order No.");
+            SalesInvHeader.FINDFIRST;
+            CustomerNo := SalesInvHeader."Sell-to Customer No.";
+          END;
+          //DOC IN42562 NC 04/09/17 - commented and replace bellow -
+          {
+          IF SalesHeader.FINDFIRST THEN BEGIN
+            IF pRefund THEN
+              SalesPaymentProcessing.CreatePostGenJournal(CustomerNo,-pAmount,BalAcType,PaymentMethod."Bal. Account No.",jnlDocNo,FALSE,"Currency Code")
+            ELSE
+              SalesPaymentProcessing.CreatePostGenJournal(CustomerNo,pAmount,BalAcType,PaymentMethod."Bal. Account No.",jnlDocNo,FALSE,"Currency Code");
+          END;
+          IF pRefund THEN BEGIN
+            "Refund Journal Created" := TRUE;
+            "Refund Doc. No." := jnlDocNo;
+            MODIFY;
+          END ELSE BEGIN
+            "Payment Journal Created" := TRUE;
+            "Payment Doc. No." := jnlDocNo;
+            MODIFY;
+          END;
+          }
+          IF CustomerNo <> '' THEN BEGIN
+            IF pRefund THEN BEGIN
+              SalesPaymentProcessing.CreatePostGenJournal(CustomerNo,-pAmount,BalAcType,PaymentMethod."Bal. Account No.",jnlDocNo,FALSE,"Currency Code");
+              "Refund Journal Created" := TRUE;
+              "Refund Doc. No." := jnlDocNo;
+              MODIFY;
+            END ELSE BEGIN
+              SalesPaymentProcessing.CreatePostGenJournal(CustomerNo,pAmount,BalAcType,PaymentMethod."Bal. Account No.",jnlDocNo,FALSE,"Currency Code");
+              "Payment Journal Created" := TRUE;
+              "Payment Doc. No." := jnlDocNo;
+              MODIFY;
+            END;
+          END;
+          //DOC IN42562 NC 04/09/17 +
+        //END;
+      //END;
+    END;
+
+    BEGIN
+    {
+      //DOC OP9031 RK 08/03/17 - Find credit card payment by CC type.
+      //DOC IN42562 NC 04/09/17 - Fix, it would only create the journal if the SO still exist (code bug)
+      //DOC TM3026 ST 03/10/18 - New control added "Charge ID" for Checkout Integration
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,763 @@
+OBJECT Codeunit 9021670 ItemTableTriggerCode
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:20 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      InternetSetup@1000000014 : Record 9021609;
+      LabelAttributeRec@1000000009 : Record 9021623;
+      LabelAttributeRec1@1000000008 : Record 9021623;
+      WebAttributeRec@1000000007 : Record 9021701;
+      WebAttributeValue@1000000006 : Record 9021702;
+      WebAttributeValue1@1000000005 : Record 9021702;
+      WebAssemblyCpt@1000000004 : Record 9021688;
+      ItemShipPrice@1000000003 : Record 9021712;
+      ItemCategory@1000000002 : Record 5722;
+      TextG000@1000000015 : TextConst 'ENU=Error..You cannot change the %1 if the item in not a Loyalty Item.;ENG=Error..You cannot change the %1 if the item in not a Loyalty Item.';
+      ePage@1190000005 : Record 9021628;
+      MultiLabCatProdGrp@1040000 : Record 9021601;
+      CatBuildData@1190000009 : Record 9021602;
+      LabelRec@1190000010 : Record 9021618;
+      PageItem@1190000012 : Record 9021629;
+      PageItemSort@1190000013 : Record 9021600;
+      BuildCatCU@1190000007 : Codeunit 9021602;
+      WebAttributeMgt@1190000008 : Codeunit 9021620;
+      GlobalFuncs@1190000006 : Codeunit 9021624;
+      LanguageCode@1190000011 : Code[10];
+      ProbPromos@1000000000 : Text[1000];
+      i@1000000001 : Integer;
+      TextM000@1000000010 : TextConst 'ENU=If you''ve changed the Item Description and this Item is listed in the online catalogue, its Description may form part of the URL to the product detail page, so in order to ensure search engines that have indexed the current URL don''t find the page missing, you may wish to enter the old Description as an ''alias'' by opening Internet -> Label Attributes and creating an Attribute with an Attribute Type of ''ALIAS'', using the Item''s Description as the Attribute''s value;ENG=If you''ve changed the Item Description and this Item is listed in the online catalogue, its Description may form part of the URL to the product detail page, so in order to ensure search engines that have indexed the current URL don''t find the page missing, you may wish to enter the old Description as an ''alias'' by opening Internet -> Label Attributes and creating an Attribute with an Attribute Type of ''ALIAS'', using the Item''s Description as the Attribute''s value';
+      TxtProductAttributeType@1000000011 : TextConst 'ENU=PRODUCT;ENG=PRODUCT';
+      TxtProductFlag@1000000012 : TextConst 'ENU=PROD-FLAG;ENG=PROD-FLAG';
+      TxtProductWebAttributeCode@1000000013 : TextConst 'ENU=PROD-FLAG;ENG=PROD-FLAG';
+      TxtProductWebAttributeName@1000000016 : TextConst 'ENU=Product Highlight Icon;ENG=Product Highlight Icon';
+
+    PROCEDURE OnDelete@1000000014(ItemPar@1000000000 : Record 27);
+    BEGIN
+      CheckForIntDependencyFunc(ItemPar,'delete');
+      ItemShipPrice.RESET;
+      ItemShipPrice.SETRANGE("Item No.",ItemPar."No.");
+      ItemShipPrice.DELETEALL;
+
+      LabelAttributeRec.RESET;
+      LabelAttributeRec.SETRANGE("Attribute Type",TxtProductAttributeType);  //DOC EC2013.3.00
+      LabelAttributeRec.SETRANGE("Attribute Owner Reference",ItemPar."No.");
+      IF LabelAttributeRec.FIND('-') THEN
+      REPEAT
+        LabelAttributeRec.DELETE(TRUE);
+      UNTIL LabelAttributeRec.NEXT = 0;
+
+      //DOC EC2009.2.67 -
+      CatBuildData.RESET;
+      CatBuildData.SETCURRENTKEY("Item No.");
+      CatBuildData.SETRANGE("Item No.",ItemPar."No.");
+      CatBuildData.DELETEALL;
+      //DOC EC2009.2.67 +
+
+      WebAttributeMgt.DeleteWebAttValuesForRecord('',27,ItemPar."No.",'',0,FALSE,0);
+
+      //SyncMgt.DeletionMgt(27,ItemPar."No.",'','','','',
+      //                    '','','',ItemPar."Sync Log No.",ItemPar."Sync Version No.");
+    END;
+
+    PROCEDURE OnRename@1000000015(VAR ItemPar@1000000000 : Record 27;xRecItemNo@1000000001 : Code[20]);
+    VAR
+      Text000@1000000002 : TextConst 'ENU=Error.. The system does not support renaming an item when that Item is on a Web Assembly.;ENG=Error.. The system does not support renaming an item when that Item is on a Web Assembly.';
+    BEGIN
+      //DOC EC2015.5.03 ItemPar.DateTimeInsertedModified := CURRENTDATETIME;
+      //ItemPar."Sync Log No." := SyncMgt.InsertModifyRenameMgt(27);
+      //ItemPar."Sync Version No." := CREATEGUID;
+
+      LabelAttributeRec.RESET;
+      LabelAttributeRec.SETRANGE("Attribute Type",TxtProductAttributeType);  //DOC EC2013.3.00
+      LabelAttributeRec.SETRANGE("Attribute Owner Reference",xRecItemNo);
+      IF LabelAttributeRec.FIND('-') THEN
+      REPEAT
+        LabelAttributeRec1 := LabelAttributeRec;
+        LabelAttributeRec1."Attribute Owner Reference" := ItemPar."No.";
+        LabelAttributeRec1.MODIFY;
+      UNTIL LabelAttributeRec.NEXT = 0;
+
+      WebAssemblyCpt.RESET;
+      WebAssemblyCpt.SETRANGE(Type,WebAssemblyCpt.Type::Item);
+      WebAssemblyCpt.SETRANGE("No.",xRecItemNo);
+      IF WebAssemblyCpt.FINDFIRST THEN
+        ERROR(Text000);
+
+      WebAttributeValue.RESET;
+      //DOC EC2009.2.68 MQ 15/08/2011 - GW110815 WebAttributeValue.SETRANGE("Label Code",'');
+      WebAttributeValue.SETRANGE("Table ID",27);
+      WebAttributeValue.SETRANGE("Key Field String 1",xRecItemNo);
+      IF WebAttributeValue.FIND('-') THEN
+      REPEAT
+        WebAttributeValue1.INIT;
+        WebAttributeValue1 := WebAttributeValue;
+        WebAttributeValue1."Key Field String 1" := ItemPar."No.";
+        WebAttributeValue1.INSERT;
+        WebAttributeValue.DELETE;
+      UNTIL WebAttributeValue.NEXT = 0;
+    END;
+
+    PROCEDURE DescriptionOnVal@1190000008(ItemRec@1190000005 : Record 27);
+    BEGIN
+      SetMetaAttributes(ItemRec);
+    END;
+
+    PROCEDURE DescriptionOnValAliases@1000000003(Description@1000000000 : Text[50];xRecDescription@1000000001 : Text[50];ItemNo@1000000002 : Code[20];xRecItemNo@1000000003 : Code[20]);
+    BEGIN
+      //DOC EC2013.4.60 new function
+      IF (Description <> xRecDescription) AND
+        (ItemNo = xRecItemNo) THEN
+      //  MESSAGE('If you have change the description you may wish to enter the old'+
+      //          ' description as an alias.');
+        MESSAGE(TextM000);
+    END;
+
+    PROCEDURE GrossWeightOnVal@1000000016(VAR ItemPar@1000000000 : Record 27);
+    BEGIN
+      RecalcItemShipPricesFunc(ItemPar);
+    END;
+
+    PROCEDURE UnitVolumeOnVal@1000000017(VAR ItemPar@1000000000 : Record 27);
+    BEGIN
+      RecalcItemShipPricesFunc(ItemPar);
+    END;
+
+    PROCEDURE BlockedOnVal@1000000018(VAR ItemPar@1000000000 : Record 27;xRecBlocked@1000000001 : Boolean);
+    BEGIN
+      IF (ItemPar.Blocked <> xRecBlocked) AND (ItemPar.Blocked) THEN
+        CheckForIntDependencyFunc(ItemPar,'block');
+    END;
+
+    PROCEDURE ItemCategoryOnVal1@1000000019(VAR ItemPar@1000000000 : Record 27;xRecItemCatCode@1000000001 : Code[10]);
+    BEGIN
+      IF (xRecItemCatCode <> '') AND
+         (ItemCategory.GET(xRecItemCatCode)) THEN
+        IF (ItemCategory."Label Code" <> '') AND
+           (ItemCategory."Web Attribute Code" <> '') THEN
+          WebAttributeMgt.ControlWebAttributes(ItemPar."No.",'',0,27,ItemCategory."Label Code",
+                          ItemCategory."Web Attribute Code",0,'','',0,FALSE,0D,0T);
+
+      //DOC EC2009.2.66 -
+      IF (xRecItemCatCode <> '') AND
+         (ItemPar."Product Group Code" <> '') THEN BEGIN
+        MultiLabCatProdGrp.RESET;
+        MultiLabCatProdGrp.SETRANGE("Item Category Code",xRecItemCatCode);
+        MultiLabCatProdGrp.SETRANGE("Product Group Code",ItemPar."Product Group Code");
+        MultiLabCatProdGrp.SETFILTER("Label Code",'<>%1','');
+        //DOC EC2009.2.67 MQ 29/07/2011 - GW110729 MultiLabCatProdGrp.SETFILTER("ePage GuID",'<>%1',0);
+        //DOC EC2009.2.67 MQ 29/07/2011 - GW110729 MultiLabCatProdGrp.SETRANGE("Auto Update Catalogue",TRUE);
+        IF MultiLabCatProdGrp.FIND('-') THEN
+        REPEAT
+          //DOC EC2009.2.67 MQ 29/07/2011 - GW110729 -
+          IF MultiLabCatProdGrp."Web Attribute Code" <> '' THEN
+            WebAttributeMgt.ControlWebAttributes(ItemPar."No.",'',0,27,MultiLabCatProdGrp."Label Code",
+                            MultiLabCatProdGrp."Web Attribute Code",0,'','',0,FALSE,0D,0T);
+          IF (MultiLabCatProdGrp."ePage GuID" <> 0) AND
+             (MultiLabCatProdGrp."Auto Update Catalogue" = TRUE) THEN
+          //DOC EC2009.2.67 MQ 29/07/2011 - GW110729 +
+            BuildCatCU.DeleteCatBuildData(MultiLabCatProdGrp."Label Code",
+                           MultiLabCatProdGrp."ePage GuID",ItemPar."No.",TRUE);
+        UNTIL MultiLabCatProdGrp.NEXT = 0;
+      END;
+      //DOC EC2009.2.66 +
+
+      IF (xRecItemCatCode <> '') THEN BEGIN
+        MultiLabCatProdGrp.RESET;
+        MultiLabCatProdGrp.SETRANGE("Item Category Code",xRecItemCatCode);
+        MultiLabCatProdGrp.SETRANGE("Product Group Code",'');
+        MultiLabCatProdGrp.SETFILTER("Label Code",'<>%1','');
+        //DOC EC2009.2.68 MQ 03/08/2011 - GW110803 MultiLabCatProdGrp.SETFILTER("Web Attribute Code",'<>%1','');
+        IF MultiLabCatProdGrp.FIND('-') THEN
+        REPEAT
+          IF MultiLabCatProdGrp."Web Attribute Code" <> '' THEN //DOC EC2009.2.68 MQ 03/08/2011 - GW110803
+            WebAttributeMgt.ControlWebAttributes(ItemPar."No.",'',0,27,MultiLabCatProdGrp."Label Code",
+                          MultiLabCatProdGrp."Web Attribute Code",0,'','',0,FALSE,0D,0T);
+          //DOC EC2009.2.68 MQ 03/08/2011 - GW110803 -
+          IF (MultiLabCatProdGrp."ePage GuID" <> 0) AND
+             (MultiLabCatProdGrp."Auto Update Catalogue" = TRUE) THEN
+            BuildCatCU.DeleteCatBuildData(MultiLabCatProdGrp."Label Code",
+                           MultiLabCatProdGrp."ePage GuID",ItemPar."No.",TRUE);
+          //DOC EC2009.2.68 MQ 03/08/2011 - GW110803 +
+        UNTIL MultiLabCatProdGrp.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE ItemCategoryOnVal2@1000000023(VAR ItemPar@1000000000 : Record 27;ItemCatLabelCode@1000000001 : Code[10];ItemCatWebAttCode@1000000002 : Code[20]);
+    BEGIN
+      //DOC EC2009.2.68 MQ 03/08/2011 - GW110803 IF (ItemCatLabelCode <> '') AND
+      //DOC EC2009.2.68 MQ 03/08/2011 - GW110803    (ItemCatWebAttCode <> '') THEN
+      //DOC EC2009.2.68 MQ 03/08/2011 - GW110803   WebAttributeMgt.ControlWebAttributes(ItemPar."No.",'',0,27,ItemCatLabelCode,
+      //DOC EC2009.2.68 MQ 03/08/2011 - GW110803                   ItemCatWebAttCode,0,'','',0,TRUE,0D,0T);
+
+      IF (ItemPar."Item Category Code" <> '') THEN BEGIN
+        MultiLabCatProdGrp.RESET;
+        MultiLabCatProdGrp.SETRANGE("Item Category Code",ItemPar."Item Category Code");
+        MultiLabCatProdGrp.SETRANGE("Product Group Code",'');
+        //DOC EC2009.2.68 MQ 03/08/2011 - GW110803 MultiLabCatProdGrp.SETFILTER("Label Code",'<>%1&<>%2','',ItemCatLabelCode);
+        MultiLabCatProdGrp.SETFILTER("Label Code",'<>%1','');
+        //DOC EC2009.2.68 MQ 03/08/2011 - GW110803 MultiLabCatProdGrp.SETFILTER("Web Attribute Code",'<>%1','');
+        IF MultiLabCatProdGrp.FIND('-') THEN
+        REPEAT
+          IF MultiLabCatProdGrp."Web Attribute Code" <> '' THEN //DOC EC2009.2.68 MQ 03/08/2011 - GW110803
+            WebAttributeMgt.ControlWebAttributes(ItemPar."No.",'',0,27,MultiLabCatProdGrp."Label Code",
+                          MultiLabCatProdGrp."Web Attribute Code",0,'','',0,TRUE,0D,0T);
+          //DOC EC2009.2.68 MQ 03/08/2011 - GW110803 -
+          IF (MultiLabCatProdGrp."ePage GuID" <> 0) AND
+             (MultiLabCatProdGrp."Auto Update Catalogue" = TRUE) THEN BEGIN
+            BuildCatCU.CreateCatBuildData(MultiLabCatProdGrp."Label Code",
+                       MultiLabCatProdGrp."ePage GuID",ItemPar."No.",0,'');
+            ePage.GET(MultiLabCatProdGrp."Label Code",MultiLabCatProdGrp."ePage GuID");
+            IF ePage."Page Item Sort Code" = '' THEN BEGIN
+              BuildCatCU.ApplyOrder(MultiLabCatProdGrp."Label Code",
+                         MultiLabCatProdGrp."ePage GuID",TRUE,TRUE,FALSE);
+              //this is the default of Put Promos at Top, score by Alphabetical and
+              //do not score lowest first.
+              BuildCatCU.TransferBuildDataToPageItems(MultiLabCatProdGrp."Label Code",
+                         MultiLabCatProdGrp."ePage GuID");
+            END ELSE BEGIN
+              //DOC EC2009.2.70
+              PageItemSort.GET(ePage."Label Code",ePage."Page Item Sort Code");
+              IF NOT PageItemSort."Do Not Maintain Catalogue Data" THEN BEGIN
+                BuildCatCU.CalcScore(MultiLabCatProdGrp."Label Code",
+                                     MultiLabCatProdGrp."ePage GuID");
+                BuildCatCU.TransferBuildDataToPageItems(MultiLabCatProdGrp."Label Code",
+                           MultiLabCatProdGrp."ePage GuID");
+              END;
+            END;
+          END;
+          //DOC EC2009.2.68 MQ 03/08/2011 - GW110803 +
+        UNTIL MultiLabCatProdGrp.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE ProdGroupOnVal@1000000020(VAR ItemPar@1000000000 : Record 27;xRecProductGroupCode@1000000001 : Code[10]);
+    VAR
+      ProductGrp@1000000002 : Record 5723;
+    BEGIN
+      //ERROR('item cat %3, prod group %1,xrec %2',ItemPar."Product Group Code",xRecProductGroupCode,
+      //ItemPar."Item Category Code");
+      //DOC EC2009.2.68 MQ 03/08/2011 - GW110803 IF ItemPar."Product Group Code" <> xRecProductGroupCode THEN BEGIN
+        IF xRecProductGroupCode <> '' THEN BEGIN
+          MultiLabCatProdGrp.RESET;
+          MultiLabCatProdGrp.SETRANGE("Item Category Code",ItemPar."Item Category Code");
+          MultiLabCatProdGrp.SETRANGE("Product Group Code",xRecProductGroupCode);
+          MultiLabCatProdGrp.SETFILTER("Label Code",'<>%1','');
+          IF MultiLabCatProdGrp.FIND('-') THEN
+          REPEAT
+            IF MultiLabCatProdGrp."Web Attribute Code" <> '' THEN
+              WebAttributeMgt.ControlWebAttributes(ItemPar."No.",'',0,27,MultiLabCatProdGrp."Label Code",
+                              MultiLabCatProdGrp."Web Attribute Code",0,'','',0,FALSE,0D,0T);
+            //DOC EC2009.2.66 -
+            IF (MultiLabCatProdGrp."ePage GuID" <> 0) AND
+               (MultiLabCatProdGrp."Auto Update Catalogue" = TRUE) THEN
+                 BuildCatCU.DeleteCatBuildData(MultiLabCatProdGrp."Label Code",
+                          MultiLabCatProdGrp."ePage GuID",ItemPar."No.",TRUE);
+            //DOC EC2009.2.66 +
+          UNTIL MultiLabCatProdGrp.NEXT = 0;
+        END;
+        IF ItemPar."Product Group Code" <> '' THEN BEGIN
+          MultiLabCatProdGrp.RESET;
+          MultiLabCatProdGrp.SETRANGE("Item Category Code",ItemPar."Item Category Code");
+          MultiLabCatProdGrp.SETRANGE("Product Group Code",ItemPar."Product Group Code");
+          MultiLabCatProdGrp.SETFILTER("Label Code",'<>%1','');
+          IF MultiLabCatProdGrp.FIND('-') THEN
+          REPEAT
+            IF MultiLabCatProdGrp."Web Attribute Code" <> '' THEN
+              WebAttributeMgt.ControlWebAttributes(ItemPar."No.",'',0,27,MultiLabCatProdGrp."Label Code",
+                            MultiLabCatProdGrp."Web Attribute Code",0,'','',0,TRUE,0D,0T);
+            //DOC EC2009.2.66 -
+            IF (MultiLabCatProdGrp."ePage GuID" <> 0) AND
+               (MultiLabCatProdGrp."Auto Update Catalogue" = TRUE) THEN BEGIN
+              BuildCatCU.CreateCatBuildData(MultiLabCatProdGrp."Label Code",
+                          MultiLabCatProdGrp."ePage GuID",ItemPar."No.",0,'');
+              ePage.GET(MultiLabCatProdGrp."Label Code",MultiLabCatProdGrp."ePage GuID");
+              IF ePage."Page Item Sort Code" = '' THEN BEGIN
+                BuildCatCU.ApplyOrder(MultiLabCatProdGrp."Label Code",
+                            MultiLabCatProdGrp."ePage GuID",TRUE,TRUE,FALSE);
+                //this is the default of Put Promos at Top, score by Alphabetical and
+                //do not score lowest first.
+                BuildCatCU.TransferBuildDataToPageItems(MultiLabCatProdGrp."Label Code",
+                            MultiLabCatProdGrp."ePage GuID");
+              END ELSE BEGIN
+                //DOC EC2009.2.70
+                PageItemSort.GET(ePage."Label Code",ePage."Page Item Sort Code");
+                IF NOT PageItemSort."Do Not Maintain Catalogue Data" THEN BEGIN
+                  BuildCatCU.CalcScore(MultiLabCatProdGrp."Label Code",
+                                        MultiLabCatProdGrp."ePage GuID");
+                  BuildCatCU.TransferBuildDataToPageItems(MultiLabCatProdGrp."Label Code",
+                              MultiLabCatProdGrp."ePage GuID");
+                END;
+              END;
+            END;
+            //DOC EC2009.2.66 +
+          UNTIL MultiLabCatProdGrp.NEXT = 0;
+        END;
+      //DOC EC2009.2.68 MQ 03/08/2011 - GW110803 END;
+    END;
+
+    PROCEDURE BlockedOnlineOnVal@1000000000(VAR ItemPar@1000000001 : Record 27;xRecBlocked@1000000000 : Boolean);
+    VAR
+      LText000@1000000002 : TextConst 'ENU=Warning only .... the item is in;ENG=Warning only .... the item is in';
+    BEGIN
+      //DOC EC2013.3.60 -
+      IF ItemPar."Blocked Online" THEN
+        BlockedCheckInPromos(ItemPar."No.");
+      IF ProbPromos <> '' THEN BEGIN
+        ProbPromos := LText000 + ProbPromos;
+        MESSAGE('%1',ProbPromos);
+      END;
+      //DOC EC2013.3.60 +
+    END;
+
+    PROCEDURE LongestDimOnVal@1000000025(VAR ItemPar@1000000000 : Record 27);
+    BEGIN
+      IF (ItemPar.Height = 0) AND
+        (ItemPar.Width = 0) AND
+        (ItemPar.Depth = 0) THEN
+        ItemPar."Longest Dimension" := 0
+      ELSE BEGIN
+        IF ItemPar.Height > ItemPar.Width THEN BEGIN
+          IF ItemPar.Depth > ItemPar.Height THEN
+            ItemPar."Longest Dimension" := ItemPar.Depth
+          ELSE
+            ItemPar."Longest Dimension" := ItemPar.Height;
+        END ELSE BEGIN
+          IF ItemPar.Depth > ItemPar.Width THEN
+            ItemPar."Longest Dimension" := ItemPar.Depth
+          ELSE
+            ItemPar."Longest Dimension" := ItemPar.Width;
+        END;
+      END;
+      IF (ItemPar.Height <> 0) AND
+        (ItemPar.Width <> 0) AND
+        (ItemPar.Depth <> 0) THEN
+        ItemPar."Unit Volume" := ItemPar.Height * ItemPar.Width * ItemPar.Depth
+      ELSE
+        ItemPar."Unit Volume" := 0;
+
+      RecalcItemShipPricesFunc(ItemPar);
+    END;
+
+    PROCEDURE ManuallySetShipPriceOnVal@1000000026(VAR ItemPar@1000000000 : Record 27;xRecManuallySetShipPrice@1000000002 : Boolean);
+    VAR
+      Text000@1000000001 : TextConst 'ENU=You cannot change the Manually Set Shipping Prices while Item Ship Prices exist.;ENG=You cannot change the Manually Set Shipping Prices while Item Ship Prices exist.';
+    BEGIN
+      IF ItemPar."Manually Set Shipping Prices" <> xRecManuallySetShipPrice THEN BEGIN
+        ItemShipPrice.RESET;
+        ItemShipPrice.SETRANGE("Item No.",ItemPar."No.");
+        IF ItemShipPrice.FINDFIRST THEN
+          ERROR(Text000);
+      END;
+    END;
+
+    PROCEDURE NoOfLoyaltyPointsOnVal@1000000024(VAR ItemPar@1000000000 : Record 27;IsLoyaltyItem@1000000001 : Boolean);
+    BEGIN
+      IF (ItemPar."No. of Loyalty Points" <> 0) AND (IsLoyaltyItem = FALSE) THEN
+        ERROR(TextG000,ItemPar.FIELDCAPTION("No. of Loyalty Points"));
+    END;
+
+    PROCEDURE CanBuyLoyaltyItemOnVal@1000000027(VAR ItemPar@1000000000 : Record 27;IsLoyaltyItem@1000000001 : Boolean);
+    BEGIN
+      IF (ItemPar."Can Buy Loyalty Item" = TRUE) AND (IsLoyaltyItem = FALSE) THEN
+        ERROR(TextG000,ItemPar.FIELDCAPTION("Can Buy Loyalty Item"));
+    END;
+
+    PROCEDURE WebAttributesRequiredOnVal@1000000028(VAR ItemPar@1000000000 : Record 27);
+    BEGIN
+      IF ItemPar."Web Attributes Required" THEN BEGIN
+        WebAttributeRec.RESET;
+        WebAttributeRec.SETRANGE("Table ID",27);
+        WebAttributeRec.SETRANGE("Values Must be Listed",TRUE);
+        IF WebAttributeRec.FIND('-') THEN
+        REPEAT
+          IF NOT WebAttributeValue.GET(WebAttributeRec."Label Code",27,WebAttributeRec.Code,ItemPar."No.",'',0) THEN BEGIN
+            WebAttributeValue.INIT;
+            WebAttributeValue."Label Code" := WebAttributeRec."Label Code";
+            WebAttributeValue."Table ID" := WebAttributeRec."Table ID";
+            WebAttributeValue."Attribute Code" := WebAttributeRec.Code;
+            WebAttributeValue."Key Field String 1" := ItemPar."No.";
+            WebAttributeValue."Global Code" := WebAttributeRec."Global Code";
+            WebAttributeValue."Data Type" := WebAttributeRec."Data Type";
+            CASE WebAttributeValue."Data Type" OF
+              WebAttributeValue."Data Type"::Integer :
+                WebAttributeValue.VALIDATE(IntegerVar,WebAttributeRec."Default Integer Value");
+              WebAttributeValue."Data Type"::Text :
+                WebAttributeValue.VALIDATE(TextVar,WebAttributeRec."Default Text Value");
+              WebAttributeValue."Data Type"::Code :
+                WebAttributeValue.VALIDATE(CodeVar,WebAttributeRec."Default Code Value");
+              WebAttributeValue."Data Type"::Decimal :
+                WebAttributeValue.VALIDATE(DecimalVar,WebAttributeRec."Default Decimal Value");
+              WebAttributeValue."Data Type"::Boolean :
+                WebAttributeValue.VALIDATE(BooleanVar,WebAttributeRec."Default Boolean Value");
+              WebAttributeValue."Data Type"::Date :
+                WebAttributeValue.VALIDATE(DateVar,WebAttributeRec."Default Date Value");
+              WebAttributeValue."Data Type"::Time :
+                WebAttributeValue.VALIDATE(TimeVar,WebAttributeRec."Default Time Value");
+              WebAttributeValue."Data Type"::"Text+Dec" :
+              BEGIN
+                WebAttributeValue.VALIDATE(TextVar,WebAttributeRec."Default Text Value");
+                WebAttributeValue.VALIDATE(DecimalVar,WebAttributeRec."Default Decimal Value");
+              END;
+            END;
+            WebAttributeValue."Web Value Must be Listed" := WebAttributeRec."Values Must be Listed";
+            WebAttributeValue."Web Value Value Not Blank" := WebAttributeRec."Value Must Not Be Blank";
+            WebAttributeValue."Link Table ID" := WebAttributeRec."Link Table ID" ;
+            WebAttributeValue."Link Attribute Code" := WebAttributeRec."Link Attribute Code";
+            WebAttributeValue.DateTimeInsertedModified := CURRENTDATETIME;
+            WebAttributeValue.INSERT;
+          END;
+        UNTIL WebAttributeRec.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE CheckForIntDependencyFunc@1000000021(VAR ItemPar@1000000000 : Record 27;WhatsHappening@1000000001 : Text[20]);
+    VAR
+      Text000@1000000002 : TextConst 'ENU=You cannot %2 an item while it is set up on a %1.;ENG=You cannot %2 an item while it is set up on a %1.';
+    BEGIN
+      ItemPar.CALCFIELDS("No. of Web Pages","On Web Assembly");
+      IF ItemPar."No. of Web Pages" > 0 THEN
+          ERROR(Text000,'Web Page',WhatsHappening);
+      IF ItemPar."On Web Assembly" THEN
+        ERROR(Text000,'Web Assembly',WhatsHappening);
+    END;
+
+    PROCEDURE RecalcItemShipPricesFunc@1000000022(VAR ItemPar@1000000000 : Record 27);
+    VAR
+      ShipControl@1000000002 : Codeunit 9021623;
+    BEGIN
+      InternetSetup.GET;
+      IF InternetSetup."Advanced Shipping Mode" THEN BEGIN
+        ItemPar.MODIFY(TRUE);  //GW if don't put this in, the codeunit does not pick up latest values
+        //DOC EC2013.3.40 ShipControl.UpdateItemShipPrices('','','',0,'','',ItemPar."No.",FALSE);
+        ShipControl.UpdateItemShipPrices('','','',0,'','',ItemPar."No.",FALSE,''); //DOC EC2013.3.40
+      END;
+    END;
+
+    PROCEDURE SetMetaAttributes@1190000005(ItemRec@1190000005 : Record 27);
+    VAR
+      CataloguePageGuids@1190000010 : Text[50];
+      CustSpecParam@1190000011 : Record 9021606;
+      Delimiter@1190000012 : Text[3];
+      LabelCode@1190000007 : Code[10];
+      PageNames@1190000015 : Text[250];
+      ParentPageGuid@1190000006 : Integer;
+      TypeCode@1190000009 : Code[20];
+    BEGIN
+      LabelCode:=GlobalFuncs.GetLabelCode;
+      IF LabelCode = '' THEN EXIT; //DOC EC2013.3.40
+      LabelRec.GET(LabelCode);
+
+      IF NOT LabelRec."Add Meta on Item Desc Validate" THEN EXIT;
+      LanguageCode:=GlobalFuncs.GetLanguage;
+      IF LabelRec."Catalogue Page Guid"<>0 THEN
+        CataloguePageGuids:=FORMAT(LabelRec."Catalogue Page Guid")+','; //more added later if required...
+
+      Delimiter:='|';
+      IF CustSpecParam.GET('META-DELIMITER',LabelRec.Code,0) THEN
+        Delimiter:=CustSpecParam.TextVar;
+      Delimiter:=' '+Delimiter+' ';
+
+      //build the string of owner page names...
+      PageItem.RESET;
+      PageItem.SETRANGE("Label Code",LabelCode);
+      PageItem.SETFILTER(Type,'%1',PageItem.Type::Item);
+      PageItem.SETRANGE("No.",ItemRec."No.");
+
+      //the item may appear on more than one page; but always use the first...
+      IF NOT PageItem.FINDFIRST THEN EXIT;
+
+      //don't auto-populate if disabled flag exists...
+      IF (LabelAttributeRec.GetAttributeValue(LabelCode,TxtProductAttributeType,ItemRec."No.",
+          'META-DISABLEAUTOPOP','') = 'TRUE') THEN EXIT; //DOC EC2013.3.00
+
+      ePage.GET(LabelCode,PageItem."Page GroupGuid");
+      PageNames:=ePage."Menu Name";
+      //get list of customer
+      IF CustSpecParam.GET('META-CAT-PAGEGUIDS',LabelCode,0) THEN
+        CataloguePageGuids:=CustSpecParam.TextVar+',';
+
+
+      //look for a parent pages; build breadcrumb of page names...
+      ParentPageGuid:=ePage.ParentGuID;
+      WHILE (ParentPageGuid<>0) AND (STRPOS(CataloguePageGuids,FORMAT(ePage.ParentGuID)+',')=0) DO BEGIN
+        ePage.RESET;
+        IF ePage.GET(LabelCode,ParentPageGuid) THEN
+          PageNames:=PageNames+Delimiter+ePage."Menu Name";
+        ParentPageGuid:=ePage.ParentGuID;
+      END;
+
+      //IF NOT CONFIRM('parentpageguid (%1) is 0 or found in CataloguePageGuids(%2)',TRUE,ParentPageGuid,CataloguePageGuids)
+        //THEN ERROR('');
+
+      SetMetaAttributeValue('META-TITLE','[product-name] | [page-name] | [site-url]',
+                            ItemRec,PageNames);
+      SetMetaAttributeValue('META-DESCRIPTION','Buy [product-name] from the [page-name] category at [site-url]',
+                            ItemRec,PageNames);
+    END;
+
+    PROCEDURE SetMetaAttributeValue@1190000007(AttrTypeCode@1190000005 : Code[20];DefaultAttrValue@1190000006 : Text[250];ItemRec@1190000010 : Record 27;PageNames@1190000011 : Text[250]);
+    VAR
+      AttributeValue@1190000009 : Text[250];
+      CustSpecParam@1190000008 : Record 9021606;
+      SiteUrl@1190000014 : Text[100];
+    BEGIN
+      AttributeValue:=DefaultAttrValue;
+
+      //check for a customer-specific string template for the meta tag...
+      CustSpecParam.RESET;
+      IF CustSpecParam.GET(AttrTypeCode,LabelRec.Code,0) THEN
+        AttributeValue:=CustSpecParam.TextVar;
+
+      //remove the http:// from the start of the remote site url...
+      SiteUrl:=LabelRec."Remote Shop URL";
+      IF COPYSTR(SiteUrl,1,7)='http://' THEN
+        SiteUrl:=COPYSTR(SiteUrl,8,STRLEN(SiteUrl)-7);
+
+      //build the attribute value and save it...
+      AttributeValue:=StringReplace(AttributeValue,'[product-name]',ItemRec.Description);
+      AttributeValue:=StringReplace(AttributeValue,'[site-url]',SiteUrl);
+      AttributeValue:=StringReplace(AttributeValue,'[page-name]',PageNames);
+      LabelAttributeRec.SetAttributeValue(LabelRec.Code,TxtProductAttributeType,
+                      ItemRec."No.",AttrTypeCode,LanguageCode,AttributeValue); //DOC EC2013.3.00
+    END;
+
+    PROCEDURE StringReplace@1190000006(StringToSearchIn@1190000005 : Text[250];StringToSearchFor@1190000006 : Text[250];StringToReplaceWith@1190000007 : Text[250]) NewString : Text[250];
+    BEGIN
+      WHILE STRPOS(StringToSearchIn,StringToSearchFor) > 0 DO
+        StringToSearchIn:=DELSTR(StringToSearchIn,STRPOS(StringToSearchIn,StringToSearchFor)) + StringToReplaceWith +
+                          COPYSTR(StringToSearchIn,STRPOS(StringToSearchIn,StringToSearchFor) + STRLEN(StringToSearchFor));
+      NewString := StringToSearchIn;
+    END;
+
+    PROCEDURE SetSuppliedLabelAttribute@1190000009(LabAttCode@1190000005 : Code[20];CreatePageItemIfNotExist@1190000006 : Boolean;ItemNo@1190000007 : Code[20];TextValue@1190000008 : Text[250];LabelCodeIn@1190000009 : Code[10]);
+    VAR
+      TextL000@1190000010 : TextConst 'ENU=The supplied Label Attribute Code in the function SetSuppliedLabelAttribute must not be blank.;ENG=The supplied Label Attribute Code in the function SetSuppliedLabelAttribute must not be blank.';
+    BEGIN
+      //DOC EC2009.2.69 - New Function
+      IF LabAttCode = '' THEN
+        ERROR(TextL000);
+
+      LanguageCode:=GlobalFuncs.GetLanguage;
+      IF LabelCodeIn = '' THEN BEGIN
+        LabelRec.RESET;
+        LabelRec.SETRANGE(Active,TRUE);
+        LabelRec.SETRANGE("Used-in Company",COMPANYNAME);
+        IF LabelRec.FIND('-') THEN
+        REPEAT
+          SetSuppliedLabelAttribute2(LabAttCode,CreatePageItemIfNotExist,ItemNo,TextValue,
+                                     LabelRec.Code,LabelRec."Master ePage GuID for Items");
+        UNTIL LabelRec.NEXT = 0;
+      END ELSE BEGIN
+        LabelRec.GET(LabelCodeIn);
+        SetSuppliedLabelAttribute2(LabAttCode,CreatePageItemIfNotExist,ItemNo,TextValue,
+                                   LabelCodeIn,LabelRec."Master ePage GuID for Items");
+      END;
+    END;
+
+    PROCEDURE SetSuppliedLabelAttribute2@1190000011(LabAttCode@1190000005 : Code[20];CreatePageItemIfNotExist@1190000006 : Boolean;ItemNo@1190000007 : Code[20];TextValue@1190000008 : Text[250];LabelCodeIn@1190000009 : Code[10];MasterePage@1190000011 : Integer);
+    VAR
+      TextL000@1190000010 : TextConst 'ENU=Supplied Label Code in function SetSuppliedLabelAttribute2 must not be blank.;ENG=Supplied Label Code in function SetSuppliedLabelAttribute2 must not be blank.';
+      TextL001@1190000012 : TextConst 'ENU=The Master ePage GuID for Items on Label %1 must not be blank if you have set CreatePageItemIfNotExist;ENG=The Master ePage GuID for Items on Label %1 must not be blank if you have set CreatePageItemIfNotExist';
+      LabelAttValueRec@1190000013 : Record 9021624;
+    BEGIN
+      //DOC EC2009.2.69 - New Function 2
+      IF LabelCodeIn = '' THEN
+        ERROR(TextL000);
+
+      PageItem.RESET;
+      PageItem.SETRANGE("Label Code",LabelCodeIn);
+      PageItem.SETFILTER(Type,'%1',PageItem.Type::Item);
+      PageItem.SETRANGE("No.",ItemNo);
+      //the item may appear on more than one page; but always use the first...
+      IF NOT PageItem.FINDFIRST THEN BEGIN
+        IF CreatePageItemIfNotExist THEN BEGIN
+          IF MasterePage = 0 THEN
+            ERROR(TextL001,LabelCodeIn);
+          IF NOT PageItem.GET(LabelCodeIn,MasterePage,PageItem.Type::Item,'',ItemNo) THEN BEGIN
+            PageItem.INIT;
+            PageItem."Label Code" := LabelCodeIn;
+            PageItem."Page GroupGuid" := MasterePage;
+            PageItem.Type := PageItem.Type::Item;
+            PageItem."No." := ItemNo;
+            PageItem.INSERT(TRUE);
+          END;
+        END ELSE
+          EXIT;
+      END;
+      LabelAttributeRec.SetAttributeValue(LabelCodeIn,TxtProductAttributeType,
+                        ItemNo,LabAttCode,LanguageCode,TextValue);  //DOC EC2013.3.00
+    END;
+
+    PROCEDURE ShowWebAttributeIconOnVal@1190000010(VAR ItemPar@1190000005 : Record 27);
+    VAR
+      GlobalCode@1190000007 : Code[20];
+      GlobalRec@1190000006 : Record 9021695;
+      LabelCode@1190000010 : Code[10];
+      WebAttrCode@1190000008 : Code[50];
+      WebAttrName@1190000011 : Text[30];
+    BEGIN
+      LabelCode:=GlobalFuncs.GetLabelCode;
+      GlobalCode:=TxtProductFlag;
+      WebAttrCode:=TxtProductWebAttributeCode;
+      WebAttrName:=TxtProductWebAttributeName;
+
+      IF NOT GlobalRec.GET(LabelCode,GlobalCode) THEN BEGIN
+        //create Global Code...
+        GlobalRec.INIT;
+        GlobalRec."Label Code":=LabelCode;
+        GlobalRec.Name:=WebAttrName;
+        GlobalRec.Code:=GlobalCode;
+        GlobalRec."Default Data Type":=GlobalRec."Default Data Type"::Boolean;
+        GlobalRec."Dynamics Table ID":=27;
+        GlobalRec."Show Attribute Image":=TRUE;
+        GlobalRec."Only Show Attrs With Values":=TRUE;
+        GlobalRec.INSERT(TRUE);
+      END;
+
+      IF NOT WebAttributeRec.GET(LabelCode,27,WebAttrCode) THEN BEGIN
+        //create Web Attribute...
+        WebAttributeRec.INIT;
+        WebAttributeRec."Label Code":=LabelCode;
+        WebAttributeRec."Table ID":=27;
+        WebAttributeRec.Code:=WebAttrCode;
+        WebAttributeRec."Attribute Name":=WebAttrName;
+        WebAttributeRec."Global Code":=GlobalCode;
+        WebAttributeRec."Data Type":=WebAttributeRec."Data Type"::Boolean;
+        WebAttributeRec."Default Image URL":='attributes/ProductHighlightIcon.png';
+        WebAttributeRec.INSERT(TRUE);
+      END;
+
+      WebAttributeMgt.ControlWebAttributeValue(LabelCode,27,ItemPar."No.",'',0,GlobalCode,WebAttrCode,
+        FORMAT(ItemPar."Show Web Attribute Icon"),TRUE);
+    END;
+
+    PROCEDURE BlockedCheckInPromos@1000000001(ItemNo@1000000000 : Code[20]);
+    VAR
+      Promos@1000000001 : Record 9021656;
+      ItemsInPromoG@1000000002 : Record 9021650;
+      PromoQL@1000000003 : Record 9021657;
+      PromoBL@1000000004 : Record 9021658;
+      LText000@1000000007 : TextConst 'ENU=" %1 Released promotions - see %2. ";ENG=" %1 Released promotions - see %2. "';
+      LText001@1000000006 : TextConst 'ENU=" %1 Released promotions - as a start see %2.";ENG=" %1 Released promotions - as a start see %2."';
+      ProbFoundInThisPromo@1000000005 : Boolean;
+    BEGIN
+      i := 0;
+
+      ProbPromos := '';
+
+      Promos.RESET;
+      Promos.SETCURRENTKEY(Released);
+      Promos.SETRANGE(Released,TRUE);
+      Promos.SETFILTER("End Date",'>=%1',TODAY);
+      IF Promos.FIND('-') THEN
+      REPEAT
+        ProbFoundInThisPromo := FALSE;
+        PromoQL.SETRANGE("Promotion No.",Promos."No.");
+        PromoQL.SETRANGE("Applies-to Type",PromoQL."Applies-to Type"::Item);
+        PromoQL.SETRANGE("No.",ItemNo);
+        IF PromoQL.FINDFIRST THEN BEGIN
+          i := i + 1;
+          IF i < 40 THEN BEGIN
+            IF ProbPromos = '' THEN
+              ProbPromos := FORMAT(Promos."No.")
+            ELSE
+              ProbPromos := ProbPromos + ', ' + FORMAT(Promos."No.");
+          END;
+          ProbFoundInThisPromo := TRUE;
+        END;
+        IF ProbFoundInThisPromo = FALSE THEN BEGIN
+          PromoQL.SETRANGE("Applies-to Type",PromoQL."Applies-to Type"::"Promotion Group");
+          PromoQL.SETRANGE("No.");
+          IF PromoQL.FIND('-') THEN
+          REPEAT
+            ItemsInPromoG.RESET;
+            ItemsInPromoG.SETRANGE("Label Code",Promos."Label Code");
+            ItemsInPromoG.SETRANGE("Promotion Group Code",PromoQL."No.");
+            ItemsInPromoG.SETRANGE("Item No.",ItemNo);
+            IF ItemsInPromoG.FINDFIRST THEN BEGIN
+              ProbFoundInThisPromo := TRUE;
+              i := i + 1;
+              IF i < 40 THEN BEGIN
+                IF ProbPromos = '' THEN
+                  ProbPromos := FORMAT(Promos."No.")
+                ELSE
+                  ProbPromos := ProbPromos + ', ' + FORMAT(Promos."No.");
+                END;
+            END;
+          UNTIL (PromoQL.NEXT = 0) OR (ProbFoundInThisPromo = TRUE);
+        END;
+        IF ProbFoundInThisPromo = FALSE THEN BEGIN
+          PromoBL.SETRANGE("Promotion No.",Promos."No.");
+          PromoBL.SETRANGE("Item No.",ItemNo);
+          IF PromoBL.FINDFIRST THEN BEGIN
+            ProbFoundInThisPromo := TRUE;
+            i := i + 1;
+            IF i < 40 THEN BEGIN
+              IF ProbPromos = '' THEN
+                ProbPromos := FORMAT(Promos."No.")
+              ELSE
+                ProbPromos := ProbPromos + ', ' + FORMAT(Promos."No.");
+            END;
+          END;
+        END;
+      UNTIL Promos.NEXT = 0;
+      IF i < 1 THEN BEGIN
+        ProbPromos := '';
+      END ELSE BEGIN
+        IF i < 40 THEN
+          ProbPromos := STRSUBSTNO(LText000,i,ProbPromos)
+        ELSE
+          ProbPromos := STRSUBSTNO(LText001,i,ProbPromos);
+      END;
+    END;
+
+    PROCEDURE CallBlockedCheckInPromos@1000000002(ItemNo@1000000000 : Code[20]) : Text[1000];
+    VAR
+      LText000@1000000002 : TextConst 'ENU=ERROR...this item %1 is not on any other ePage but is on;ENG=ERROR...this item %1 is not on any other ePage but is on';
+    BEGIN
+      //This function called from Page Item OnDelete.
+
+      //ERROR...this item %1 is not on any other ePage but is on
+      BlockedCheckInPromos(ItemNo);
+      IF i > 0 THEN BEGIN
+        ProbPromos := LText000 + ProbPromos;
+        ProbPromos := STRSUBSTNO(ProbPromos,ItemNo);
+      END;
+      EXIT(ProbPromos);
+    END;
+
+    BEGIN
+    {
+      //DOC EC2009.2    MA 04/05/2011 - MA20110504 Added DescriptionOnVal & SetMetaAttribute functions
+      //DOC EC2009.2.66 MQ 01/06/2011 - Added item meta automation
+      //DOC EC2009.2.67 MQ 20/07/2011 - GW110720 OnDelete - delete Catalogue Build Data
+      //DOC EC2009.2.67 MQ 29/07/2011 - GW110729 Delete Product Group web attributes on delete Item Category
+      //DOC EC2009.2.68 MQ 03/08/2011 - GW110803 Handle Item Category having ePage GuID
+      //DOC EC2009.2.68 MQ 15/08/2011 - GW110815 Took out line of code which stopped the OnRename of Web Attribute Values working
+      //DOC EC2009.2.69 MQ 22/08/2011 - GW110822 New function SetSuppliedLabelAttribute and 2 - for BC but can be used for any Label Attribute
+      //DOC EC2009.2.70 MQ 22/11/2011 - GW111122 PageItemSort.Do Not Maintain Catalogue Data functionality
+      //DOC EC2013.3.00 MA 10/05/2012 - MA120510 Added function ShowWebAttributeIconOnVal; Deal with change from Type to Attribute Type
+      //DOC EC2013.3.40 MQ 21/01/2013 - GW130121 change in RecalcItemShipPricesFunc to deal with additional parameter UserContextCode; Exit if not got Label
+      //DOC EC2013.3.60 MQ 01/07/2013 - GW130701 New functions BlockedOnlineOnVal and BlockedCheckInPromos
+      //DOC EC2013.4.50 MQ 21/01/2014 - GW140121 DERM
+      //DOC EC2013.4.60 MQ 14/03/2014 - GW140314 New function DescriptionOnValAliases ELL
+      //DOC EC2015.5.02 MQ 16/04/2015 - GW150416 Add support for DERMUK2015 x1
+      //DOC EC2015.5.03 MQ 05/05/2015 - GW150505 Remove OnInsert, OnModify and comment out OnRename cos only do DateTimeInsMod
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

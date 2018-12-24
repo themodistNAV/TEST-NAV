@@ -1,0 +1,641 @@
+OBJECT Codeunit 50030 Sales Order Update XML
+{
+  OBJECT-PROPERTIES
+  {
+    Date=17/12/18;
+    Time=[ 1:50:56 PM];
+    Modified=Yes;
+    Version List=OP9031,OP10987,OP10933,TM0004,TM0033;
+  }
+  PROPERTIES
+  {
+    TableNo=9062734;
+    Permissions=TableData 110=rm,
+                TableData 111=rm;
+    OnRun=VAR
+            AutoNAVToolkit@1000000000 : Codeunit 9062602;
+          BEGIN
+            ClearLastErrors;
+            IF NOT SalesOrderUpdateXML(Filename) THEN BEGIN
+              LogError(GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ExportXML'),GETLASTERRORCODE,Filename);
+              AutoNAVToolkit.AddEntryForTask(Rec,GETLASTERRORTEXT,2);//DOC OP10933 CB 15/06/17 -+
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ERRLOCATION@1000000000 : TextConst 'ENU=%1\Codeunit 50030;ENG=%1\Codeunit 50030';
+      Filename@1000000001 : Text;
+      FileCreated@1000000002 : Boolean;
+      "--TMgVariables--"@1000000003 : Integer;
+      Item@1000000004 : Record 27;
+
+    [TryFunction]
+    PROCEDURE SalesOrderUpdateXML@1000000001(VAR pFilename@1000000019 : Text);
+    VAR
+      XMLDoc@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLWriter@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlWriter";
+      ModistSetup@1000000002 : Record 50000;
+      SalesHeader@1000000003 : Record 36;
+      WebIntegrationManagement@1000000005 : Codeunit 50100;
+      SalesLine@1000000006 : Record 37;
+      IntegrationProcessStaging@1000000008 : Record 50004;
+      IntegrationProcessFunction@1000000010 : Record 50005;
+      TempLineNo@1000000004 : Integer;
+      i@1000000012 : Integer;
+      SalesShipment@1000000011 : Record 110;
+      SalesShipmentLine@1000000014 : Record 111;
+      IntegrationProcessStagingToUpdate@1000000007 : Record 50004;
+      SalesHeaderArchive@1000000009 : Record 5107;
+      SalesLineArchive@1000000013 : Record 5108;
+      MixedCancelled@1000000015 : Boolean;
+      IntegrationProcessingGroup@1000450016 : Record 50007;
+      FileName@1000000017 : Text;
+      IntegrationFunctions@1000000018 : Codeunit 50008;
+      RecordProcessed@1000000020 : Boolean;
+      SalesCrMemoHeader@1000000021 : Record 114;
+      SalesCrMemoLine@1000000022 : Record 115;
+    BEGIN
+      //This function facilitates the communication of non shipped sales order status updates to the website
+      //DOC OP9031 RK 02/02/17 -
+      FileCreated := FALSE;
+      //DOC OP9031 RK 02/02/17 +
+      ModistSetup.GET;
+
+      IntegrationProcessingGroup.GET(ModistSetup."Demandware Integration Type",ModistSetup."Demandware Order Update Group");
+
+      //iterate through unprocessed documents in new process table
+      IntegrationProcessStaging.RESET;
+      IntegrationProcessStaging.SETCURRENTKEY("Integration Type","Group Code",Processed);
+      IntegrationProcessStaging.SETRANGE("Integration Type",ModistSetup."Demandware Integration Type");
+      IntegrationProcessStaging.SETRANGE("Group Code",ModistSetup."Demandware Order Update Group");
+      IntegrationProcessStaging.SETRANGE(Processed,FALSE);
+
+
+      IF IntegrationProcessStaging.FINDSET THEN BEGIN
+
+        FileName := WebIntegrationManagement.OrderUpdateFileName;
+        pFilename := FileName;
+      //DOC OP9031 RK 02/02/17 -
+        //XMLWriter := XMLWriter.Create(FileName);
+        //XMLWriter.WriteStartElement('orders','http://www.demandware.com/xml/impex/order/2006-10-31');
+      //DOC OP9031 RK 02/02/17 +
+        REPEAT
+          //DOC OP9031 RK 02/02/17 -
+          RecordProcessed := FALSE;
+          //DOC OP9031 RK 02/02/17 +
+          CASE IntegrationProcessStaging."Function Code" OF
+
+            'SALESUPDATEPROCESSING','SALESUPDATEPICKING' : BEGIN
+
+      // OP10987 Moved as we need the Sales Order know <<
+      //        IntegrationProcessFunction.RESET;
+      //        IntegrationProcessFunction.GET(IntegrationProcessStaging."Integration Type",IntegrationProcessStaging."Group Code", IntegrationProcessStaging."Function Code");
+      // OP10987 >>
+
+              IF SalesHeader.GET(SalesHeader."Document Type"::Order,IntegrationProcessStaging."Document No.") THEN BEGIN
+              // OP10987 Moved as we need the Sales Order know <<
+              IntegrationProcessFunction.RESET;
+              IntegrationProcessFunction.GET(IntegrationProcessStaging."Integration Type",IntegrationProcessStaging."Group Code", IntegrationProcessStaging."Function Code",SalesHeader."Customer Locale");
+              // OP10987 >>
+              //DOC OP9031 RK 02/02/17 -
+                IF FileCreated = FALSE THEN BEGIN
+                  XMLWriter := XMLWriter.Create(FileName);
+                  XMLWriter.WriteStartElement('orders','http://www.demandware.com/xml/impex/order/2006-10-31');
+                  FileCreated := TRUE;
+                END;
+                RecordProcessed := TRUE;
+              //DOC OP9031 RK 02/02/17 +
+
+                  XMLWriter.WriteStartElement('order'); // <order>+
+                  //DOC OP9031 RK 18/01/17 -
+                    IF SalesHeader."Internet Order Reference" <> '' THEN
+                      XMLWriter.WriteAttributeString('order-no',SalesHeader."Internet Order Reference")
+                    ELSE
+                  //DOC OP9031 RK 18/01/17 +
+                      XMLWriter.WriteAttributeString('order-no',SalesHeader."No.");
+                      XMLWriter.WriteStartElement('status');  // <status>+
+                        XMLWriter.WriteElementString('order-status',IntegrationProcessFunction."Attribute Value1");
+                        XMLWriter.WriteElementString('shipping-status',IntegrationProcessFunction."Attribute Value2");
+                      XMLWriter.WriteEndElement; // </status>-
+                      XMLWriter.WriteStartElement('product-lineitems'); // <product-lineitems>+
+                        SalesLine.RESET;
+                        SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+                        SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+                      //DOC OP9031 RK 31/01/17 -
+                        SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+                        SalesLine.SETFILTER("No.",'<>%1','');
+                      //DOC OP9031 RK 31/01/17 +
+                        IF SalesLine.FINDSET THEN BEGIN
+                          REPEAT
+                            SalesLine."Line Status" := IntegrationProcessFunction."Line Status";
+                            SalesLine.MODIFY;
+                            Item.GET(SalesLine."No."); //TM0020 -+
+                            XMLWriter.WriteStartElement('product-lineitem');  // <product-lineitem>+
+                            XMLWriter.WriteElementString('product-id',SalesLine."No." + '-' + SalesLine."Variant Code");
+                              XMLWriter.WriteElementString('external-line-item-status',WebIntegrationManagement.ItemStatusDescription(SalesLine."Line Status"));
+                              //XMLWriter.WriteElementString('IsReturnable',FORMAT(Item."Is Returnable",0,9)); //TM0004 -+
+                              XMLWriter.WriteElementString('IsReturnable',FORMAT(SalesLine."Is Returnable",0,9)); //TM0033 -+
+                            XMLWriter.WriteEndElement; // </product-lineitem>-
+                          UNTIL SalesLine.NEXT = 0;
+                        END;
+                      XMLWriter.WriteEndElement; // </product-lineitems>-
+                      XMLWriter.WriteStartElement('shipments'); // <shipments>+
+                        XMLWriter.WriteStartElement('shipment');  // <shipment>+
+                          XMLWriter.WriteAttributeString('shipment-id',SalesHeader."Shipment ID");
+                          XMLWriter.WriteStartElement('status');  // <status>+
+                            XMLWriter.WriteElementString('shipping-status',IntegrationProcessFunction."Attribute Value3");
+                          XMLWriter.WriteEndElement; // </status>-
+                        XMLWriter.WriteEndElement; // </shipment>-
+                      XMLWriter.WriteEndElement; // </shipments>-
+                      XMLWriter.WriteElementString('modistOrderStatus',IntegrationProcessFunction."Attribute Value4");
+                  XMLWriter.WriteEndElement; // </order>-
+                  //update order status
+                  //SalesHeader."Order Status" := IntegrationProcessFunction."Attribute Value4";
+                  //SalesHeader.MODIFY;
+              END; //IF SalesHeader.GET
+            END; //SALESUPDATEPROCESSING
+
+            'SALESUPDATESHIPPED' : BEGIN  //Shipped
+
+              // OP10987 Moved as we need the Sales Order know <<
+              //  IntegrationProcessFunction.RESET;
+              //  IntegrationProcessFunction.GET(IntegrationProcessStaging."Integration Type",IntegrationProcessStaging."Group Code",IntegrationProcessStaging."Function Code");
+              // OP10987 >>
+
+                //Get sales shipment
+                SalesShipment.RESET;
+                SalesShipment.SETRANGE("Order No.",IntegrationProcessStaging."Document No.");
+
+                IF SalesShipment.FINDSET THEN BEGIN
+
+      // OP10987 Moved as we need the Sales Order know <<
+                  IntegrationProcessFunction.RESET;
+                  IntegrationProcessFunction.GET(IntegrationProcessStaging."Integration Type",IntegrationProcessStaging."Group Code",IntegrationProcessStaging."Function Code",SalesShipment."Customer Locale");
+      // OP10987 >>
+
+                //DOC OP9031 RK 02/02/17 -
+                  IF FileCreated = FALSE THEN BEGIN
+                    XMLWriter := XMLWriter.Create(FileName);
+                    XMLWriter.WriteStartElement('orders','http://www.demandware.com/xml/impex/order/2006-10-31');
+                    FileCreated := TRUE;
+                  END;
+                  RecordProcessed := TRUE;
+                //DOC OP9031 RK 02/02/17 +
+                  REPEAT
+                    XMLWriter.WriteStartElement('order'); // <order>+
+                  //DOC OP9031 RK 18/01/17 -
+                    IF SalesShipment."Internet Order Reference" <> '' THEN
+                      XMLWriter.WriteAttributeString('order-no',SalesShipment."Internet Order Reference")
+                    ELSE
+                  //DOC OP9031 RK 18/01/17 +
+                      XMLWriter.WriteAttributeString('order-no',SalesShipment."Order No.");
+                      XMLWriter.WriteStartElement('status');  // <status>+
+                        XMLWriter.WriteElementString('order-status',IntegrationProcessFunction."Attribute Value1");
+                        XMLWriter.WriteElementString('shipping-status',IntegrationProcessFunction."Attribute Value2");
+                      XMLWriter.WriteEndElement; // </status>-
+                      XMLWriter.WriteStartElement('product-lineitems'); // <product-lineitems>+
+                        SalesShipmentLine.RESET;
+                        SalesShipmentLine.SETRANGE("Document No.",SalesShipment."No.");
+                      //DOC OP9031 RK 31/01/17 -
+                        SalesShipmentLine.SETRANGE(Type,SalesShipmentLine.Type::Item);
+                        SalesShipmentLine.SETFILTER("No.",'<>%1','');
+                      //DOC OP9031 RK 31/01/17 +
+                        IF SalesShipmentLine.FINDSET THEN BEGIN
+                          REPEAT
+                            SalesShipmentLine."Line Status" := IntegrationProcessFunction."Line Status";
+                            SalesShipmentLine.MODIFY;
+                            Item.GET(SalesShipmentLine."No."); //TM0020 -+
+
+                            XMLWriter.WriteStartElement('product-lineitem');  // <product-lineitem>+
+                            XMLWriter.WriteElementString('product-id',SalesShipmentLine."No." + '-' + SalesShipmentLine."Variant Code");
+                            XMLWriter.WriteElementString('external-line-item-status',WebIntegrationManagement.ItemStatusDescription(SalesShipmentLine."Line Status"));
+                            //XMLWriter.WriteElementString('IsReturnable',FORMAT(Item."Is Returnable",0,9)); //TM0004 -+
+                            XMLWriter.WriteElementString('IsReturnable',FORMAT(SalesShipmentLine."Is Returnable",0,9)); //TM0004 -+
+                            XMLWriter.WriteEndElement; // </product-lineitem>-
+                          UNTIL SalesShipmentLine.NEXT = 0;
+                        END;
+                      XMLWriter.WriteEndElement; // </product-lineitems>-
+                      XMLWriter.WriteStartElement('shipments'); // <shipments>+
+                        XMLWriter.WriteStartElement('shipment');  // <shipment>+
+                          XMLWriter.WriteAttributeString('shipment-id',SalesShipment."Shipment ID");
+                          XMLWriter.WriteStartElement('status');  // <status>+
+                            XMLWriter.WriteElementString('shipping-status',IntegrationProcessFunction."Attribute Value3");
+                          XMLWriter.WriteEndElement; // </status>-
+                          //DOC OP9031 RK 03/02/17 -
+                          //XMLWriter.WriteElementString('tracking-number',SalesShipment."Package Tracking No.");
+                          //XMLWriter.WriteElementString('trackingURL',BuildTrackingURL(SalesShipment."Sell-to Customer No.",SalesShipment."Airway Bill No."));
+                          XMLWriter.WriteElementString('tracking-number',SalesShipment."Airway Bill No.");
+                          //DOC TM1421 AW 07/09/2018 -
+                          IF SalesShipment."Return Airway Bill Number" <> '' THEN
+                            XMLWriter.WriteElementString('awb-return-tracking-number',SalesShipment."Return Airway Bill Number"); //TM
+                          //DOC TM1421 AW 07/09/2018 +
+                          XMLWriter.WriteElementString('trackingURL',BuildTrackingURL(SalesShipment."Shipment Method Code",SalesShipment."Airway Bill No."));
+                          //DOC OP9031 RK 03/02/17 +
+                        XMLWriter.WriteEndElement; // </shipment>-
+                      XMLWriter.WriteEndElement; // </shipments>-
+                      XMLWriter.WriteElementString('modistOrderStatus',IntegrationProcessFunction."Attribute Value4");
+                    XMLWriter.WriteEndElement; // </order>-
+                    SalesShipment."Order Status" := IntegrationProcessFunction."Attribute Value4";
+                    SalesShipment.MODIFY;
+                  UNTIL SalesShipment.NEXT = 0;
+                END;
+            END;
+
+            'SALESRETRECEIVED' : BEGIN  //Received
+
+              // OP10987 Moved as we need the Sales Order know <<
+              //  IntegrationProcessFunction.RESET;
+              //  IntegrationProcessFunction.GET(IntegrationProcessStaging."Integration Type",IntegrationProcessStaging."Group Code",IntegrationProcessStaging."Function Code");
+              // OP10987 >>
+
+                //Get sales shipment
+                SalesCrMemoHeader.GET(IntegrationProcessStaging."Document No.");
+                SalesShipment.RESET;
+                SalesShipment.SETRANGE("Order No.",SalesCrMemoHeader."Origianl Order No.");
+
+                IF SalesShipment.FINDSET THEN BEGIN
+
+      // OP10987 Moved as we need the Sales Order know <<
+                  IntegrationProcessFunction.RESET;
+                  IntegrationProcessFunction.GET(IntegrationProcessStaging."Integration Type",IntegrationProcessStaging."Group Code",IntegrationProcessStaging."Function Code",SalesShipment."Customer Locale");
+      // OP10987 >>
+
+                //DOC OP9031 RK 02/02/17 -
+                  IF FileCreated = FALSE THEN BEGIN
+                    XMLWriter := XMLWriter.Create(FileName);
+                    XMLWriter.WriteStartElement('orders','http://www.demandware.com/xml/impex/order/2006-10-31');
+                    FileCreated := TRUE;
+                  END;
+                  RecordProcessed := TRUE;
+                //DOC OP9031 RK 02/02/17 +
+                  REPEAT
+                    XMLWriter.WriteStartElement('order'); // <order>+
+                  //DOC OP9031 RK 18/01/17 -
+                    IF SalesShipment."Internet Order Reference" <> '' THEN
+                      XMLWriter.WriteAttributeString('order-no',SalesShipment."Internet Order Reference")
+                    ELSE
+                  //DOC OP9031 RK 18/01/17 +
+                      XMLWriter.WriteAttributeString('order-no',SalesShipment."Order No.");
+                      XMLWriter.WriteStartElement('product-lineitems'); // <product-lineitems>+
+                        SalesCrMemoLine.RESET;
+                        SalesCrMemoLine.SETRANGE("Document No.",SalesCrMemoHeader."No.");
+                      //DOC OP9031 RK 31/01/17 -
+                        SalesCrMemoLine.SETRANGE(Type,SalesCrMemoLine.Type::Item);
+                        SalesCrMemoLine.SETFILTER("No.",'<>%1','');
+                      //DOC OP9031 RK 31/01/17 +
+                        IF SalesCrMemoLine.FINDSET THEN BEGIN
+                          REPEAT
+                            //SalesShipmentLine."Line Status" := IntegrationProcessFunction."Line Status";
+                            //SalesShipmentLine.MODIFY;
+                            Item.GET(SalesCrMemoLine."No."); //TM0020 -+
+
+                            XMLWriter.WriteStartElement('product-lineitem');  // <product-lineitem>+
+                            IF SalesCrMemoLine."Variant Code" <> '' THEN
+                              XMLWriter.WriteElementString('product-id',SalesCrMemoLine."No." + '-' + SalesCrMemoLine."Variant Code")
+                            ELSE
+                              XMLWriter.WriteElementString('product-id',SalesCrMemoLine."No.");
+                            XMLWriter.WriteElementString('external-line-item-status','This item has been received');
+                            //XMLWriter.WriteElementString('IsReturnable',FORMAT(Item."Is Returnable",0,9)); //TM0020 -+
+                            XMLWriter.WriteElementString('IsReturnable',FORMAT(SalesCrMemoLine."Is Returnable",0,9)); //TM0033 -+
+                            XMLWriter.WriteEndElement; // </product-lineitem>-
+                          UNTIL SalesCrMemoLine.NEXT = 0;
+                        END;
+                      XMLWriter.WriteEndElement; // </product-lineitems>-
+                      XMLWriter.WriteStartElement('shipments'); // <shipments>+
+                        XMLWriter.WriteStartElement('shipment');  // <shipment>+
+                          XMLWriter.WriteAttributeString('shipment-id',SalesShipment."Shipment ID");
+                          XMLWriter.WriteStartElement('status');  // <status>+
+                            XMLWriter.WriteElementString('shipping-status',IntegrationProcessFunction."Attribute Value3");
+                          XMLWriter.WriteEndElement; // </status>-
+                          //DOC OP9031 RK 03/02/17 -
+                          //XMLWriter.WriteElementString('tracking-number',SalesShipment."Package Tracking No.");
+                          //XMLWriter.WriteElementString('trackingURL',BuildTrackingURL(SalesShipment."Sell-to Customer No.",SalesShipment."Airway Bill No."));
+                          XMLWriter.WriteElementString('tracking-number',SalesShipment."Airway Bill No.");
+                          //DOC TM1421 AW 07/09/2018 -
+                          IF SalesShipment."Return Airway Bill Number" <> '' THEN
+                            XMLWriter.WriteElementString('awb-return-tracking-number',SalesShipment."Return Airway Bill Number"); //TM
+                          //DOC TM1421 AW 07/09/2018 +
+                          XMLWriter.WriteElementString('trackingURL',BuildTrackingURL(SalesShipment."Shipment Method Code",SalesShipment."Airway Bill No."));
+                          //DOC OP9031 RK 03/02/17 +
+                        XMLWriter.WriteEndElement; // </shipment>-
+                      XMLWriter.WriteEndElement; // </shipments>-
+                      XMLWriter.WriteElementString('modistOrderStatus',IntegrationProcessFunction."Attribute Value4");
+                    XMLWriter.WriteEndElement; // </order>-
+                    //SalesShipment."Order Status" := IntegrationProcessFunction."Attribute Value4";
+                    //SalesShipment.MODIFY;
+                  UNTIL SalesShipment.NEXT = 0;
+                END;
+            END;
+
+            'SALESRETREFUND' : BEGIN  //Refunded
+
+              // OP10987 Moved as we need the Sales Order know <<
+              //  IntegrationProcessFunction.RESET;
+              //  IntegrationProcessFunction.GET(IntegrationProcessStaging."Integration Type",IntegrationProcessStaging."Group Code",IntegrationProcessStaging."Function Code");
+              // OP10987 >>
+
+                //Get sales shipment
+                SalesCrMemoHeader.GET(IntegrationProcessStaging."Document No.");
+                SalesShipment.RESET;
+                SalesShipment.SETRANGE("Order No.",SalesCrMemoHeader."Origianl Order No.");
+
+                IF SalesShipment.FINDSET THEN BEGIN
+
+      // OP10987 Moved as we need the Sales Order know <<
+                  IntegrationProcessFunction.RESET;
+                  IntegrationProcessFunction.GET(IntegrationProcessStaging."Integration Type",IntegrationProcessStaging."Group Code",IntegrationProcessStaging."Function Code",SalesShipment."Customer Locale");
+      // OP10987 >>
+
+                //DOC OP9031 RK 02/02/17 -
+                  IF FileCreated = FALSE THEN BEGIN
+                    XMLWriter := XMLWriter.Create(FileName);
+                    XMLWriter.WriteStartElement('orders','http://www.demandware.com/xml/impex/order/2006-10-31');
+                    FileCreated := TRUE;
+                  END;
+                  RecordProcessed := TRUE;
+                //DOC OP9031 RK 02/02/17 +
+                  REPEAT
+                    XMLWriter.WriteStartElement('order'); // <order>+
+                  //DOC OP9031 RK 18/01/17 -
+                    IF SalesShipment."Internet Order Reference" <> '' THEN
+                      XMLWriter.WriteAttributeString('order-no',SalesShipment."Internet Order Reference")
+                    ELSE
+                  //DOC OP9031 RK 18/01/17 +
+                      XMLWriter.WriteAttributeString('order-no',SalesShipment."Order No.");
+                      XMLWriter.WriteStartElement('product-lineitems'); // <product-lineitems>+
+                        SalesCrMemoLine.RESET;
+                        SalesCrMemoLine.SETRANGE("Document No.",SalesCrMemoHeader."No.");
+                      //DOC OP9031 RK 31/01/17 -
+                        SalesCrMemoLine.SETRANGE(Type,SalesCrMemoLine.Type::Item);
+                        SalesCrMemoLine.SETFILTER("No.",'<>%1','');
+                      //DOC OP9031 RK 31/01/17 +
+                        IF SalesCrMemoLine.FINDSET THEN BEGIN
+                          REPEAT
+                            //SalesShipmentLine."Line Status" := IntegrationProcessFunction."Line Status";
+                            //SalesShipmentLine.MODIFY;
+                            Item.GET(SalesCrMemoLine."No."); //TM0020 -+
+
+                            XMLWriter.WriteStartElement('product-lineitem');  // <product-lineitem>+
+                            IF SalesCrMemoLine."Variant Code" <> '' THEN
+                              XMLWriter.WriteElementString('product-id',SalesCrMemoLine."No." + '-' + SalesCrMemoLine."Variant Code")
+                            ELSE
+                              XMLWriter.WriteElementString('product-id',SalesCrMemoLine."No.");
+                            XMLWriter.WriteElementString('external-line-item-status','This item has been refunded');
+                            //XMLWriter.WriteElementString('IsReturnable',FORMAT(Item."Is Returnable",0,9)); //TM0020 -+
+                            XMLWriter.WriteElementString('IsReturnable',FORMAT(SalesCrMemoLine."Is Returnable",0,9)); //TM0033 -+
+                            XMLWriter.WriteEndElement; // </product-lineitem>-
+                          UNTIL SalesCrMemoLine.NEXT = 0;
+                        END;
+                      XMLWriter.WriteEndElement; // </product-lineitems>-
+                      XMLWriter.WriteStartElement('shipments'); // <shipments>+
+                        XMLWriter.WriteStartElement('shipment');  // <shipment>+
+                          XMLWriter.WriteAttributeString('shipment-id',SalesShipment."Shipment ID");
+                          XMLWriter.WriteStartElement('status');  // <status>+
+                            XMLWriter.WriteElementString('shipping-status',IntegrationProcessFunction."Attribute Value3");
+                          XMLWriter.WriteEndElement; // </status>-
+                          //DOC OP9031 RK 03/02/17 -
+                          //XMLWriter.WriteElementString('tracking-number',SalesShipment."Package Tracking No.");
+                          //XMLWriter.WriteElementString('trackingURL',BuildTrackingURL(SalesShipment."Sell-to Customer No.",SalesShipment."Airway Bill No."));
+                          XMLWriter.WriteElementString('tracking-number',SalesShipment."Airway Bill No.");
+                          //DOC TM1421 AW 07/09/2018 -
+                          IF SalesShipment."Return Airway Bill Number" <> '' THEN
+                            XMLWriter.WriteElementString('awb-return-tracking-number',SalesShipment."Return Airway Bill Number"); //TM
+                          //DOC TM1421 AW 07/09/2018 +
+                          XMLWriter.WriteElementString('trackingURL',BuildTrackingURL(SalesShipment."Shipment Method Code",SalesShipment."Airway Bill No."));
+                          //DOC OP9031 RK 03/02/17 +
+                        XMLWriter.WriteEndElement; // </shipment>-
+                      XMLWriter.WriteEndElement; // </shipments>-
+                      XMLWriter.WriteElementString('modistOrderStatus',IntegrationProcessFunction."Attribute Value4");
+                    XMLWriter.WriteEndElement; // </order>-
+                    //SalesShipment."Order Status" := IntegrationProcessFunction."Attribute Value4";
+                    //SalesShipment.MODIFY;
+                  UNTIL SalesShipment.NEXT = 0;
+                END;
+            END;
+
+
+            'SALESUPDATECANCELLED' : BEGIN  //Cancelled
+
+      // OP10987 Moved as we need the Sales Order know <<
+      //          IntegrationProcessFunction.RESET;
+      //          IntegrationProcessFunction.GET(IntegrationProcessStaging."Integration Type",IntegrationProcessStaging."Group Code",IntegrationProcessStaging."Function Code");
+      // OP10987 >>
+
+                //Get sales shipment
+                SalesHeaderArchive.RESET;
+                SalesHeaderArchive.SETRANGE("No.",IntegrationProcessStaging."Document No.");
+                IF SalesHeaderArchive.FINDSET THEN BEGIN
+
+      // OP10987 Moved as we need the Sales Order know <<
+                IntegrationProcessFunction.RESET;
+                IntegrationProcessFunction.GET(IntegrationProcessStaging."Integration Type",IntegrationProcessStaging."Group Code",IntegrationProcessStaging."Function Code",SalesHeaderArchive."Customer Locale");
+      // OP10987 >>
+
+                //DOC OP9031 RK 02/02/17 -
+                  IF FileCreated = FALSE THEN BEGIN
+                    XMLWriter := XMLWriter.Create(FileName);
+                    XMLWriter.WriteStartElement('orders','http://www.demandware.com/xml/impex/order/2006-10-31');
+                    FileCreated := TRUE;
+                  END;
+                  RecordProcessed := TRUE;
+                //DOC OP9031 RK 02/02/17 +
+                  REPEAT
+                    MixedCancelled := IsMixedCancellation(SalesHeaderArchive); //determine if the order has mixed cancelled and picked /processed lines
+                    XMLWriter.WriteStartElement('order'); // <order>+
+                  //DOC OP9031 RK 18/01/17 -
+                    IF SalesHeaderArchive."Internet Order Reference" <> '' THEN
+                      XMLWriter.WriteAttributeString('order-no',SalesHeaderArchive."Internet Order Reference")
+                    ELSE
+                  //DOC OP9031 RK 18/01/17 +
+                      XMLWriter.WriteAttributeString('order-no',SalesHeaderArchive."No.");
+                      XMLWriter.WriteStartElement('status');  // <status>+
+                        IF MixedCancelled THEN
+                          XMLWriter.WriteElementString('order-status','PROCESSING')
+                        ELSE
+                          XMLWriter.WriteElementString('order-status',IntegrationProcessFunction."Attribute Value1");
+                        XMLWriter.WriteElementString('shipping-status',IntegrationProcessFunction."Attribute Value2");
+                      XMLWriter.WriteEndElement; // </status>-
+                      XMLWriter.WriteStartElement('product-lineitems'); // <product-lineitems>+
+                        SalesLineArchive.RESET;
+                        SalesLineArchive.SETRANGE("Document Type",SalesHeaderArchive."Document Type");
+                        SalesLineArchive.SETRANGE("Document No.",SalesHeaderArchive."No.");
+                        SalesLineArchive.SETRANGE("Doc. No. Occurrence",SalesHeaderArchive."Doc. No. Occurrence");
+                        SalesLineArchive.SETRANGE("Version No.",SalesHeaderArchive."Doc. No. Occurrence");
+                      //DOC OP9031 RK 31/01/17 -
+                        SalesLineArchive.SETRANGE(Type,SalesLineArchive.Type::Item);
+                        SalesLineArchive.SETFILTER("No.",'<>%1','');
+                      //DOC OP9031 RK 31/01/17 +
+                        IF SalesLineArchive.FINDSET THEN BEGIN
+                          REPEAT
+                            Item.GET(SalesLineArchive."No."); //TM0004 -+
+                            XMLWriter.WriteStartElement('product-lineitem');  // <product-lineitem>+
+                            XMLWriter.WriteElementString('product-id',SalesLineArchive."No." + '-' + SalesLineArchive."Variant Code");
+                            XMLWriter.WriteElementString('external-line-item-status',WebIntegrationManagement.ItemStatusDescription(SalesLineArchive."Line Status"));
+                            //XMLWriter.WriteElementString('IsReturnable',FORMAT(Item."Is Returnable",0,9)); //TM0004 -+
+                            XMLWriter.WriteElementString('IsReturnable',FORMAT(SalesLineArchive."Is Returnable",0,9)); //TM0033 -+
+
+                            XMLWriter.WriteEndElement; // </product-lineitem>-
+                          UNTIL SalesLineArchive.NEXT = 0;
+                        END;
+                      XMLWriter.WriteEndElement; // </product-lineitems>-
+                      XMLWriter.WriteStartElement('shipments'); // <shipments>+
+                        XMLWriter.WriteStartElement('shipment');  // <shipment>+
+                          XMLWriter.WriteAttributeString('shipment-id',SalesHeaderArchive."Shipment ID");
+                          XMLWriter.WriteStartElement('status');  // <status>+
+                            XMLWriter.WriteElementString('shipping-status',IntegrationProcessFunction."Attribute Value3");
+                          XMLWriter.WriteEndElement; // </status>-
+                        XMLWriter.WriteEndElement; // </shipment>-
+                      XMLWriter.WriteEndElement; // </shipments>-
+                      IF MixedCancelled THEN
+                        XMLWriter.WriteElementString('modistOrderStatus','PROCESSING')
+                      ELSE
+                        XMLWriter.WriteElementString('modistOrderStatus',IntegrationProcessFunction."Attribute Value4");
+                    XMLWriter.WriteEndElement; // </order>-
+                  UNTIL SalesHeaderArchive.NEXT = 0;
+                END;
+            END;  //SALESUPDATECANCELLED
+
+          END;//CASE
+        //DOC OP9031 RK 02/02/17 -
+          IF RecordProcessed = TRUE THEN BEGIN
+        //DOC OP9031 RK 02/02/17 +
+           //Mark the staging record as processed
+          IntegrationProcessStagingToUpdate.GET(IntegrationProcessStaging."Entry No.");
+          IntegrationProcessStagingToUpdate.Processed := TRUE;
+          IntegrationProcessStagingToUpdate.MODIFY;
+        //DOC OP9031 RK 02/02/17 -
+          END;
+        //DOC OP9031 RK 02/02/17 +
+        UNTIL IntegrationProcessStaging.NEXT = 0;
+      //DOC OP9031 RK 02/02/17 -
+        IF FileCreated = TRUE THEN BEGIN
+      //DOC OP9031 RK 02/02/17 +
+        XMLWriter.WriteEndElement; // </orders>-
+        XMLWriter.Flush;
+        XMLWriter.Close;
+
+        //connect to SFTP and upload file
+        IF IntegrationProcessingGroup."Enable SFTP Connect" THEN BEGIN //if we are ready to connect to sftp
+          WebIntegrationManagement.TransferFTPfiles(IntegrationProcessingGroup."Working Location",IntegrationProcessingGroup."Archive Location",'.xml',ModistSetup."FTP temporary file extension",
+                                                  ModistSetup."Demandware Export SFTP Server",IntegrationProcessingGroup."FTP Folder",IntegrationProcessingGroup."FTP Archive Folder",TRUE);
+        END;
+
+        //Log integration
+        IntegrationFunctions.LogDMWOrderUpdate(FileName,'');
+      //DOC OP9031 RK 02/02/17 -
+        END;
+      //DOC OP9031 RK 02/02/17 +
+      END ELSE BEGIN
+        IF GUIALLOWED THEN
+          MESSAGE('Nothing to process');
+      END;
+    END;
+
+    LOCAL PROCEDURE BuildTrackingURL@1000000000(ShipMethod@1000000000 : Code[20];TrackingID@1000000001 : Text[50]) : Text;
+    VAR
+      Cust@1000000002 : Record 18;
+      ShippingAgent@1000000003 : Record 291;
+      ShipmentMethod@1000000004 : Record 10;
+    BEGIN
+      //This function builds a tracking URL for the appropriant shipping company
+      //DOC OP9031 RK 03/02/17 -
+      //IF Cust.GET(CustNo) THEN
+      //  IF ShippingAgent.GET(Cust."Shipping Agent Code") THEN
+      IF ShipmentMethod.GET(ShipMethod) THEN BEGIN
+        IF ShippingAgent.GET(ShipmentMethod."Default Shipping Agent") THEN BEGIN
+          IF STRPOS(ShippingAgent."Internet Address",'%1') > 0 THEN
+            EXIT(STRSUBSTNO(ShippingAgent."Internet Address",TrackingID))
+          ELSE
+            EXIT(ShippingAgent."Internet Address" + TrackingID);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE IsMixedCancellation@1000000002(VAR pSalesHeaderArchive@1000000000 : Record 5107) : Boolean;
+    VAR
+      SalesLineArchive@1000000001 : Record 5108;
+      containsCancelled@1000000002 : Boolean;
+      containsNonCancelled@1000000003 : Boolean;
+    BEGIN
+      //This function checks if an archiveed order has mixed cancellations
+      SalesLineArchive.SETCURRENTKEY("Document Type","Document No.","Doc. No. Occurrence","Version No.","Line Status");
+      SalesLineArchive.SETRANGE("Document Type",pSalesHeaderArchive."Document Type");
+      SalesLineArchive.SETRANGE("Document No.",pSalesHeaderArchive."No.");
+      SalesLineArchive.SETRANGE("Doc. No. Occurrence",pSalesHeaderArchive."Doc. No. Occurrence");
+      SalesLineArchive.SETRANGE("Version No.",pSalesHeaderArchive."Doc. No. Occurrence");
+      IF SalesLineArchive.FINDSET THEN BEGIN
+        REPEAT
+          IF (SalesLineArchive."Line Status" = SalesLineArchive."Line Status"::Cancelled) THEN
+            containsCancelled :=TRUE
+          ELSE
+            containsNonCancelled  := TRUE;
+
+        UNTIL SalesLineArchive.NEXT = 0;
+      END;
+
+      EXIT(containsCancelled AND containsNonCancelled);
+    END;
+
+    LOCAL PROCEDURE LogError@1000000015(ErrMessage@1000000002 : Text;ErrorLocation@1000000004 : Text;ErrCode@1000000005 : Text;Filename@1000000001 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+    BEGIN
+      //This function facilitates the logging of an error in the error log table by deriving the default values
+      //and applying the variable values
+      ModistSetup.GET;
+      ErrorHandler.LogError(ModistSetup."Demandware Integration Type",
+                            ModistSetup."Demandware Order Update Group",
+                            '',
+                            0,
+                            '',
+                            0,
+                            ErrMessage,
+                            ErrorLocation,
+                            0,
+                            ErrCode,
+                            Filename);
+    END;
+
+    LOCAL PROCEDURE ClearLastErrors@1000000008();
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+      IntegrationErrorLog@1022300001 : Record 50011;
+    BEGIN
+      //This function deletes all previous errors for the integration type and group
+      ModistSetup.GET;
+      IntegrationErrorLog.SETRANGE("Integration Type",ModistSetup."Demandware Integration Type");
+      IntegrationErrorLog.SETRANGE("Integration Process Group",ModistSetup."Demandware Order Update Group");
+      IF IntegrationErrorLog.FINDSET THEN
+        IntegrationErrorLog.DELETEALL;
+
+      CLEARLASTERROR;
+    END;
+
+    LOCAL PROCEDURE CreateFile@1000000003();
+    BEGIN
+      //DOC OP9031 RK 02/02/17 -
+        //XMLWriter := XMLWriter.Create(FileName);
+        //XMLWriter.WriteStartElement('orders','http://www.demandware.com/xml/impex/order/2006-10-31');
+      //DOC OP9031 RK 02/02/17 +
+    END;
+
+    BEGIN
+    {
+      //DOC OP9031 RK 18/01/17 - Use demandware order number if present.
+      //DOC OP9031 RK 31/01/17 - Add permission on sales shipment and sales shipment line tables.
+      //DOC OP9031 RK 31/01/17 - Only export item lines to Demandware.
+      //DOC OP9031 RK 02/02/17 - Don't flag shipped update to processed if shipment not found (not yet posted with some error)
+      //DOC OP9031 RK 03/02/17 - Use shipping agent from shipment method.
+      //DOC OP10987 TM 16/06/17 - Add Customer Locale in the call for IntegrationProcessFunction.GET as its's been added to the Key
+      //DOC OP10933 CB 15/06/17 - Error handling to send emails with autonav
+      //DOC TM1421 AW 07/09/2018 - Return AWB to DW
+    }
+    END.
+  }
+}
+

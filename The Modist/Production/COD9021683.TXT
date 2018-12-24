@@ -1,0 +1,206 @@
+OBJECT Codeunit 9021683 Internet Order Explode BOM
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/07/16;
+    Time=12:16:05 PM;
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE WebExplodeBOM@1000000001(VAR SalesLine@1000000000 : Record 37;FromInternetAuto@1000000023 : Boolean);
+    VAR
+      ToSalesLine@1000000017 : Record 37;
+      SalesLineOrig@1000000012 : Record 37;
+      FromBOMComp@1000000016 : Record 90;
+      SalesHeader@1000000015 : Record 36;
+      ItemTranslation@1000000014 : Record 30;
+      Item@1000000013 : Record 27;
+      BOMItemNo@1000000010 : Code[20];
+      Selection@1000000024 : Integer;
+      LineSpacing@1000000009 : Integer;
+      NextLineNo@1000000008 : Integer;
+      NoOfBOMComp@1000000007 : Integer;
+      Text000@1000000021 : TextConst 'ENU=The BOM cannot be exploded on the sales lines because it is associated with purchase order %1.;ENG=The BOM cannot be exploded on the sales lines because it is associated with purchase order %1.';
+      Text001@1000000020 : TextConst 'ENU=Item %1 is not a bill of materials.;ENG=Item %1 is not a bill of materials.';
+      Text003@1000000019 : TextConst 'ENU=There is not enough space to explode the BOM.;ENG=There is not enough space to explode the BOM.';
+      Text004@1000000018 : TextConst 'ENU=&Copy dimensions from BOM,&Retrieve dimensions from components;ENG=&Copy dimensions from BOM,&Retrieve dimensions from components';
+      HeaderIsNewBo@1000000022 : Boolean;
+      ReserveFunc@1000000001 : Codeunit 9021600;
+      DimMgt@1000000002 : Codeunit 408;
+      ItemCheckAvail@1000000006 : Codeunit 311;
+      UOMMgt@1000000011 : Codeunit 5402;
+    BEGIN
+      SalesLine.TESTFIELD(Type,SalesLine.Type::Item);
+      SalesLine.TESTFIELD("Quantity Shipped",0);
+      SalesLine.TESTFIELD("Return Qty. Received",0);
+      SalesLine.CALCFIELDS("Reserved Qty. (Base)");
+      SalesLine.TESTFIELD("Reserved Qty. (Base)",0);
+      IF SalesLine."Purch. Order Line No." <> 0 THEN
+        ERROR(
+          Text000,
+          SalesLine."Purchase Order No.");
+      IF SalesLine."Job Contract Entry No." <> 0 THEN BEGIN
+        SalesLine.TESTFIELD("Job No.",'');
+        SalesLine.TESTFIELD("Job Contract Entry No.",0);
+      END;
+      SalesHeader.GET(SalesLine."Document Type",SalesLine."Document No.");
+      SalesHeader.TESTFIELD(Status,SalesHeader.Status::Open);
+      FromBOMComp.SETRANGE("Parent Item No.",SalesLine."No.");
+      NoOfBOMComp := FromBOMComp.COUNT;
+      IF NoOfBOMComp = 0 THEN
+        ERROR(
+          Text001,
+          SalesLine."No.");
+
+      //MQOrig Selection := STRMENU(Text004,2);
+      Selection := 2; //MQOrig
+      IF Selection = 0 THEN
+        EXIT;
+
+      ToSalesLine.RESET;
+      ToSalesLine.SETRANGE("Document Type",SalesLine."Document Type");
+      ToSalesLine.SETRANGE("Document No.",SalesLine."Document No.");
+      ToSalesLine := SalesLine;
+      IF ToSalesLine.FIND('>') THEN BEGIN
+        LineSpacing := (ToSalesLine."Line No." - SalesLine."Line No.") DIV (1 + NoOfBOMComp);
+        IF LineSpacing = 0 THEN
+          ERROR(Text003);
+      END ELSE
+        LineSpacing := 10000;
+
+      IF SalesLine."Document Type" IN [SalesLine."Document Type"::Order,
+                                       SalesLine."Document Type"::Invoice] THEN BEGIN
+        ToSalesLine := SalesLine;
+        FromBOMComp.SETRANGE(Type,FromBOMComp.Type::Item);
+        FromBOMComp.SETFILTER("No.",'<>%1','');
+        IF FromBOMComp.FINDSET THEN
+          REPEAT
+            FromBOMComp.TESTFIELD(Type,FromBOMComp.Type::Item);
+            Item.GET(FromBOMComp."No.");
+            ToSalesLine."Line No." := 0;
+            ToSalesLine."No." := FromBOMComp."No.";
+            ToSalesLine."Variant Code" := FromBOMComp."Variant Code";
+            ToSalesLine."Unit of Measure Code" := FromBOMComp."Unit of Measure Code";
+            ToSalesLine."Qty. per Unit of Measure" := UOMMgt.GetQtyPerUnitOfMeasure(Item,FromBOMComp."Unit of Measure Code");
+            ToSalesLine."Outstanding Quantity" := ROUND(SalesLine."Quantity (Base)" * FromBOMComp."Quantity per",0.00001);
+
+            //MQOrig -
+            //Not needed as Split Orders in Internet Orders to Sales-Doc does this.
+            //IF ToSalesLine."Outstanding Quantity" > 0 THEN
+            //  ItemCheckAvail.SalesLineCheck(ToSalesLine);
+            //MQOrig +
+
+          UNTIL FromBOMComp.NEXT = 0;
+      END;
+
+      IF SalesLine."BOM Item No." = '' THEN
+        BOMItemNo := SalesLine."No."
+      ELSE
+        BOMItemNo := SalesLine."BOM Item No.";
+
+      SalesLineOrig := SalesLine;  //130809
+
+      ToSalesLine := SalesLine;
+      ToSalesLine.INIT;
+      ToSalesLine.Description := SalesLine.Description;
+      ToSalesLine."Description 2" := SalesLine."Description 2";
+      ToSalesLine."BOM Item No." := BOMItemNo;
+
+      //MQAdd -
+      ToSalesLine."Label Code" := SalesLine."Label Code";
+      ToSalesLine."Is An Internet Customer" := SalesLine."Is An Internet Customer";
+      ToSalesLine."Order GuID" := SalesLine."Order GuID";
+      ToSalesLine.DateTimeInsertedModified := CURRENTDATETIME;
+      ToSalesLine."BOM Quantity" := SalesLine."Quantity (Base)";
+      //MQAdd +
+      //ToSalesLine.MODIFY;  //130809
+      SalesLine := ToSalesLine; //130809
+
+      FromBOMComp.RESET;
+      FromBOMComp.SETRANGE("Parent Item No.",SalesLineOrig."No.");   //130809 Orig
+      FromBOMComp.FINDSET;
+      NextLineNo := SalesLine."Line No.";
+      REPEAT
+        ToSalesLine.INIT;
+        NextLineNo := NextLineNo + LineSpacing;
+        ToSalesLine."Line No." := NextLineNo;
+        CASE FromBOMComp.Type OF
+          FromBOMComp.Type::" ":
+            ToSalesLine.Type := ToSalesLine.Type::" ";
+          FromBOMComp.Type::Item:
+            ToSalesLine.Type := ToSalesLine.Type::Item;
+          FromBOMComp.Type::Resource:
+            ToSalesLine.Type := ToSalesLine.Type::Resource;
+        END;
+        IF ToSalesLine.Type <> ToSalesLine.Type::" " THEN BEGIN
+          FromBOMComp.TESTFIELD("No.");
+          ToSalesLine.VALIDATE("No.",FromBOMComp."No.");
+          IF SalesHeader."Location Code" <> SalesLineOrig."Location Code" THEN   //130809 Orig
+            ToSalesLine.VALIDATE("Location Code",SalesLineOrig."Location Code");  //130809 Orig
+          IF FromBOMComp."Variant Code" <> '' THEN
+            ToSalesLine.VALIDATE("Variant Code",FromBOMComp."Variant Code");
+          IF ToSalesLine.Type = ToSalesLine.Type::Item THEN BEGIN
+            ToSalesLine."Drop Shipment" := SalesLineOrig."Drop Shipment";  //130809 Orig
+            Item.GET(FromBOMComp."No.");
+            ToSalesLine.VALIDATE("Unit of Measure Code",FromBOMComp."Unit of Measure Code");
+            ToSalesLine."Qty. per Unit of Measure" := UOMMgt.GetQtyPerUnitOfMeasure(Item,ToSalesLine."Unit of Measure Code");
+            ToSalesLine.VALIDATE(Quantity,
+              ROUND(
+                SalesLineOrig."Quantity (Base)" * FromBOMComp."Quantity per" *
+                UOMMgt.GetQtyPerUnitOfMeasure(Item,ToSalesLine."Unit of Measure Code") /
+                ToSalesLine."Qty. per Unit of Measure",
+                0.00001));        //130809 Orig
+          END ELSE
+            ToSalesLine.VALIDATE(Quantity,SalesLineOrig."Quantity (Base)" * FromBOMComp."Quantity per");
+
+        END;
+        IF SalesHeader."Language Code" = '' THEN
+          ToSalesLine.Description := FromBOMComp.Description
+        ELSE
+          IF NOT ItemTranslation.GET(FromBOMComp."No.",FromBOMComp."Variant Code",SalesHeader."Language Code") THEN
+            ToSalesLine.Description := FromBOMComp.Description;
+
+        ToSalesLine."BOM Item No." := BOMItemNo;
+
+        //MQAdd -  Additional lines
+        ToSalesLine.DateTimeInsertedModified := CURRENTDATETIME;
+        ToSalesLine."BOM Quantity" := SalesLineOrig."Quantity (Base)"; //130809 Orig
+        //MQAdd +
+
+        ToSalesLine.INSERT;
+
+        IF (ToSalesLine.Type = ToSalesLine.Type::Item) AND (ToSalesLine.Reserve = ToSalesLine.Reserve::Always) THEN
+          //MQOrig -
+          //ToSalesLine.AutoReserve;
+          IF ReserveFunc.SalesLineReserve(ToSalesLine,FromInternetAuto) THEN
+            ToSalesLine.MODIFY;
+          //MQOrig +
+
+        IF Selection = 1 THEN BEGIN
+          ToSalesLine."Shortcut Dimension 1 Code" := SalesLineOrig."Shortcut Dimension 1 Code";   //130809 Orig
+          ToSalesLine."Shortcut Dimension 2 Code" := SalesLineOrig."Shortcut Dimension 2 Code";   //130809 Orig
+          ToSalesLine.MODIFY;
+        END;
+      UNTIL FromBOMComp.NEXT = 0;
+    END;
+
+    BEGIN
+    {
+      //DOC EC2013.3.70 MQ 15/07/2013 - GW130715 New codeunit; Copy of Sales-Explode BOM-OnRun; Local Variables copied from OnRun; changes in OnRun code identified with //MQOrig
+      //DOC EC2013.3.70 MQ 15/07/2013 - needs field 9022517 BOM Quantity. (Decimal) adding to tables 37, 113 and 115 and field 9022518 BOM Item No. (Code 20) to tables 113 and 115.
+      //DOC EC2013.3.70 MQ 15/07/2013 - Also need to add 7 lines to CU63 identified as //MQAdd
+      //DOC EC2013.3.80 MQ 09/08/2013 - GW130809 further mods cos item that had Reserve:FULL was further being modified in Internet Sales Order conversion
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

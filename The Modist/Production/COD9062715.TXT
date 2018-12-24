@@ -1,0 +1,865 @@
+OBJECT Codeunit 9062715 Stock Import
+{
+  OBJECT-PROPERTIES
+  {
+    Date=24/05/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ImportToolkit@1000000000 : Codeunit 9062701;
+      gStockImportLines@1000000002 : Record 9062846;
+      ProcessDlg@1000000001 : Dialog;
+      ImportErrorManagement@1000000003 : Codeunit 9062708;
+      gStockImportHeader@1000000004 : Record 9062845;
+      WarehouseJournalLine@1000000008 : Record 7311;
+      ItemJournalLine@1000000007 : Record 83;
+      ItemJnlCheckLine@1000000006 : Codeunit 21;
+      ItemJnlPostLine@1000000005 : Codeunit 22;
+      LineNo@1000000009 : Integer;
+      WhseJnlRegisterBatch@1000000010 : Codeunit 7304;
+      ItemJnlPostBatch@1000000011 : Codeunit 23;
+      CalcWhseAdjmt@1000000012 : Report 7315;
+      bWhsePosting@1000000013 : Boolean;
+      bLocPosting@1000000014 : Boolean;
+      StockImportLog@1000000015 : Record 9062853;
+      StockImportWorksheetLine@1000000016 : Record 9062846;
+      tDialogTitle1@1000000018 : TextConst 'ENU=Processing...;ENG=Processing...';
+      tDialogTitle2@1000000017 : TextConst 'ENU=Please Wait;ENG=Please Wait';
+
+    PROCEDURE ValidateStatus@1000000002(pStatus@1000000000 : ' ,Imported,In Progress,Processed';VAR pProcessedByUserId@1000000001 : Code[50];VAR pProcessedDate@1000000002 : Date;VAR pProcessedTime@1000000003 : Time);
+    BEGIN
+      IF (pStatus = pStatus::Processed) THEN
+      BEGIN
+        pProcessedByUserId := USERID();
+        pProcessedDate := TODAY();
+        pProcessedTime := TIME();
+      END;
+    END;
+
+    PROCEDURE CreateImportTemplate@1000000047();
+    VAR
+      lField@1000000000 : Record 2000000041;
+    BEGIN
+      StockImportWorksheetLine.FilterSimpleFields(lField);
+      ImportToolkit.CreateImportTemplateAdv(DATABASE::"Stock Import Worksheet Line", DATABASE::"Stock Import Worksheet Line", lField, TRUE);
+    END;
+
+    PROCEDURE CheckBatch@1000000009(VAR pStockImportHeader@1000000000 : Record 9062845);
+    BEGIN
+
+      gStockImportHeader.GET(pStockImportHeader."Batch No.");
+      ProcessDlg.OPEN(PADSTR(tDialogTitle1, 30, ' ') + '\\' + PADSTR('#1', 30, '#') + '\\' + tDialogTitle2);
+
+      gStockImportLines.SETRANGE("Batch No.",pStockImportHeader."Batch No.");
+      gStockImportLines.SETRANGE(gStockImportLines.Status,0,3);
+
+      IF gStockImportLines.FINDSET THEN BEGIN
+        REPEAT
+          ProcessDlg.UPDATE(1,gStockImportLines."Item No.");
+          CheckLine(gStockImportLines);
+        UNTIL gStockImportLines.NEXT=0;
+
+      END;
+
+      ProcessDlg.CLOSE;
+    END;
+
+    PROCEDURE CheckLine@1000000003(VAR pStockImportLines@1000000000 : Record 9062846) : Boolean;
+    VAR
+      lError@1000000001 : Boolean;
+      VendorPostingGroup@1000000002 : Record 93;
+    BEGIN
+
+      CheckWorkFlows(pStockImportLines);
+
+      IF lError = FALSE THEN BEGIN
+        pStockImportLines.Status:=gStockImportLines.Status::Ready;
+        pStockImportLines.MODIFY;
+      END ELSE BEGIN
+        pStockImportLines.Status:=gStockImportLines.Status::Error;
+        pStockImportLines.MODIFY;
+        END;
+
+      EXIT(lError<> TRUE);
+    END;
+
+    PROCEDURE CheckForJnlBatches@1000000006(VAR pStockImportLines@1000000000 : Record 9062846) : Boolean;
+    VAR
+      bWhseBatchExists@1000000001 : Boolean;
+      bItemJnlBatchExists@1000000002 : Boolean;
+      Location@1000000003 : Record 14;
+      TmpLoc@1000000004 : TEMPORARY Record 14;
+      eMixedLocations@1000000005 : TextConst 'ENU=Mixed LOCATIONS cannot be used in batch;ENG=Mixed LOCATIONS cannot be used in batch';
+    BEGIN
+
+      bWhseBatchExists:=FALSE;
+      bWhsePosting:=FALSE;
+      bItemJnlBatchExists:=FALSE;
+      bLocPosting:=FALSE;
+
+      IF gStockImportLines.FINDSET THEN BEGIN
+        REPEAT
+          IF pStockImportLines."Location Code"<>'' THEN BEGIN
+        IF NOT TmpLoc.GET(pStockImportLines."Location Code") THEN BEGIN
+          TmpLoc.INIT;
+          TmpLoc.Code:=pStockImportLines."Location Code";
+          TmpLoc.INSERT;
+          END;
+          END;
+        UNTIL gStockImportLines.NEXT=0;
+
+      IF TmpLoc.FINDSET THEN BEGIN
+
+        IF TmpLoc.COUNT > 1 THEN
+          ERROR(eMixedLocations);
+
+        REPEAT
+        Location.GET(TmpLoc.Code);
+          IF (Location."Require Receive") OR (Location."Require Shipment") THEN BEGIN
+            bWhsePosting:=TRUE;
+            WarehouseJournalLine.RESET;
+            WarehouseJournalLine.SETRANGE("Journal Template Name",gStockImportHeader."Whse Journal Template Name");
+            WarehouseJournalLine.SETRANGE("Journal Batch Name",gStockImportHeader."Whse Journal Batch Name");
+            IF WarehouseJournalLine.FINDFIRST THEN
+              bWhseBatchExists:=TRUE;
+
+            ItemJournalLine.RESET;
+            ItemJournalLine.SETRANGE("Journal Template Name",gStockImportHeader."Item Journal Template Name");
+            ItemJournalLine.SETRANGE("Journal Batch Name",gStockImportHeader."Item Journal Batch Name");
+            IF ItemJournalLine.FINDSET THEN
+                bItemJnlBatchExists:=TRUE;
+
+            END ELSE BEGIN
+              bLocPosting:=TRUE;
+              ItemJournalLine.RESET;
+              ItemJournalLine.SETRANGE("Journal Template Name",gStockImportHeader."Item Journal Template Name");
+              ItemJournalLine.SETRANGE("Journal Batch Name",gStockImportHeader."Item Journal Batch Name");
+              IF ItemJournalLine.FINDSET THEN BEGIN
+                bItemJnlBatchExists:=TRUE;
+              END
+            END;
+        UNTIL TmpLoc.NEXT=0;
+      END;
+
+      IF (bItemJnlBatchExists=TRUE) OR (bWhseBatchExists = TRUE) THEN
+        EXIT(FALSE)
+
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ValidateBatch@1000000019(VAR pStockImportHeader@1000000000 : Record 9062845);
+    BEGIN
+      gStockImportHeader.GET(pStockImportHeader."Batch No.");
+
+      ProcessDlg.OPEN(PADSTR(tDialogTitle1, 30, ' ') + '\\' + PADSTR('#1', 30, '#') + '\\' + tDialogTitle2);
+
+      gStockImportLines.SETRANGE(gStockImportLines."Batch No.",pStockImportHeader."Batch No.");
+      gStockImportLines.SETFILTER(gStockImportLines.Status,'..%1',3);
+
+      IF gStockImportLines.FINDSET THEN BEGIN
+
+        REPEAT
+          ProcessDlg.UPDATE(1,gStockImportLines."Item No.");
+
+          ValidateLine(gStockImportLines);
+          CheckLine(gStockImportLines);
+
+          gStockImportLines.CALCFIELDS("No Of Errors","No Of Warnings");
+
+          IF gStockImportLines."No Of Warnings" > 0 THEN
+            gStockImportLines.Status:=gStockImportLines.Status::Warning;
+
+          IF gStockImportLines."No Of Errors" > 0 THEN
+            gStockImportLines.Status:=gStockImportLines.Status::Error;
+
+          gStockImportLines.MODIFY;
+
+        UNTIL gStockImportLines.NEXT=0;
+
+      pStockImportHeader.CALCFIELDS(pStockImportHeader."No. of Error Lines",pStockImportHeader."No. of Incomplete Lines");
+
+      END;
+
+      ProcessDlg.CLOSE;
+    END;
+
+    PROCEDURE ValidateLine@1000000021(VAR pStockImportLines@1000000000 : Record 9062846) : Boolean;
+    VAR
+      lError@1000000001 : Boolean;
+      VendorPostingGroup@1000000002 : Record 93;
+    BEGIN
+
+      ImportErrorManagement.DeleteErrorsAndWarnings(DATABASE::"Stock Import Worksheet Line",pStockImportLines."Postion Text");
+
+      ValidateQty(pStockImportLines);
+      ValidateItemNo(pStockImportLines);
+      ValidateVariantCode(pStockImportLines);
+      ValidateLocationCode(pStockImportLines);
+      ValidateBin(pStockImportLines);
+
+      ValidateDates(pStockImportLines);
+      ValidatePostingSetup(pStockImportLines);
+      ValidateUnitCost(pStockImportLines);
+      ValidateItemTracking(pStockImportLines);
+    END;
+
+    PROCEDURE ProcessBatch@1000000000(VAR pStockImportHeader@1000000000 : Record 9062845);
+    VAR
+      ItemJnlError@1000000001 : Boolean;
+      TMPStockImportLines@1000000002 : TEMPORARY Record 9062846;
+      LStockImportLines@1000000003 : Record 9062846;
+      WMSManagement@1000000004 : Codeunit 7302;
+      eConfirmation@1000000005 : TextConst 'ENU=This will submit the entries to the database. Do you want to continue?;ENG=This will submit the entries to the database. Do you want to continue?';
+      eBatchesExist@1000000006 : TextConst 'ENU=Batches exist already with the same names as you are about to create.\\Please POST or DELETE existing batches;ENG=Batches exist already with the same names as you are about to create.\\Please POST or DELETE existing batches';
+      eProcessingJournals@1000000007 : TextConst 'ENU=Processing Journals;ENG=Processing Journals';
+      eProcessingWhseJournal@1000000008 : TextConst 'ENU=Processing Warehouse Journal;ENG=Processing Warehouse Journal';
+      eErrorProcessingWhseBatch@1000000009 : TextConst 'ENU=Error processing the warehouse batch;ENG=Error processing the warehouse batch';
+      eCreatingWhseAdjmtJournal@1000000010 : TextConst 'ENU=Creating Warehouse Adjustment Journal;ENG=Creating Warehouse Adjustment Journal';
+      eCheckingAdjmtJournal@1000000011 : TextConst 'ENU=Checking Adjustment Journal is OK to Post;ENG=Checking Adjustment Journal is OK to Post';
+      ePostingWhseAdjmtJournal@1000000012 : TextConst 'ENU=Posting Warehouse Adjustment Journal;ENG=Posting Warehouse Adjustment Journal';
+      ePostingStockJournal@1000000013 : TextConst 'ENU=Posting Stock Journal;ENG=Posting Stock Journal';
+      eCheckingItemJournal@1000000014 : TextConst 'ENU=Checking Item Journal is OK to Post;ENG=Checking Item Journal is OK to Post';
+      ePostingItemJournal@1000000015 : TextConst 'ENU=Posting Item Journal;ENG=Posting Item Journal';
+      eErrors@1000000016 : TextConst 'ENU=There were errors trying to post the item jnl please review and post manually or retry;ENG=There were errors trying to post the item jnl please review and post manually or retry';
+      eNoLines@1000000017 : TextConst 'ENU=No lines in a state to process;ENG=No lines in a state to process';
+    BEGIN
+
+      bWhsePosting:=FALSE;
+      bLocPosting:=FALSE;
+
+      gStockImportHeader.GET(pStockImportHeader."Batch No.");
+
+      gStockImportLines.RESET;
+      gStockImportLines.SETRANGE(gStockImportLines."Batch No.",pStockImportHeader."Batch No.");
+      gStockImportLines.SETRANGE(gStockImportLines.Status,0,3);
+
+      IF gStockImportLines.FINDSET THEN BEGIN
+
+      IF  NOT CONFIRM(eConfirmation) THEN
+        EXIT;
+
+        IF NOT CheckForJnlBatches(gStockImportLines) THEN
+          ERROR(eBatchesExist);
+
+        ProcessDlg.OPEN(PADSTR(tDialogTitle1, 30, ' ') + '\\' + PADSTR('#1', 30, '#') + '\\' + tDialogTitle2);
+
+        gStockImportLines.FINDFIRST;
+        REPEAT
+          ProcessDlg.UPDATE(1,gStockImportLines."Item No.");
+          gStockImportLines.CALCFIELDS(gStockImportLines."No Of Errors");
+
+          IF gStockImportLines."No Of Errors"=0 THEN BEGIN
+
+            ValidateLine(gStockImportLines);
+            CheckLine(gStockImportLines);
+            PostLine(gStockImportLines);
+
+            END;
+        UNTIL gStockImportLines.NEXT=0;
+
+      ProcessDlg.UPDATE(1,eProcessingJournals);
+
+      //Now post the journals
+      IF bWhsePosting THEN BEGIN
+        WarehouseJournalLine.RESET;
+        WarehouseJournalLine.SETRANGE("Journal Template Name",gStockImportHeader."Whse Journal Template Name");
+        WarehouseJournalLine.SETRANGE("Journal Batch Name",gStockImportHeader."Whse Journal Batch Name");
+        IF WarehouseJournalLine.FINDSET THEN BEGIN
+            //Post warehouse journal
+            ProcessDlg.UPDATE(1,eProcessingWhseJournal);
+
+
+            WarehouseJournalLine.FINDFIRST;
+            REPEAT
+              WMSManagement.CheckWhseJnlLine(WarehouseJournalLine,4,WarehouseJournalLine."Qty. (Absolute, Base)",FALSE);
+            UNTIL WarehouseJournalLine.NEXT=0;
+
+            WarehouseJournalLine.FINDFIRST;
+
+            COMMIT;
+
+
+            //Does it post ?
+            IF NOT WhseJnlRegisterBatch.RUN(WarehouseJournalLine) THEN
+              BEGIN
+                ERROR(eErrorProcessingWhseBatch + ': ' + GETLASTERRORTEXT);
+                WarehouseJournalLine.DELETEALL;
+                EXIT;
+                END;
+
+            CLEAR(StockImportLog);
+            StockImportLog.INIT;
+            StockImportLog."Process Type":=StockImportLog."Process Type"::"Item Journal";
+            StockImportLog."Batch No":=gStockImportHeader."Batch No.";
+            StockImportLog."Whse Register No":=WhseJnlRegisterBatch.GetWhseRegNo;
+            StockImportLog.INSERT(TRUE);
+
+            IF WarehouseJournalLine.FINDSET THEN
+              WarehouseJournalLine.DELETEALL;
+
+            //Now mark the lines as warehouse posted
+            gStockImportLines.SETRANGE(gStockImportLines."Is Warehouse Line",TRUE);
+            gStockImportLines.MODIFYALL("Is Warehouse Posted",TRUE);
+            gStockImportLines.SETRANGE(gStockImportLines."Is Warehouse Line");
+
+            //Need to put this here to force the is posted
+            COMMIT;
+
+            END;
+
+            //Now we need to create and post a whse adjustment journal
+            //Create a new itemjnl
+            ProcessDlg.UPDATE(1,eCreatingWhseAdjmtJournal);
+            CLEAR(CalcWhseAdjmt);
+            ItemJournalLine.RESET;
+            ItemJournalLine."Journal Template Name":=gStockImportHeader."Item Journal Template Name";
+            ItemJournalLine."Journal Batch Name":=gStockImportHeader."Item Journal Batch Name";
+            CalcWhseAdjmt.USEREQUESTPAGE(FALSE);
+            CalcWhseAdjmt.InitializeRequest(WORKDATE,gStockImportHeader."Whse Journal Batch Name");
+            CalcWhseAdjmt.SetItemJnlLine(ItemJournalLine);
+            CalcWhseAdjmt.SetHideValidationDialog(TRUE);
+            CalcWhseAdjmt.RUNMODAL;
+            CLEAR(CalcWhseAdjmt);
+
+            COMMIT;
+
+            IF ItemJournalLine.FINDSET THEN BEGIN
+              ProcessDlg.UPDATE(1,eCheckingAdjmtJournal);
+              REPEAT
+                ProcessDlg.UPDATE(1,ItemJournalLine."Item No.");
+                IF NOT ItemJnlCheckLine.RUN(ItemJournalLine) THEN BEGIN
+                  ItemJnlError:=TRUE;
+                  TMPStockImportLines.INIT;
+                  TMPStockImportLines."Batch No.":=gStockImportHeader."Batch No.";
+                  TMPStockImportLines."Item No.":=ItemJournalLine."Item No.";
+                  IF LStockImportLines.GET(gStockImportHeader."Batch No.",ItemJournalLine."Item No.") THEN
+                    TMPStockImportLines."Postion Text":=LStockImportLines."Postion Text";
+                  TMPStockImportLines."Error Text":=COPYSTR(GETLASTERRORTEXT,1,250);
+                  IF TMPStockImportLines.INSERT THEN;
+                  END;
+              UNTIL ItemJournalLine.NEXT=0;
+             END;
+
+             //COMMIT;
+
+             IF ItemJnlError = FALSE  THEN BEGIN
+               IF ItemJournalLine.FINDFIRST THEN BEGIN
+                  ProcessDlg.UPDATE(1,ePostingWhseAdjmtJournal);
+                 CLEAR(ItemJnlPostBatch);
+                 ItemJnlPostBatch.RUN(ItemJournalLine);
+
+                 CLEAR(StockImportLog);
+                 StockImportLog.INIT;
+                 StockImportLog."Process Type":=StockImportLog."Process Type"::"Item Journal";
+                 StockImportLog."Batch No":=gStockImportHeader."Batch No.";
+                 StockImportLog."Item Register No":=ItemJnlPostBatch.GetItemRegNo();
+                 StockImportLog."Whse Register No":=ItemJnlPostBatch.GetWhseRegNo();
+                 StockImportLog.INSERT(TRUE);
+                 END;
+            END;
+      END;
+
+      IF bLocPosting THEN BEGIN
+        ItemJournalLine.RESET;
+        ItemJournalLine.SETRANGE("Journal Template Name",gStockImportHeader."Item Journal Template Name");
+        ItemJournalLine.SETRANGE("Journal Batch Name",gStockImportHeader."Item Journal Batch Name");
+        IF ItemJournalLine.FINDSET THEN BEGIN
+          ProcessDlg.UPDATE(1,ePostingStockJournal);
+
+        COMMIT;
+
+         ProcessDlg.UPDATE(1,eCheckingItemJournal);
+
+         REPEAT
+          IF NOT ItemJnlCheckLine.RUN(ItemJournalLine) THEN BEGIN
+            ItemJnlError:=TRUE;
+            TMPStockImportLines.INIT;
+            TMPStockImportLines."Batch No.":=gStockImportHeader."Batch No.";
+            TMPStockImportLines."Item No.":=ItemJournalLine."Item No.";
+            IF LStockImportLines.GET(gStockImportHeader."Batch No.",ItemJournalLine."Item No.") THEN
+              TMPStockImportLines."Postion Text":=LStockImportLines."Postion Text";
+            TMPStockImportLines."Error Text":=COPYSTR(GETLASTERRORTEXT,1,250);
+            IF TMPStockImportLines.INSERT THEN;
+            END;
+         UNTIL ItemJournalLine.NEXT=0;
+
+        IF ItemJnlError = FALSE  THEN BEGIN
+          //Post the item journal
+          ProcessDlg.UPDATE(1,ePostingItemJournal);
+          CLEAR(ItemJnlPostBatch);
+          ItemJournalLine.FINDFIRST;
+          ItemJnlPostBatch.RUN(ItemJournalLine) ;
+          CLEAR(StockImportLog);
+          StockImportLog.INIT;
+          StockImportLog."Batch No":=gStockImportHeader."Batch No.";
+          StockImportLog."Item Register No":=ItemJnlPostBatch.GetItemRegNo();
+          StockImportLog."Whse Register No":=ItemJnlPostBatch.GetWhseRegNo();
+          StockImportLog.INSERT(TRUE);
+          END;
+
+          END;
+      END;
+
+      pStockImportHeader.CALCFIELDS(pStockImportHeader."No. of Error Lines",pStockImportHeader."No. of Incomplete Lines");
+
+      IF (pStockImportHeader."No. of Error Lines" = 0) AND (pStockImportHeader."No. of Incomplete Lines" =0) THEN BEGIN
+        pStockImportHeader."Processed by User ID":=USERID;
+        pStockImportHeader."Processed Date":=TODAY;
+        pStockImportHeader."Processed Time":=TIME;
+        pStockImportHeader.MODIFY;
+        END;
+
+
+      //Clear up the errors and lines
+      IF gStockImportLines.FINDFIRST THEN
+        BEGIN
+          REPEAT
+            IF TMPStockImportLines.GET(gStockImportLines."Batch No.",gStockImportLines."Item No.") THEN BEGIN
+              ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",TMPStockImportLines.GETPOSITION(FALSE),TMPStockImportLines."Error Text");
+              gStockImportLines.Status:=gStockImportLines.Status::Error;
+            END;
+            gStockImportLines.CALCFIELDS("No Of Errors");
+            IF gStockImportLines."No Of Errors" =0  THEN BEGIN
+              gStockImportLines.Status:=gStockImportLines.Status::Processed;
+              gStockImportLines.DeleteErrors();
+            END ELSE
+            gStockImportLines.Status:=gStockImportLines.Status::Error;
+
+           gStockImportLines.MODIFY;
+          UNTIL gStockImportLines.NEXT=0;
+        END;
+
+      ProcessDlg.CLOSE;
+
+      IF ItemJnlError THEN BEGIN
+        MESSAGE(eErrors);
+        END;
+
+      //Delete any system created line from journal posting
+      COMMIT;
+      ItemJournalLine.RESET;
+      ItemJournalLine.SETRANGE("Journal Template Name",gStockImportHeader."Item Journal Template Name");
+      ItemJournalLine.SETRANGE("Journal Batch Name",gStockImportHeader."Item Journal Batch Name");
+      IF ItemJournalLine.FINDSET THEN
+        ItemJournalLine.DELETEALL(TRUE);
+
+      END ELSE
+        MESSAGE(eNoLines);
+    END;
+
+    LOCAL PROCEDURE PostLine@1000000001(VAR pStockImportLines@1000000000 : Record 9062846);
+    VAR
+      Location@1000000001 : Record 14;
+      eNoLocation@1000000002 : TextConst 'ENU=Location must be set for stock take on journal;ENG=Location must be set for stock take on journal';
+      eLocationNotFound@1000000003 : TextConst 'ENU=Location not found;ENG=Location not found';
+      eTransitLocation@1000000004 : TextConst 'ENU=Cannot post to transit location;ENG=Cannot post to transit location';
+    BEGIN
+      IF pStockImportLines."Location Code" =''THEN
+        ERROR(eNoLocation);
+
+      IF NOT Location.GET(pStockImportLines."Location Code") THEN
+        ERROR(eLocationNotFound);
+
+      IF Location."Use As In-Transit" = TRUE THEN
+        ERROR(eTransitLocation);
+
+      LineNo:=LineNo+10000;
+
+       IF (pStockImportLines."Is Warehouse Posted" = FALSE) AND (pStockImportLines."Is Warehouse Line"=TRUE) THEN
+        BEGIN
+            //Warehouse location we need a Whse journal line
+          WarehouseJournalLine.INIT;
+          WarehouseJournalLine."Journal Template Name":=gStockImportHeader."Whse Journal Template Name";
+          WarehouseJournalLine."Journal Batch Name":=gStockImportHeader."Whse Journal Batch Name";
+          WarehouseJournalLine."Location Code":=pStockImportLines."Location Code";
+          WarehouseJournalLine."Line No.":=LineNo;
+          WarehouseJournalLine.INSERT;
+          WarehouseJournalLine.SetUpNewLine(WarehouseJournalLine);
+
+          WarehouseJournalLine.VALIDATE(WarehouseJournalLine."Item No.",pStockImportLines."Item No.");
+
+          IF pStockImportLines."Variant Code" <> '' THEN
+            WarehouseJournalLine.VALIDATE(WarehouseJournalLine."Variant Code",pStockImportLines."Variant Code");
+
+          WarehouseJournalLine.VALIDATE(WarehouseJournalLine.Quantity,pStockImportLines.Quantity);
+          WarehouseJournalLine.VALIDATE(WarehouseJournalLine."Bin Code",pStockImportLines."Bin Code");
+
+          IF pStockImportLines."Document No."<> '' THEN
+            WarehouseJournalLine.VALIDATE(WarehouseJournalLine."Reference No.",pStockImportLines."Document No.");
+          WarehouseJournalLine.MODIFY(TRUE);
+
+        END;
+
+        IF (pStockImportLines."Is Warehouse Line"=FALSE) THEN
+        BEGIN
+          //Std location we need an item journal line
+          ItemJournalLine.INIT;
+          ItemJournalLine."Journal Template Name":=gStockImportHeader."Item Journal Template Name";
+          ItemJournalLine."Journal Batch Name":=gStockImportHeader."Item Journal Batch Name";
+          ItemJournalLine."Line No.":=LineNo;
+          ItemJournalLine.INSERT(TRUE);
+          ItemJournalLine."Entry Type":=ItemJournalLine."Entry Type"::"Positive Adjmt.";
+          ItemJournalLine.VALIDATE(ItemJournalLine."Item No.",pStockImportLines."Item No.");
+          ItemJournalLine.VALIDATE(ItemJournalLine."Variant Code",pStockImportLines."Variant Code");
+          ItemJournalLine.VALIDATE(ItemJournalLine.Quantity,pStockImportLines.Quantity);
+
+          ItemJournalLine.VALIDATE(ItemJournalLine."Location Code",pStockImportLines."Location Code");
+
+          IF pStockImportLines."Dimension 1 Code"<> '' THEN
+            ItemJournalLine.VALIDATE(ItemJournalLine."Shortcut Dimension 1 Code",pStockImportLines."Dimension 1 Code");
+
+          IF pStockImportLines."Dimension 2 Code"<> '' THEN
+                ItemJournalLine.VALIDATE(ItemJournalLine."Shortcut Dimension 2 Code",pStockImportLines."Dimension 2 Code");
+
+          IF pStockImportLines."Unit Cost" <> 0 THEN
+            ItemJournalLine.VALIDATE(ItemJournalLine."Unit Cost",pStockImportLines."Unit Cost");
+
+          IF pStockImportLines."Document No."<> '' THEN
+          ItemJournalLine.VALIDATE(ItemJournalLine."Document No.",pStockImportLines."Document No.");
+
+          IF pStockImportLines."Document Date" <> WORKDATE THEN
+            ItemJournalLine.VALIDATE(ItemJournalLine."Document Date",pStockImportLines."Document Date")
+          ELSE
+            ItemJournalLine.VALIDATE(ItemJournalLine."Document Date",WORKDATE);
+
+          IF pStockImportLines."Posting Date" <> WORKDATE THEN
+            ItemJournalLine.VALIDATE(ItemJournalLine."Posting Date",pStockImportLines."Posting Date")
+          ELSE
+            ItemJournalLine.VALIDATE(ItemJournalLine."Posting Date",WORKDATE);
+
+          ItemJournalLine.MODIFY(TRUE);
+
+        END;
+    END;
+
+    PROCEDURE DeleteLines@1000000035(VAR pStockImportHeader@1000000000 : Record 9062845);
+    VAR
+      eConfirmation@1000000001 : TextConst 'ENU=Please confirm you wish to delete all Lines?;ENG=Please confirm you wish to delete all Lines?';
+      eDialogTitle@1000000002 : TextConst 'ENU=Processing... Please Wait;ENG=Processing... Please Wait';
+    BEGIN
+
+      IF NOT CONFIRM(eConfirmation) THEN
+        EXIT;
+
+      ProcessDlg.OPEN(eDialogTitle);
+
+      gStockImportLines.SETRANGE(gStockImportLines."Batch No.",pStockImportHeader."Batch No.");
+      IF gStockImportLines.FINDSET THEN BEGIN
+        gStockImportLines.DELETEALL(TRUE);
+      END;
+
+      ProcessDlg.CLOSE;
+    END;
+
+    PROCEDURE ResetLines@1000000004(VAR pStockImportHeader@1000000000 : Record 9062845);
+    VAR
+      eConfirmation@1000000001 : TextConst 'ENU=Please confirm you wish to RESET all Lines ?;ENG=Please confirm you wish to RESET all Lines ?';
+      eDialogTitle@1000000003 : TextConst 'ENU=Processing... Please Wait;ENG=Processing... Please Wait';
+    BEGIN
+
+      IF NOT CONFIRM(eConfirmation) THEN
+        EXIT;
+
+      ProcessDlg.OPEN(eDialogTitle);
+      gStockImportLines.RESET;
+      gStockImportLines.SETRANGE(gStockImportLines."Batch No.",pStockImportHeader."Batch No.");
+      IF gStockImportLines.FINDSET THEN BEGIN
+        REPEAT
+          gStockImportLines.VALIDATE(gStockImportLines.Status,gStockImportLines.Status::Loaded);
+          gStockImportLines."Is Warehouse Posted":=FALSE;
+          gStockImportLines.DeleteErrors();
+          gStockImportLines.MODIFY;
+        UNTIL gStockImportLines.NEXT=0;
+      END;
+
+      ProcessDlg.CLOSE;
+    END;
+
+    PROCEDURE UndoInserts@1000000042(VAR pStockImportHeader@1000000000 : Record 9062845;pInteraction@1000000001 : Boolean) : Boolean;
+    VAR
+      ImportLog@1000000004 : Record 9062843;
+      eConfirmation@1000000002 : TextConst 'ENU=This will undo the inserted records from this batch.\\Continue?;ENG=This will undo the inserted records from this batch.\\Continue?';
+    BEGIN
+
+      IF NOT CONFIRM(eConfirmation,FALSE) THEN
+        EXIT;
+
+      ImportLog.RESET();
+      ImportLog.SETCURRENTKEY("Import Header Table ID", "Batch No");
+      ImportLog.SETRANGE("Import Header Table ID", DATABASE::"Stock Import Worksheet Hdr.");
+      ImportLog.SETRANGE("Batch No", pStockImportHeader."Batch No.");
+      ImportToolkit.ReverseLogEntry(ImportLog);
+    END;
+
+    LOCAL PROCEDURE ValidateQty@1000000005(VAR pStockImportLines@1000000000 : Record 9062846);
+    VAR
+      Lqty@1000000004 : Integer;
+      ConfigTemplateLine@1000000003 : Record 8619;
+      eQuantityMustBePositive@1000000001 : TextConst 'ENU=Qty Must be Positive;ENG=Qty Must be Positive';
+    BEGIN
+      Lqty:=pStockImportLines.Quantity;
+
+      IF Lqty <=0 THEN
+        ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),eQuantityMustBePositive);
+
+      pStockImportLines.VALIDATE(pStockImportLines.Quantity,Lqty);
+      pStockImportLines.MODIFY;
+    END;
+
+    LOCAL PROCEDURE ValidateItemNo@1000000027(VAR pStockImportLines@1000000000 : Record 9062846);
+    VAR
+      lItemNo@1000000004 : Code[20];
+      ConfigTemplateLine@1000000003 : Record 8619;
+      Item@1000000001 : Record 27;
+      eItemDoesNotExist@1000000002 : TextConst 'ENU=Item No %1 does not exist;ENG=Item No %1 does not exist';
+      eItemNoMissing@1000000005 : TextConst 'ENU=Item No is Missing;ENG=Item No is Missing';
+      eItemPostingSetupIncomplete@1000000006 : TextConst 'ENU=Item Posting setup %1 incomplete;ENG=Item Posting setup %1 incomplete';
+      eItemBlocked@1000000007 : TextConst 'ENU=Item %1 is Blocked;ENG=Item %1 is Blocked';
+    BEGIN
+      IF pStockImportLines."Item No." <> '' THEN BEGIN
+        lItemNo:=pStockImportLines."Item No.";
+
+        IF NOT ImportToolkit.CheckItemExist(pStockImportLines."Item No.") THEN
+           ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),STRSUBSTNO(eItemDoesNotExist,pStockImportLines."Item No.") );
+        END;
+
+      IF lItemNo='' THEN
+        ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),eItemNoMissing);
+
+      IF (lItemNo<>'') AND (Item.GET(lItemNo)) THEN BEGIN
+        IF (Item."Gen. Prod. Posting Group"='')  OR (Item."Inventory Posting Group"='') OR ( Item."VAT Prod. Posting Group" ='')  THEN
+            ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),STRSUBSTNO(eItemPostingSetupIncomplete,pStockImportLines."Item No."));
+
+        IF Item.Blocked THEN
+          ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),STRSUBSTNO(eItemBlocked,pStockImportLines."Item No."));
+
+        END;
+
+      pStockImportLines.VALIDATE(pStockImportLines."Item No.",lItemNo);
+      pStockImportLines.MODIFY;
+    END;
+
+    LOCAL PROCEDURE ValidateVariantCode@1000000033(VAR pStockImportLines@1000000000 : Record 9062846);
+    VAR
+      lVarCode@1000000004 : Code[20];
+      ConfigTemplateLine@1000000003 : Record 8619;
+      eItemVariantDoesNotExist@1000000001 : TextConst 'ENU=Item Variant %1, %2  does not exist;ENG=Item Variant %1, %2  does not exist';
+    BEGIN
+      IF pStockImportLines."Variant Code" <> '' THEN BEGIN
+        lVarCode:=pStockImportLines."Variant Code";
+
+        IF NOT ImportToolkit.CheckItemVariantExist(pStockImportLines."Item No.",lVarCode) THEN
+           ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),STRSUBSTNO(eItemVariantDoesNotExist,pStockImportLines."Item No.",lVarCode));
+        END;
+
+      pStockImportLines.VALIDATE(pStockImportLines."Variant Code",lVarCode);
+      pStockImportLines.MODIFY;
+    END;
+
+    LOCAL PROCEDURE ValidateLocationCode@1000000034(VAR pStockImportLines@1000000000 : Record 9062846);
+    VAR
+      lLocCode@1000000004 : Code[20];
+      ConfigTemplateLine@1000000003 : Record 8619;
+      Location@1000000002 : Record 14;
+      Bin@1000000001 : Record 7354;
+      eLocationMissing@1000000005 : TextConst 'ENU=Location is Missing;ENG=Location is Missing';
+      eLocationDoesNotExist@1000000006 : TextConst 'ENU=Location %1 does not exist;ENG=Location %1 does not exist';
+      eLocationIsTransit@1000000007 : TextConst 'ENU=Location code %1 is a transit Warehouse;ENG=Location code %1 is a transit Warehouse';
+      eLocationIsWhseNoBin@1000000008 : TextConst 'ENU=Location %1 is a warehouse, but NO Bin supplied;ENG=Location %1 is a warehouse, but NO Bin supplied';
+      eLocationIsWhseBinMandNoBin@1000000009 : TextConst 'ENU=Location is a warehouse with Bin Mandatory, but NO Bin supplied;ENG=Location is a warehouse with Bin Mandatory, but NO Bin supplied';
+      eLocationIsWhseNoAdjmtBin@1000000010 : TextConst 'ENU=Location is a warehouse, but adjustment Bin is missing;ENG=Location is a warehouse, but adjustment Bin is missing';
+      eBinCapacityProhibitionSet@1000000011 : TextConst 'ENU=Warehouse Has Bin Capacity Prohibition Set. This may cause posting Errors.;ENG=Warehouse Has Bin Capacity Prohibition Set. This may cause posting Errors.';
+      eLocationIsWhseWithBinsNoBin@1000000012 : TextConst 'ENU=Location is a warehouse with bins, but NO Bin supplied;ENG=Location is a warehouse with bins, but NO Bin supplied';
+    BEGIN
+      IF pStockImportLines."Location Code" <> '' THEN BEGIN
+        lLocCode:=pStockImportLines."Location Code";
+
+      IF NOT ImportToolkit.CheckLocationExist(pStockImportLines."Location Code") THEN
+        ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),STRSUBSTNO(eLocationDoesNotExist,pStockImportLines."Location Code"));
+
+      IF ImportToolkit.CheckLocationExist(pStockImportLines."Location Code") THEN
+        IF NOT ImportToolkit.CheckLocationIsNotTansit(pStockImportLines."Location Code") THEN
+          ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),STRSUBSTNO(eLocationIsTransit,pStockImportLines."Location Code"));
+
+      IF (ImportToolkit.CheckLocationIsWarehouse(pStockImportLines."Location Code")) AND (pStockImportLines."Bin Code"='') THEN
+        ImportErrorManagement.CreateWarning(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),STRSUBSTNO(eLocationIsWhseNoBin,pStockImportLines."Location Code"));
+
+      IF Location.GET(lLocCode) THEN BEGIN
+        IF (Location."Bin Mandatory") AND (pStockImportLines."Bin Code"='') THEN
+            ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),eLocationIsWhseBinMandNoBin);
+
+        IF (ImportToolkit.CheckLocationIsWarehouse(pStockImportLines."Location Code")) AND (Location."Adjustment Bin Code"='') THEN
+            ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),eLocationIsWhseNoAdjmtBin);
+
+        IF (ImportToolkit.CheckLocationIsWarehouse(pStockImportLines."Location Code")) AND (Location."Bin Capacity Policy"=Location."Bin Capacity Policy"::"Prohibit More Than Max. Cap.") THEN
+            ImportErrorManagement.CreateWarning(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),eBinCapacityProhibitionSet);
+
+        IF ImportToolkit.CheckLocationIsWarehouse(pStockImportLines."Location Code") AND (Location."Bin Mandatory"=FALSE) THEN BEGIN
+            Bin.SETRANGE(Bin."Location Code",lLocCode);
+            IF Bin.FINDSET THEN
+              ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),eLocationIsWhseWithBinsNoBin);
+            END;
+        END;
+      END;
+
+      IF lLocCode='' THEN
+      ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),eLocationMissing);
+
+      IF ImportToolkit.CheckLocationIsWarehouse(pStockImportLines."Location Code") THEN
+        pStockImportLines."Is Warehouse Line":=TRUE;
+
+      pStockImportLines.VALIDATE(pStockImportLines."Location Code",lLocCode);
+      pStockImportLines.MODIFY;
+    END;
+
+    LOCAL PROCEDURE ValidateBin@1000000037(VAR pStockImportLines@1000000000 : Record 9062846);
+    VAR
+      lBinCode@1000000004 : Code[20];
+      ConfigTemplateLine@1000000003 : Record 8619;
+      eLocationNotAWarehouse@1000000001 : TextConst 'ENU=Bin supplied but Location code %1 is NOT a Warehouse;ENG=Bin supplied but Location code %1 is NOT a Warehouse';
+      eBinDoesNotExist@1000000002 : TextConst 'ENU=Warehouse Bin No %1, %2 does not exist;ENG=Warehouse Bin No %1, %2 does not exist';
+    BEGIN
+      IF pStockImportLines."Bin Code" <> '' THEN BEGIN
+        lBinCode:=pStockImportLines."Bin Code";
+
+      IF NOT ImportToolkit.CheckLocationIsWarehouse(pStockImportLines."Location Code") THEN
+        ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),STRSUBSTNO(eLocationNotAWarehouse,pStockImportLines."Location Code"));
+
+      IF NOT ImportToolkit.CheckBinExist(pStockImportLines."Location Code",pStockImportLines."Bin Code") THEN
+        ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),STRSUBSTNO(eBinDoesNotExist,pStockImportLines."Location Code",pStockImportLines."Bin Code"));
+
+
+      END;
+
+      pStockImportLines.VALIDATE(pStockImportLines."Bin Code",lBinCode);
+      pStockImportLines.MODIFY;
+    END;
+
+    LOCAL PROCEDURE ValidateDates@1000000007(VAR pStockImportLines@1000000000 : Record 9062846);
+    VAR
+      lBinCode@1000000004 : Code[20];
+      ConfigTemplateLine@1000000003 : Record 8619;
+    BEGIN
+
+      IF pStockImportLines."Document Date"=0D THEN
+        pStockImportLines.VALIDATE(pStockImportLines."Document Date",WORKDATE);
+      IF pStockImportLines."Posting Date" = 0D THEN
+        pStockImportLines.VALIDATE(pStockImportLines."Posting Date",WORKDATE);
+      pStockImportLines.MODIFY;
+    END;
+
+    LOCAL PROCEDURE ValidatePostingSetup@1000000008(VAR pStockImportLines@1000000000 : Record 9062846);
+    VAR
+      lItemNo@1000000004 : Code[20];
+      ConfigTemplateLine@1000000003 : Record 8619;
+      Item@1000000001 : Record 27;
+      InventoryPostingSetup@1000000002 : Record 5813;
+      ItemUnitofMeasure@1000000005 : Record 5404;
+      eItemDoesNotExist@1000000006 : TextConst 'ENU=Item %1 does not exist;ENG=Item %1 does not exist';
+      eInvPostingSetupDoesNotExist@1000000007 : TextConst 'ENU=Inventory Posting Setup %1, %2 does not exist;ENG=Inventory Posting Setup %1, %2 does not exist';
+      eInvPostingSetupMissingStockAcc@1000000008 : TextConst 'ENU=Inventory Posting Setup %1, %2 missing stock account;ENG=Inventory Posting Setup %1, %2 missing stock account';
+      eItemBaseUoMBlank@1000000009 : TextConst 'ENU=Item Base Unit of Measure is Blank;ENG=Item Base Unit of Measure is Blank';
+      eItemUoMNotFound@1000000010 : TextConst 'ENU=Item Unit of Measure %1 , %2 is Not Found;ENG=Item Unit of Measure %1 , %2 is Not Found';
+    BEGIN
+
+      IF NOT Item.GET(pStockImportLines."Item No.") THEN
+        ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),STRSUBSTNO(eItemDoesNotExist,pStockImportLines."Item No."));
+
+      IF NOT InventoryPostingSetup.GET(pStockImportLines."Location Code",Item."Inventory Posting Group") THEN
+        ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),STRSUBSTNO(eInvPostingSetupDoesNotExist,pStockImportLines."Location Code",Item."Inventory Posting Group"));
+
+      IF  InventoryPostingSetup.GET(pStockImportLines."Location Code",Item."Inventory Posting Group") THEN BEGIN
+        IF InventoryPostingSetup."Inventory Account"='' THEN
+         ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),STRSUBSTNO(eInvPostingSetupMissingStockAcc,pStockImportLines."Location Code",Item."Inventory Posting Group"));
+
+      END;
+
+      IF Item."Base Unit of Measure"='' THEN
+        ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),eItemBaseUoMBlank);
+
+      IF NOT ItemUnitofMeasure.GET(pStockImportLines."Item No.",Item."Base Unit of Measure") THEN
+        ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),STRSUBSTNO(eItemUoMNotFound,pStockImportLines."Item No.",Item."Base Unit of Measure"));
+    END;
+
+    LOCAL PROCEDURE CheckWorkFlows@1000000039(VAR pStockImportLines@1000000001 : Record 9062846);
+    VAR
+      EnhancedWorkflow@1000000000 : Record 9062258;
+      eWorkflowsExist@1000000002 : TextConst 'ENU=One or More Item Workflows Exist;ENG=One or More Item Workflows Exist';
+    BEGIN
+
+      EnhancedWorkflow.RESET;
+      EnhancedWorkflow.SETRANGE("Table ID",27);
+      EnhancedWorkflow.SETRANGE(Enabled,TRUE);
+      IF EnhancedWorkflow.FINDSET THEN
+        ImportErrorManagement.CreateWarning(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),eWorkflowsExist);
+    END;
+
+    LOCAL PROCEDURE ValidateUnitCost@1000000010(VAR pStockImportLines@1000000000 : Record 9062846);
+    VAR
+      lItemNo@1000000004 : Code[20];
+      Item@1000000001 : Record 27;
+      lUnitCost@1000000002 : Decimal;
+      eUnitCostZero@1000000003 : TextConst 'ENU=Item Unit Cost is Zero Please check;ENG=Item Unit Cost is Zero Please check';
+    BEGIN
+      IF pStockImportLines."Unit Cost" = 0 THEN BEGIN
+
+        IF Item.GET(pStockImportLines."Item No.") THEN BEGIN
+
+          IF Item."Unit Cost">0  THEN
+            lUnitCost:=Item."Unit Cost";
+
+        END;
+
+        ImportErrorManagement.CreateWarning(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),eUnitCostZero);
+        pStockImportLines.VALIDATE(pStockImportLines."Unit Cost",lUnitCost);
+        pStockImportLines.MODIFY;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE ValidateItemTracking@1000000011(VAR pStockImportLines@1000000000 : Record 9062846);
+    VAR
+      lItemNo@1000000004 : Code[20];
+      ConfigTemplateLine@1000000003 : Record 8619;
+      Item@1000000001 : Record 27;
+      eItemTrackingCode@1000000002 : TextConst 'ENU=Item Has Item Tracking Code Assigned. This Import does not support Item Tracked Lines;ENG=Item Has Item Tracking Code Assigned. This Import does not support Item Tracked Lines';
+      eSerialNo@1000000005 : TextConst 'ENU=Item Has Serial Numbers Assigned. This Import does not support Item Tracked Lines;ENG=Item Has Serial Numbers Assigned. This Import does not support Item Tracked Lines';
+      eLotNo@1000000006 : TextConst 'ENU=Item Has Lot Number Assigned. This Import does not support Item Tracked Lines;ENG=Item Has Lot Number Assigned. This Import does not support Item Tracked Lines';
+    BEGIN
+      IF pStockImportLines."Item No." <> '' THEN BEGIN
+        IF Item.GET(pStockImportLines."Item No.") THEN BEGIN
+          IF Item."Item Tracking Code"<>''   THEN
+            ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),eItemTrackingCode);
+
+          IF Item."Serial Nos."<>''   THEN
+            ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),eSerialNo);
+
+          IF Item."Lot Nos."<>''   THEN
+            ImportErrorManagement.CreateError(DATABASE::"Stock Import Worksheet Line",pStockImportLines.GETPOSITION(FALSE),eLotNo);
+        END;
+      END;
+    END;
+
+    BEGIN
+    {
+      //Used to import items from an excel worksheet to a stock journla for posting
+      //needs to take into account bin codes / warehouse locations
+      //will need to create either a item journal or a warehouse item journal based on the loation
+      //DOC NH2016.15 JH 26/04/2016 - CfMD amendments
+      //DOC NH2016.16 JH 24/05/2016 - Bugfixes
+    }
+    END.
+  }
+}
+

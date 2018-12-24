@@ -1,0 +1,366 @@
+OBJECT Page 9062898 Ask nOra Web Control CardPart
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.15;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Ask nOra;
+               ENG=Ask nOra];
+    PageType=CardPart;
+    OnOpenPage=VAR
+                 ActiveSession@1000000000 : Record 2000000110;
+               BEGIN
+                 ResetConversation := TRUE;
+                 DisableImages := FALSE;
+                 OpenLinks := FALSE;
+
+                 IF ActiveSession.GET(SERVICEINSTANCEID,SESSIONID) THEN BEGIN
+                   IF (ActiveSession."Client Type" = ActiveSession."Client Type"::"Windows Client") THEN
+                     UseClientType := UseClientType::Rtc
+                   ELSE
+                     UseClientType := UseClientType::Web;
+                 END ELSE
+                   UseClientType := UseClientType::Rtc;
+               END;
+
+    ActionList=ACTIONS
+    {
+      { 1000000002;  ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 1000000003;1 ;Action    ;
+                      Name=Clear;
+                      CaptionML=[ENU=Clear;
+                                 ENG=Clear];
+                      Image=Delete;
+                      OnAction=BEGIN
+                                 ClearMessages();
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1000000000;;Container;
+                ContainerType=ContentArea }
+
+    { 1000000001;1;Field  ;
+                Name=AskNoraControl;
+                CaptionML=[ENU=AskNoraControl;
+                           ENG=AskNoraControl];
+                SourceExpr=AskNoraField;
+                ControlAddIn=[TheNavPeople.AskNoraControl;PublicKeyToken=ae2245b87131454c] }
+
+  }
+  CODE
+  {
+    VAR
+      HttpUtility@1000000006 : DotNet "'System.Web, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Web.HttpUtility";
+      AskNoraField@1000000000 : Text;
+      ResetConversation@1000000002 : Boolean;
+      AskNoraInitialized@1000000001 : Boolean;
+      DisableImages@1000000003 : Boolean;
+      OpenLinks@1000000004 : Boolean;
+      UseClientType@1000000005 : 'Rtc,Web,Tablet';
+      txtDownloadFileTitle@1000000007 : TextConst 'ENU=Download File;ENG=Download File';
+
+    LOCAL PROCEDURE AskNoraControlReady@1000000001();
+    BEGIN
+      IF (NOT(AskNoraInitialized)) THEN
+        CurrPage.AskNoraControl.RunScript('InvokeEvent(''sourceurl'', ''sourceurl'', document.URL);');
+      AskNoraInitialized := TRUE;
+    END;
+
+    LOCAL PROCEDURE ProcessAskNoraEvent@1000000005(source@1000000000 : Text;name@1000000001 : Text;parameters@1000000002 : Text);
+    BEGIN
+      IF (name = 'message') THEN
+        ProcessMessage(parameters)
+      ELSE IF (name = 'link') THEN
+        ProcessLink(parameters)
+      ELSE IF (name = 'sourceurl') THEN
+        DetectClient(parameters);
+    END;
+
+    LOCAL PROCEDURE DetectClient@1000000014(sourceUrl@1000000000 : Text);
+    BEGIN
+      IF (STRPOS(sourceUrl, '/tablet.aspx') > 0) THEN
+        UseClientType := UseClientType::Tablet;
+    END;
+
+    LOCAL PROCEDURE ProcessLink@1000000009(link@1000000000 : Text);
+    VAR
+      conversationEntry@1000000001 : Record 9062511;
+      sentence@1000000002 : Record 9062517;
+      ANConversation@1000000006 : Record 9062522;
+      AskNoraConvMgt@1000000005 : Codeunit 9062400;
+      sentenceUrl@1000000004 : Text;
+      remainingPart@1000000008 : Text;
+      sentenceID@1000000003 : Integer;
+      linkPos@1000000007 : Integer;
+    BEGIN
+      IF (NOT(EVALUATE(sentenceID, link))) THEN
+        EXIT;
+
+      IF (NOT(sentence.GET(sentenceID))) THEN
+        EXIT;
+
+      IF (NOT(ANConversation.GET(sentence."Conversation ID"))) THEN
+        EXIT;
+
+      IF (ANConversation."User ID" <> USERID) THEN
+        EXIT;
+
+      sentenceUrl := '';
+      CASE (UseClientType) OF
+        UseClientType::Rtc:
+          IF (sentence."Related RTC URL" <> '') THEN BEGIN
+            sentenceUrl := sentence."Related RTC URL";
+            linkPos := STRPOS(sentenceUrl, '/runpage?');
+            IF (linkPos > 0) THEN BEGIN
+              sentenceUrl := 'DynamicsNAV:////' + COPYSTR(sentenceUrl, linkPos);
+              //delete tenant
+              linkPos := STRPOS(sentenceUrl, '&tenant=');
+              IF (linkPos > 0) THEN BEGIN
+                remainingPart := COPYSTR(sentenceUrl, linkPos + 1);
+                sentenceUrl := COPYSTR(sentenceUrl, 1, linkPos - 1);
+                //add parameter specified after tenant
+                linkPos := STRPOS(remainingPart, '&');
+                IF (linkPos > 0) THEN
+                  sentenceUrl := sentenceUrl + COPYSTR(remainingPart, linkPos);
+
+                IF (TENANTID <> '') THEN
+                  sentenceUrl := sentenceUrl + '&tenant=' + TENANTID;
+
+              END;
+            END;
+          END;
+        UseClientType::Tablet,
+        UseClientType::Web:
+          sentenceUrl := sentence."Related Web Client URL"
+      END;
+
+      IF ((sentenceUrl = '') AND (sentence."Related URL" <> '')) THEN
+        sentenceUrl := sentence."Related URL";
+      IF (sentenceUrl <> '') THEN
+        HYPERLINK(sentenceUrl);
+    END;
+
+    LOCAL PROCEDURE ProcessMessage@1000000002(messageText@1000000000 : Text);
+    VAR
+      ANConversation@1000000004 : Record 9062522;
+      ConvID@1000000003 : Integer;
+      CurrConvEntryNo@1000000002 : Integer;
+      Conversation@1000000001 : Record 9062522;
+      AskNoraConvMgt@1000000005 : Codeunit 9062400;
+      outputMessageHtml@1000000006 : Text;
+    BEGIN
+      //message processing
+
+      //prepare message
+      AskNoraConvMgt.GetConversation(USERID,ANConversation);
+      ConvID := ANConversation.ID;
+      ANConversation.CALCFIELDS("Max. Entry No.");
+      CurrConvEntryNo := ANConversation."Max. Entry No.";
+
+      IF ResetConversation THEN BEGIN
+        Conversation.GET(AskNoraConvMgt.GetConversation(USERID,Conversation));
+        AskNoraConvMgt.ResetConversation(Conversation);
+        ResetConversation := FALSE;
+      END;
+
+      //process message
+      AskNoraConvMgt.AsknOra(messageText);
+      COMMIT;
+
+      //build HTML
+      outputMessageHtml := BuildMessageHtml(ConvID, CurrConvEntryNo, TRUE);
+
+      //send messages to Ask nora control
+      SendMessage(outputMessageHtml);
+    END;
+
+    LOCAL PROCEDURE SendMessage@1000000003(messageHtml@1000000000 : Text);
+    BEGIN
+      CurrPage.AskNoraControl.RunCommand('message', '', messageHtml);
+    END;
+
+    LOCAL PROCEDURE ClearMessages@1000000004();
+    BEGIN
+      CurrPage.AskNoraControl.RunCommand('reset', '', '');
+    END;
+
+    LOCAL PROCEDURE BuildMessageHtml@1000000000(ConvId@1000000001 : Integer;ConvEntryNo@1000000002 : Integer;OutgoingMessagesOnly@1000000003 : Boolean) : Text;
+    VAR
+      conversationEntry@1000000004 : Record 9062511;
+      sentence@1000000005 : Record 9062517;
+      InputStream@1000000010 : InStream;
+      BlobText@1000000011 : BigText;
+      HtmlBuilder@1000000000 : BigText;
+      HtmlText@1000000007 : Text;
+      sentenceText@1000000006 : Text;
+      sentenceUrl@1000000012 : Text;
+      messageClass@1000000009 : Text;
+      spaceCount@1000000008 : Integer;
+    BEGIN
+      //build messages HTML
+
+      CLEAR(HtmlBuilder);
+      HtmlText := '';
+
+      conversationEntry.SETRANGE("Conversation ID", ConvId);
+      conversationEntry.SETFILTER("Entry ID",'>%1',ConvEntryNo);
+      IF (OutgoingMessagesOnly) THEN
+        conversationEntry.SETRANGE(Direction, conversationEntry.Direction::"nOra -> User");
+
+      IF (conversationEntry.FINDSET()) THEN BEGIN
+        REPEAT
+          //message header
+          HtmlBuilder.ADDTEXT('<div class="msg">');
+          IF (NOT(DisableImages)) THEN BEGIN
+            IF (conversationEntry.Direction = conversationEntry.Direction::"User -> nOra") THEN
+              HtmlBuilder.ADDTEXT('<div class="msgimage"></div>')
+            ELSE
+              HtmlBuilder.ADDTEXT('<div class="msgimage"><img src="##NORAIMAGE##" /></div>');
+          END;
+
+          IF (conversationEntry.Direction = conversationEntry.Direction::"User -> nOra") THEN
+            messageClass := 'rmsgc'
+          ELSE
+            messageClass := 'lmsgc';
+
+          HtmlBuilder.ADDTEXT('<div class="msgcontent ' + messageClass + '"><div class="body">');
+
+          //message content
+          sentence.RESET();
+          sentence.SETRANGE("Conversation ID", conversationEntry."Conversation ID");
+          sentence.SETRANGE("Conv. Entry ID", conversationEntry."Entry ID");
+          IF (sentence.FINDSET()) THEN BEGIN
+            REPEAT
+              sentenceUrl := '';
+              CASE (UseClientType) OF
+                UseClientType::Rtc:
+                  BEGIN
+                    IF ((sentence."Related RTC URL" <> '') OR (sentence."Related URL" <> '')) THEN
+                      sentenceUrl := 'javascript:RunLink(''' + FORMAT(sentence."Sentence ID") + ''')';
+                  END;
+
+                UseClientType::Tablet,
+                UseClientType::Web:
+
+                  BEGIN
+                    IF (sentence."Related Web Client URL" <> '') THEN
+                      sentenceUrl := sentence."Related Web Client URL"
+                    ELSE IF (sentence."Related URL" <> '') THEN
+                      sentenceUrl := sentence."Related URL";
+                  END;
+              END;
+
+              //write sentence as link
+              IF (sentenceUrl <> '') THEN BEGIN
+                HtmlBuilder.ADDTEXT('<a href="' + sentenceUrl);
+                IF (UseClientType <> UseClientType::Rtc) THEN BEGIN
+                  HtmlBuilder.ADDTEXT('" target="_blank');
+                END;
+                HtmlBuilder.ADDTEXT('">');
+              END;
+
+              //format sentence text
+              sentenceText := sentence."Line Part 1";
+              sentenceText := HttpUtility.HtmlEncode(sentenceText);
+              IF (sentenceText = '') THEN
+                sentenceText := '&nbsp;';
+              spaceCount := CountSpaces(sentenceText);
+
+              IF (sentence."List Entry No." <> 0) THEN
+                sentenceText := FORMAT(sentence."List Entry No.") + '. ' + sentenceText;
+
+              IF (spaceCount > 0) THEN BEGIN
+                spaceCount := 10 * spaceCount;
+                HtmlBuilder.ADDTEXT('<div style="margin-left:');
+                HtmlBuilder.ADDTEXT(FORMAT(spaceCount));
+                HtmlBuilder.ADDTEXT('px;">');
+              END ELSE
+                HtmlBuilder.ADDTEXT('<div>');
+              HtmlBuilder.ADDTEXT(sentenceText);
+              HtmlBuilder.ADDTEXT('</div>');
+
+              IF (sentenceUrl <> '') THEN
+                HtmlBuilder.ADDTEXT('</a>');
+
+              //add html response to message
+              IF (sentence."HTML BLOB".HASVALUE) THEN BEGIN
+                sentence.CALCFIELDS("HTML BLOB");
+                sentence."HTML BLOB".CREATEINSTREAM(InputStream);
+                BlobText.READ(InputStream);
+                HtmlBuilder.ADDTEXT('<div class="inlinehtml">');
+                HtmlBuilder.ADDTEXT(BlobText);
+                HtmlBuilder.ADDTEXT('</div>');
+              END;
+
+              //download file
+              IF (sentence."File BLOB".HASVALUE) THEN BEGIN
+                sentence.CALCFIELDS("File BLOB");
+                sentence."File BLOB".CREATEINSTREAM(InputStream);
+                DOWNLOADFROMSTREAM(InputStream, txtDownloadFileTitle, '', 'All Files (*.*)|*.*', sentence."File Name");
+              END;
+
+            UNTIL (sentence.NEXT() = 0);
+          END;
+
+          //message footer
+          HtmlBuilder.ADDTEXT('</div></div>');
+          IF (NOT(DisableImages)) THEN BEGIN
+            IF (conversationEntry.Direction = conversationEntry.Direction::"User -> nOra") THEN
+              HtmlBuilder.ADDTEXT('<div class="msgimage"><img src="##USERIMAGE##" /></div>')
+            ELSE
+              HtmlBuilder.ADDTEXT('<div class="msgimage"></div>');
+          END;
+          HtmlBuilder.ADDTEXT('</div>');
+        UNTIL (conversationEntry.NEXT() = 0);
+      END;
+
+      HtmlBuilder.GETSUBTEXT(HtmlText, 1);
+
+      EXIT(HtmlText);
+    END;
+
+    LOCAL PROCEDURE BuildMessageText@1000000007(VAR HtmlBuilder@1000000000 : BigText;VAR conversationEntry@1000000001 : Record 9062505);
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CountSpaces@1000000012(text@1000000000 : Text) : Integer;
+    VAR
+      spaceCount@1000000001 : Integer;
+    BEGIN
+      spaceCount := 0;
+      WHILE (spaceCount < STRLEN(text)) DO BEGIN
+        IF (text[spaceCount + 1] <> ' ') THEN
+          EXIT(spaceCount);
+        spaceCount += 1;
+      END;
+      EXIT(spaceCount);
+    END;
+
+    EVENT AskNoraControl@-1000000001::ControlAddInReady@3();
+    BEGIN
+      AskNoraControlReady();
+    END;
+
+    EVENT AskNoraControl@-1000000001::ControlEvent@4(source@1000000002 : Text;name@1000000001 : Text;parameters@1000000000 : Text);
+    BEGIN
+      ProcessAskNoraEvent(source, name, parameters);
+    END;
+
+    BEGIN
+    {
+      //DOC NA2015.5  AP 16/03/2015 - Don't add tenant paramiter is the system is not multitenant
+      //DOC NA2016.5  AZ 09/09/2015 - Upgraded to Nav 2016
+      //DOC NA2016.15 JH 25/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,205 @@
+OBJECT Codeunit 9087024 Replenishment Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=21/09/16;
+    Time=[ 4:12:14 PM];
+    Version List=NS2016.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ReplenishmentTemplate@1000000007 : Record 9087041;
+      ReplenishmentBatch@1000000011 : Record 9087042;
+      ReplenishmentLine@1000000010 : Record 9087043;
+      tDefaultTemplateCode@1000000008 : TextConst 'ENU=DEFAULT;ENG=DEFAULT';
+      tDefaultTemplateDescription@1000000009 : TextConst 'ENU=Default Replenishment Template;ENG=Default Replenishment Template';
+      tDefaultBatchCode@1000000001 : TextConst 'ENU=DEFAULT;ENG=DEFAULT';
+      tDefaultBatchDescription@1000000000 : TextConst 'ENU=Default Replenishment Batch;ENG=Default Replenishment Batch';
+      tEmptyTemplate@1000000002 : TextConst 'ENU=Replenishment template code is empty;ENG=Replenishment template code is empty';
+      tEmptyBatch@1000000003 : TextConst 'ENU=Replenishment batch code is empty;ENG=Replenishment batch code is empty';
+
+    PROCEDURE EditReplenishmentWorksheet@9(VAR pReplenishmentBatch@1003 : Record 9087042);
+    BEGIN
+      //DOC NS2016.16 - Editing replenishment worksheet (from batch)
+      //  <> pReplenishmentBatch: The batch
+
+      pReplenishmentBatch.TESTFIELD("Replenishment Template Code");
+      pReplenishmentBatch.TESTFIELD(Code);
+
+      ApplyReplenishmentTemplateBatchFilter(ReplenishmentLine, pReplenishmentBatch."Replenishment Template Code",
+        pReplenishmentBatch.Code);
+
+      PAGE.RUN(PAGE::"Replenishment Worksheet", ReplenishmentLine);
+    END;
+
+    PROCEDURE InitialiseReplenishmentWorksheet@1(VAR pReplenishmentLine@1004 : Record 9087043;VAR pReplenishmentTemplateCode@1000000001 : Code[20];VAR pReplenishmentBatchCode@1000000006 : Code[20]);
+    VAR
+      lFilterGroup@1000000003 : Integer;
+      lSelected@1000000000 : Boolean;
+      eNoTemplateSelected@1000000002 : TextConst 'ENU=No replenishment template has been selected.;ENG=No replenishment template has been selected.';
+    BEGIN
+      //DOC NS2016.16 - Initialising replenishment worksheet
+      //  <> pReplenishmentLine: Line recordset
+      //  <> pReplenishmentTemplateCode: Source / target replenishment template code
+      //  <> pReplenishmentBatchCode: Source / target replenishment batch code
+
+      FOR lFilterGroup := 6 DOWNTO 0 DO
+      BEGIN
+        pReplenishmentLine.FILTERGROUP(lFilterGroup);
+        IF (pReplenishmentTemplateCode = '') THEN
+          IF (pReplenishmentLine.GETFILTER("Replenishment Template Code") <> '') THEN
+            pReplenishmentTemplateCode := pReplenishmentLine.GETRANGEMIN("Replenishment Template Code");
+        IF (pReplenishmentBatchCode = '') THEN
+          IF (pReplenishmentLine.GETFILTER("Replenishment Batch Code") <> '') THEN
+            pReplenishmentBatchCode := pReplenishmentLine.GETRANGEMIN("Replenishment Batch Code");
+        IF ((pReplenishmentTemplateCode <> '') AND (pReplenishmentBatchCode <> '')) THEN
+          lFilterGroup := 0;
+      END;
+      pReplenishmentLine.FILTERGROUP(0);
+
+      IF (pReplenishmentTemplateCode = '') THEN
+      BEGIN
+        lSelected := FALSE;
+        ReplenishmentTemplate.RESET();
+        CASE (ReplenishmentTemplate.COUNT()) OF
+          0:
+            BEGIN
+              CLEAR(ReplenishmentTemplate);
+              ReplenishmentTemplate.INIT();
+              ReplenishmentTemplate.VALIDATE(Code, tDefaultTemplateCode);
+              ReplenishmentTemplate.VALIDATE(Description, tDefaultTemplateDescription);
+              ReplenishmentTemplate.INSERT(TRUE);
+              COMMIT;
+              lSelected := TRUE;
+            END;
+          1:
+            BEGIN
+              ReplenishmentTemplate.FINDFIRST();
+              lSelected := TRUE;
+            END;
+          ELSE
+            lSelected := (PAGE.RUNMODAL(0, ReplenishmentTemplate) = ACTION::LookupOK);
+        END;
+        IF ( NOT (lSelected)) THEN
+          ERROR(eNoTemplateSelected);
+        pReplenishmentTemplateCode := ReplenishmentTemplate.Code;
+      END;
+
+      IF (pReplenishmentBatchCode = '') THEN
+      BEGIN
+        ReplenishmentBatch.RESET();
+        ReplenishmentBatch.SETRANGE("Replenishment Template Code", pReplenishmentTemplateCode);
+        IF ( NOT (ReplenishmentBatch.FINDFIRST())) THEN
+        BEGIN
+          CLEAR(ReplenishmentBatch);
+          ReplenishmentBatch.INIT();
+          ReplenishmentBatch.VALIDATE("Replenishment Template Code", pReplenishmentTemplateCode);
+          ReplenishmentBatch.VALIDATE(Code, tDefaultBatchCode);
+          ReplenishmentBatch.VALIDATE(Description, tDefaultBatchDescription);
+          ReplenishmentBatch.INSERT(TRUE);
+          COMMIT;
+        END;
+        pReplenishmentBatchCode := ReplenishmentBatch.Code;
+      END;
+
+      ApplyReplenishmentTemplateBatchFilter(pReplenishmentLine, pReplenishmentTemplateCode, pReplenishmentTemplateCode);
+    END;
+
+    PROCEDURE ValidateReplenishmentBatchCode@1000000000(VAR pReplenishmentLine@1000000003 : Record 9087043;pReplenishmentTemplateCode@1000000002 : Code[20];VAR pReplenishmentBatchCode@1000000001 : Code[20]);
+    VAR
+      lFound@1000000000 : Boolean;
+      eUnknownBatch@1000000004 : TextConst 'ENU=Unknown "%1" replenishment batch for "%2" replenishment template.;ENG=Unknown "%1" replenishment batch for "%2" replenishment template.';
+    BEGIN
+      //DOC NS2016.16 - Validating replenishment batch code
+      //  <> pReplenishmentLine: Line recordset
+      //  -> pReplenishmentTemplateCode: Source replenishment template code
+      //  <> pReplenishmentBatchCode: Source / target replenishment batch code
+
+      IF (pReplenishmentTemplateCode = '') THEN
+        ERROR(tEmptyTemplate);
+      IF (pReplenishmentBatchCode = '') THEN
+        ERROR(tEmptyBatch);
+
+      lFound := ReplenishmentBatch.GET(pReplenishmentTemplateCode, pReplenishmentBatchCode);
+      IF ( NOT (lFound)) THEN
+      BEGIN
+        ReplenishmentBatch.RESET();
+        ReplenishmentBatch.SETRANGE("Replenishment Template Code", pReplenishmentTemplateCode);
+        ReplenishmentBatch.SETFILTER(Code, pReplenishmentBatchCode + '*');
+        lFound := (ReplenishmentBatch.FINDFIRST());
+      END;
+      IF ( NOT (lFound)) THEN
+      BEGIN
+        ReplenishmentBatch.RESET();
+        ReplenishmentBatch.SETRANGE("Replenishment Template Code", pReplenishmentTemplateCode);
+        ReplenishmentBatch.SETFILTER(Code, '*' + pReplenishmentBatchCode + '*');
+        lFound := (ReplenishmentBatch.FINDFIRST());
+      END;
+      IF (lFound) THEN
+        pReplenishmentBatchCode := ReplenishmentBatch.Code
+      ELSE
+        ERROR(eUnknownBatch, pReplenishmentBatchCode, pReplenishmentTemplateCode);
+
+      ApplyReplenishmentTemplateBatchFilter(pReplenishmentLine, pReplenishmentTemplateCode, pReplenishmentTemplateCode);
+    END;
+
+    PROCEDURE ReplenishmentBatchCodeLookup@1000000001(VAR pReplenishmentLine@1000000002 : Record 9087043;pReplenishmentTemplateCode@1000000001 : Code[20];VAR pReplenishmentBatchCode@1000000000 : Code[20]) : Boolean;
+    VAR
+      lResult@1000000003 : Boolean;
+    BEGIN
+      //DOC NS2016.16 - Lookup for replenishment batch code
+      //  <> pReplenishmentLine: Line recordset
+      //  -> pReplenishmentTemplateCode: Source replenishment template code
+      //  <> pReplenishmentBatchCode: Source / target replenishment batch code
+      //  <- Lookup result
+
+      IF (pReplenishmentTemplateCode = '') THEN
+        ERROR(tEmptyTemplate);
+
+      lResult := FALSE;
+
+      ReplenishmentBatch.RESET();
+      ReplenishmentBatch.FILTERGROUP(2);
+      ReplenishmentBatch.SETRANGE("Replenishment Template Code", pReplenishmentTemplateCode);
+      ReplenishmentBatch.FILTERGROUP(0);
+      IF (pReplenishmentBatchCode <> '') THEN
+        IF (ReplenishmentBatch.GET(pReplenishmentTemplateCode, pReplenishmentBatchCode)) THEN;
+      IF (PAGE.RUNMODAL(0, ReplenishmentBatch) = ACTION::LookupOK) THEN
+      BEGIN
+        pReplenishmentBatchCode := ReplenishmentBatch.Code;
+        ApplyReplenishmentTemplateBatchFilter(pReplenishmentLine, pReplenishmentTemplateCode, pReplenishmentTemplateCode);
+        lResult := TRUE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE ApplyReplenishmentTemplateBatchFilter@1000000009(VAR pReplenishmentLine@1000000002 : Record 9087043;pReplenishmentTemplateCode@1000000001 : Code[20];pReplenishmentBatchCode@1000000000 : Code[20]);
+    BEGIN
+      //DOC NS2016.16 - Applying replenishment template + batch filter to replenishment line
+      //  <> pReplenishmentLine: The line to apply filter to
+      //  -> pReplenishmentTemplateCode: The template code
+      //  -> pReplenishmentBatchCode: The batch code
+
+      pReplenishmentLine.RESET();
+      pReplenishmentLine.FILTERGROUP(2);
+      pReplenishmentLine.SETRANGE("Replenishment Template Code", pReplenishmentTemplateCode);
+      pReplenishmentLine.SETRANGE("Replenishment Batch Code", pReplenishmentTemplateCode);
+      pReplenishmentLine.FILTERGROUP(0);
+    END;
+
+    BEGIN
+    {
+      //DOC NS2016.16 JH 15/09/2016 - Created
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,309 @@
+OBJECT Codeunit 9062562 Help Editing
+{
+  OBJECT-PROPERTIES
+  {
+    Date=21/07/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.16.1;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            rid@1000000000 : RecordID;
+          BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      HelpHeader@1000000001 : Record 9062710;
+      HelpEditor@1000000003 : Record 9062718;
+      SystemBehaviour@1000000000 : Record 9062230;
+      tHelpBaseUrlSysB@1000000008 : TextConst 'ENU=HELP_BASEURL;ENG=HELP_BASEURL';
+      tHelpEditorSysB@1000000002 : TextConst 'ENU=HELP_EDITOR;ENG=HELP_EDITOR';
+      TextCommentExtension@1000000012 : Record 9062238;
+      BlobToolkit@1000000006 : Codeunit 9062242;
+      FileSystem@1000000004 : Codeunit 9062264;
+      TextExtensionManagement@1000000005 : Codeunit 9062250;
+      TnpToolkit@1000000014 : Codeunit 9062230;
+      HtmlTemplateFileName@1000000011 : Text;
+      HtmlTemplateFilePath@1000000010 : Text;
+      HtmlTemplateFile@1000000009 : File;
+      HtmlTemplateInfo@1000000013 : Record 9062386;
+
+    LOCAL PROCEDURE "--- General ---"@1000000003();
+    BEGIN
+    END;
+
+    PROCEDURE Edit@1000000000(VAR pHelpHeader@1000000000 : Record 9062710) : Boolean;
+    VAR
+      lHelpEditorCode@1000000001 : Code[20];
+      lHelpEditorFound@1000000002 : Boolean;
+      lResult@1000000003 : Boolean;
+    BEGIN
+      //DOC NA2016.16.1 - Editing help
+      //  <> pHelpHeader: The help
+      //  <- TRUE = Help change, FALSE = Not
+
+      lResult := FALSE;
+
+      HelpHeader := pHelpHeader;
+
+      lHelpEditorFound := FALSE;
+      lHelpEditorCode := SystemBehaviour.GetText(tHelpEditorSysB);
+      IF (lHelpEditorCode <> '') THEN
+        IF (STRLEN(lHelpEditorCode) <= MAXSTRLEN(HelpEditor.Code)) THEN
+          lHelpEditorFound := HelpEditor.GET(lHelpEditorCode);
+
+      IF (lHelpEditorFound) THEN
+        lResult := EditExternally()
+      ELSE
+        lResult := EditInternally();
+
+      pHelpHeader := HelpHeader;
+
+      EXIT(lResult);
+    END;
+
+    PROCEDURE Export@1000000011(VAR pHelpHeader@1000000000 : Record 9062710);
+    VAR
+      lHelpText@1000000001 : Text;
+      eHelpTextIsEmpty@1000000002 : TextConst 'ENU=Help "%1" text is empty.;ENG=Help "%1" text is empty.';
+      lHelpBlob@1000000003 : Record 99008535;
+      lHelpFileName@1000000004 : Text;
+      eFileFilter@1000000005 : TextConst 'ENU="HTML Files (*.htm;*.html)|*.htm;*.html|All Files (*.*)|*.*";ENG="HTML Files (*.htm;*.html)|*.htm;*.html|All Files (*.*)|*.*"';
+    BEGIN
+      //DOC NA2016.16.1 - Exporting help text
+      //  <> pHelpHeader: The help
+
+      HelpHeader := pHelpHeader;
+      lHelpText := TextExtensionManagement.GetText(TextCommentExtension, DATABASE::"Help Header", HelpHeader.FIELDNO("Help Text"), HelpHeader.GETPOSITION());
+      IF (lHelpText = '') THEN
+        ERROR(eHelpTextIsEmpty, HelpHeader."No.");
+
+      lHelpFileName := FileSystem.ToFileName(HelpHeader."No.");
+
+      BlobToolkit.TextToBlob(lHelpText, lHelpBlob);
+      FileSystem.ExportBlobToFile(TRUE, lHelpBlob, lHelpFileName, '', eFileFilter);
+    END;
+
+    PROCEDURE Import@1000000013(VAR pHelpHeader@1000000000 : Record 9062710) : Boolean;
+    VAR
+      eConfirmation@1000000001 : TextConst 'ENU=The help text is not empty. Do you want to overwrite it?;ENG=The help text is not empty. Do you want to overwrite it?';
+      lBlob@1000000002 : Record 99008535;
+      lFilePath@1000000003 : Text;
+      eFileFilter@1000000004 : TextConst 'ENU="HTML Files (*.htm;*.html)|*.htm;*.html|All Files (*.*)|*.*";ENG="HTML Files (*.htm;*.html)|*.htm;*.html|All Files (*.*)|*.*"';
+      lHelpText@1000000005 : Text;
+    BEGIN
+      //DOC NA2016.16.1 - Importing help text
+      //  <> pHelpHeader: The help
+      //  <- TRUE = Imported, FALSE = Cancelled
+
+      HelpHeader := pHelpHeader;
+      lHelpText := TextExtensionManagement.GetText(TextCommentExtension, DATABASE::"Help Header", HelpHeader.FIELDNO("Help Text"), HelpHeader.GETPOSITION());
+      IF (lHelpText <> '') THEN
+        IF ( NOT (CONFIRM(eConfirmation, TRUE))) THEN
+          EXIT(FALSE);
+
+      FileSystem.ImportFileToBlob(TRUE, lFilePath, lBlob, '', eFileFilter);
+      lHelpText := BlobToolkit.BlobToText(lBlob);
+
+      TextExtensionManagement.SetText(TextCommentExtension, DATABASE::"Help Header", HelpHeader.FIELDNO("Help Text"), HelpHeader.GETPOSITION(), lHelpText);
+      HelpHeader."Help Text" := COPYSTR(lHelpText, 1, MAXSTRLEN(HelpHeader."Help Text"));
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE "--- Inernal ---"@1000000004();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE EditInternally@1000000001() : Boolean;
+    BEGIN
+      //DOC NA2016.16.1 - Editing help internally
+      //  <- TRUE = Help change, FALSE = Not
+
+      HelpHeader."Help Text" := TextExtensionManagement.OnAssistEdit_AsHTML(DATABASE::"Help Header", HelpHeader.FIELDNO("Help Text"),
+        HelpHeader.GETPOSITION(), HelpHeader."Help Text", FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE EditExternally@1000000002() : Boolean;
+    BEGIN
+      //DOC NA2016.16.1 - Editing help externally
+      //  <- TRUE = Help change, FALSE = Not
+
+      HelpEditor.TESTFIELD(Command);
+
+      CreateHtmlTemplateFile();
+      RunEditor();
+      ExtractFromHtmlTemplateFile();
+    END;
+
+    LOCAL PROCEDURE CreateHtmlTemplateFile@1000000005();
+    VAR
+      lHtmlTemplateServerFilePath@1000000004 : Text;
+      lClientFilePath@1000000003 : Text;
+      lHelpText@1000000000 : Text;
+    BEGIN
+      //DOC NA2016.16.1 - Creating HTML teplate file
+
+      HtmlTemplateFileName := STRSUBSTNO('%1.html', FileSystem.ToFileName(HelpHeader."No."));
+      lHtmlTemplateServerFilePath := FileSystem.GetTempPathForFile(FALSE, HtmlTemplateFileName);
+      FileSystem.DeleteFileIfExists(FALSE, lHtmlTemplateServerFilePath);
+
+      CLEAR(HtmlTemplateFile);
+      HtmlTemplateFile.WRITEMODE(TRUE);
+      HtmlTemplateFile.TEXTMODE(TRUE);
+      HtmlTemplateFile.CREATE(lHtmlTemplateServerFilePath);
+      BeginHtmlTemplate();
+      lHelpText := TextExtensionManagement.GetText(TextCommentExtension, DATABASE::"Help Header", HelpHeader.FIELDNO("Help Text"), HelpHeader.GETPOSITION());
+      HtmlTemplateFile.WRITE(lHelpText);
+      EndHtmlTemplate();
+      HtmlTemplateFile.CLOSE();
+
+      HtmlTemplateFilePath := FileSystem.GetTempPathForFile(TRUE, HtmlTemplateFileName);
+      FileSystem.DeleteFileIfExists(TRUE, HtmlTemplateFilePath);
+      FileSystem.DownloadSilent(TRUE, lHtmlTemplateServerFilePath, HtmlTemplateFilePath);
+
+      FileSystem.DeleteFileIfExists(FALSE, lHtmlTemplateServerFilePath);
+
+      FileSystem.GetFileInfo(TRUE, HtmlTemplateFilePath, HtmlTemplateInfo);
+    END;
+
+    LOCAL PROCEDURE RunEditor@1000000006();
+    VAR
+      lParameters@1000000002 : Text;
+      lProcess@1000000001 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Diagnostics.Process" RUNONCLIENT;
+      ProcessDotNetStartInfo@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Diagnostics.ProcessStartInfo";
+    BEGIN
+      //DOC NA2016.16.1 - Running editor with HTML template file
+
+      lParameters := HelpEditor.Parameters;
+      IF (lParameters = '') THEN
+        lParameters := '%1';
+      lParameters := STRSUBSTNO(lParameters, HtmlTemplateFilePath);
+
+      lProcess := lProcess.Start(HelpEditor.Command, lParameters);
+      lProcess.WaitForExit();
+    END;
+
+    LOCAL PROCEDURE ExtractFromHtmlTemplateFile@1000000012();
+    VAR
+      lHtmlTemplateModifiedInfo@1000000006 : Record 9062386;
+      lHtmlTemplateModified@1000000001 : Boolean;
+      lConfirmationText@1000000000 : Text;
+      lLine@1000000003 : Text;
+      lLineTrimmed@1000000012 : Text;
+      lHtmlTextStatus@1000000004 : ' ,Started,Finished';
+      lHtmlText@1000000005 : Text;
+      eConfirmationIfModified@1000000007 : TextConst 'ENU=You have modified the HTML. Do you want to save it?;ENG=You have modified the HTML. Do you want to save it?';
+      eConfirmationIfNotModified@1000000008 : TextConst 'ENU=You haven''t modified the HTML. Despite this, do you still want to save it?;ENG=You haven''t modified the HTML. Despite this, do you still want to save it?';
+      lHtmlTemplateServerFilePath@1000000009 : Text;
+      eBodyBegin@1000000010 : TextConst 'ENU=<body;ENG=<body';
+      eBodyEnd@1000000011 : TextConst 'ENU=</body;ENG=</body';
+      lHtmlTemplateFileLen@1000000002 : Integer;
+    BEGIN
+      //DOC NA2016.16.1 - Extracting text back from HTML template file
+
+      FileSystem.GetFileInfo(TRUE, HtmlTemplateFilePath, lHtmlTemplateModifiedInfo);
+      lHtmlTemplateModified := ((lHtmlTemplateModifiedInfo."Last Access Data Time" <> HtmlTemplateInfo."Last Access Data Time") OR
+        (lHtmlTemplateModifiedInfo."Last Write Date Time" <> HtmlTemplateInfo."Last Write Date Time") OR
+        (lHtmlTemplateModifiedInfo.Size <> HtmlTemplateInfo.Size));
+      lConfirmationText := TnpToolkit.IIFText(lHtmlTemplateModified, eConfirmationIfModified, eConfirmationIfNotModified);
+      IF (CONFIRM(lConfirmationText, lHtmlTemplateModified)) THEN
+      BEGIN
+        lHtmlTemplateServerFilePath := FileSystem.GetTempPathForFile(FALSE, HtmlTemplateFileName);
+        FileSystem.DeleteFileIfExists(FALSE, lHtmlTemplateServerFilePath);
+        FileSystem.UploadSilent(TRUE, HtmlTemplateFilePath, lHtmlTemplateServerFilePath);
+        FileSystem.DeleteFileIfExists(TRUE, HtmlTemplateFilePath);
+
+        HtmlTemplateFile.WRITEMODE(FALSE);
+        HtmlTemplateFile.TEXTMODE(TRUE);
+        HtmlTemplateFile.OPEN(lHtmlTemplateServerFilePath);
+        lHtmlTemplateFileLen := HtmlTemplateFile.LEN();
+        WHILE (HtmlTemplateFile.POS() < lHtmlTemplateFileLen) DO
+        BEGIN
+          HtmlTemplateFile.READ(lLine);
+          lLine := DELCHR(lLine, '<>', ' ') + ' ';
+          lLineTrimmed := DELCHR(lLine, '<>', ' ');
+          IF (COPYSTR(lLineTrimmed, 1, STRLEN(eBodyEnd)) = eBodyEnd) THEN
+            lHtmlTextStatus := lHtmlTextStatus::Finished;
+          IF (lHtmlTextStatus = lHtmlTextStatus::Started) THEN
+            lHtmlText := lHtmlText + lLine;
+          IF (COPYSTR(lLineTrimmed, 1, STRLEN(eBodyBegin)) = eBodyBegin) THEN
+            lHtmlTextStatus := lHtmlTextStatus::Started;
+        END;
+        HtmlTemplateFile.CLOSE();
+
+        TextExtensionManagement.SetText(TextCommentExtension, DATABASE::"Help Header", HelpHeader.FIELDNO("Help Text"), HelpHeader.GETPOSITION(), lHtmlText);
+        HelpHeader."Help Text" := COPYSTR(lHtmlText, 1, MAXSTRLEN(HelpHeader."Help Text"));
+
+        FileSystem.DeleteFileIfExists(FALSE, lHtmlTemplateServerFilePath);
+      END;
+    END;
+
+    LOCAL PROCEDURE BeginHtmlTemplate@1000000010();
+    VAR
+      lHelpBaseUrl@1000000000 : Text;
+      eClassicCssUrl@1000000002 : TextConst 'ENU=%1/help/local/Classic.css;ENG=%1/help/local/Classic.css';
+      lClassicCssUrl@1000000003 : Text;
+      eScriptJsUrl@1000000004 : TextConst 'ENU=%1/help/local/script.js;ENG=%1/help/local/script.js';
+      lScriptJsUrl@1000000005 : Text;
+      eFeedbackJsUrl@1000000006 : TextConst 'ENU=%1/help/Feedback.js;ENG=%1/help/Feedback.js';
+      lFeedbackJsUrl@1000000007 : Text;
+    BEGIN
+      //DOC NA2016.16.1 - Beginning HTML template
+
+      SystemBehaviour.TestText(tHelpBaseUrlSysB);
+      lHelpBaseUrl := SystemBehaviour.GetText(tHelpBaseUrlSysB);
+
+      lClassicCssUrl := STRSUBSTNO(eClassicCssUrl, lHelpBaseUrl);
+      lScriptJsUrl := STRSUBSTNO(eScriptJsUrl, lHelpBaseUrl);
+      lFeedbackJsUrl := STRSUBSTNO(eFeedbackJsUrl, lHelpBaseUrl);
+
+      ToHtmlTemplateFile0('<!doctype html>');
+      ToHtmlTemplateFile0('<html');
+      ToHtmlTemplateFile0('  <head>');
+      ToHtmlTemplateFile1('    <link rel="stylesheet" type="text/css" href="%1">', lClassicCssUrl);
+      ToHtmlTemplateFile1('    <script language="jscript" src="%1"></script>', lScriptJsUrl);
+      ToHtmlTemplateFile1('    <script language="jscript" src="%1"></script>', lFeedbackJsUrl);
+      ToHtmlTemplateFile0('  </head>');
+      ToHtmlTemplateFile0('  <body>');
+    END;
+
+    LOCAL PROCEDURE EndHtmlTemplate@1000000007();
+    BEGIN
+      //DOC NA2016.16.1 - Ending HTML template
+
+      ToHtmlTemplateFile0('  </body>');
+      ToHtmlTemplateFile0('</html>');
+    END;
+
+    LOCAL PROCEDURE ToHtmlTemplateFile0@1000000008(pText@1000000001 : Text);
+    BEGIN
+      //DOC NA2016.16.1 - Adding text to HTML template file
+      //  -> pText: The text
+
+      HtmlTemplateFile.WRITE(pText);
+    END;
+
+    LOCAL PROCEDURE ToHtmlTemplateFile1@1000000009(pText@1000000001 : Text;pParameter1@1000000002 : Text);
+    BEGIN
+      //DOC NA2016.16.1 - Adding text with 1 parameter to HTML template file
+      //  -> pText: The text
+      //  -> pParameter1: Parameter 1
+
+      HtmlTemplateFile.WRITE(STRSUBSTNO(pText, pParameter1));
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.16.1 JH 19/07/2016 - Created
+    }
+    END.
+  }
+}
+

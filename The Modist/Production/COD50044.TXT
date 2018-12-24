@@ -1,0 +1,301 @@
+OBJECT Codeunit 50044 3PL Transfer Order Import
+{
+  OBJECT-PROPERTIES
+  {
+    Date=27/03/18;
+    Time=[ 4:19:15 PM];
+    Modified=Yes;
+    Version List=TM0001;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            GetModistSetup;
+            GetIntegrationProcessingGrpSetup;
+
+            IF IntegrationProcessingGroup."Enable SFTP Connect" THEN
+              DownloadftpFiles;
+            ProcessFTPFiles;
+            MoveSuccessFileToArchLocation;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TransferHeader@1000000010 : Record 5740;
+      TransferLine@1000000011 : Record 5741;
+      TmpTransferHeader@1000000012 : TEMPORARY Record 5740;
+      TmpTransferLine@1000000013 : TEMPORARY Record 5741;
+      ModistSetup@1000000001 : Record 50000;
+      IntegrationProcessingGroup@1000000000 : Record 50007;
+      AutoNAVTask@1000000005 : Record 9062734;
+      IntegrationErrorLog@1000000009 : Record 50011;
+      Location@1000000017 : Record 14;
+      AutoNAVToolkit@1000000004 : Codeunit 9062602;
+      FileManagement@1000000008 : Codeunit 419;
+      TransferOrderPostShipment@1000000016 : Codeunit 5704;
+      TransferOrderPostReceipt@1000000020 : Codeunit 5705;
+      GetSourceDocInbound@1000000018 : Codeunit 5751;
+      WhsePostReceipt@1000000019 : Codeunit 5760;
+      SuccessList@1000000007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      ModistSetupOK@1000000002 : Boolean;
+      IntegrationProcessingGrpSetupOK@1000000003 : Boolean;
+      SuccessFile@1000000006 : Text;
+      Text000@1000000014 : TextConst 'ENU=Error Processing Transfer Orders, Please contact your System Administrator.';
+      Text001@1000000015 : TextConst 'ENU=Warehouse Shipments are not supported with GAC Integration';
+      Text002@1000000021 : TextConst 'ENU=Transfer Order No. %1 not found.';
+
+    LOCAL PROCEDURE ProcessFTPFiles@1000000003();
+    VAR
+      lFile@1000000000 : Record 2000000022;
+    BEGIN
+      CLEARLASTERROR;
+      SuccessList := SuccessList.List;
+      lFile.SETRANGE(Path,IntegrationProcessingGroup."Working Location");
+      lFile.SETRANGE("Is a file",TRUE);
+      lFile.SETFILTER(Name,'%1','*.xml');
+      IF lFile.FINDSET THEN BEGIN
+        ClearErrorLogs;
+        REPEAT
+          IF ImportTransferOrders(IntegrationProcessingGroup."Working Location" + lFile.Name,lFile.Name) THEN
+            SuccessList.Add(IntegrationProcessingGroup."Working Location" + lFile.Name)
+          ELSE
+            LogError('',0,GETLASTERRORTEXT,'Import XML File',GETLASTERRORCODE,lFile.Name);
+        UNTIL lFile.NEXT=0;
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ImportTransferOrders@1000000004(pFilePath@1000000001 : Text;pFileName@1000000000 : Text);
+    VAR
+      lReader@1000000005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlTextReader";
+      lReaderName@1000000004 : Text;
+      lReaderValue@1000000003 : Text;
+      lNodeTypeTxt@1000000002 : Text;
+    BEGIN
+      TmpTransferHeader.RESET;
+      TmpTransferLine.RESET;
+      TmpTransferHeader.DELETEALL;
+      TmpTransferLine.DELETEALL;
+
+      lReader := lReader.Create(pFilePath);
+      WHILE lReader.Read DO BEGIN
+        lNodeTypeTxt := FORMAT(lReader.NodeType);
+        CASE lNodeTypeTxt OF
+          'Element':
+            BEGIN
+              lReaderName := lReader.Name;
+              CASE lReaderName OF
+                'StockMovement':
+                  BEGIN
+                    TmpTransferHeader.INIT;
+                    TmpTransferLine.INIT;
+                  END;
+              END;
+            END;
+          'Text':
+            BEGIN
+              lReaderValue := lReader.Value;
+              CASE lReaderName OF
+                'SKUNumber'    : TmpTransferLine.SKU := lReaderValue;
+                'SourceLineNo' : EVALUATE(TmpTransferLine."Line No.",lReaderValue);
+                'FromLocation' : TmpTransferLine."Transfer-from Code" := lReaderValue;
+                'ToLocation'   : TmpTransferLine."Transfer-to Code" := lReaderValue;
+                'Quantity'     : EVALUATE(TmpTransferLine."Qty. to Ship",lReaderValue);
+                'TransferRef'  :
+                  BEGIN
+                    TmpTransferLine."Document No." := lReaderValue;
+                    TmpTransferHeader."No." := lReaderValue;
+                  END;
+              END;
+            END;
+          'EndElement':
+            BEGIN
+              lReaderName := lReader.Name;
+              CASE lReaderName OF
+                'StockMovement':
+                  BEGIN
+                    IF (TmpTransferHeader."No." <> '') AND (TmpTransferLine."Document No." <> '') THEN BEGIN
+                      TmpTransferLine.INSERT;
+                      IF NOT TmpTransferHeader.GET(TmpTransferHeader."No.") THEN
+                        TmpTransferHeader.INSERT;
+                    END;
+                  END;
+              END;
+            END;
+        END;
+      END;
+      lReader.Close;
+      lReader.Dispose;
+
+      ProcessTmpTransferHeader;
+    END;
+
+    LOCAL PROCEDURE ProcessTmpTransferHeader@1000000009();
+    BEGIN
+      TmpTransferHeader.RESET;
+      TmpTransferLine.RESET;
+
+      IF TmpTransferHeader.FINDSET THEN BEGIN
+        REPEAT
+          IF TransferHeader.GET(TmpTransferHeader."No.") THEN BEGIN
+            TmpTransferLine.RESET;
+            TmpTransferLine.SETRANGE("Document No.",TmpTransferHeader."No.");
+            IF TmpTransferLine.FINDSET THEN BEGIN
+              REPEAT
+                TransferLine.GET(TmpTransferLine."Document No.",TmpTransferLine."Line No.");
+                IF (TransferLine."Qty. to Ship" <> TmpTransferLine."Qty. to Ship") AND
+                   (TransferLine."Quantity Shipped" <> TransferLine.Quantity)
+                THEN
+                  TransferLine.VALIDATE("Qty. to Ship",TmpTransferLine."Qty. to Ship");
+              UNTIL TmpTransferLine.NEXT=0;
+            END;
+            IF NOT PostTransferShipment(TransferHeader) THEN
+              LogError(TransferHeader."No.",0,GETLASTERRORTEXT,'PostTransferShipment',GETLASTERRORCODE,'')
+            ELSE
+              IF NOT PostTransferReceipt(TransferHeader) THEN
+                LogError(TransferHeader."No.",0,GETLASTERRORTEXT,'PostTransferReceipt',GETLASTERRORCODE,'');
+          END ELSE
+            LogError(TmpTransferHeader."No.",0,STRSUBSTNO(Text002,TmpTransferHeader."No."),'ProcessTmpTransferHeader','','');
+        UNTIL TmpTransferHeader.NEXT=0;
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE PostTransferShipment@1000000010(VAR pTransferHeader@1000000000 : Record 5740);
+    BEGIN
+      WITH pTransferHeader DO BEGIN
+        CLEARLASTERROR;
+        IF AlreadyShipped(pTransferHeader) THEN
+          EXIT;
+        Location.GET("Transfer-from Code");
+        IF Location."Require Shipment" THEN
+          ERROR(Text000);
+        CLEAR(TransferOrderPostShipment);
+        TransferOrderPostShipment.SetHideValidationDialog(TRUE);
+        TransferOrderPostShipment.RUN(pTransferHeader);
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE PostTransferReceipt@1000000013(VAR pTransferHeader@1000000000 : Record 5740);
+    VAR
+      lWarehouseReceiptLine@1000000001 : Record 7317;
+    BEGIN
+      WITH pTransferHeader DO BEGIN
+        CLEARLASTERROR;
+        Location.GET("Transfer-to Code");
+        IF Location."Require Receive" THEN BEGIN
+          CLEAR(GetSourceDocInbound);
+          CLEAR(WhsePostReceipt);
+
+          lWarehouseReceiptLine.RESET;
+          lWarehouseReceiptLine.SETCURRENTKEY("Source Type","Source Subtype","Source No.","Source Line No.");
+          lWarehouseReceiptLine.SETRANGE("Source Type",DATABASE::"Transfer Line");
+          lWarehouseReceiptLine.SETRANGE("Source Subtype",1);
+          lWarehouseReceiptLine.SETRANGE("Source No.","No.");
+
+          GetSourceDocInbound.CreateFromInbndTransferOrderHideDialog(pTransferHeader);
+          lWarehouseReceiptLine.FINDFIRST;
+          WhsePostReceipt.SetHideValidationDialog(TRUE);
+          WhsePostReceipt.RUN(lWarehouseReceiptLine);
+        END ELSE BEGIN
+          CLEAR(TransferOrderPostReceipt);
+          TransferOrderPostReceipt.SetHideValidationDialog(TRUE);
+          TransferOrderPostReceipt.RUN(pTransferHeader);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE AlreadyShipped@1000000006(pTransferHeader@1000000000 : Record 5740) : Boolean;
+    VAR
+      lTransferLine@1000000001 : Record 5741;
+    BEGIN
+      WITH pTransferHeader DO BEGIN
+        lTransferLine.RESET;
+        lTransferLine.SETRANGE("Document No.","No.");
+        lTransferLine.SETRANGE("Derived From Line No.",0);
+        lTransferLine.SETFILTER(Quantity,'<>0');
+        lTransferLine.SETFILTER("Qty. to Ship",'<>0');
+        EXIT(lTransferLine.ISEMPTY)
+      END;
+    END;
+
+    LOCAL PROCEDURE LogError@1000000015(OrderRef@1000000001 : Code[20];LineNo@1000000006 : Integer;ErrMessage@1000000002 : Text;ErrorLocation@1000000004 : Text;ErrCode@1000000005 : Text;pFileName@1000000007 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+    BEGIN
+      ErrorHandler.LogError(ModistSetup."3PL Integration Type",
+                            ModistSetup."3PL Transfer Order Imp. Grp.",
+                            '',
+                            DATABASE::"Transfer Header",
+                            OrderRef,
+                            LineNo,
+                            ErrMessage,
+                            ErrorLocation,
+                            0,
+                            ErrCode,
+                            pFileName);
+    END;
+
+    LOCAL PROCEDURE MoveSuccessFileToArchLocation@1000000017();
+    BEGIN
+      FOREACH SuccessFile IN SuccessList DO BEGIN
+        IF SuccessFile <> '' THEN BEGIN
+          FileManagement.MoveFile(SuccessFile,IntegrationProcessingGroup."Archive Location" + FileManagement.GetFileName(SuccessFile));
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ClearErrorLogs@1000000005();
+    BEGIN
+      GetIntegrationProcessingGrpSetup;
+      IntegrationErrorLog.RESET;
+      IntegrationErrorLog.SETCURRENTKEY("Integration Type","Integration Process Group");
+      IntegrationErrorLog.SETRANGE("Integration Type",IntegrationProcessingGroup."Platform Code");
+      IntegrationErrorLog.SETRANGE("Integration Process Group",IntegrationProcessingGroup.Code);
+      IF NOT IntegrationErrorLog.ISEMPTY THEN
+        IntegrationErrorLog.DELETEALL;
+    END;
+
+    LOCAL PROCEDURE DownloadftpFiles@1000000002();
+    VAR
+      lWebIntegrationManagement@1000000000 : Codeunit 50100;
+    BEGIN
+      IF NOT lWebIntegrationManagement.DownloadftpFiles(IntegrationProcessingGroup."Working Location",
+                                                        ModistSetup."Demandware Import SFTP Server",
+                                                        IntegrationProcessingGroup."FTP Folder")
+      THEN BEGIN
+        AutoNAVToolkit.AddEntryForTask(AutoNAVTask,GETLASTERRORTEXT,2);
+        ERROR(GETLASTERRORTEXT);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetModistSetup@1000000000();
+    BEGIN
+      IF NOT ModistSetupOK THEN BEGIN
+        ModistSetup.GET;
+        ModistSetup.TESTFIELD("3PL Integration Type");
+        ModistSetup.TESTFIELD("3PL Transfer Order Imp. Grp.");
+        ModistSetupOK := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetIntegrationProcessingGrpSetup@1000000001();
+    BEGIN
+      GetModistSetup;
+      IF NOT IntegrationProcessingGrpSetupOK THEN BEGIN
+        IntegrationProcessingGroup.GET(ModistSetup."3PL Integration Type",ModistSetup."3PL Transfer Order Imp. Grp.");
+        IntegrationProcessingGrpSetupOK := TRUE;
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC TM0001 AW 19/11/2017 - Transfer Order EDI
+    }
+    END.
+  }
+}
+

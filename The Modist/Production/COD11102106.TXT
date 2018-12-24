@@ -1,0 +1,588 @@
+OBJECT Codeunit 11102106 OM - Editor Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            ExportVirtualTables;
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE DocumentationTriggerTag@1() : Text;
+    VAR
+      ProjectType@1000 : Record 11102097;
+    BEGIN
+      GetActiveProjectType(ProjectType);
+      EXIT(BuildTag(ProjectType.ProjectTagDocTrigger, ''));
+    END;
+
+    PROCEDURE ModificationTag@2() : Text;
+    VAR
+      ProjectType@1000 : Record 11102097;
+    BEGIN
+      GetActiveProjectType(ProjectType);
+      EXIT(BuildTag(ProjectType.ModificationTag, ''));
+    END;
+
+    PROCEDURE ModificationStartTag@3() : Text;
+    VAR
+      ProjectType@1000 : Record 11102097;
+    BEGIN
+      GetActiveProjectType(ProjectType);
+      EXIT(BuildTag(ProjectType.ModificationStartTag, ''));
+    END;
+
+    PROCEDURE ModificationEndTag@4() : Text;
+    VAR
+      ProjectType@1000 : Record 11102097;
+    BEGIN
+      GetActiveProjectType(ProjectType);
+      EXIT(BuildTag(ProjectType.ModificationEndTag, ''));
+    END;
+
+    LOCAL PROCEDURE ActiveProjectNo@5() : Code[20];
+    VAR
+      AssignModificationsMgt@1000 : Codeunit 11102036;
+      ActiveProjectNo2@1001 : Code[20];
+      AssignType@1002 : 'Save,Popup,Active Project';
+    BEGIN
+      AssignModificationsMgt.GetSettings(AssignType, ActiveProjectNo2);
+      EXIT(ActiveProjectNo2);
+    END;
+
+    LOCAL PROCEDURE GetActiveProjectType@6(VAR ProjectType@1000 : Record 11102097);
+    VAR
+      Project@1001 : Record 11102036;
+    BEGIN
+      IF Project.GET(ActiveProjectNo) THEN
+        IF ProjectType.GET(Project."Project Type Code") THEN
+          ;
+    END;
+
+    LOCAL PROCEDURE BuildTag@7(Tag@1000 : Text;ExtraInfo@1001 : Text) : Text;
+    VAR
+      User@1002 : Record 11102056;
+    BEGIN
+      User.GetActiveUser(FALSE);
+
+      EXIT(FORMAT(WORKDATE, 0, STRSUBSTNO(Tag, ActiveProjectNo, User.Initials, ExtraInfo)));
+    END;
+
+    PROCEDURE SaveCALCode@8(CALCode@1000 : Text;Compile@1001 : Boolean);
+    VAR
+      Setup@1002 : Record 11102035;
+      CALHistoryObject@1003 : Record 11102052;
+      Object@1004 : Record 2000000001;
+      TmpObjectHeaders@1005 : TEMPORARY Record 2000000001;
+      ImExportMgt@1006 : Codeunit 11102043;
+      ObjectMgt@1007 : Codeunit 11102046;
+      SourceControl@1008 : Codeunit 11102050;
+      FileHandler@1009 : Codeunit 11102097;
+      oFile@1010 : File;
+      InStr@1011 : InStream;
+      OutStr@1012 : OutStream;
+      ServerFileName@1013 : Text;
+    BEGIN
+      Setup.CustomGet;
+
+      ServerFileName := FileHandler.CreateServerTempFileName('txt');
+
+      oFile.CREATE(ServerFileName);
+      oFile.CREATEOUTSTREAM(OutStr);
+      OutStr.WRITETEXT(CALCode);
+      oFile.CLOSE;
+
+      SLEEP(20);
+
+      oFile.OPEN(ServerFileName);
+      oFile.CREATEINSTREAM(InStr);
+      ImExportMgt.GetObjectHeadersFromTxt(InStr, TmpObjectHeaders);
+      oFile.CLOSE;
+
+      ObjectMgt.ImportObject(ServerFileName);
+      IF TmpObjectHeaders.FINDSET THEN
+        REPEAT
+          IF Compile THEN
+            ObjectMgt.CompileObject(TmpObjectHeaders);
+
+          IF Object.GET(TmpObjectHeaders.Type, '', TmpObjectHeaders.ID) THEN BEGIN
+            Object.Date := TODAY;
+            Object.Time := TIME;
+            Object.Modified := TRUE;
+
+            ObjectMgt.UpdateObject(Object, FALSE);
+
+            IF Setup."Save C/AL at Modification" <> Setup."Save C/AL at Modification"::No THEN
+              SourceControl.AddObject(Object, CALHistoryObject."Action Type"::Modification, FALSE, TRUE, 2, FALSE);
+
+          END;
+
+        UNTIL TmpObjectHeaders.NEXT = 0;
+
+      ObjectMgt.TryDeleteFile(ServerFileName);
+    END;
+
+    PROCEDURE CALCode@9(ObjectType@1000 : Integer;ObjectNo@1001 : Integer) ExitValue : Text;
+    VAR
+      CALHistoryObject@1002 : Record 11102052;
+    BEGIN
+      IF CALHistoryObject.TryGoToLastRecord(ObjectType, ObjectNo) THEN
+        EXIT(HistoryCALCode(CALHistoryObject."Entry No."));
+    END;
+
+    PROCEDURE LifeCALCode@30(ObjectType@1000 : Integer;ObjectNo@1001 : Integer) ExitValue : Text;
+    VAR
+      Object@1002 : Record 2000000001;
+      ObjectMgt@1003 : Codeunit 11102046;
+    BEGIN
+      Object.Type := ObjectType;
+      Object.ID := ObjectNo;
+      ExitValue := ObjectMgt.GetLifeObject(Object);
+
+      IF ExitValue = '' THEN
+        ExitValue := CALCode(ObjectType, ObjectNo);
+    END;
+
+    PROCEDURE HistoryCALCode@10(EntryNo@1000 : Integer) : Text;
+    VAR
+      CALHistoryLine@1001 : Record 11102053;
+    BEGIN
+      CALHistoryLine.SETRANGE("Entry No.", EntryNo);
+      EXIT(BuildCALCode(CALHistoryLine));
+    END;
+
+    PROCEDURE GetObjectNo@11(ObjectType@1000 : Integer;ObjectName2@1001 : Text) : Integer;
+    VAR
+      Object2@1002 : Record 2000000001;
+    BEGIN
+      Object2.SETRANGE(Type, ObjectType);
+      Object2.SETFILTER(Name, '''@' + ObjectName2 + '''');
+      IF Object2.FINDFIRST THEN
+        EXIT(Object2.ID);
+    END;
+
+    PROCEDURE GetObjectName@12(ObjectType@1000 : Integer;ObjectNo@1001 : Integer) : Text;
+    VAR
+      AllObj@1002 : Record 2000000038;
+    BEGIN
+      IF AllObj.GET(ObjectType, ObjectNo) THEN
+        EXIT(AllObj."Object Name");
+    END;
+
+    PROCEDURE GetObjectNoOfInputName@13(ObjectType@1000 : Integer;ObjectName2@1001 : Text) : Integer;
+    VAR
+      AllObj@1002 : Record 2000000038;
+      ObjectNo@1003 : Integer;
+    BEGIN
+      IF EVALUATE(ObjectNo, ObjectName2) THEN
+        IF AllObj.GET(ObjectType, ObjectNo) THEN
+          EXIT(AllObj."Object ID");
+
+      AllObj.SETRANGE("Object Type", ObjectType);
+      AllObj.SETFILTER("Object Name", '''@' + ObjectName2 + '''');
+      IF AllObj.FINDFIRST THEN
+        EXIT(AllObj."Object ID");
+
+      AllObj.SETRANGE("Object Type", ObjectType);
+      AllObj.SETFILTER("Object Name", '''@' + ObjectName2 + '*''');
+      IF AllObj.FINDFIRST THEN
+        EXIT(AllObj."Object ID");
+    END;
+
+    PROCEDURE ProceedModify@15(VAR Object@1000 : Record 2000000001;VAR AnswerProceedModify@1001 : ' ,Yes,No';VAR RefreshCode@1002 : Boolean;CALCode@1003 : Text) : Boolean;
+    VAR
+      Setup@1004 : Record 11102035;
+      ObjectLock@1005 : Record 11102054;
+      SourceControl@1006 : Codeunit 11102050;
+      CodeOutdated@1007 : Boolean;
+      ctNotLatestVersion@1008 : TextConst 'DEU=This is not the current C/AL code.\Reload object?;ENU=This is not the current C/AL code.\Reload object?;ESP=This is not the current C/AL code.\Reload object?;FRA=This is not the current C/AL code.\Reload object?;NLD=Dit is niet de huidige C/AL code.\Wilt u het object opnieuw ophalen?;DEA=This is not the current C/AL code.\Reload object?';
+    BEGIN
+      IF AnswerProceedModify <> AnswerProceedModify::" " THEN
+        EXIT(AnswerProceedModify = AnswerProceedModify::Yes);
+
+      IF CALCode <> '' THEN
+        CodeOutdated := CALIsOutdated(Object, CALCode)
+      ELSE
+        CodeOutdated := SourceControl.LatestHistoryIsOutdated(Object);
+
+      IF CodeOutdated THEN BEGIN
+        AnswerProceedModify := AnswerProceedModify::No;
+        RefreshCode := CONFIRM(ctNotLatestVersion, TRUE);
+        EXIT(FALSE);
+      END;
+
+      IF NOT SourceControl.ConfirmObjectLock(Object) THEN BEGIN
+        AnswerProceedModify := AnswerProceedModify::No;
+        EXIT(FALSE);
+      END;
+
+      Setup.CustomGet;
+      IF Setup."Lock Object at Design" THEN
+        ObjectLock.InsertLock(Object);
+
+      AnswerProceedModify := AnswerProceedModify::Yes;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE UpdateWhereUsed@16(VAR Object@1000 : Record 2000000001);
+    VAR
+      WhereUsedObject@1001 : Record 11102057;
+      Progressbar@1002 : Codeunit 11102044;
+      WhereUsedMgt@1003 : Codeunit 11102045;
+      WhereUsedStatus@1004 : Codeunit 11102047;
+      SourceControl@1005 : Codeunit 11102050;
+      ctUpdateObjectLines@1006 : TextConst 'DEU=Updating Where Used Objects...;ENU=Updating Where Used Objects...;ESP=Updating Where Used Objects...;FRA=Updating Where Used Objects...;NLD=Waar-gebruikt objecten bijwerken...;DEA=Updating Where Used Objects...';
+      ctUpdateWhereUsedIn@1007 : TextConst 'DEU=Updating Where Used In...;ENU=Updating Where Used In...;ESP=Updating Where Used In...;FRA=Updating Where Used In...;NLD=Waar-gebruikt in bijwerken...;DEA=Updating Where Used In...';
+      ctUpdatingObject@1008 : TextConst 'DEU=Update object...;ENU=Update object...;ESP=Update object...;FRA=Update object...;NLD=Object opslaan...;DEA=Update object...';
+    BEGIN
+      Progressbar.Open('', 1);
+      Progressbar.BarSize := 3;
+
+      Progressbar.AddToBar(1);
+      Progressbar.Text1 := ctUpdatingObject;
+
+      SourceControl.AddObject(Object, 0, FALSE, FALSE, 1, FALSE);
+
+      Progressbar.Text1 := ctUpdateObjectLines;
+      Progressbar.AddToBar(1);
+      WhereUsedMgt.FillEntryNos;
+      WhereUsedMgt.UpdateObjectLines(Object);
+
+      Progressbar.Text1 := ctUpdateWhereUsedIn;
+      Progressbar.AddToBar(1);
+      WhereUsedMgt.UpdateWhereInOfObject(Object);
+
+      COMMIT;
+
+      IF WhereUsedStatus.SqlsAnswer <> '1' THEN
+        IF WhereUsedObject.GET(Object.Type, Object.ID) THEN BEGIN
+          WhereUsedObject.Status := WhereUsedObject.Status::"Lines Updated";
+          WhereUsedObject."Variable Usage Calculated" := FALSE;
+          WhereUsedObject.MODIFY;
+        END;
+    END;
+
+    LOCAL PROCEDURE CALIsOutdated@17(VAR Object@1000 : Record 2000000001;CALCode@1001 : Text) : Boolean;
+    VAR
+      TmpCALHistoryLine@1002 : TEMPORARY Record 11102053;
+      SourceControl@1003 : Codeunit 11102050;
+    BEGIN
+      FillCALHistoryLines(TmpCALHistoryLine, CALCode);
+      EXIT(SourceControl.CALIsOutdated(Object, TmpCALHistoryLine));
+    END;
+
+    PROCEDURE RegisterAddin@18();
+    VAR
+      ClientAddin@1000 : Record 2000000069;
+      AddinName@1001 : TextConst 'DEU=WickIt.Navgate.NavAddin;ENU=WickIt.Navgate.NavAddin;ESP=WickIt.Navgate.NavAddin;FRA=WickIt.Navgate.NavAddin;NLD=WickIt.Navgate.NavAddin;DEA=WickIt.Navgate.NavAddin';
+      Description@1002 : TextConst 'DEU=Wick-It Navgate NavAddin;ENU=Wick-It Navgate NavAddin;ESP=Wick-It Navgate NavAddin;FRA=Wick-It Navgate NavAddin;NLD=Wick-It Navgate NavAddin;DEA=Wick-It Navgate NavAddin';
+      PublicKeyToken@1003 : TextConst 'DEU=f487c57c254ec85a;ENU=f487c57c254ec85a;ESP=f487c57c254ec85a;FRA=f487c57c254ec85a;NLD=f487c57c254ec85a;DEA=f487c57c254ec85a';
+    BEGIN
+      IF NOT ClientAddin.GET(AddinName, PublicKeyToken) THEN BEGIN
+        ClientAddin."Add-in Name" := AddinName;
+        ClientAddin."Public Key Token" := PublicKeyToken;
+        ClientAddin.Description := Description;
+        ClientAddin.INSERT;
+      END;
+    END;
+
+    PROCEDURE ApplyGuidelines@19(VAR Object@1000 : Record 2000000001;VAR TmpCheckGuidelinesComment@1001 : TEMPORARY Record 11102081;VAR CALCode@1002 : Text);
+    VAR
+      TmpCALHistoryLine@1003 : TEMPORARY Record 11102053;
+      TmpCheckGuidelinesComment2@1004 : TEMPORARY Record 11102081;
+      AutoApplyGuidelines@1005 : Codeunit 11102061;
+    BEGIN
+      FillCALHistoryLines(TmpCALHistoryLine, CALCode);
+      IF AutoApplyGuidelines.AutocorrectCode(Object, TmpCALHistoryLine, TmpCheckGuidelinesComment2, TmpCALHistoryLine) THEN BEGIN
+        TmpCALHistoryLine.RESET;
+        CALCode := BuildCALCode(TmpCALHistoryLine);
+      END;
+    END;
+
+    PROCEDURE ApplyGuidelinesSelection@20(VAR Object@1000 : Record 2000000001;VAR TmpCheckGuidelinesComment@1001 : TEMPORARY Record 11102081;VAR CALCode@1002 : Text;FromLineLine@1003 : Integer;TillLineLine@1004 : Integer);
+    VAR
+      TmpCALHistoryLine@1005 : TEMPORARY Record 11102053;
+      TmpSelectedCALHistoryLine@1006 : TEMPORARY Record 11102053;
+      TmpCheckGuidelinesComment2@1007 : TEMPORARY Record 11102081;
+      AutoApplyGuidelines@1008 : Codeunit 11102061;
+    BEGIN
+      FillCALHistoryLines(TmpCALHistoryLine, CALCode);
+
+      TmpCALHistoryLine.SETRANGE("Line No.", FromLineLine, TillLineLine);
+      IF TmpCALHistoryLine.FINDSET THEN
+        REPEAT
+          TmpSelectedCALHistoryLine := TmpCALHistoryLine;
+          TmpSelectedCALHistoryLine.INSERT;
+        UNTIL TmpCALHistoryLine.NEXT = 0;
+      TmpCALHistoryLine.RESET;
+
+      IF AutoApplyGuidelines.AutocorrectCode(Object, TmpCALHistoryLine, TmpCheckGuidelinesComment2, TmpSelectedCALHistoryLine) THEN BEGIN
+        TmpCALHistoryLine.RESET;
+        CALCode := BuildCALCode(TmpCALHistoryLine);
+      END;
+    END;
+
+    LOCAL PROCEDURE FillCALHistoryLines@21(VAR TmpCALHistoryLine@1000 : Record 11102053;CALCode@1001 : Text);
+    VAR
+      Line@1002 : Text;
+      CodeLineCounter@1003 : Integer;
+      i@1004 : Integer;
+      LineCharacterCounter@1005 : Integer;
+      SubLineCounter@1006 : Integer;
+    BEGIN
+      CodeLineCounter := 1;
+
+      FOR i := 1 TO STRLEN(CALCode) DO
+        CASE CALCode[i] OF
+          13, 10 :
+            BEGIN
+
+              SubLineCounter += 1;
+
+              TmpCALHistoryLine."Line No." := CodeLineCounter;
+              TmpCALHistoryLine."Sub Line No." := SubLineCounter;
+              TmpCALHistoryLine.Code := Line;
+              TmpCALHistoryLine.INSERT;
+
+              Line := '';
+              IF CALCode[i] = 13 THEN
+                i += 1;
+
+              CodeLineCounter += 1;
+              SubLineCounter := 0;
+              LineCharacterCounter := 0;
+
+            END;
+
+          ELSE BEGIN
+            LineCharacterCounter += 1;
+            IF LineCharacterCounter MOD 245 = 0 THEN BEGIN
+
+              SubLineCounter += 1;
+
+              TmpCALHistoryLine."Line No." := CodeLineCounter;
+              TmpCALHistoryLine."Sub Line No." := SubLineCounter;
+              TmpCALHistoryLine.Code := Line;
+              TmpCALHistoryLine.INSERT;
+
+              Line := '';
+            END;
+            Line += FORMAT(CALCode[i]);
+          END;
+        END;
+    END;
+
+    LOCAL PROCEDURE BuildCALCode@22(VAR CALHistoryLine@1000 : Record 11102053) : Text;
+    VAR
+      PrevLineNo@1001 : Integer;
+      SB@1002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+    BEGIN
+      SB := SB.StringBuilder;
+
+      IF CALHistoryLine.FINDSET THEN
+        REPEAT
+          IF NOT (PrevLineNo IN [0, CALHistoryLine."Line No."]) THEN
+            SB.AppendLine;
+          SB.Append(CALHistoryLine.Code);
+          PrevLineNo := CALHistoryLine."Line No.";
+
+        UNTIL CALHistoryLine.NEXT = 0;
+
+      EXIT(SB.ToString);
+    END;
+
+    PROCEDURE GlueLine@23(Object@1000 : Record 2000000001;VAR CALCode@1001 : Text;LineNo@1002 : Integer);
+    VAR
+      TmpCALHistoryLine@1003 : TEMPORARY Record 11102053;
+      TmpCheckGuidelinesComment@1004 : TEMPORARY Record 11102081;
+      AutoApplyGuidelines@1005 : Codeunit 11102061;
+    BEGIN
+      FillCheckGuidelinesComment(TmpCheckGuidelinesComment, Object);
+      FillCALHistoryLines(TmpCALHistoryLine, CALCode);
+
+      IF AutoApplyGuidelines.GlueLine(TmpCheckGuidelinesComment, TmpCALHistoryLine, LineNo) THEN
+        CALCode := BuildCALCode(TmpCALHistoryLine);
+    END;
+
+    PROCEDURE UpdateCaptions@24(Object@1000 : Record 2000000001;VAR CALCode@1001 : Text;All@1002 : Boolean);
+    VAR
+      TmpCALHistoryLine@1003 : TEMPORARY Record 11102053;
+      TmpCheckGuidelinesComment@1004 : TEMPORARY Record 11102081;
+      TranslationMgt@1005 : Codeunit 11102051;
+    BEGIN
+      FillCheckGuidelinesComment(TmpCheckGuidelinesComment, Object);
+      FillCALHistoryLines(TmpCALHistoryLine, CALCode);
+
+      IF TranslationMgt.UpdateFromCALLines(Object, TmpCALHistoryLine, TmpCheckGuidelinesComment, All) THEN
+        CALCode := BuildCALCode(TmpCALHistoryLine);
+    END;
+
+    LOCAL PROCEDURE FillCheckGuidelinesComment@25(VAR TmpCheckGuidelinesComment@1000 : TEMPORARY Record 11102081;VAR Object@1001 : Record 2000000001);
+    VAR
+      CheckGuidelinesComment@1002 : Record 11102081;
+    BEGIN
+      CheckGuidelinesComment.SETRANGE("Object Type", Object.Type);
+      CheckGuidelinesComment.SETRANGE("Object No.", Object.ID);
+      IF CheckGuidelinesComment.FINDSET THEN
+        REPEAT
+          TmpCheckGuidelinesComment := CheckGuidelinesComment;
+          TmpCheckGuidelinesComment.INSERT;
+        UNTIL CheckGuidelinesComment.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE NavgateFolder@26() : Text;
+    VAR
+      FileHandler@1000 : Codeunit 11102097;
+      InstallDir@1001 : Text;
+      Registry@1002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.Microsoft.Win32.Registry" RUNONCLIENT;
+    BEGIN
+      InstallDir := Registry.GetValue('HKEY_LOCAL_MACHINE\Software\Wick-It Products\Navgate\', 'InstallDir', '');
+      FileHandler.AddBackSlash(InstallDir);
+      IF STRLEN(InstallDir) > 10 THEN
+        EXIT(InstallDir);
+
+      InstallDir := Registry.GetValue('HKEY_LOCAL_MACHINE\Software\Wow6432Node\Wick-It Products\Navgate\', 'InstallDir', '');
+      FileHandler.AddBackSlash(InstallDir);
+      IF STRLEN(InstallDir) > 10 THEN
+        EXIT(InstallDir);
+    END;
+
+    PROCEDURE SnippetFolder@27() : Text;
+    VAR
+      FileHandler@1000 : Codeunit 11102097;
+    BEGIN
+      IF FileHandler.ClientDirectoryExists(NavgateFolder + 'CALSnippets') THEN
+        EXIT(NavgateFolder + 'CALSnippets');
+    END;
+
+    PROCEDURE ManualFileName@28() : Text;
+    VAR
+      FileHandler@1000 : Codeunit 11102097;
+    BEGIN
+      IF FileHandler.ClientFileNameExists(NavgateFolder + 'Navgate Help.pdf') THEN
+        EXIT(NavgateFolder + 'Navgate Help.pdf');
+    END;
+
+    PROCEDURE SpecificationFile@29() : Text;
+    VAR
+      FileHandler@1000 : Codeunit 11102097;
+      ApplicationSettings@1001 : Codeunit 11102101;
+      SpecificationsFileName@1002 : Text;
+      ctVersionSpecificationsFileName@1003 : TextConst 'DEU=%1Specifications\%2.xml;ENU=%1Specifications\%2.xml;ESP=%1Specifications\%2.xml;FRA=%1Specifications\%2.xml;NLD=%1Specifications\%2.xml;DEA=%1Specifications\%2.xml';
+    BEGIN
+      SpecificationsFileName := STRSUBSTNO(ctVersionSpecificationsFileName, NavgateFolder, ApplicationSettings.ApplicationVersion);
+      IF FileHandler.ClientFileNameExists(SpecificationsFileName) THEN
+        EXIT(SpecificationsFileName);
+
+      SpecificationsFileName := NavgateFolder + 'Specifications.xml';
+      IF FileHandler.ClientFileNameExists(SpecificationsFileName) THEN
+        EXIT(SpecificationsFileName);
+    END;
+
+    PROCEDURE CheckGuideLines@31(VAR Object@1000 : Record 2000000001;VAR TmpCheckGuidelinesComment@1001 : TEMPORARY Record 11102081;VAR CALCode@1002 : Text);
+    VAR
+      TmpCALHistoryLine@1003 : TEMPORARY Record 11102053;
+      CheckGuidelinesMgt@1004 : Codeunit 11102060;
+    BEGIN
+      FillCALHistoryLines(TmpCALHistoryLine, CALCode);
+      CheckGuidelinesMgt.Initialize;
+      CheckGuidelinesMgt.AnalyseObject(Object, TmpCALHistoryLine, TmpCheckGuidelinesComment);
+    END;
+
+    PROCEDURE OpenEditorWithLifeObject@32(ObjectType2@1000 : Option;ObjectNo@1001 : Integer);
+    VAR
+      Setup@1002 : Record 11102035;
+      CALHistoryObject@1003 : Record 11102052;
+      Object@1004 : Record 2000000001;
+      NavgateEditor@1005 : Page 11175819;
+    BEGIN
+      Setup.CustomGet;
+      CASE Setup.Editor OF
+        Setup.Editor::"Object Manager" :
+          BEGIN
+            CALHistoryObject.GoToLastRecord(ObjectType2, ObjectNo);
+            CALHistoryObject.ShowCode;
+          END;
+
+        Setup.Editor::Navgate :
+          BEGIN
+            Object.Type := ObjectType2;
+            Object.ID := ObjectNo;
+
+            NavgateEditor.SetObject(Object);
+            NavgateEditor.RUN;
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ExportVirtualTables@33();
+    VAR
+      Object@1000 : Record 2000000001;
+      AllObj@1001 : Record 2000000038;
+      Fld@1002 : Record 2000000041;
+      TableMgt@1003 : Codeunit 11102053;
+      FileHandler@1004 : Codeunit 11102097;
+      oFile@1005 : File;
+      RecRef@1006 : RecordRef;
+      FldRef@1007 : FieldRef;
+      FieldLine@1008 : Text;
+      FieldType@1009 : Text;
+      FileName@1010 : Text;
+    BEGIN
+      FileName := FileHandler.TempDirectory + 'VirtualTables.txt';
+      IF EXISTS(FileName) THEN
+        ERASE(FileName);
+
+      oFile.TEXTMODE(TRUE);
+      oFile.CREATE(FileName);
+      oFile.WRITE('  <VirtualTables>');
+      AllObj.SETRANGE("Object Type", AllObj."Object Type"::Table);
+      AllObj.SETFILTER("Object ID", '>%1', 2000000000);
+      IF AllObj.FINDSET THEN
+        REPEAT
+          IF NOT Object.GET(AllObj."Object Type", '', AllObj."Object ID") THEN BEGIN
+            RecRef.OPEN(AllObj."Object ID");
+            oFile.WRITE(STRSUBSTNO('    <Table%1 Name="%2">', AllObj."Object ID", AllObj."Object Name"));
+            Fld.SETRANGE(TableNo, AllObj."Object ID");
+            IF Fld.FINDSET THEN
+              REPEAT
+                FldRef := RecRef.FIELD(Fld."No.");
+                FieldLine := STRSUBSTNO(STRSUBSTNO('      <Field%1', FldRef.NUMBER));
+                IF TableMgt.IsPrimaryKeyField(AllObj."Object ID", FldRef.NUMBER) THEN
+                  FieldLine += ' PrimaryKey="1"';
+                FieldLine += STRSUBSTNO(' Name="%1"', FldRef.NAME);
+                FieldType := FORMAT(FldRef.TYPE);
+                IF FieldType = 'OemText' THEN
+                  FieldType := 'Text';
+                FieldLine += STRSUBSTNO(' Value="%1"', FieldType);
+                IF FieldType IN ['Code', 'Text'] THEN
+                  FieldLine += STRSUBSTNO(' Length="%1"', FldRef.LENGTH);
+                IF FieldType = 'Option' THEN
+                  FieldLine += STRSUBSTNO(' OptionString="%1"', FldRef.OPTIONSTRING);
+                IF FORMAT(FldRef.CLASS) <> 'Normal' THEN
+                  FieldLine += STRSUBSTNO(' FieldClass="%1"', FORMAT(FldRef.CLASS));
+                FieldLine += ' />';
+                oFile.WRITE(FieldLine);
+
+              UNTIL Fld.NEXT = 0;
+
+            oFile.WRITE(STRSUBSTNO('    </Table%1>', AllObj."Object ID"));
+            RecRef.CLOSE;
+          END;
+        UNTIL AllObj.NEXT = 0;
+      oFile.WRITE('  </VirtualTables>');
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

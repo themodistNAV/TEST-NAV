@@ -1,0 +1,510 @@
+OBJECT Codeunit 9062349 Purchase Invoice Matching
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/16;
+    Time=12:00:00 PM;
+    Version List=NH2016.15;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text50000@1000000000 : TextConst 'ENU=The Invoice Amount on Batch %1, Line %2 cannot be 0;ENG=The Invoice Amount on Batch %1, Line %2 cannot be 0';
+      Text50001@1000000001 : TextConst 'ENU=No Receipt Lines found for Order No. %1;ENG=No Receipt Lines found for Order No. %1';
+      Text50002@1000000002 : TextConst 'ENU=No Receipt Lines found for Vendor Shipment No. %1;ENG=No Receipt Lines found for Vendor Shipment No. %1';
+      Text50003@1000000003 : TextConst 'ENU=Neither Order No. or Vendor Shipment No. were specified;ENG=Neither Order No. or Vendor Shipment No. were specified';
+      Text50004@1000000004 : TextConst 'ENU=The Vendor Invoice No. on Batch %1, Line %2 cannot be blank;ENG=The Vendor Invoice No. on Batch %1, Line %2 cannot be blank';
+      Text50005@1000000005 : TextConst 'ENU=The Document Date on Batch %1, Line %2 cannot be blank;ENG=The Document Date on Batch %1, Line %2 cannot be blank';
+      Text50006@1000000006 : TextConst 'ENU=The "Invoice Adj. G/L Account" has not been set in Invoice Matching Setup;ENG=The "Invoice Adj. G/L Account" has not been set in Invoice Matching Setup';
+      Text50007@1000000007 : TextConst 'ENU=The "Invoice Diff. G/L Account" has not been set in Invoice Matching Setup;ENG=The "Invoice Diff. G/L Account" has not been set in Invoice Matching Setup';
+      Text50008@1000000008 : TextConst 'ENU=The "Invoice Diff. G/L Account" has not been set in Invoice Matching Setup;ENG=The "Invoice Diff. G/L Account" has not been set in Invoice Matching Setup';
+      AmtPercTolValue@1000000009 : Decimal;
+      Text50009@1000000010 : TextConst 'ENU=The "Full VAT Posting Group" has not been set in Invoice Matching Setup;ENG=The "Full VAT Posting Group" has not been set in Invoice Matching Setup';
+      Text50010@1000000011 : TextConst 'ENU=The VAT Product Posting Group %1 which is set as "Full VAT Posting Group" in the Invoice Matching Setup does not exist;ENG=The VAT Product Posting Group %1 which is set as "Full VAT Posting Group" in the Invoice Matching Setup does not exist';
+      TotalAmt@1000000012 : Decimal;
+      InvoiceMatchingSetup@9062230 : Record 9062762;
+      InvMatchSetupExists@9062231 : Boolean;
+
+    PROCEDURE POMatch@1000000002(VAR InvMatchingLine@1000000009 : Record 9062441;SuppressDialog@1000000000 : Boolean) Matched : Boolean;
+    BEGIN
+      IF CreatePurchaseInvoice(InvMatchingLine,SuppressDialog) THEN
+        MatchLine(InvMatchingLine,SuppressDialog);
+    END;
+
+    PROCEDURE TakeAction@1000000000(VAR InvMatchingLine@1000000000 : Record 9062441;SuppressDialog@1000000002 : Boolean);
+    VAR
+      PurchInvoice@1000000001 : Record 38;
+      PurchasesPayablesSetup@1000000003 : Record 312;
+      ReturnOrder@1000000004 : Record 38;
+      PurchPost@1000000005 : Codeunit 90;
+      DisputeAmount@9062230 : Decimal;
+    BEGIN
+      GetInvoiceMatchingSetup;
+      CASE InvMatchingLine."Next Action" OF
+        InvMatchingLine."Next Action"::"Allow Difference" :
+          BEGIN
+            PurchInvoice.GET(PurchInvoice."Document Type"::Invoice,InvMatchingLine."Invoice No.");
+            AddDiffLineToInvoice(PurchInvoice,InvMatchingLine."Amount Difference",TRUE);
+            InvMatchingLine.VALIDATE("Posting Status",InvMatchingLine."Posting Status"::"Ready to Post");
+            InvMatchingLine.MODIFY(TRUE);
+            MatchLine(InvMatchingLine,SuppressDialog);
+          END;
+        InvMatchingLine."Next Action"::"Dispute & Raise Debit" :
+          BEGIN
+            PurchInvoice.GET(PurchInvoice."Document Type"::Invoice,InvMatchingLine."Invoice No.");
+            AddDiffLineToInvoice(PurchInvoice,InvMatchingLine."Amount Difference",FALSE);
+            DisputeAmount := InvMatchingLine."Amount Difference";
+            PurchInvoice.MODIFY(TRUE);
+            InvMatchingLine.VALIDATE("Return Order No.",CreateReturnOrderForDisputeAmt(PurchInvoice,InvMatchingLine."Amount Difference"));
+            InvMatchingLine.VALIDATE("Posting Status",InvMatchingLine."Posting Status"::"Ready to Post");
+            InvMatchingLine.MODIFY(TRUE);
+            IF ReturnOrder.GET(ReturnOrder."Document Type"::"Return Order",InvMatchingLine."Return Order No.") THEN BEGIN
+              CASE InvoiceMatchingSetup."Dispute Option" OF
+                InvoiceMatchingSetup."Dispute Option"::"Post Awaiting Credit":
+                  BEGIN
+                    ReturnOrder.VALIDATE(Ship,TRUE);
+                    ReturnOrder.MODIFY(TRUE);
+                    PurchPost.RUN(ReturnOrder);
+                  END;
+                InvoiceMatchingSetup."Dispute Option"::"Post Credit":
+                  BEGIN
+                    ReturnOrder.VALIDATE(Ship,TRUE);
+                    ReturnOrder.VALIDATE(Invoice,TRUE);
+                    ReturnOrder.MODIFY(TRUE);
+                    PurchPost.RUN(ReturnOrder);
+                  END;
+              END;
+              InvMatchingLine.VALIDATE("Posting Status",InvMatchingLine."Posting Status"::Posted);
+              InvMatchingLine.MODIFY(TRUE);
+            END;
+            MatchLine(InvMatchingLine,SuppressDialog);
+          END; //DOC NA2015.9 <<<
+      END;
+    END;
+
+    LOCAL PROCEDURE AddDiffLineToInvoice@1000000005(VAR PurchInvoice@1000000000 : Record 38;Amount@1000000002 : Decimal;IsAdjustment@1000000006 : Boolean);
+    VAR
+      PurchLine@1000000001 : Record 39;
+      PurchSetup@1000000004 : Record 312;
+      LineNo@1000000005 : Integer;
+      VATPostingSetup@1000000003 : Record 325;
+      tToleranceAdjustment@9062230 : TextConst 'ENU=Invoice Tolerance Adjustment;ENG=Invoice Tolerance Adjustment';
+      tDisputeAmount@9062231 : TextConst 'ENU=Invoice Dispute Amount;ENG=Invoice Dispute Amount';
+    BEGIN
+      GetInvoiceMatchingSetup;
+      PurchLine.SETRANGE("Document Type",PurchLine."Document Type"::Invoice);
+      PurchLine.SETRANGE("Document No.",PurchInvoice."No.");
+      PurchLine.SETRANGE(Description,tToleranceAdjustment);
+
+      IF PurchLine.FINDFIRST THEN BEGIN
+        PurchLine.VALIDATE(Quantity,1);
+        VATPostingSetup.SETRANGE("VAT Bus. Posting Group",PurchLine."VAT Bus. Posting Group");
+        VATPostingSetup.SETRANGE("VAT %",0);
+        IF VATPostingSetup.FINDSET(FALSE,FALSE) THEN  PurchLine.VALIDATE("VAT Prod. Posting Group",VATPostingSetup."VAT Prod. Posting Group");
+        PurchLine.VALIDATE("Direct Unit Cost",Amount);
+        PurchLine.MODIFY(TRUE);
+        EXIT;
+      END;
+
+      PurchSetup.GET;
+      IF IsAdjustment THEN BEGIN
+        IF InvoiceMatchingSetup."Invoice Adj. G/L Account" = '' THEN
+          ERROR(Text50006);
+      END ELSE BEGIN
+        IF InvoiceMatchingSetup."Invoice Diff. G/L Account" = '' THEN
+          ERROR(Text50007);
+      END;
+
+      PurchLine.RESET;
+      PurchLine.SETRANGE("Document Type",PurchLine."Document Type"::Invoice);
+      PurchLine.SETRANGE("Document No.",PurchInvoice."No.");
+      IF PurchLine.FINDLAST THEN LineNo := PurchLine."Line No.";
+
+      PurchLine.INIT;
+      PurchLine.VALIDATE("Document Type",PurchLine."Document Type"::Invoice);
+      PurchLine.VALIDATE("Document No.",PurchInvoice."No.");
+      LineNo += 10000;
+      PurchLine.VALIDATE("Line No.",LineNo);
+      PurchLine.VALIDATE(Type,PurchLine.Type::"G/L Account");
+
+      IF IsAdjustment THEN
+        PurchLine.VALIDATE("No.",InvoiceMatchingSetup."Invoice Adj. G/L Account")
+      ELSE
+        PurchLine.VALIDATE("No.",InvoiceMatchingSetup."Invoice Diff. G/L Account");
+
+      PurchLine.VALIDATE(Quantity,1);
+      VATPostingSetup.SETRANGE("VAT Bus. Posting Group",PurchLine."VAT Bus. Posting Group");
+      VATPostingSetup.SETRANGE("VAT %",0);
+      IF VATPostingSetup.FINDSET(FALSE,FALSE) THEN  PurchLine.VALIDATE("VAT Prod. Posting Group",VATPostingSetup."VAT Prod. Posting Group");
+      PurchLine.VALIDATE("Direct Unit Cost",Amount) ;
+
+      IF IsAdjustment THEN
+        PurchLine.VALIDATE(Description,tToleranceAdjustment)
+      ELSE
+        PurchLine.VALIDATE(Description,tDisputeAmount);
+
+      PurchLine.INSERT(TRUE);
+    END;
+
+    PROCEDURE CreateDebitForDisputeAmt@1000000003(VAR PurchInvoice@1000000000 : Record 38;DifferenceAmount@9062230 : Decimal) CreditNo : Code[20];
+    VAR
+      PurchCredit@1000000001 : Record 38;
+      PurchLine@1000000005 : Record 39;
+      LineNo@1000000003 : Integer;
+      VATPostingSetup@1000000002 : Record 325;
+    BEGIN
+      GetInvoiceMatchingSetup;
+      IF InvoiceMatchingSetup."Invoice Diff. G/L Account" = '' THEN
+        ERROR(Text50008);
+
+      PurchCredit.INIT;
+      PurchCredit.VALIDATE("Document Type",PurchCredit."Document Type"::"Credit Memo");
+      PurchCredit.VALIDATE("Document Date",PurchInvoice."Document Date");
+      PurchCredit.VALIDATE("Buy-from Vendor No.",PurchInvoice."Buy-from Vendor No.");
+      PurchCredit.VALIDATE("Applies-to Doc. Type",PurchCredit."Applies-to Doc. Type"::Invoice);
+      PurchCredit.VALIDATE("Applies-to Doc. No.",PurchInvoice."No.");
+      PurchCredit.INSERT(TRUE);
+      PurchCredit.VALIDATE("Applies-to ID",PurchCredit."No.");
+      PurchCredit.MODIFY(TRUE);
+
+      PurchLine.INIT;
+      PurchLine.VALIDATE("Document Type",PurchLine."Document Type"::"Credit Memo");
+      PurchLine.VALIDATE("Document No.",PurchCredit."No.");
+      PurchLine.VALIDATE("Line No.",10000);
+      PurchLine.VALIDATE(Type,PurchLine.Type::"G/L Account");
+
+      PurchLine.VALIDATE("No.",InvoiceMatchingSetup."Invoice Diff. G/L Account");
+      PurchLine.VALIDATE(Quantity,1);
+      IF VATPostingSetup.GET(PurchLine."VAT Bus. Posting Group",PurchLine."VAT Prod. Posting Group") THEN BEGIN
+        DifferenceAmount := DifferenceAmount / (1+(VATPostingSetup."VAT %"/100));
+      END;
+      PurchLine.VALIDATE("Direct Unit Cost",DifferenceAmount);
+      PurchLine.VALIDATE(Description,'Invoice Dispute Amount');
+      PurchLine.INSERT(TRUE);
+
+      EXIT(PurchCredit."No.");
+    END;
+
+    PROCEDURE CreateReturnOrderForDisputeAmt@1000000006(VAR PurchInvoice@1000000000 : Record 38;DifferenceAmount@9062230 : Decimal) CreditNo : Code[20];
+    VAR
+      ReturnOrder@1000000001 : Record 38;
+      PurchLine@1000000005 : Record 39;
+      LineNo@1000000003 : Integer;
+      VATPostingSetup@1000000002 : Record 325;
+      tDisputeAmountDescription@9062231 : TextConst 'ENU=Invoice Dispute Amount;ENG=Invoice Dispute Amount';
+    BEGIN
+      //DOC NA2015.9
+      IF InvoiceMatchingSetup."Invoice Diff. G/L Account" = '' THEN
+        ERROR(Text50008);
+
+      ReturnOrder.INIT;
+      ReturnOrder.VALIDATE("Document Type",ReturnOrder."Document Type"::"Return Order");
+      ReturnOrder.VALIDATE("Document Date",PurchInvoice."Document Date");
+      ReturnOrder.VALIDATE("Buy-from Vendor No.",PurchInvoice."Buy-from Vendor No.");
+      ReturnOrder.VALIDATE("Applies-to Doc. Type",ReturnOrder."Applies-to Doc. Type"::Invoice);
+      ReturnOrder.VALIDATE("Applies-to Doc. No.",PurchInvoice."No.");
+      ReturnOrder.VALIDATE("Vendor Cr. Memo No.",PurchInvoice."No.");
+      ReturnOrder.VALIDATE("On Hold",'AC');
+      ReturnOrder.INSERT(TRUE);
+
+      PurchLine.INIT;
+      PurchLine.VALIDATE("Document Type",PurchLine."Document Type"::"Return Order");
+      PurchLine.VALIDATE("Document No.",ReturnOrder."No.");
+      PurchLine.VALIDATE("Line No.",10000);
+      PurchLine.VALIDATE(Type,PurchLine.Type::"G/L Account");
+
+      PurchLine.VALIDATE("No.",InvoiceMatchingSetup."Invoice Diff. G/L Account");
+      PurchLine.VALIDATE(Quantity,1);
+      IF VATPostingSetup.GET(PurchLine."VAT Bus. Posting Group",PurchLine."VAT Prod. Posting Group") THEN BEGIN
+        DifferenceAmount := DifferenceAmount / (1+(VATPostingSetup."VAT %"/100));
+      END;
+      PurchLine.VALIDATE("Direct Unit Cost",DifferenceAmount);
+      PurchLine.VALIDATE(Description,tDisputeAmountDescription);
+      PurchLine.INSERT(TRUE);
+
+      EXIT(ReturnOrder."No.");
+    END;
+
+    PROCEDURE MatchLine@1000000007(VAR InvMatchingLine@1000000000 : Record 9062441;SuppressDialog@1000000001 : Boolean);
+    VAR
+      PurchInv@1000000006 : Record 38;
+      CurrencyRate@1000000005 : Record 330;
+      AmtPercTolValue@1000000004 : Decimal;
+      PInvMatching@1000000003 : Codeunit 9062349;
+      VendorInvTemplate@9062230 : Record 9062578;
+      TolerancePercentage@9062231 : Integer;
+    BEGIN
+      GetInvoiceMatchingSetup;
+
+      VendorInvTemplate.SETRANGE("Vendor No.",InvMatchingLine."Vendor No. Filter");
+      IF VendorInvTemplate.FINDSET THEN
+        TolerancePercentage := VendorInvTemplate."Invoice Tolerance % (LCY)"
+      ELSE
+        TolerancePercentage := InvoiceMatchingSetup."Vendor Invoice % Tolerance";
+
+      IF (TolerancePercentage = 0) THEN
+        TolerancePercentage := InvoiceMatchingSetup."Vendor Invoice % Tolerance";
+
+      InvMatchingLine."Amount % Tolerance" := TolerancePercentage;
+
+      IF PurchInv.GET(PurchInv."Document Type"::Invoice,InvMatchingLine."Invoice No.") THEN BEGIN
+        PurchInv.CALCFIELDS("Amount Including VAT");
+        InvMatchingLine.CALCFIELDS("NAV Invoice Amount (LCY)","Unposted Invoice Amount");
+
+        IF InvMatchingLine."Unposted Invoice Amount" = 0 THEN BEGIN
+          InvMatchingLine."Match Status" := InvMatchingLine."Match Status"::"Outside Tolerance";
+          InvMatchingLine.MODIFY;
+          EXIT;
+        END;
+
+        InvMatchingLine.SetAmounts();
+
+        AmtPercTolValue := 0;
+        AmtPercTolValue := (InvMatchingLine."NAV Invoice Amount (LCY)" /100) * InvMatchingLine."Amount % Tolerance";
+
+        IF InvMatchingLine."Amount % Difference" = 0 THEN BEGIN
+         InvMatchingLine."Match Status" := InvMatchingLine."Match Status"::Matched;
+          InvMatchingLine.VALIDATE("Posting Status",InvMatchingLine."Posting Status"::"Ready to Post");
+          InvMatchingLine.MODIFY(TRUE);
+
+        END ELSE BEGIN
+          IF (InvMatchingLine."Amount Tolerance" < AmtPercTolValue) AND (InvMatchingLine."Amount Tolerance" > 0) THEN BEGIN
+            IF ((InvMatchingLine."Amount Difference" <= InvMatchingLine."Amount Tolerance") AND
+                (InvMatchingLine."Amount Difference" >= (0- InvMatchingLine."Amount Tolerance")) AND (InvMatchingLine."Amount Tolerance" > 0)) THEN BEGIN
+              InvMatchingLine."Match Status" := InvMatchingLine."Match Status"::"Within Tolerance";
+              InvMatchingLine.VALIDATE(InvMatchingLine."Posting Status",InvMatchingLine."Posting Status"::"Ready to Post");
+              InvMatchingLine.MODIFY(TRUE);
+              AddDiffLineToInvoice( PurchInv,InvMatchingLine."Amount Difference",TRUE);
+            END ELSE BEGIN
+              InvMatchingLine."Match Status" := InvMatchingLine."Match Status"::"Outside Tolerance";
+              InvMatchingLine.VALIDATE(InvMatchingLine."Posting Status",InvMatchingLine."Posting Status"::" ");
+              InvMatchingLine.MODIFY(TRUE);
+            END;
+          END ELSE BEGIN
+            IF (InvMatchingLine."Amount % Difference" <= InvMatchingLine."Amount % Tolerance") AND
+               (InvMatchingLine."Amount % Difference" >= 0-InvMatchingLine."Amount % Tolerance") THEN BEGIN
+              InvMatchingLine."Match Status" := InvMatchingLine."Match Status"::"Within Tolerance";
+              InvMatchingLine.VALIDATE("Posting Status",InvMatchingLine."Posting Status"::"Ready to Post");
+              InvMatchingLine.MODIFY(TRUE);
+              AddDiffLineToInvoice( PurchInv,InvMatchingLine."Amount Difference",TRUE);
+
+            END ELSE BEGIN
+              InvMatchingLine."Match Status" := InvMatchingLine."Match Status"::"Outside Tolerance";
+              InvMatchingLine.VALIDATE("Posting Status",InvMatchingLine."Posting Status"::" ");
+              InvMatchingLine.MODIFY(TRUE);
+            END;
+          END;
+        END;
+
+      InvMatchingLine."Invoice Amount When Matched" := InvMatchingLine."Unposted Invoice Amount";
+      InvMatchingLine.MODIFY(TRUE);
+      END ELSE
+      BEGIN
+        PInvMatching.POMatch(InvMatchingLine,SuppressDialog);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreatePurchaseInvoice@1000000004(VAR InvMatchingLine@1000000000 : Record 9062441;SuppressDialog@1000000005 : Boolean) Created : Boolean;
+    VAR
+      GetReceipts@1000000004 : Codeunit 74;
+      RcptLine@1000000003 : Record 121;
+      PL@1000000002 : Record 39;
+      PurchHead@1000000001 : Record 38;
+      ReferredPO@1000000007 : Record 38;
+      RcptHeader@9062230 : Record 7316;
+      PurchasesPayablesSetup@9062231 : Record 312;
+    BEGIN
+      GetInvoiceMatchingSetup;
+      IF InvMatchingLine."Invoice No." <> '' THEN
+        IF NOT PurchHead.GET(PurchHead."Document Type"::Invoice,InvMatchingLine."Invoice No.") THEN
+          InvMatchingLine."Invoice No." := '';
+
+      IF (InvMatchingLine."Invoice Amount" = 0) AND (NOT (SuppressDialog)) THEN BEGIN
+        ERROR(Text50000,InvMatchingLine."Batch Code",InvMatchingLine."Line No.");
+      END;
+
+      IF InvMatchingLine."Purch. Order No." <> '' THEN BEGIN
+        RcptLine.SETRANGE("Order No.",InvMatchingLine."Purch. Order No.");
+        IF NOT RcptLine.FINDSET THEN BEGIN
+          IF NOT SuppressDialog THEN
+            MESSAGE(Text50001,InvMatchingLine."Purch. Order No.");
+          InvMatchingLine.VALIDATE("Match Status",InvMatchingLine."Match Status"::"Waiting to Match");
+          InvMatchingLine.VALIDATE("Posting Status",InvMatchingLine."Posting Status"::" ");
+          InvMatchingLine.MODIFY(TRUE);
+          EXIT(FALSE);
+        END;
+      END ELSE BEGIN
+        IF InvMatchingLine."Vendor Del. Note. No." <> '' THEN BEGIN
+          RcptHeader.SETRANGE("Vendor Shipment No.",InvMatchingLine."Vendor Del. Note. No.");
+          IF RcptHeader.FINDSET THEN BEGIN
+            RcptLine.SETRANGE("No.",RcptHeader."No.");
+            IF NOT RcptLine.FINDSET THEN BEGIN
+              IF NOT SuppressDialog THEN MESSAGE(Text50002,InvMatchingLine."Vendor Del. Note. No.");
+              InvMatchingLine.VALIDATE("Match Status",InvMatchingLine."Match Status"::"Waiting to Match");
+              InvMatchingLine.VALIDATE("Posting Status",InvMatchingLine."Posting Status"::" ");
+              InvMatchingLine.MODIFY(TRUE);
+              EXIT(FALSE);
+            END;
+          END;
+        END ELSE BEGIN
+          IF NOT SuppressDialog THEN MESSAGE(Text50003);
+          InvMatchingLine.VALIDATE("Match Status",InvMatchingLine."Match Status"::"Waiting to Match");
+          InvMatchingLine.VALIDATE("Posting Status",InvMatchingLine."Posting Status"::" ");
+          InvMatchingLine.MODIFY(TRUE);
+          EXIT(FALSE);
+        END;
+      END;
+
+
+      IF InvMatchingLine."Invoice No." = '' THEN BEGIN
+        IF (InvMatchingLine."Vendor Invoice No." = '') AND (NOT (SuppressDialog)) THEN
+          ERROR(Text50004,InvMatchingLine."Batch Code",InvMatchingLine."Line No.");
+        IF (InvMatchingLine."Document Date" = 0D) AND (NOT (SuppressDialog)) THEN
+          ERROR(Text50005,InvMatchingLine."Batch Code",InvMatchingLine."Line No.");
+
+
+        PurchHead.INIT;
+        PurchHead.VALIDATE("Document Type",PurchHead."Document Type"::Invoice);
+        PurchHead.VALIDATE("No.",InvMatchingLine."Alocated Invoice No.");
+        PurchHead.INSERT(TRUE);
+        PurchHead.VALIDATE("Document Date",InvMatchingLine."Document Date");
+        PurchHead.VALIDATE("Posting Date",TODAY);
+        PurchHead.VALIDATE("Buy-from Vendor No.",RcptLine."Buy-from Vendor No.");
+        PurchHead.VALIDATE("Vendor Invoice No.",InvMatchingLine."Vendor Invoice No.");
+        PurchHead.VALIDATE("Posting No. Series",PurchasesPayablesSetup."Invoice Nos.");
+        IF ReferredPO.GET(ReferredPO."Document Type"::Order,InvMatchingLine."Purch. Order No.") THEN  //DOC NA2015.9
+          PurchHead.VALIDATE("Purchaser Code",ReferredPO."Purchaser Code");
+        PurchHead.MODIFY(TRUE);
+        InvMatchingLine."Invoice No." :=  PurchHead."No.";
+        InvMatchingLine.MODIFY(TRUE);
+
+      END ELSE BEGIN
+        PurchHead.GET(PurchHead."Document Type"::Invoice,InvMatchingLine."Invoice No.");
+      END;
+
+      PL.RESET();
+      PL.SETRANGE("Document Type",PurchHead."Document Type");
+      PL.SETRANGE("Document No.",PurchHead."No.");
+      IF NOT PL.FINDSET THEN BEGIN
+        IF RcptLine.FINDSET THEN BEGIN
+          GetReceipts.SetPurchHeader(PurchHead);
+          GetReceipts.CreateInvLines(RcptLine);
+        END;
+      END;
+
+      PL.SETRANGE("Document Type",PurchHead."Document Type");
+      PL.SETRANGE("Document No.",PurchHead."No.");
+      IF PL.FINDSET THEN BEGIN
+        REPEAT
+          IF InvoiceMatchingSetup."Use Incoming Documents" AND (InvMatchingLine."Incoming Document" > 0) THEN
+            TotalAmt += PL.Amount
+          ELSE
+            TotalAmt += PL."Amount Including VAT";
+        UNTIL PL.NEXT = 0;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ProcessDocumentFromFile@1000000001(VAR DocumentsDirectoryPath@1000000002 : Text[100];ShowResultPage@1000000007 : Boolean);
+    VAR
+      PurchInvMatchingBatch@1000000000 : Record 9062440;
+      OCRManagement@1000000001 : Codeunit 9062426;
+      PurchInvMatchingLine@1000000003 : Record 9062441;
+      PurchInvHeader@1000000004 : Record 122;
+      PostedPurchaseInvoiceCard@1000000005 : Page 138;
+      PInvMatchingBatchCard@1000000006 : Page 9062573;
+    BEGIN
+      IF (DocumentsDirectoryPath = '') THEN EXIT;
+
+      PurchInvMatchingBatch.INIT();
+      PurchInvMatchingBatch.VALIDATE(Code,'');
+      PurchInvMatchingBatch.VALIDATE(Description,(FORMAT(TODAY,0,'<Month Text> <Closing><Day>, <Year4>')));
+      PurchInvMatchingBatch.VALIDATE("Invoice Scaning Folder",DocumentsDirectoryPath);
+      PurchInvMatchingBatch.INSERT(TRUE);
+
+      OCRManagement.ProcessDocumentsFromFolder(PurchInvMatchingBatch);
+
+      PurchInvMatchingLine.SETRANGE("Batch Code",PurchInvMatchingBatch.Code);
+      IF PurchInvMatchingLine.FINDSET THEN BEGIN
+        PurchInvMatchingBatch.MatchLines(TRUE);
+        PurchInvMatchingBatch.PostInvoices(TRUE);
+      END;
+
+
+      PurchInvMatchingLine.RESET();
+      PurchInvMatchingLine.SETFILTER("Batch Code",PurchInvMatchingBatch.Code);
+      PurchInvMatchingLine.SETFILTER("Posting Status",STRSUBSTNO('%1',PurchInvMatchingLine."Posting Status"::Posted));
+      IF PurchInvMatchingLine.FINDSET THEN BEGIN
+        IF PurchInvHeader.GET(PurchInvMatchingLine."Invoice No.") AND ShowResultPage THEN BEGIN
+          PostedPurchaseInvoiceCard.SETRECORD(PurchInvHeader);
+          PostedPurchaseInvoiceCard.RUN;
+        END;
+      END ELSE BEGIN
+       IF ShowResultPage THEN BEGIN
+          PInvMatchingBatchCard.SETRECORD(PurchInvMatchingBatch);
+          PInvMatchingBatchCard.RUN;
+        END;
+      END;
+    END;
+
+    PROCEDURE ProcessinvoiceMatchingBatch@1000000008(VAR PurchInvMatchingBatch@1000000000 : Record 9062440;SuppressDialog@1000000003 : Boolean);
+    VAR
+      OCRManagement@1000000001 : Codeunit 9062426;
+      PurchInvMatchingLine@1000000002 : Record 9062441;
+      SystemBehaviour@1000000004 : Record 9062230;
+      OCRFolder@1000000005 : Text[200];
+      tProcessBatchConfirmation@1000000006 : TextConst 'ENU=Are you sure you want to read the documents and post matched invoices?;ENG=Are you sure you want to read the documents and post matched invoices?';
+    BEGIN
+      IF NOT CONFIRM(tProcessBatchConfirmation) THEN EXIT;
+      WITH PurchInvMatchingBatch DO BEGIN
+        OCRFolder := SystemBehaviour.GetText('INV_M_SCAN_FOLDER');
+        IF ("Invoice Scaning Folder" = '') AND (OCRFolder <> '') THEN
+            VALIDATE("Invoice Scaning Folder",OCRFolder);
+        OCRManagement.ProcessDocumentsFromFolder(PurchInvMatchingBatch);
+        PurchInvMatchingLine.SETRANGE("Batch Code",Code);
+        IF PurchInvMatchingLine.FINDSET THEN
+            MatchLines(TRUE);
+        PostInvoices(SuppressDialog);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetInvoiceMatchingSetup@9062230();
+    BEGIN
+      IF NOT InvMatchSetupExists THEN BEGIN
+        InvoiceMatchingSetup.GET;
+        InvMatchSetupExists := TRUE;
+      END;
+    END;
+
+    [EventSubscriber(Table,130,OnAfterDeleteEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE OnDeleteIncomingDocument@9062231(VAR Rec@9062230 : Record 130;RunTrigger@9062231 : Boolean);
+    VAR
+      PurchInvMatchingLine@9062232 : Record 9062441;
+      PurchInvMatchingLine1@9062233 : Record 9062441;
+    BEGIN
+      PurchInvMatchingLine.SETRANGE("Incoming Document",Rec."Entry No.");
+      IF PurchInvMatchingLine.FINDSET THEN BEGIN
+        PurchInvMatchingLine1 := PurchInvMatchingLine;
+        PurchInvMatchingLine1.MODIFYALL("Incoming Document",0,FALSE);
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC NH2015.1  PC 21/02/2014 - Fixed bug on Tolerance Amount matching
+      //DOC NH2015.8  AP 03/07/2015 - Split the POMatch into 2 functions and normalise the Match Line function called from header with the one called from Lines.
+      //DOC NH2015.8  AP 03/07/2015 - Removed multiple VAT amount functionality
+      //DOC NH2016.10 JH 01/10/2015 - Upgraded to 2016
+      //DOC NH2016.15 JH 18/04/2016 - CfMD amendments
+    }
+    END.
+  }
+}
+

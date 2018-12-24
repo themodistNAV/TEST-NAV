@@ -1,0 +1,651 @@
+OBJECT Codeunit 50013 3PL GRN Import XML
+{
+  OBJECT-PROPERTIES
+  {
+    Date=14/01/18;
+    Time=11:51:06 AM;
+    Modified=Yes;
+    Version List=OP9031,OP10530,IN42482;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            ClearLastErrors('');
+            IF NOT ImportXML THEN
+              LogError(GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ExportXML/ImportXML'),GETLASTERRORCODE,'')
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Filename@1000000000 : Text;
+      ERRLOCATION@1000000001 : TextConst 'ENU=%1\Codeunit 50013;ENG=%1\Codeunit 50013';
+      ReclassJournalLineNo@1000000002 : Integer;
+      JournalsToPost@1000000003 : Boolean;
+      Archived@1000000004 : Boolean;
+      WhsePostReceipt@1000000005 : Codeunit 5760;
+
+    [TryFunction]
+    LOCAL PROCEDURE ImportXML@1000000001();
+    VAR
+      XMLDoc@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XmlItems@1000000001 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      XmlItem@1000000002 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      IntegrationProcessingGroup@1000000003 : Record 50007;
+      ModistSetup@1000000004 : Record 50000;
+      i@1000000005 : Integer;
+      j@1000000013 : Integer;
+      WarehouseReceiptHeader@1000000006 : Record 7316;
+      FileRec@1000000008 : Record 2000000022;
+      FileMgmnt@1000000009 : Codeunit 419;
+      Filename@1000000010 : Text;
+      DocNo@1000000011 : Code[20];
+      ShipmentNo@1000000012 : Code[35];
+      XmlLineItems@1000000014 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      LineNo@1000000015 : Integer;
+      ItemCode@1000000016 : Code[20];
+      VariantCode@1000000017 : Code[10];
+      QtyReceived@1000000019 : Decimal;
+      IntegrationFunctions@1000000020 : Codeunit 50008;
+      LocationCode@1000000018 : Code[10];
+      SourceDocNo@1000000021 : Code[20];
+      List@1000000022 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      element@1000000023 : Text;
+      AirwayBillNo@1000000024 : Code[50];
+      InventoryImportXML@1000000025 : Codeunit 50014;
+      TempWrhsRcptLine@1000000026 : TEMPORARY Record 7317;
+      TempLineNo@1000000007 : Integer;
+      WhsRcptLine@1000000027 : Record 7317;
+      FileSystem@1000000028 : Codeunit 9062264;
+      OverRcptSalesReturnErr@1000000029 : TextConst 'ENU=Qty. to receive %1 is higher than quantity %2 on warehouse receipt %3 item %4.;ENG=Qty. to receive %1 is higher than quantity %2 on warehouse receipt %3 item %4.';
+      HasError@1000000030 : Boolean;
+      IsReturn@1000000031 : Boolean;
+      SalesHeader@1000000032 : Record 36;
+      SalesPost@1000000033 : Codeunit 80;
+    BEGIN
+      JournalsToPost:=FALSE;
+      ModistSetup.GET;
+      IntegrationProcessingGroup.GET(ModistSetup."3PL Integration Type",ModistSetup."3PL GRN Group");
+
+      IF IntegrationProcessingGroup."Enable SFTP Connect" THEN
+        DownloadftpFiles(IntegrationProcessingGroup);
+
+      //iterate through the files in a working location
+      FileRec.SETRANGE(Path,IntegrationProcessingGroup."Working Location");
+      FileRec.SETRANGE("Is a file",TRUE);
+      FileRec.SETFILTER(Name,'%1','*.xml');
+      IF FileRec.FINDSET THEN BEGIN
+        List := List.List();
+        REPEAT
+          Archived:=FALSE;
+          ClearLastErrors(FileRec.Name);
+          CLEAR(XMLDoc);
+          CLEAR(XmlItems);
+          Filename:='';
+          Filename:=FileMgmnt.CombinePath(IntegrationProcessingGroup."Working Location",FileRec.Name);
+          XMLDoc :=XMLDoc.XmlDocument();
+          XMLDoc.Load(Filename);
+          XmlItems := XMLDoc.SelectNodes('//ReceiptConfirmations/ReceiptConfirmation');
+
+          FOR i := 0 TO XmlItems.Count - 1 DO BEGIN
+            DocNo := IntegrationFunctions.RetrieveElement(XmlItems,'ASNRef',i);
+            SourceDocNo := IntegrationFunctions.RetrieveElement(XmlItems,'ASNNo',i);
+            WarehouseReceiptHeader.RESET;
+            ShipmentNo := IntegrationFunctions.RetrieveElement(XmlItems,'ShipmentNo',i);
+            AirwayBillNo := IntegrationFunctions.RetrieveElement(XmlItems,'AirwayBillNumber',i);
+          //DOC OP10530 RK 10/04/17 -
+            HasError := FALSE;
+            IsReturn := FALSE;
+          //DOC OP10530 RK 10/04/17 +
+            CLEARLASTERROR;
+            IF NOT UpdateWhsReceiptHeader(DocNo,ShipmentNo,SourceDocNo,FileRec.Name,AirwayBillNo) THEN BEGIN
+              LogError(GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ExportXML/UpdateWhsReceiptHeader'),GETLASTERRORCODE,FileRec.Name);
+            //DOC OP10530 RK 10/04/17 -
+              HasError := TRUE;
+            //DOC OP10530 RK 10/04/17 +
+            END;
+            //DOC OP10530 RK 10/04/17 -
+            TempWrhsRcptLine.RESET;
+            TempWrhsRcptLine.DELETEALL;
+
+            //DOC IN42482 NC 22/08/17 -
+            IF (DocNo <> '') THEN BEGIN
+              WhsRcptLine.SETCURRENTKEY("No.","Source Document","Source No.","Source Line No.");
+              WhsRcptLine.SETRANGE("No.",DocNo);
+              WhsRcptLine.MODIFYALL("Qty. to Receive",0,TRUE);
+            END;
+            CLEAR(XmlLineItems);
+            //DOC IN42482 NC 22/08/17 =
+            //DOC OP10530 RK 10/04/17 +
+
+            //iterate through the ReceiptConfirmationLines in the grn
+            XmlLineItems := XMLDoc.SelectNodes('//ReceiptConfirmationLines/ReceiptConfirmationLine');
+            CLEAR(TempWrhsRcptLine);
+            TempLineNo:=0;
+            FOR j := 0 TO XmlLineItems.Count - 1 DO BEGIN
+              QtyReceived:=0;
+              TempLineNo:=TempLineNo+10000;
+              LineNo := IntegrationFunctions.RetrieveElementAsInteger(XmlLineItems,'ASNLineNo',j);
+              IntegrationFunctions.SplitSKUno(IntegrationFunctions.RetrieveElement(XmlLineItems,'SKUNumber',j),ItemCode,VariantCode);
+              LocationCode:=IntegrationFunctions.RetrieveElement(XmlLineItems,'LocationCode',j);
+              QtyReceived:=IntegrationFunctions.RetrieveElementAsDecimal(XmlLineItems,'Quantity',j);
+
+              //1. Populate temp warehouse receipt line to agregate item quantities
+              TempWrhsRcptLine.SETRANGE("No.",DocNo);
+              //TempWrhsRcptLine.SETRANGE("Source Document",TempWrhsRcptLine."Source Document"::"Purchase Order");
+              TempWrhsRcptLine.SETFILTER("Source Document",'%1|%2',TempWrhsRcptLine."Source Document"::"Purchase Order",TempWrhsRcptLine."Source Document"::"Sales Return Order");
+              TempWrhsRcptLine.SETRANGE("Source No.",SourceDocNo);
+              TempWrhsRcptLine.SETRANGE("Source Line No.",LineNo);
+              IF TempWrhsRcptLine.FINDFIRST THEN BEGIN
+                TempWrhsRcptLine."Qty. to Receive":=TempWrhsRcptLine."Qty. to Receive" + QtyReceived;
+                TempWrhsRcptLine.MODIFY;
+              END ELSE BEGIN
+                TempWrhsRcptLine."No.":=DocNo;
+                TempWrhsRcptLine."Line No.":=TempLineNo;
+                //TempWrhsRcptLine."Source Document":=TempWrhsRcptLine."Source Document"::"Purchase Order";
+              //DOC OP10530 RK 10/04/17 -
+                //TempWrhsRcptLine.SETFILTER("Source Document",'%1|%2',TempWrhsRcptLine."Source Document"::"Purchase Order",TempWrhsRcptLine."Source Document"::"Sales Return Order");
+                TempWrhsRcptLine."Source Document" := TempWrhsRcptLine."Source Document"::"Purchase Order";
+              //DOC OP10530 RK 10/04/17 +
+                TempWrhsRcptLine."Source No." := SourceDocNo;
+                TempWrhsRcptLine."Source Line No.":=LineNo;
+                TempWrhsRcptLine."Qty. to Receive":=QtyReceived;
+                TempWrhsRcptLine.INSERT;
+              END;
+
+              //2. check if the line is for an item to be moved after receipt
+              CLEARLASTERROR;
+              IF NOT IdentifyMovementLine(DocNo,SourceDocNo,LineNo,QtyReceived,AirwayBillNo,LocationCode,FileRec.Name) THEN BEGIN
+                LogError(GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ExportXML/IdentifyMovementLine'),GETLASTERRORCODE,FileRec.Name);
+              //DOC OP10530 RK 10/04/17 -
+                HasError := TRUE;
+              //DOC OP10530 RK 10/04/17 +
+              END;
+
+            END; //End For
+            //3. Iterate through the Temp warehouse receipt lines and confirm quantities to be receipted
+            // and If neccecary handle over receipts
+            TempWrhsRcptLine.RESET;
+
+       {//DOC IN42482 NC 22/08/17 - commented and move to above (only last doc was set to 0)
+           //DOC OP10530 RK 10/04/17 -
+            IF NOT TempWrhsRcptLine.ISEMPTY THEN BEGIN
+              WhsRcptLine.SETCURRENTKEY("No.","Source Document","Source No.","Source Line No.");
+              WhsRcptLine.SETRANGE("No.",DocNo);
+              WhsRcptLine.MODIFYALL("Qty. to Receive",0,TRUE);
+            END;
+            //DOC OP10530 RK 10/04/17 +
+        }//DOC IN42482 NC 22/08/17 +
+
+            TempWrhsRcptLine.FINDSET;
+            REPEAT
+              CLEAR(WhsRcptLine);
+              WhsRcptLine.SETCURRENTKEY("No.","Source Document","Source No.","Source Line No.");
+              WhsRcptLine.SETRANGE("No.",TempWrhsRcptLine."No.");
+              //WhsRcptLine.SETRANGE("Source Document",TempWrhsRcptLine."Source Document"::"Purchase Order");
+              WhsRcptLine.SETFILTER("Source Document",'%1|%2',WhsRcptLine."Source Document"::"Purchase Order",WhsRcptLine."Source Document"::"Sales Return Order");
+              WhsRcptLine.SETRANGE("Source No.",TempWrhsRcptLine."Source No.");
+            //DOC OP9031 RK 15/05/17 -
+              //WhsRcptLine.SETRANGE("Source Line No.",TempWrhsRcptLine."Source Line No.");
+              WhsRcptLine.SETRANGE("Line No.",TempWrhsRcptLine."Source Line No.");
+            //DOC OP9031 RK 15/05/17 +
+              IF WhsRcptLine.FINDFIRST THEN BEGIN
+              //DOC OP10530 RK 10/04/17 +
+                IF WhsRcptLine."Source Document" = WhsRcptLine."Source Document"::"Sales Return Order" THEN
+                  IsReturn := TRUE
+                ELSE
+                  IsReturn := FALSE;
+              //DOC OP10530 RK 10/04/17 +
+                WhsRcptLine."Airway Bill No.":= AirwayBillNo;
+                IF TempWrhsRcptLine."Qty. to Receive" <= WhsRcptLine.Quantity THEN BEGIN
+                  WhsRcptLine.VALIDATE("Qty. to Receive",TempWrhsRcptLine."Qty. to Receive");
+                  WhsRcptLine.MODIFY(TRUE);
+                END ELSE BEGIN
+                //we have an over receipt
+                //DOC OP10530 RK 10/04/17 -
+                  IF WhsRcptLine."Source Document" = WhsRcptLine."Source Document"::"Sales Return Order" THEN BEGIN
+                    HasError := TRUE;
+                    LogError(STRSUBSTNO(OverRcptSalesReturnErr,FORMAT(TempWrhsRcptLine."Qty. to Receive"),FORMAT(WhsRcptLine.Quantity),WhsRcptLine."No.",WhsRcptLine."Item No."),
+                              STRSUBSTNO(ERRLOCATION,'ImportXML/ApplyOverReceipt'),'',FileRec.Name)
+                  END ELSE BEGIN
+                //DOC OP10530 RK 10/04/17 +
+                    CLEARLASTERROR;
+                    IF NOT ApplyOverReceipt(WhsRcptLine,TempWrhsRcptLine."Qty. to Receive") THEN BEGIN
+                    //DOC OP10530 RK 10/04/17 -
+                      HasError := TRUE;
+                    //DOC OP10530 RK 10/04/17 +
+                      LogError(GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ExportXML/ApplyOverReceipt'),GETLASTERRORCODE,FileRec.Name);
+                    END;
+                //DOC OP10530 RK 10/04/17 -
+                  END;
+                //DOC OP10530 RK 10/04/17 +
+                END;
+              END;
+            UNTIL TempWrhsRcptLine.NEXT = 0;
+
+            //post warehouse receipt
+            CLEARLASTERROR;
+          //DOC OP10530 RK 10/04/17 -
+            IF NOT HasError THEN BEGIN
+              //DOC IN42482 NC 22/08/17 - fix to use the WhsRcptLine variable instead, (was not getting the lastest rec version)
+              WhsRcptLine.RESET;
+              WhsRcptLine.SetIgnoreErrors;
+              WhsRcptLine.SETCURRENTKEY("No.");
+              WhsRcptLine.SETRANGE("No.",DocNo);
+              WhsRcptLine.SETFILTER("Qty. to Receive",'>0');
+              //DOC IN42482 NC 22/08/17 -
+              IF NOT PostWhsReceipt(WhsRcptLine) THEN BEGIN //DOC IN42482 NC 22/08/17 -+ passing the line isntead of DocNo
+                HasError := TRUE;
+                LogError(GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ExportXML/PostWhsReceipt'),GETLASTERRORCODE,FileRec.Name);
+              END;
+              IF IsReturn AND (NOT HasError) THEN BEGIN
+                SalesHeader.SETRANGE("Document Type",SalesHeader."Document Type"::"Return Order");
+                SalesHeader.SETRANGE("No.",SourceDocNo);
+                SalesHeader.FINDFIRST;
+                SalesHeader.Receive := TRUE;
+                SalesHeader.Invoice := TRUE;
+                SalesHeader.MODIFY;
+                COMMIT;
+                IF NOT SalesPost.RUN(SalesHeader) THEN
+                  LogError(GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ImportXML/PostSalesCreditMemo'),GETLASTERRORCODE,FileRec.Name);
+              END;
+            END;
+          //DOC OP10530 RK 10/04/17 +
+          END;
+
+          //those files that are not in error will be recorded in an list
+        //DOC OP10530 RK 10/04/17 -
+          //IF IntegrationFunctions.GetNumIntegrationErrors(ModistSetup."3PL Integration Type",ModistSetup."3PL GRN Group",FileRec.Name) = 0 THEN BEGIN
+          IF (IntegrationFunctions.GetNumIntegrationErrors(ModistSetup."3PL Integration Type",ModistSetup."3PL GRN Group",FileRec.Name) = 0) OR (HasError = FALSE) THEN BEGIN
+        //DOC OP10530 RK 10/04/17 +
+            List.Add(FileMgmnt.CombinePath(FileRec.Path, FileRec.Name));
+            //Log integration
+            IntegrationFunctions.Log3PLGRNImport(FileRec.Path + FileRec.Name,'');
+          END;
+        UNTIL FileRec.NEXT = 0;
+
+        //iterate through our list and move the files to the archive
+        Filename:='';
+        FOREACH element IN List DO BEGIN
+          Filename := FileMgmnt.GetFileName(element);
+          //FileMgmnt.MoveFile(FileMgmnt.CombinePath(IntegrationProcessingGroup."Working Location", Filename),FileMgmnt.CombinePath(IntegrationProcessingGroup."Archive Location",Filename));
+          FileSystem.MoveFile(FALSE,FileMgmnt.CombinePath(IntegrationProcessingGroup."Working Location", Filename),FileMgmnt.CombinePath(IntegrationProcessingGroup."Archive Location",Filename));
+        END;
+        //if there are any reclass journals to post
+        IF JournalsToPost THEN
+          InventoryImportXML.CreateJournals();
+      END;
+    END;
+
+    LOCAL PROCEDURE AppendStrings@1000000000(string1@1000000000 : Text;string2@1000000001 : Text;string3@1000000002 : Text) : Text;
+    VAR
+      tempString@1000000003 : Text;
+    BEGIN
+      IF string1 <> '' THEN
+        tempString := tempString + string1;
+
+      IF string2 <> '' THEN
+        tempString := tempString + ' ' + string2;
+
+      IF string3 <> '' THEN
+        tempString := tempString + ' ' + string3;
+
+      EXIT(tempString);
+    END;
+
+    LOCAL PROCEDURE DownloadftpFiles@1000000002(VAR IntegrationProcGroup@1000000001 : Record 50007);
+    VAR
+      WebIntegrationManagement@1000000000 : Codeunit 50100;
+      ModSetup@1000000002 : Record 50000;
+    BEGIN
+      ModSetup.GET;
+      IF NOT WebIntegrationManagement.DownloadftpFiles(IntegrationProcGroup."Working Location",ModSetup."Demandware Import SFTP Server",IntegrationProcGroup."FTP Folder") THEN
+        ERROR(GETLASTERRORTEXT);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE IdentifyMovementLine@1000000004(WhsDocNo@1000000000 : Code[20];SourceDocumentNo@1000000004 : Code[20];LineNo@1000000001 : Integer;QtyReceived@1000000002 : Decimal;AirwayBillNumber@1000000005 : Code[50];LocationCode@1000000006 : Code[10];FileName@1000000007 : Text);
+    VAR
+      WhsRcptLine@1000000003 : Record 7317;
+      TEMP_OverReceipt_WhsRcptLine@1000000008 : TEMPORARY Record 7317;
+    BEGIN
+      //this function updates the Quantity Received on the Warehouse Receipt Line based on data from GRN file
+
+      WhsRcptLine.SETCURRENTKEY("No.","Source Document","Source No.","Source Line No.");
+      WhsRcptLine.SETRANGE("No.",WhsDocNo);
+      //WhsRcptLine.SETRANGE("Source Document",WhsRcptLine."Source Document"::"Purchase Order");
+      WhsRcptLine.SETFILTER("Source Document",'%1|%2',WhsRcptLine."Source Document"::"Purchase Order",WhsRcptLine."Source Document"::"Sales Return Order");
+      WhsRcptLine.SETRANGE("Source No.",SourceDocumentNo);
+      //DOC OP9031 RK 15/05/17 -
+      //WhsRcptLine.SETRANGE("Source Line No.",LineNo);
+      WhsRcptLine.SETRANGE("Line No.",LineNo);
+      //DOC OP9031 RK 15/05/17 +
+      IF WhsRcptLine.FINDFIRST THEN BEGIN
+        //WhsRcptLine."Qty. Received" := WhsRcptLine."Qty. Received" + QtyReceived;
+        //WhsRcptLine.VALIDATE("Qty. to Receive",WhsRcptLine."Qty. Received");
+        //WhsRcptLine."Airway Bill No.":= AirwayBillNumber;
+        //WhsRcptLine.MODIFY(TRUE);
+        //if we are notified of stock going to a different location we will reclass it into that location
+        IF WhsRcptLine."Location Code" <> LocationCode THEN BEGIN
+          //Create a reclass staging entry
+          JournalsToPost:=TRUE;
+          ReclassJournalLineNo := ReclassJournalLineNo+10000;
+          InsertJournalStaging(WhsRcptLine."Item No.",WhsRcptLine."Variant Code",WhsRcptLine."Location Code",LocationCode,QtyReceived,ReclassJournalLineNo,FileName,WhsRcptLine."No.");
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE PostWhsReceipt@1000000006(VAR WarehouseReceiptLine@1000000005 : Record 7317) : Boolean;
+    VAR
+      Success@1000000003 : Boolean;
+      toDeleteInt@1000000004 : Integer;
+    BEGIN
+      //DOC IN42482 NC 22/08/17 - commented - the record is already filtered above. Also change the function parameter from DocNo to Whse. receipt line
+      // WarehouseReceiptLine.SetIgnoreErrors;
+      // WarehouseReceiptLine.SETCURRENTKEY("No.");
+      // WarehouseReceiptLine.SETRANGE("No.",WhsReceiptNo);
+      // WarehouseReceiptLine.SETFILTER("Qty. to Receive",'>0');
+      //DOC IN42482 NC 22/08/17 -
+      IF WarehouseReceiptLine.FINDSET THEN BEGIN
+        COMMIT;
+        Success := WhsePostReceipt.RUN(WarehouseReceiptLine);
+      END  ELSE
+        Success := TRUE; //if there are no records we need to return success
+
+      CLEAR(WhsePostReceipt);
+      EXIT(Success);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE UpdatePurchaseOrder@1000000003(DocNo@1000000000 : Code[20];AirwayBillNo@1000000003 : Code[50]);
+    VAR
+      PurchaseHeader@1000000001 : Record 38;
+      PurchaseLine@1000000002 : Record 39;
+    BEGIN
+      //This function sets the Posting Date on the PO to reflect the WORKDATE
+      IF PurchaseHeader.GET(PurchaseHeader."Document Type"::Order,DocNo) THEN BEGIN
+        PurchaseHeader."Posting Date" := WORKDATE;
+        PurchaseHeader.MODIFY(FALSE);
+        PurchaseLine.SETRANGE("Document Type",PurchaseHeader."Document Type");
+        PurchaseLine.SETRANGE("Document No.",PurchaseHeader."No.");
+        IF PurchaseLine.FINDSET THEN
+          PurchaseLine.MODIFYALL("Airway Bill No.",AirwayBillNo);
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE UpdateWhsReceiptHeader@1000000007(WhsReceiptNo@1000000001 : Code[20];ShipmentNo@1000000002 : Code[30];SourceDocNo@1000000003 : Code[20];pFileName@1000000004 : Text;AirwayBillNumber@1000000005 : Code[50]);
+    VAR
+      WarehouseReceiptHeader@1000000000 : Record 7316;
+      SalesHeader@1000000006 : Record 36;
+    BEGIN
+      IF WarehouseReceiptHeader.GET(WhsReceiptNo) THEN BEGIN
+        CLEARLASTERROR;
+        WarehouseReceiptHeader.CALCFIELDS("Source Document");
+      //DOC OP10530 RK 10/04/17 -
+        //IF (WarehouseReceiptHeader."Source Document" = WarehouseReceiptHeader."Source Document"::"Purchase Order") THEN
+        IF (WarehouseReceiptHeader."Source Document" = WarehouseReceiptHeader."Source Document"::"Purchase Order") THEN BEGIN
+      //DOC OP10530 RK 10/04/17 +
+          IF UpdatePurchaseOrder(SourceDocNo,AirwayBillNumber) THEN BEGIN
+            IF (ShipmentNo <> '') AND (ShipmentNo <> WarehouseReceiptHeader."Vendor Shipment No.") THEN BEGIN
+              WarehouseReceiptHeader."Vendor Shipment No." := ShipmentNo;
+              WarehouseReceiptHeader."Airway Bill No." := AirwayBillNumber;
+              WarehouseReceiptHeader."Posting Date" := WORKDATE;
+              WarehouseReceiptHeader.MODIFY;
+            END;
+          END ELSE BEGIN
+            LogError(GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ExportXML/UpdatePostingDateonPO'),GETLASTERRORCODE,pFileName)
+          END;
+      //DOC OP10530 RK 10/04/17 -
+        END ELSE BEGIN
+          IF WarehouseReceiptHeader."Posting Date" <> WORKDATE THEN BEGIN
+            WarehouseReceiptHeader."Posting Date" := WORKDATE;
+            WarehouseReceiptHeader.MODIFY;
+            SalesHeader.GET(SalesHeader."Document Type"::"Return Order",SourceDocNo);
+            IF SalesHeader."Posting Date" <> WORKDATE THEN BEGIN
+              SalesHeader."Posting Date" := WORKDATE;
+              SalesHeader.MODIFY(FALSE);
+            END;
+          END;
+        END;
+      //DOC OP10530 RK 10/04/17 +
+      END;
+    END;
+
+    LOCAL PROCEDURE LogError@1000000015(ErrMessage@1000000002 : Text;ErrorLocation@1000000004 : Text;ErrCode@1000000005 : Text;Filename@1000000001 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+    BEGIN
+      //This function facilitates the logging of an error in the error log table by deriving the default values
+      //and applying the variable values
+      ModistSetup.GET;
+      ErrorHandler.LogError(ModistSetup."3PL Integration Type",
+                            ModistSetup."3PL GRN Group",
+                            '',
+                            0,
+                            '',
+                            0,
+                            ErrMessage,
+                            ErrorLocation,
+                            0,
+                            ErrCode,
+                            Filename);
+    END;
+
+    LOCAL PROCEDURE ClearLastErrors@1000000008(pFileName@1000000002 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+      IntegrationErrorLog@1000000001 : Record 50011;
+    BEGIN
+      //This function deletes all previous errors for the integration type and group
+      ModistSetup.GET;
+      IntegrationErrorLog.SETRANGE("Integration Type",ModistSetup."3PL Integration Type");
+      IntegrationErrorLog.SETRANGE("Integration Process Group",ModistSetup."3PL GRN Group");
+      IF pFileName<> '' THEN
+        IntegrationErrorLog.SETRANGE(FileName,pFileName);
+
+      IF IntegrationErrorLog.FINDSET THEN
+        IntegrationErrorLog.DELETEALL;
+
+      CLEARLASTERROR;
+    END;
+
+    LOCAL PROCEDURE InsertJournalStaging@1000000005(ItemNo@1000000002 : Code[20];VariantCode@1000000003 : Code[10];FromLocation@1000000004 : Code[10];ToLocation@1000000005 : Code[10];Qty@1000000006 : Decimal;LineNo@1000000007 : Integer;FileName@1000000008 : Text;DocNo@1000000010 : Code[20]);
+    VAR
+      IntegrationJournalStaging@1000000000 : Record 50014;
+      ModistSetup@1000000001 : Record 50000;
+      TEXT001@1000000009 : TextConst 'ENU=Change of 3PL Receipt from %1 to %2;ENG=Change of 3PL Receipt from %1 to %2';
+    BEGIN
+      ModistSetup.GET;
+      CLEAR(IntegrationJournalStaging);
+      IntegrationJournalStaging.INIT;
+      IntegrationJournalStaging.Filename := FileName;
+      IntegrationJournalStaging."Integration Type" := ModistSetup."3PL Integration Type";
+      IntegrationJournalStaging."Integration Group Code" := ModistSetup."3PL Inventory Group";
+      IntegrationJournalStaging."Posting Date" := TODAY;
+      IntegrationJournalStaging."Item No" := ItemNo;
+      IntegrationJournalStaging."Variant Code" := VariantCode;
+      IntegrationJournalStaging."From Location" := FromLocation;
+      IntegrationJournalStaging."To Location" := ToLocation;
+      IntegrationJournalStaging.Quantity := Qty;
+      IntegrationJournalStaging.Type := 'TRANSFER';
+      IntegrationJournalStaging.Reference := DocNo;
+      IntegrationJournalStaging.Reason := STRSUBSTNO(TEXT001,FromLocation,ToLocation);
+      IntegrationJournalStaging."Journal Type" := IntegrationJournalStaging."Journal Type"::"Item Reclass";
+      IntegrationJournalStaging."Journal Batch Name" := ModistSetup."3PL Item Reclass Journal Batch";
+      IntegrationJournalStaging."Journal Template Name" := 'RECLASS';
+      IntegrationJournalStaging."Journal Line No." := LineNo;
+      IntegrationJournalStaging.Processed:=FALSE;
+      IntegrationJournalStaging.INSERT;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ApplyOverReceipt@1000000009(VAR pWhsRecptLine@1000000000 : Record 7317;ActualQuantityToReceive@1000000005 : Decimal);
+    VAR
+      lTempWhsRecptLine@1000000001 : TEMPORARY Record 7317;
+      PurchaseHeader@1000000002 : Record 38;
+      PurchaseLine@1000000003 : Record 39;
+      ReleasePurchDoc@1000000004 : Codeunit 415;
+      isOrderReleased@1000000006 : Boolean;
+      WhsRecptLine@1000000007 : Record 7317;
+      ArchiveManagement@1000000008 : Codeunit 5063;
+      OriginalQty@1000000009 : Decimal;
+    BEGIN
+      //This codeunit facilitates the over receipt of items on a warehouse receipt
+      isOrderReleased := FALSE;
+      OriginalQty:=0;
+      //1. Copy details of the original warehouse receipt line to temp record thendelete the original line
+      lTempWhsRecptLine.COPY(pWhsRecptLine);
+      lTempWhsRecptLine.INSERT;
+      lTempWhsRecptLine.VALIDATE(Quantity,ActualQuantityToReceive);
+      lTempWhsRecptLine.MODIFY;
+      pWhsRecptLine.DELETE;
+
+      //2. Release the Purchase Header
+      PurchaseHeader.SETCURRENTKEY("Document Type","No.");
+      PurchaseHeader.SETRANGE("Document Type",PurchaseHeader."Document Type"::Order);
+      PurchaseHeader.SETRANGE("No.",pWhsRecptLine."Source No.");
+      IF PurchaseHeader.FINDFIRST THEN BEGIN
+        //3. Archive the original purchase order
+        IF NOT Archived THEN BEGIN
+          ArchiveManagement.ArchPurchDocumentNoConfirm(PurchaseHeader);
+          Archived:=TRUE;
+        END;
+        IF PurchaseHeader.Status = PurchaseHeader.Status::Released THEN BEGIN
+          ReleasePurchDoc.PerformManualReopen(PurchaseHeader);
+          isOrderReleased := TRUE;
+        END;
+        //4. Get the purchase line and adjust the original purchase quantity
+        IF PurchaseLine.GET(PurchaseHeader."Document Type",PurchaseHeader."No.",lTempWhsRecptLine."Source Line No.") THEN BEGIN
+          OriginalQty := PurchaseLine.Quantity;
+
+          //Change the quantity
+          PurchaseLine.VALIDATE(Quantity,ActualQuantityToReceive);
+          PurchaseLine.MODIFY;
+          //Add comments
+          AddPurchComment(PurchaseLine,OriginalQty,FALSE);
+          AddPurchComment(PurchaseLine,OriginalQty,TRUE);
+        END;
+        //5.re Release the purchase order.
+        IF isOrderReleased THEN BEGIN
+          ReleasePurchDoc.PerformManualRelease(PurchaseHeader);
+        END;
+      END;
+
+      //6. Re Create the warehouse receipt line with the new quantity
+      WhsRecptLine.COPY(lTempWhsRecptLine);
+      WhsRecptLine.INSERT;
+    END;
+
+    PROCEDURE AddPurchComment@1000000010(VAR pPurchaseLine@1000000000 : Record 39;OrigQty@1000000011 : Decimal;IsLineComment@1000000012 : Boolean);
+    VAR
+      PurchCommentLine@1000000001 : Record 43;
+      LineNo@1000000002 : Integer;
+      HEADERCOMMENT@1000000003 : TextConst 'ENU=The quantity of Item %1 on Line %2 has changed;ENG=The quantity of Item %1 on Line %2 has changed';
+      LINECOMMENT@1000000004 : TextConst 'ENU=The quantity of Item %1 has changed from %2 to %3;ENG=The quantity of Item %1 has changed from %2 to %3';
+      commentstring@1000000005 : Text;
+      HeaderCommentStr@1000000006 : Text;
+      LineCommentStr@1000000007 : Text;
+      List@1000000009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      element@1000000008 : Text;
+      multipleCommentLines@1000000010 : Boolean;
+    BEGIN
+      HeaderCommentStr:=STRSUBSTNO(HEADERCOMMENT,pPurchaseLine."No."+'-'+pPurchaseLine."Variant Code",pPurchaseLine."Line No.");
+      LineCommentStr:=STRSUBSTNO(LINECOMMENT,pPurchaseLine."No."+'-'+pPurchaseLine."Variant Code",OrigQty,pPurchaseLine.Quantity);
+      multipleCommentLines:=FALSE;
+
+      IF IsLineComment THEN BEGIN
+        IF STRLEN(LineCommentStr) > 80 THEN BEGIN
+          List := List.List();
+          BuildCommentsList(LineCommentStr,80,List);
+          multipleCommentLines:=TRUE;
+        END;
+      END ELSE BEGIN
+        IF STRLEN(HeaderCommentStr) > 80 THEN BEGIN
+          List := List.List();
+          BuildCommentsList(HeaderCommentStr,80,List);
+          multipleCommentLines:=TRUE;
+        END;
+      END;
+
+      LineNo := NextPurchCommentLineNo(pPurchaseLine."Document No.",pPurchaseLine."Line No.");
+
+      IF NOT multipleCommentLines THEN BEGIN
+        CLEAR(PurchCommentLine);
+        PurchCommentLine.INIT;
+        PurchCommentLine."Document Type" := PurchCommentLine."Document Type"::Order;
+        PurchCommentLine."No." := pPurchaseLine."Document No.";
+        PurchCommentLine."Line No." := LineNo;
+        PurchCommentLine.Date := WORKDATE;
+        IF IsLineComment THEN BEGIN
+          PurchCommentLine."Document Line No." := pPurchaseLine."Line No.";
+          PurchCommentLine.Comment := LineCommentStr;
+        END ELSE
+          PurchCommentLine.Comment := HeaderCommentStr;
+
+        PurchCommentLine.INSERT ;
+      END ELSE BEGIN
+        FOREACH element IN List DO BEGIN
+          CLEAR(PurchCommentLine);
+          PurchCommentLine.INIT;
+          PurchCommentLine."Document Type" := PurchCommentLine."Document Type"::Order;
+          PurchCommentLine."No." := pPurchaseLine."Document No.";
+          PurchCommentLine."Line No." := LineNo;
+          PurchCommentLine.Date := WORKDATE;
+          IF IsLineComment THEN
+            PurchCommentLine."Document Line No." := pPurchaseLine."Line No.";
+          PurchCommentLine.Comment := element;
+          IF PurchCommentLine.INSERT THEN
+            LineNo:=LineNo+10000;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE BuildCommentsList@1000000016(StringToSplit@1000000000 : Text;Length@1000000002 : Integer;VAR List@1000000003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1");
+    VAR
+      element@1000000001 : Text;
+    BEGIN
+      WHILE (STRLEN(StringToSplit)>0) DO BEGIN
+        IF STRLEN(StringToSplit) > Length THEN BEGIN
+          List.Add(DELCHR(COPYSTR(StringToSplit,1,Length),'<>'));
+          StringToSplit := COPYSTR(StringToSplit,Length+1,STRLEN(StringToSplit)-Length);
+        END ELSE BEGIN
+          List.Add(StringToSplit);
+          EXIT;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE NextPurchCommentLineNo@1000000011(pPurchNo@1000000000 : Code[20];pLineNo@1000000001 : Integer) : Integer;
+    VAR
+      PurchComntLine@1000000002 : Record 43;
+      LineNo@1000000003 : Integer;
+    BEGIN
+      LineNo:=0;
+      CLEAR(PurchComntLine);
+      PurchComntLine.SETCURRENTKEY("Document Type","No.");
+      PurchComntLine.SETRANGE("Document Type",PurchComntLine."Document Type"::Order);
+      PurchComntLine.SETRANGE("No.",pPurchNo);
+      IF pLineNo > 0 THEN
+        PurchComntLine.SETRANGE("Document Line No.",pLineNo);
+
+      IF PurchComntLine.FINDLAST THEN
+        LineNo := PurchComntLine."Line No." + 10000
+      ELSE
+        LineNo := 10000;
+
+      EXIT(LineNo);
+    END;
+
+    BEGIN
+    {
+      //DOC OP10530 RK 10/04/17 - To process sales return grn and post receipt and credit memo.
+      //DOC IN42482 NC 22/08/17 - Several fix to allow the CU to process correctly morethan one file at once.
+    }
+    END.
+  }
+}
+

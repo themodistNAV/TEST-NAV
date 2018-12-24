@@ -1,0 +1,611 @@
+OBJECT Codeunit 9062257 Table Relation Toolkit
+{
+  OBJECT-PROPERTIES
+  {
+    Date=16/03/16;
+    Time=12:00:00 PM;
+    Version List=NA2016.14;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AllObj@1000000000 : Record 2000000038;
+      AllObjWithCaption@1000000006 : Record 2000000058;
+      Field@1000000005 : Record 2000000041;
+      Blob@1000000004 : Record 99008535;
+      ObjectMetadata@1000000001 : Record 2000000071;
+      TableRelationInformation@1000000011 : TEMPORARY Record 9062744;
+      TableRelationInformationId@1000000012 : Integer;
+      BlobToolkit@1000000002 : Codeunit 9062242;
+      Convert@1000000007 : Codeunit 9062683;
+      FileSystem@1000000003 : Codeunit 9062264;
+      ObjectFieldToolkit@1000000009 : Codeunit 9062343;
+      RecordRefManagement@1000000015 : Codeunit 9062241;
+      RunWithRecordRef@1000000010 : Codeunit 9062239;
+      TableFieldManagement@1000000016 : Codeunit 9062248;
+      XmlToolkit@1000000008 : Codeunit 9062641;
+      XmlDocument@1000000014 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XmlNamespaceManager@1000000013 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+
+    LOCAL PROCEDURE "--- Table Relation ---"@1000000005();
+    BEGIN
+    END;
+
+    PROCEDURE GetTableRelationInformation@1000000007(pTableId@1000000002 : Integer;pTablePosition@1000000007 : Text;pFieldId@1000000001 : Integer;VAR pTableRelationInformation@1000000000 : Record 9062744) : Boolean;
+    VAR
+      lRecordRef@1000000003 : RecordRef;
+      lResult@1000000004 : Boolean;
+    BEGIN
+      //DOC NA2016.14 - Returning table relation information for given table and position
+      //  -> pTableIx: Table ID
+      //  -> pTablePosition: Table position
+      //  -> pFieldId: Field ID
+      //  <> pTableRelationInformation: Target recordset
+      //  <- TRUE = Has relation defined, FALSE = Not
+
+      InitialiseRecordRef(pTableId, pTablePosition, lRecordRef);
+      lResult := GetTableRelationInformationForRecRef(lRecordRef, pFieldId, pTableRelationInformation);
+      FinaliseRecordRef(lRecordRef);
+      EXIT(lResult);
+    END;
+
+    PROCEDURE GetTableRelationInformationForRecRef@1000000022(VAR pRecordRef@1000000002 : RecordRef;pFieldId@1000000001 : Integer;VAR pTableRelationInformation@1000000000 : Record 9062744) : Boolean;
+    VAR
+      lXmlTableRelationsXPath@1000000009 : Text;
+      lXmlTableRelationsElements@1000000008 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      lXmlTableRelationsElement@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlElement";
+    BEGIN
+      //DOC NA2016.14 - Returning table relation information for given recordref
+      //  <> pRecordRef: Record reference
+      //  -> pFieldId: Field ID
+      //  <> pTableRelationInformation: Target recordset
+      //  <- TRUE = Has relation defined, FALSE = Not
+
+      ExportObjectMetadataToXml(AllObj."Object Type"::Table, pRecordRef.NUMBER());
+      lXmlTableRelationsXPath := STRSUBSTNO('x:MetaTable/x:Fields/x:Field[@ID=%1]/x:TableRelations', FORMAT(pFieldId, 0, 1));
+      lXmlTableRelationsElements := XmlDocument.SelectNodes(lXmlTableRelationsXPath, XmlNamespaceManager);
+      IF (lXmlTableRelationsElements.Count() = 0) THEN
+        EXIT(FALSE);
+
+      IF ( NOT (FindMatchingTableRelation(pRecordRef, lXmlTableRelationsElements, lXmlTableRelationsElement))) THEN
+        EXIT(FALSE);
+
+      BuildTableRelationInformation(pRecordRef.NUMBER(), pFieldId, lXmlTableRelationsElement, 'TableID', 'FieldID', 'x:Filter');
+      pTableRelationInformation.COPY(TableRelationInformation, TRUE);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ApplyTableRelationFilter@1000000036(pTableId@1000000003 : Integer;pTablePosition@1000000002 : Text;pFieldId@1000000001 : Integer;VAR pRelatedRecordRef@1000000000 : RecordRef) : Boolean;
+    VAR
+      lRecordRef@1000000005 : RecordRef;
+      lResult@1000000004 : Boolean;
+    BEGIN
+      //DOC NA2016.14 - Applying table relation filter for given table and position
+      //  -> pTableIx: Table ID
+      //  -> pTablePosition: Table position
+      //  -> pFieldId: Field ID
+      //  <> pRelatedRecordRef: Recordref to apply the filter to
+      //  <- TRUE = Has relation defined, FALSE = Not
+
+      InitialiseRecordRef(pTableId, pTablePosition, lRecordRef);
+      lResult := ApplyTableRelationFilterForRecRef(lRecordRef, pFieldId, pRelatedRecordRef);
+      FinaliseRecordRef(lRecordRef);
+      EXIT(lResult);
+    END;
+
+    PROCEDURE ApplyTableRelationFilterForRecRef@1000000037(VAR pRecordRef@1000000001 : RecordRef;pFieldId@1000000000 : Integer;VAR pRelatedRecordRef@1000000002 : RecordRef) : Boolean;
+    VAR
+      lTableRelationInformation@1000000003 : TEMPORARY Record 9062744;
+      lResult@1000000004 : Boolean;
+    BEGIN
+      //DOC NA2016.14 - Applying table relation filter for given recordref
+      //  <> pRecordRef: The recordref
+      //  -> pFieldId: Field ID
+      //  <> pRelatedRecordRef: Recordref to apply the filter to
+      //  <- TRUE = Has relation defined, FALSE = Not
+
+      lResult := GetTableRelationInformationForRecRef(pRecordRef, pFieldId, lTableRelationInformation);
+      IF (lResult) THEN
+        ApplyTableRelationInformation(pRecordRef, pRelatedRecordRef);
+      EXIT(lResult);
+    END;
+
+    PROCEDURE Lookup@1000000038(pTableId@1000000002 : Integer;pTablePosition@1000000001 : Text;pFieldId@1000000000 : Integer;pEditable@1000000003 : Boolean;VAR pValue@1000000006 : Variant) : Boolean;
+    VAR
+      lRecordRef@1000000004 : RecordRef;
+      lResult@1000000005 : Boolean;
+    BEGIN
+      //DOC NA2016.14 - Performing lookup for given table and position
+      //  -> pTableIx: Table ID
+      //  -> pTablePosition: Table position
+      //  -> pFieldId: Field ID
+      //  -> pEditable: Editable flag
+      //  <> pValue: Value if changed
+      //  <- Lookup result
+
+      InitialiseRecordRef(pTableId, pTablePosition, lRecordRef);
+      lResult := LookupForRecRef(lRecordRef, pFieldId, pEditable, pValue);
+      FinaliseRecordRef(lRecordRef);
+      EXIT(lResult);
+    END;
+
+    PROCEDURE LookupForRecRef@1000000039(VAR pRecordRef@1000000002 : RecordRef;pFieldId@1000000001 : Integer;pEditable@1000000000 : Boolean;VAR pValue@1000000009 : Variant) : Boolean;
+    VAR
+      lFieldRef@1000000006 : FieldRef;
+      lRelatedRecordRef@1000000003 : RecordRef;
+      lRelatedKeyRef@1000000007 : KeyRef;
+      lRelatedFieldRef@1000000008 : FieldRef;
+      lResult@1000000004 : Boolean;
+      lRunWithRecordRef@1000000005 : Codeunit 9062239;
+    BEGIN
+      //DOC NA2016.14 - Performing lookup for given recordref
+      //  <> pRecordRef: The recordref
+      //  -> pFieldId: Field ID
+      //  -> pEditable: Editable flag
+      //  <> pValue: Value if changed
+      //  <- Lookup result
+
+      lResult := ApplyTableRelationFilterForRecRef(pRecordRef, pFieldId, lRelatedRecordRef);
+      IF (lResult) THEN
+      BEGIN
+        lFieldRef := pRecordRef.FIELD(pFieldId);
+        TableRelationInformation.RESET();
+        TableRelationInformation.SETRANGE("Entry Type", TableRelationInformation."Entry Type"::Relation);
+        TableRelationInformation.FINDFIRST();
+        IF (TableRelationInformation."Related Field ID" <> 0) THEN
+          lRelatedFieldRef := lRelatedRecordRef.FIELD(TableRelationInformation."Related Field ID")
+        ELSE
+        BEGIN
+          lRelatedKeyRef := lRelatedRecordRef.KEYINDEX(1);
+          lRelatedFieldRef := lRelatedKeyRef.FIELDINDEX(1);
+        END;
+        lRelatedFieldRef.SETRANGE(lFieldRef.VALUE());
+        IF (lRelatedRecordRef.FINDFIRST()) THEN;
+        lRelatedFieldRef.SETRANGE();
+        lResult := lRunWithRecordRef.RunListPage(lRelatedRecordRef, TRUE);
+        IF ((lResult) AND (pEditable)) THEN
+        BEGIN
+          pValue := lRelatedFieldRef.VALUE();
+          lFieldRef.VALIDATE(pValue);
+          pRecordRef.MODIFY(TRUE);
+        END
+        ELSE
+          lResult := FALSE;
+      END;
+
+      EXIT(lResult);
+    END;
+
+    LOCAL PROCEDURE "--- FlowField ---"@1000000003();
+    BEGIN
+    END;
+
+    PROCEDURE GetFlowFieldInformation@1000000004(pTableId@1000000001 : Integer;pFieldId@1000000002 : Integer;VAR pTableRelationInformation@1000000000 : Record 9062744);
+    VAR
+      eNotAFlowField@1000000005 : TextConst 'ENU="""%1"" table field ""%2"" is not a FlowField.";ENG="""%1"" table field ""%2"" is not a FlowField."';
+      eCantFindCalculationFormula@1000000014 : TextConst 'ENU=Cannot find "CalculationFormula" information for "%1" table field "%2".;ENG=Cannot find "CalculationFormula" information for "%1" table field "%2".';
+      lRecordRef@1000000003 : RecordRef;
+    BEGIN
+      //DOC NA2016.14 - Returning FlowField information for given table and position
+      //  -> pTableIx: Table ID
+      //  -> pFieldId: Field ID
+      //  <> pTableRelationInformation: Target recordset
+
+      InitialiseRecordRef(pTableId, '', lRecordRef);
+      GetFlowFieldInformationForRecRef(lRecordRef, pFieldId, pTableRelationInformation);
+      FinaliseRecordRef(lRecordRef);
+    END;
+
+    PROCEDURE GetFlowFieldInformationForRecRef@1000000028(pRecordRef@1000000001 : RecordRef;pFieldId@1000000002 : Integer;VAR pTableRelationInformation@1000000000 : Record 9062744);
+    VAR
+      lRelationInformation@1000000015 : Record 9062744;
+      lXmlCalculationFormulaXPath@1000000013 : Text;
+      lXmlCalculationFormulaElement@1000000012 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlElement";
+      eNotAFlowField@1000000005 : TextConst 'ENU="""%1"" table field ""%2"" is not a FlowField.";ENG="""%1"" table field ""%2"" is not a FlowField."';
+      eCantFindCalculationFormula@1000000014 : TextConst 'ENU=Cannot find "CalculationFormula" information for "%1" table field "%2".;ENG=Cannot find "CalculationFormula" information for "%1" table field "%2".';
+    BEGIN
+      //DOC NA2016.14 - Returning FlowField information for given recordref
+      //  -> pTableIx: Table ID
+      //  -> pFieldId: Field ID
+      //  <> pTableRelationInformation: Target recordset
+
+      Field.GET(pRecordRef.NUMBER(), pFieldId);
+      IF (Field.Class <> Field.Class::FlowField) THEN
+        ERROR(eNotAFlowField, pRecordRef.CAPTION(), ObjectFieldToolkit.GetFieldName(pRecordRef.NUMBER(), pFieldId));
+
+      ExportObjectMetadataToXml(AllObj."Object Type"::Table, pRecordRef.NUMBER());
+      lXmlCalculationFormulaXPath := STRSUBSTNO('x:MetaTable/x:Fields/x:Field[@ID=%1]/x:CalculationFormula', FORMAT(pFieldId, 0, 1));
+      lXmlCalculationFormulaElement := XmlDocument.SelectSingleNode(lXmlCalculationFormulaXPath, XmlNamespaceManager);
+      IF (ISNULL(lXmlCalculationFormulaElement)) THEN
+        ERROR(eCantFindCalculationFormula, pRecordRef.CAPTION(), ObjectFieldToolkit.GetFieldName(pRecordRef.NUMBER(), pFieldId));
+
+      BuildTableRelationInformation(pRecordRef.NUMBER(), pFieldId, lXmlCalculationFormulaElement, 'Table', 'Field', 'x:TableFilters/x:Filter');
+      pTableRelationInformation.COPY(TableRelationInformation, TRUE);
+    END;
+
+    PROCEDURE ApplyFlowFieldFilter@1000000018(pTableId@1000000001 : Integer;pTablePosition@1000000002 : Text;pFieldId@1000000000 : Integer;VAR pRelatedRecordRef@1000000004 : RecordRef);
+    VAR
+      lRecordRef@1000000003 : RecordRef;
+    BEGIN
+      //DOC NA2016.14 - Applying FlowField filter for given table and position
+      //  -> pTableIx: Table ID
+      //  -> pTablePosition: Table position
+      //  -> pFieldId: Field ID
+      //  <> pRelatedRecordRef: Target recordref (it is opened inside the function and left open)
+
+      InitialiseRecordRef(pTableId, pTablePosition, lRecordRef);
+      ApplyFlowFieldFilterForRecRef(lRecordRef, pFieldId, pRelatedRecordRef);
+      FinaliseRecordRef(lRecordRef);
+    END;
+
+    PROCEDURE ApplyFlowFieldFilterForRecRef@1000000002(VAR pRecordRef@1000000001 : RecordRef;pFieldId@1000000002 : Integer;VAR pRelatedRecordRef@1000000000 : RecordRef) : Boolean;
+    VAR
+      lTableRelationInformation@1000000003 : TEMPORARY Record 9062744;
+    BEGIN
+      //DOC NA2016.14 - Applying FlowField filter for given RecordRef
+      //  <> pRecordRef: The RecordRef
+      //  -> pFieldId: Field ID
+      //  <> pRelatedRecordRef: Target recordref (it is opened inside the function and left open)
+
+      GetFlowFieldInformation(pRecordRef.NUMBER(), pFieldId, lTableRelationInformation);
+      ApplyTableRelationInformation(pRecordRef, pRelatedRecordRef);
+    END;
+
+    PROCEDURE DrillDown@1000000000(pTableId@1000000003 : Integer;pTablePosition@1000000002 : Text;pFieldId@1000000001 : Integer);
+    VAR
+      lRecordRef@1000000000 : RecordRef;
+    BEGIN
+      //DOC NA2016.14 - Performing a drill-down for given table and position
+      //  -> pTableIx: Table ID
+      //  -> pTablePosition: Table position
+      //  -> pFieldId: Field ID
+
+      InitialiseRecordRef(pTableId, pTablePosition, lRecordRef);
+      DrillDownForRecRef(lRecordRef, pFieldId);
+      FinaliseRecordRef(lRecordRef);
+    END;
+
+    PROCEDURE DrillDownForRecRef@1000000013(VAR pRecordRef@1000000001 : RecordRef;pFieldId@1000000000 : Integer);
+    VAR
+      lRelatedRecordRef@1000000002 : RecordRef;
+    BEGIN
+      //DOC NA2016.14 - Performing a drill-down for given RecordRef
+      //  <> pRecordRef: The RecordRef
+      //  -> pFieldId: Field ID
+
+      ApplyFlowFieldFilterForRecRef(pRecordRef, pFieldId, lRelatedRecordRef);
+      RunWithRecordRef.RunListPage(lRelatedRecordRef, FALSE);
+    END;
+
+    LOCAL PROCEDURE "--- Internal ---"@1000000020();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE BuildTableRelationInformation@1000000019(pTableId@1000000001 : Integer;pFieldId@1000000002 : Integer;pXmlElement@1000000009 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";pTableIdAttributeName@1000000004 : Text;pFieldIdAttributeName@1000000007 : Text;pXmlFilterXPath@1000000008 : Text);
+    VAR
+      lRelatedTableId@1000000000 : Integer;
+      lRelatedFieldId@1000000003 : Integer;
+      lXmlFilterElement@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      eNotAFlowField@1000000005 : TextConst 'ENU="""%1"" table field ""%2"" is not a FlowField.";ENG="""%1"" table field ""%2"" is not a FlowField."';
+      eCantFindCalculationFormula@1000000014 : TextConst 'ENU=Cannot find "CalculationFormula" information for "%1" table field "%2".;ENG=Cannot find "CalculationFormula" information for "%1" table field "%2".';
+    BEGIN
+      //DOC NA2016.14 - Building table relation information
+      //  -> pTableIx: Table ID
+      //  -> pFieldId: Field ID
+      //  -> pXmlElement: XML element to start with
+      //  -> pTableIdAttributeName: Table ID attribute name
+      //  -> pFieldIdAttributeName: Field ID attribute name
+      //  -> pXmlFilterXPath: XPath to filters (starting from the given XML element)
+
+      lRelatedTableId := XmlToolkit.GetXmlNodeIntegerAttribute(pXmlElement, pTableIdAttributeName);
+      lRelatedFieldId := XmlToolkit.GetXmlNodeIntegerAttribute(pXmlElement, pFieldIdAttributeName);
+
+      TableRelationInformation.RESET();
+      TableRelationInformation.DELETEALL();
+
+      NewTableRelationInformation(TableRelationInformation."Entry Type"::Relation, pTableId, pFieldId, lRelatedTableId, lRelatedFieldId);
+      TableRelationInformation.INSERT();
+
+      FOREACH lXmlFilterElement IN pXmlElement.SelectNodes(pXmlFilterXPath, XmlNamespaceManager) DO
+      BEGIN
+        NewTableRelationInformation(TableRelationInformation."Entry Type"::Filter, pTableId, pFieldId, lRelatedTableId, lRelatedFieldId);
+        TableRelationInformation."Filter Field ID" := XmlToolkit.GetXmlNodeIntegerAttribute(lXmlFilterElement, 'FieldID');
+        TableRelationInformation."Filter Group" := XmlToolkit.GetXmlNodeIntegerAttribute(lXmlFilterElement, 'FilterGroup');
+        TableRelationInformation."Filter Type" := Convert.SafeParseTableFieldOption(XmlToolkit.GetXmlNodeAttribute(lXmlFilterElement, 'FilterType'),
+          DATABASE::"Table Relation Information", TableRelationInformation.FIELDNO("Filter Type"), TableRelationInformation."Filter Type"::Filter);
+        TableRelationInformation."Filter Value" := XmlToolkit.GetXmlNodeAttribute(lXmlFilterElement, 'FilterValue');
+        IF (TableRelationInformation."Filter Type" = TableRelationInformation."Filter Type"::Field) THEN
+          TableRelationInformation."Filter Value Field ID" := Convert.ParseInteger(TableRelationInformation."Filter Value");
+        TableRelationInformation."Value Is Filter" := XmlToolkit.GetXmlNodeBooleanAttribute(lXmlFilterElement, 'ValueIsFilter');
+        TableRelationInformation."Only Max Limit" := XmlToolkit.GetXmlNodeBooleanAttribute(lXmlFilterElement, 'OnlyMaxLimit');
+        TableRelationInformation.INSERT();
+      END;
+    END;
+
+    LOCAL PROCEDURE ApplyTableRelationInformation@1000000025(VAR pRecordRef@1000000002 : RecordRef;VAR pRelatedRecordRef@1000000000 : RecordRef) : Boolean;
+    VAR
+      lFieldRef@1000000005 : FieldRef;
+      lRelatedFieldRef@1000000004 : FieldRef;
+      lFilterValue@1000000006 : Variant;
+      lFilter@1000000001 : Boolean;
+    BEGIN
+      //DOC NA2016.14 - Applying information to given recordref
+      //  <> pRecordRef: The current recordref
+      //  <> pRelatedRecordRef: Target recordref (it is opened inside the function and left open)
+
+      TableRelationInformation.RESET();
+      TableRelationInformation.SETRANGE("Entry Type", TableRelationInformation."Entry Type"::Relation);
+      TableRelationInformation.FINDFIRST();
+      TableRelationInformation.TESTFIELD("Related Table ID");
+
+      pRelatedRecordRef.OPEN(TableRelationInformation."Related Table ID");
+
+      TableRelationInformation.RESET();
+      TableRelationInformation.SETRANGE("Entry Type", TableRelationInformation."Entry Type"::Filter);
+      IF (TableRelationInformation.FINDSET()) THEN
+      REPEAT
+        TableRelationInformation.TESTFIELD("Filter Field ID");
+        lRelatedFieldRef := pRelatedRecordRef.FIELD(TableRelationInformation."Filter Field ID");
+        CASE (TableRelationInformation."Filter Type") OF
+          TableRelationInformation."Filter Type"::Const:
+            IF (TableRelationInformation."Filter Value" <> '') THEN
+            BEGIN
+              GetFilterValue(TableRelationInformation."Related Table ID", TableRelationInformation."Filter Field ID", TableRelationInformation."Filter Value", lFilterValue);
+              lRelatedFieldRef.SETRANGE(lFilterValue);
+            END
+            ELSE
+              lRelatedFieldRef.SETRANGE();
+          TableRelationInformation."Filter Type"::Field:
+            BEGIN
+              TableRelationInformation.TESTFIELD("Filter Value Field ID");
+              lFieldRef := pRecordRef.FIELD(TableRelationInformation."Filter Value Field ID");
+              lFilter := ((RecordRefManagement.FieldRefIsFlowFilter(lFieldRef)) OR (TableRelationInformation."Value Is Filter"));
+              IF (lFilter) THEN
+                lFilterValue := lFieldRef.GETFILTER()
+              ELSE
+                lFilterValue := lFieldRef.VALUE();
+              IF ( NOT (IsFilterValueEmpty(pRecordRef.NUMBER(), lFieldRef.NUMBER(), lFilterValue))) THEN
+              BEGIN
+                IF (lFilter) THEN
+                  lRelatedFieldRef.SETFILTER(lFilterValue)
+                ELSE
+                  lRelatedFieldRef.SETRANGE(lFilterValue);
+              END
+              ELSE
+                lRelatedFieldRef.SETRANGE();
+            END;
+          TableRelationInformation."Filter Type"::Filter:
+            IF (TableRelationInformation."Filter Value" <> '') THEN
+              lRelatedFieldRef.SETFILTER(TableRelationInformation."Filter Value")
+            ELSE
+              lRelatedFieldRef.SETRANGE();
+        END;
+      UNTIL (TableRelationInformation.NEXT() = 0);
+
+      TableRelationInformation.RESET();
+    END;
+
+    LOCAL PROCEDURE NewTableRelationInformation@1000000045(pEntryType@1000000004 : Integer;pTableId@1000000001 : Integer;pFieldId@1000000000 : Integer;pRelatedTableId@1000000003 : Integer;pRelatedFieldId@1000000002 : Integer);
+    BEGIN
+      //DOC NA2016.14 - Creating a new table relation information record (but not inserting it)
+      //  -> pEntryType: Entry type
+      //  -> pTableIx: Table ID
+      //  -> pFieldId: Field ID
+      //  -> pRelatedTableIx: Related table ID
+      //  -> pRelatedFieldIx: Related field ID
+
+      TableRelationInformationId += 1;
+      TableRelationInformation.INIT();
+      TableRelationInformation.ID := TableRelationInformationId;
+      TableRelationInformation."Entry Type" := pEntryType;
+      TableRelationInformation."Table ID" := pTableId;
+      TableRelationInformation."Field ID" := pFieldId;
+      TableRelationInformation."Related Table ID" := pRelatedTableId;
+      TableRelationInformation."Related Field ID" := pRelatedFieldId;
+    END;
+
+    LOCAL PROCEDURE FindMatchingTableRelation@1000000029(VAR pRecordRef@1000000002 : RecordRef;VAR pXmlTableRelationsElements@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";VAR pXmlTableRelationsElement@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlElement") : Boolean;
+    VAR
+      lXmlTableRelationsElement@1000000003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlElement";
+      lXmlConditionsElements@1000000004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      lXmlConditionsElement@1000000005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlElement";
+      lFound@1000000006 : Boolean;
+      lRecordRef@1000000007 : RecordRef;
+      lFieldRef@1000000011 : FieldRef;
+      lConditionFieldId@1000000008 : Integer;
+      lConditionType@1000000009 : Text;
+      lConditionTextValue@1000000010 : Text;
+      lConditionValue@1000000012 : Variant;
+    BEGIN
+      //DOC NA2016.14 - Trying to find matching table relation
+      //  <> pRecordRef: Record reference
+      //  <> pXmlTableRelationsElements: A list of "Table Relations" elements
+      //  -> pXmlTableRelationsElement: Target matching "Table Relation" element
+      //  <- TRUE = Table relation found, FALSE = Not
+
+      FOREACH lXmlTableRelationsElement IN pXmlTableRelationsElements DO
+      BEGIN
+        lXmlConditionsElements := lXmlTableRelationsElement.SelectNodes('x:Conditions', XmlNamespaceManager);
+        IF (lXmlConditionsElements.Count() > 0) THEN
+        BEGIN
+          lRecordRef.OPEN(pRecordRef.NUMBER());
+          lRecordRef.SETPOSITION(pRecordRef.GETPOSITION(FALSE));
+          lRecordRef.SETRECFILTER();
+          lRecordRef.FILTERGROUP(2);
+          FOREACH lXmlConditionsElement IN lXmlConditionsElements DO
+          BEGIN
+            lConditionFieldId := XmlToolkit.GetXmlNodeIntegerAttribute(lXmlConditionsElement, 'FieldID');
+            lConditionType := XmlToolkit.GetXmlNodeAttribute(lXmlConditionsElement, 'ConditionType');
+            lConditionTextValue := XmlToolkit.GetXmlNodeAttribute(lXmlConditionsElement, 'ConditionValue');
+            lFieldRef := lRecordRef.FIELD(lConditionFieldId);
+            CASE (lConditionType) OF
+              'CONST':
+                BEGIN
+                  GetFilterValue(lRecordRef.NUMBER(), lConditionFieldId, lConditionTextValue, lConditionValue);
+                  IF ( NOT (IsFilterValueEmpty(lRecordRef.NUMBER(), lFieldRef.NUMBER(), lConditionValue))) THEN
+                    lFieldRef.SETRANGE(lConditionValue)
+                  ELSE
+                    lFieldRef.SETRANGE();
+                END;
+              'FILTER':
+                IF (lConditionTextValue <> '') THEN
+                  lFieldRef.SETFILTER(lConditionTextValue)
+                ELSE
+                  lFieldRef.SETRANGE();
+            END;
+          END;
+          lRecordRef.FILTERGROUP(0);
+          lFound := ( NOT (lRecordRef.ISEMPTY()));
+        END
+        ELSE
+          lFound := TRUE;
+        IF (lFound) THEN
+        BEGIN
+          pXmlTableRelationsElement := lXmlTableRelationsElement;
+          EXIT(TRUE);
+        END;
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE "--- Tools ---"@1000000014();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE InitialiseRecordRef@1000000015(pTableId@1000000000 : Integer;pTablePosition@1000000001 : Text;VAR pRecordRef@1000000002 : RecordRef);
+    BEGIN
+      //DOC NA2016.14 - Initialising RecordRef for given table ID and position
+      //  -> pTableIx: Table ID
+      //  -> pTablePosition: Table position
+      //  <> pRecordRef: The RecordRef
+
+      pRecordRef.OPEN(pTableId);
+      IF (pTablePosition <> '') THEN
+      BEGIN
+        pRecordRef.SETPOSITION(pTablePosition);
+        IF ( NOT (pRecordRef.GET(pRecordRef.RECORDID()))) THEN
+          pRecordRef.INIT();
+        pRecordRef.RESET();
+      END;
+    END;
+
+    LOCAL PROCEDURE FinaliseRecordRef@1000000016(VAR pRecordRef@1000000000 : RecordRef);
+    BEGIN
+      //DOC NA2016.14 - Finalising RecordRef
+      //  <> pRecordRef: The RecordRef
+
+      pRecordRef.CLOSE();
+    END;
+
+    LOCAL PROCEDURE ExportObjectMetadataToXml@1000000010(pObjectType@1000000000 : Integer;pObjectId@1000000001 : Integer);
+    VAR
+      eTitle@1000000003 : TextConst 'ENU=Save Metadata To;ENG=Save Metadata To';
+      eFileFilter@1000000004 : TextConst 'ENU=XML Files (*.xml)|*.xml|All Files (*.*)|*.*;ENG=XML Files (*.xml)|*.xml|All Files (*.*)|*.*';
+      lStream@1000000005 : OutStream;
+    BEGIN
+      //DOC NA2016.14 - Exporting specified object metadata to XML
+      //  -> pObjectType: The object type
+      //  -> pObjectIx: The object ID
+
+      ObjectMetadata.GET(pObjectType, pObjectId);
+      ObjectMetadata.CALCFIELDS(Metadata);
+      Blob.Blob := ObjectMetadata.Metadata;
+      Blob.Blob.CREATEOUTSTREAM(lStream);
+      XmlDocument := XmlDocument.XmlDocument();
+      XmlDocument.Load(lStream);
+      XmlToolkit.GetXmlDocumentNamespaces(XmlDocument, 'x', XmlNamespaceManager);
+    END;
+
+    LOCAL PROCEDURE ExportObjectMetadataToFile@1000000006(pObjectType@1000000000 : Integer;pObjectId@1000000001 : Integer);
+    VAR
+      eTitle@1000000003 : TextConst 'ENU=Save Metadata To;ENG=Save Metadata To';
+      eFileFilter@1000000004 : TextConst 'ENU=XML Files (*.xml)|*.xml|All Files (*.*)|*.*;ENG=XML Files (*.xml)|*.xml|All Files (*.*)|*.*';
+      lFileName@1000000005 : Text;
+    BEGIN
+      //DOC NA2016.14 - Exporting specified object metadata to a file
+      //  -> pObjectType: The object type
+      //  -> pObjectIx: The object ID
+
+      AllObjWithCaption.GET(pObjectType, pObjectId);
+      lFileName := STRSUBSTNO('%1 %2.xml', FORMAT(AllObj."Object Type"), AllObjWithCaption."Object Caption");
+      ObjectMetadata.GET(pObjectType, pObjectId);
+      ObjectMetadata.CALCFIELDS(Metadata);
+      Blob.Blob := ObjectMetadata.Metadata;
+      FileSystem.ExportBlobToFile(FileSystem.Client(), Blob, lFileName, eTitle, eFileFilter);
+    END;
+
+    LOCAL PROCEDURE GetFilterValue@1000000009(pTableId@1000000001 : Integer;pFieldId@1000000002 : Integer;pFilterText@1000000003 : Text;VAR pFilterValue@1000000004 : Variant);
+    VAR
+      lField@1000000000 : Record 2000000041;
+      lTableFieldBuffer@1000000006 : Record 9062231;
+      lDataType@1000000005 : Integer;
+    BEGIN
+      //DOC NA2016.14 - Returning filter value for given field
+      //  -> pTableId: Table ID
+      //  -> pFieldId: Field ID
+      //  -> pFilterText: Filter text
+      //  <> pFilterValue: Target filter value
+
+      lField.GET(pTableId, pFieldId);
+      lDataType := TableFieldManagement.FieldTypeToDataType(lField.Type);
+      Convert.Parse(pFilterText, lDataType, pFilterValue);
+    END;
+
+    LOCAL PROCEDURE IsFilterValueEmpty@1000000011(pTableId@1000000002 : Integer;pFieldId@1000000001 : Integer;pFilterValue@1000000000 : Variant) : Boolean;
+    VAR
+      lField@1000000005 : Record 2000000041;
+      lTableFieldBuffer@1000000004 : Record 9062231;
+      lDataType@1000000003 : Integer;
+    BEGIN
+      //DOC NA2016.14 - Returning if filter value is empty
+      //  -> pTableId: Table ID
+      //  -> pFieldId: Field ID
+      //  -> pFilterValue: The filter value
+      //  <- Response
+
+      lField.GET(pTableId, pFieldId);
+      lDataType := TableFieldManagement.FieldTypeToDataType(lField.Type);
+      EXIT(Convert.IsValueEmpty(lDataType, pFilterValue));
+    END;
+
+    EVENT XmlDocument@1000000014::NodeInserting@93(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XmlDocument@1000000014::NodeInserted@94(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XmlDocument@1000000014::NodeRemoving@95(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XmlDocument@1000000014::NodeRemoved@96(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XmlDocument@1000000014::NodeChanging@97(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XmlDocument@1000000014::NodeChanged@98(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    BEGIN
+    {
+      //DOC NA2016.14 JH 29/02/2016 - Created
+      //DOC NA2016.14 JH 14/03/2016 - Fixes
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,256 @@
+OBJECT Codeunit 50031 TNP2
+{
+  OBJECT-PROPERTIES
+  {
+    Date=27/07/17;
+    Time=[ 2:49:07 PM];
+    Modified=Yes;
+    Version List=tnp;
+  }
+  PROPERTIES
+  {
+    TableNo=9062734;
+    OnRun=VAR
+            AutoNAVToolkit@1000000000 : Codeunit 9062602;
+          BEGIN
+            //the inventory integration is run once per day therefore we will pre populate the delta buffer
+            InventoryDeltaManagment.PopulateInventory(TRUE);
+
+            //run the export
+            ClearLastErrors;
+            IF NOT ExportXML(Filename) THEN BEGIN
+              LogError(GETLASTERRORTEXT,STRSUBSTNO(ERRLOCATION,'ExportXML'),GETLASTERRORCODE,Filename);
+              AutoNAVToolkit.AddEntryForTask(Rec,GETLASTERRORTEXT,2);//DOC OP10933 CB 19/06/2017 -+
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ERRLOCATION@1000000000 : TextConst 'ENU=%1\Codeunit 50020;ENG=%1\Codeunit 50010';
+      Filename@1000000001 : Text;
+      InventoryDeltaManagment@1000000002 : Codeunit 50001;
+
+    [TryFunction]
+    LOCAL PROCEDURE ExportXML@1000000001(pFilename@1000000016 : Text);
+    VAR
+      XMLDoc@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLWriter@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlWriter";
+      ModistSetup@1000000002 : Record 50000;
+      Style@1000000003 : Record 9087012;
+      Item@1000000004 : Record 27;
+      WebIntegrationManagement@1000000005 : Codeunit 50100;
+      FileAttachment@1000000006 : Record 9062272;
+      Vendor@1000000007 : Record 23;
+      Colour@1000000009 : Record 9087003;
+      Size@1000000008 : Record 9087002;
+      ItemColours@1000000010 : Record 27;
+      ItemVariant@1000000011 : Record 5401;
+      ExportDateTime@1000000012 : DateTime;
+      IntegrationProcessingGroup@1000000013 : Record 50007;
+      FileName@1000000014 : Text;
+      IntegrationFunctions@1000000015 : Codeunit 50008;
+      LocationFilter@1000000017 : Text;
+      AvailableInventory@1000000018 : Decimal;
+      Item2@1000000019 : Record 27;
+    BEGIN
+      ModistSetup.GET;
+
+      IntegrationProcessingGroup.GET(ModistSetup."Demandware Integration Type",ModistSetup."Demandware Inventory Group");
+
+      ExportDateTime := CURRENTDATETIME();
+
+      FileName := WebIntegrationManagement.InventoryFileName;
+      pFilename := FileName;
+      LocationFilter := IntegrationFunctions.SaleableLocationFilter;
+
+      XMLWriter := XMLWriter.Create(FileName);
+
+      XMLWriter.WriteStartElement('inventory','http://www.demandware.com/xml/impex/inventory/2007-05-31');
+        XMLWriter.WriteStartElement('inventory-list');
+          XMLWriter.WriteStartElement('header');
+            XMLWriter.WriteAttributeString('list-id',IntegrationProcessingGroup."Primary Element ID");
+            XMLWriter.WriteElementString('default-instock','false');
+            XMLWriter.WriteElementString('description','Product Sku inventory');
+            XMLWriter.WriteElementString('use-bundle-inventory-only','false');
+            XMLWriter.WriteElementString('on-order','false');
+          XMLWriter.WriteEndElement; // </header>
+          XMLWriter.WriteStartElement('records');
+
+          //##
+          Style.SETRANGE("No.",'00025');
+          Style.FINDSET;
+          REPEAT
+            CLEAR(Item);
+            Item.SETRANGE("No.",'000252302');
+            Item.SETRANGE("Style No.",Style."No.");
+            Item.SETFILTER("Location Filter",LocationFilter);
+            IF Item.FINDSET THEN BEGIN
+              REPEAT
+                AvailableInventory := 0;
+                Item.CALCFIELDS(Inventory,"Qty. on Sales Order","Qty. on Internet Order");
+                ItemVariant.RESET;
+                ItemVariant.SETRANGE("Item No.",Item."No.");
+                ItemVariant.SETFILTER("Location Filter",LocationFilter);
+                IF ItemVariant.FINDSET THEN BEGIN
+                  REPEAT
+                    AvailableInventory := 0;
+                    ItemVariant.CALCFIELDS(Inventory,"Qty. on Sales Order","Qty. on Internet Order");
+                    //DOC IN41883 DD 27/07/17 - Improve "Availableinventory" -
+                    CLEAR(Item2);
+                    Item2.SETRANGE("No.",Item."No.");
+                    Item2.SETRANGE("Variant Filter",ItemVariant.Code);
+                    Item2.SETRANGE("Location Filter",LocationFilter);
+                    Item2.FINDFIRST;
+                    Item2.CALCFIELDS("Scheduled Need (Qty.)","Planning Issues (Qty.)","Planning Transfer Ship. (Qty).","Qty. on Sales Order",
+                                     "Qty. on Service Order","Qty. on Job Order","Trans. Ord. Shipment (Qty.)","Qty. on Asm. Component",
+                                     "Qty. on Purch. Return");
+
+                    //DOC IN41883 DD 27/07/17 - Improve "Availableinventory" +
+                    IF (ItemVariant."Size Code" <> ModistSetup."One Size Code") THEN BEGIN
+                      //DOC IN41883 DD 27/07/17 - Improve "Availableinventory" -
+                      AvailableInventory := CalcInventory(ItemVariant.Inventory,ItemVariant."Qty. on Sales Order",ItemVariant."Qty. on Internet Order",
+                                                          Item2."Scheduled Need (Qty.)",Item2."Planning Issues (Qty.)",Item2."Planning Transfer Ship. (Qty).",
+                                                          Item2."Qty. on Service Order",Item2."Qty. on Job Order",Item2."Trans. Ord. Shipment (Qty.)",Item2."Qty. on Asm. Component",
+                                                          Item2."Qty. on Purch. Return");
+                        //DOC IN41883 DD 27/07/17 - Improve "Availableinventory" +
+                        XMLWriter.WriteStartElement('record');
+                        XMLWriter.WriteAttributeString('product-id',ItemVariant."Item No." + '-' + ItemVariant.Code);
+                        XMLWriter.WriteElementString('allocation',FORMAT(AvailableInventory,0,1));
+                        XMLWriter.WriteElementString('perpetual',FORMAT(FALSE, 0, 9));
+                        XMLWriter.WriteElementString('preorder-backorder-handling','none');
+                        XMLWriter.WriteElementString('preorder-backorder-allocation',FORMAT(0, 0, 9));
+                        XMLWriter.WriteElementString('ats',FORMAT( AvailableInventory,0,1));
+                        XMLWriter.WriteElementString('on-order',FORMAT(0, 0, 9));
+                        XMLWriter.WriteElementString('turnover',FORMAT(0, 0, 9));
+                      XMLWriter.WriteEndElement; // </record>
+                    END ELSE BEGIN
+                      //DOC IN41883 DD 27/07/17 - Improve "Availableinventory" -
+                      AvailableInventory := CalcInventory(ItemVariant.Inventory,ItemVariant."Qty. on Sales Order",ItemVariant."Qty. on Internet Order",
+                                                          Item2."Scheduled Need (Qty.)",Item2."Planning Issues (Qty.)",Item2."Planning Transfer Ship. (Qty).",
+                                                          Item2."Qty. on Service Order",Item2."Qty. on Job Order",Item2."Trans. Ord. Shipment (Qty.)",Item2."Qty. on Asm. Component",
+                                                          Item2."Qty. on Purch. Return");
+                      //DOC IN41883 DD 27/07/17 - Improve "Availableinventory" -
+                      XMLWriter.WriteStartElement('record');
+                        XMLWriter.WriteAttributeString('product-id',Item."No.");
+                        XMLWriter.WriteElementString('allocation',FORMAT( AvailableInventory,0,1));
+                        XMLWriter.WriteElementString('allocation-timestamp',FORMAT(ExportDateTime, 0, 9));
+                        XMLWriter.WriteElementString('perpetual',FORMAT(FALSE, 0, 9));
+                        XMLWriter.WriteElementString('preorder-backorder-handling','none');
+                        XMLWriter.WriteElementString('preorder-backorder-allocation',FORMAT(0, 0, 9));
+                        XMLWriter.WriteElementString('ats',FORMAT( AvailableInventory,0,1));
+                        XMLWriter.WriteElementString('on-order',FORMAT(0, 0, 9));
+                        XMLWriter.WriteElementString('turnover',FORMAT(0, 0, 9));
+                      XMLWriter.WriteEndElement; // </record>
+                    END;
+                  UNTIL ItemVariant.NEXT = 0;
+                END ELSE BEGIN
+                  //there are no variants
+                  Item.CALCFIELDS(Inventory,"Qty. on Sales Order","Qty. on Internet Order");
+                  //DOC IN41883 DD 27/07/17 - Improve "Availableinventory" -
+                  CLEAR(Item2);
+                  Item2.SETRANGE("No.",Item."No.");
+                  Item2.SETRANGE("Location Filter",LocationFilter);
+                  Item2.FINDFIRST;
+                  Item2.CALCFIELDS("Scheduled Need (Qty.)","Planning Issues (Qty.)","Planning Transfer Ship. (Qty).","Qty. on Sales Order",
+                                    "Qty. on Service Order","Qty. on Job Order","Trans. Ord. Shipment (Qty.)","Qty. on Asm. Component",
+                                    "Qty. on Purch. Return");
+                  AvailableInventory := CalcInventory(Item.Inventory,Item."Qty. on Sales Order",Item."Qty. on Internet Order",
+                                                      Item2."Scheduled Need (Qty.)",Item2."Planning Issues (Qty.)",Item2."Planning Transfer Ship. (Qty).",
+                                                      Item2."Qty. on Service Order",Item2."Qty. on Job Order",Item2."Trans. Ord. Shipment (Qty.)",Item2."Qty. on Asm. Component",
+                                                      Item2."Qty. on Purch. Return");
+                  //DOC IN41883 DD 27/07/17 - Improve "Availableinventory" +
+                  XMLWriter.WriteStartElement('record');
+                    XMLWriter.WriteAttributeString('product-id',Item."No.");
+                    XMLWriter.WriteElementString('allocation',FORMAT(AvailableInventory,0,1));
+                    XMLWriter.WriteElementString('allocation-timestamp',FORMAT(ExportDateTime, 0, 9));
+                    XMLWriter.WriteElementString('perpetual',FORMAT(FALSE, 0, 9));
+                    XMLWriter.WriteElementString('preorder-backorder-handling','none');
+                    XMLWriter.WriteElementString('preorder-backorder-allocation',FORMAT(0, 0, 9));
+                    XMLWriter.WriteElementString('ats',FORMAT(AvailableInventory,0,1));
+                    XMLWriter.WriteElementString('on-order',FORMAT(0, 0, 9));
+                    XMLWriter.WriteElementString('turnover',FORMAT(0, 0, 9));
+                  XMLWriter.WriteEndElement; // </record>
+                END;
+              UNTIL Item.NEXT= 0;
+            END;
+          UNTIL Style.NEXT=0;
+
+          XMLWriter.WriteEndElement; // </records>
+        XMLWriter.WriteEndElement; // </inventory-list>
+      XMLWriter.WriteEndElement; // </inventory>
+      XMLWriter.Flush;
+      XMLWriter.Close;
+
+      IF IntegrationProcessingGroup."Enable SFTP Connect" THEN BEGIN //if we are ready to connect to sftp
+        WebIntegrationManagement.TransferFTPfiles(IntegrationProcessingGroup."Working Location",IntegrationProcessingGroup."Archive Location",'.xml',ModistSetup."FTP temporary file extension",
+                                                ModistSetup."Demandware Export SFTP Server",IntegrationProcessingGroup."FTP Folder",IntegrationProcessingGroup."FTP Archive Folder",TRUE);
+      END;
+
+      //Log integration
+      IntegrationFunctions.LogDMWInventoryUpload(FileName,'');
+    END;
+
+    LOCAL PROCEDURE LogError@1000000015(ErrMessage@1000000002 : Text;ErrorLocation@1000000004 : Text;ErrCode@1000000005 : Text;Filename@1000000001 : Text);
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+    BEGIN
+      //This function facilitates the logging of an error in the error log table by deriving the default values
+      //and applying the variable values
+      ModistSetup.GET;
+      ErrorHandler.LogError(ModistSetup."Demandware Integration Type",
+                            ModistSetup."Demandware Inventory Group",
+                            '',
+                            0,
+                            '',
+                            0,
+                            ErrMessage,
+                            ErrorLocation,
+                            0,
+                            ErrCode,
+                            Filename);
+    END;
+
+    LOCAL PROCEDURE ClearLastErrors@1000000008();
+    VAR
+      ErrorHandler@1000000000 : Codeunit 50007;
+      ModistSetup@1000000003 : Record 50000;
+      IntegrationErrorLog@1000000001 : Record 50011;
+    BEGIN
+      //This function deletes all previous errors for the integration type and group
+      ModistSetup.GET;
+      IntegrationErrorLog.SETRANGE("Integration Type",ModistSetup."Demandware Integration Type");
+      IntegrationErrorLog.SETRANGE("Integration Process Group",ModistSetup."Demandware Inventory Group");
+      IF IntegrationErrorLog.FINDSET THEN
+        IntegrationErrorLog.DELETEALL;
+
+      CLEARLASTERROR;
+    END;
+
+    LOCAL PROCEDURE CalcInventory@1000000003(FullInventoryVal@1000000000 : Decimal;QtyOnSalesOrder@1000000001 : Decimal;QtyOnInternetOrder@1000000002 : Integer;ScheduledNeedQty@1000000004 : Decimal;PlanningIssuesQty@1000000005 : Decimal;PlanningTransShipQty@1000000006 : Decimal;QtyOnServiceOrder@1000000008 : Decimal;QtyOnJobOrder@1000000009 : Decimal;TransOrdShipmentQty@1000000010 : Decimal;QtyOnAsmComponent@1000000011 : Decimal;QtyOnPurchReturn@1000000012 : Decimal) : Decimal;
+    VAR
+      AvailableInventory@1000000003 : Decimal;
+    BEGIN
+      //DOC IN41883 DD 27/07/17 - Improve "Availableinventory" -
+      AvailableInventory := FullInventoryVal - (QtyOnSalesOrder + QtyOnInternetOrder +
+                                                ScheduledNeedQty +PlanningIssuesQty+PlanningTransShipQty+
+                                                QtyOnServiceOrder+QtyOnJobOrder+TransOrdShipmentQty+QtyOnAsmComponent+
+                                                QtyOnPurchReturn);
+      //DOC IN41883 DD 27/07/17 - Improve "Availableinventory" +
+      IF AvailableInventory < 0 THEN
+        AvailableInventory := 0;
+
+      EXIT(AvailableInventory);
+    END;
+
+    BEGIN
+    {
+      //DOC OP10933 CB 19/06/2017 - Error handling to send emails with autonav
+      //DOC IN41883 DD 27/07/17 - Improve "Availableinventory" -
+    }
+    END.
+  }
+}
+

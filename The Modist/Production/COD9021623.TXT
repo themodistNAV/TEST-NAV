@@ -1,0 +1,309 @@
+OBJECT Codeunit 9021623 Shipping Price Control
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:51:18 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Item@1000000000 : Record 27;
+      ShipAgentServ@1000000011 : Record 5790;
+      ShipAgentServPrice@1000000001 : Record 9021711;
+      ShipAgentServPrice1@1000000003 : Record 9021711;
+      ItemShipPrice@1000000002 : Record 9021712;
+      i@1000000004 : Integer;
+      PrevUpperLimit@1000000005 : Decimal;
+      RoundedMeasure@1000000008 : Decimal;
+      MeasureOption@1000000006 : ' ,Weight,Longest Dimension,Unit Volume,Order Value';
+      Window@1000000009 : Dialog;
+      CountryCode@1000000007 : Code[10];
+      WebLocationCode@1000000010 : Code[10];
+      GotShipAgentService@1000000012 : Boolean;
+      Text000@1000000013 : TextConst 'ENU=No Shipping Agent Service Prices found to set lower limits on.;ENG=No Shipping Agent Service Prices found to set lower limits on.';
+      Text001@1000000014 : TextConst 'ENU=Error.... The Upper Limit must not be less than 0.;ENG=Error.... The Upper Limit must not be less than 0.';
+
+    PROCEDURE UpdateItemShipPrices@1000000000(LabelCodeIn@1000000002 : Code[10];ShipAgentCodeIn@1000000000 : Code[10];ShipServCodeIn@1000000003 : Code[10];MeasureIn@1000000005 : ' ,Weight,Longest Dimension,Unit Volume,Order Value';CountryIn@1000000006 : Code[10];WebLocIn@1000000007 : Code[10];ItemNoIn@1000000001 : Code[20];FromServAgentServ@1000000004 : Boolean;UserContextCodeIn@1000000008 : Code[20]);
+    BEGIN
+      //Need to add at end whether Oversize ship charges are instead of or additional
+
+      //DOC EC2013.3.40 removed IF (LabelCodeIn <> '') AND
+      IF (ShipAgentCodeIn <> '') AND
+         (ShipServCodeIn <> '') AND
+         (FromServAgentServ = TRUE) THEN BEGIN
+        GotShipAgentService := TRUE;
+        //DOC EC2009.2.69 ShipAgentServ.GET(LabelCodeIn,ShipAgentCodeIn,ShipServCodeIn);
+        ShipAgentServ.GET(ShipAgentCodeIn,ShipServCodeIn);  //DOC EC2009.2.69
+        ShipAgentServ.TESTFIELD("Price Lower Limits Set");
+      END ELSE
+        GotShipAgentService := FALSE;
+
+      ItemShipPrice.RESET;
+      ItemShipPrice.SETCURRENTKEY("Label Code","Shipping Service Code","Shipping Agent Code",Measure);
+      IF LabelCodeIn <> '' THEN
+        ItemShipPrice.SETRANGE("Label Code",LabelCodeIn);
+      IF ShipAgentCodeIn <> '' THEN
+        ItemShipPrice.SETRANGE("Shipping Agent Code",ShipAgentCodeIn);
+      IF ShipServCodeIn <> '' THEN
+        ItemShipPrice.SETRANGE("Shipping Service Code",ShipServCodeIn);
+      //DOC EC2013.3.40 -
+      IF UserContextCodeIn <> '' THEN
+        ItemShipPrice.SETRANGE("User Context Code",UserContextCodeIn);
+      //DOC EC2013.3.40 +
+      IF CountryIn <> '' THEN
+        ItemShipPrice.SETRANGE("Destination Country",CountryIn);
+      IF WebLocIn <> '' THEN
+        ItemShipPrice.SETRANGE("Destination Web Location",WebLocIn);
+      IF MeasureIn <> MeasureIn::" " THEN
+        ItemShipPrice.SETRANGE(Measure,MeasureIn);
+      IF ItemNoIn <> '' THEN
+        ItemShipPrice.SETRANGE("Item No.",ItemNoIn);
+      ItemShipPrice.SETRANGE("Ship Price Manually Set",FALSE);
+      ItemShipPrice.DELETEALL;
+
+      ShipAgentServPrice.RESET;
+
+      //DOC EC2013.3.40 -
+      //ShipAgentServPrice.SETCURRENTKEY("Label Code","Shipping Agent Code","Shipping Service Code",
+      //                                 "Destination Country","Destination Web Location",Measure,"Upper Limit");
+      ShipAgentServPrice.SETCURRENTKEY("Label Code","Shipping Agent Code","Shipping Service Code",
+                         "User Context Code","Destination Country","Destination Web Location",Measure,"Upper Limit");
+      //DOC EC2013.3.40 +
+
+      IF LabelCodeIn <> '' THEN
+        ShipAgentServPrice.SETRANGE("Label Code",LabelCodeIn);
+      IF ShipAgentCodeIn <> '' THEN
+        ShipAgentServPrice.SETRANGE("Shipping Agent Code",ShipAgentCodeIn);
+      IF ShipServCodeIn <> '' THEN
+        ShipAgentServPrice.SETRANGE("Shipping Service Code",ShipServCodeIn);
+      //DOC EC2013.3.40 -
+      IF UserContextCodeIn <> '' THEN
+        ShipAgentServPrice.SETRANGE("User Context Code",UserContextCodeIn);
+      //DOC EC2013.3.40 +
+      IF CountryIn = '' THEN
+        ShipAgentServPrice.SETFILTER("Destination Country",'<>%1','')
+      ELSE
+        ShipAgentServPrice.SETRANGE("Destination Country",CountryIn);
+      IF WebLocIn <> '' THEN
+        ShipAgentServPrice.SETRANGE("Destination Web Location",WebLocIn);
+      ShipAgentServPrice.SETRANGE("Combine Items",FALSE);
+      ShipAgentServPrice.SETRANGE(Verified,TRUE);
+      ShipAgentServPrice.SETFILTER(Price,'<>%1',0);
+      IF MeasureIn = MeasureIn::" " THEN
+        ShipAgentServPrice.SETFILTER(Measure,'<>%1',ShipAgentServPrice.Measure::" ")
+      ELSE
+        ShipAgentServPrice.SETRANGE(Measure,MeasureIn);
+
+      Window.OPEN('Processing Item no. #1#########',Item."No.");
+
+      Item.RESET;
+      Item.SETRANGE("Manually Set Shipping Prices",FALSE);
+      IF ItemNoIn <> '' THEN
+        Item.SETRANGE("No.",ItemNoIn);
+      IF Item.FIND('-') THEN
+      REPEAT
+        Window.UPDATE;
+        IF ShipAgentServPrice.FIND('-') THEN REPEAT
+          IF ((ShipAgentServPrice."Maximum Length" = 0) OR
+              (Item."Longest Dimension" < ShipAgentServPrice."Maximum Length")) AND
+             ((ShipAgentServPrice."Maximum Weight" = 0) OR
+              (Item."Gross Weight" < ShipAgentServPrice."Maximum Weight")) THEN BEGIN
+            CASE ShipAgentServPrice.Measure OF
+            ShipAgentServPrice.Measure::Weight :
+              BEGIN
+                RoundedMeasure := ROUND(Item."Gross Weight",0.01);
+                IF (RoundedMeasure >= ShipAgentServPrice."Lower Limit") AND
+                   (RoundedMeasure <= ShipAgentServPrice."Upper Limit") THEN
+                  InsertItemShipPrice;
+              END;
+            ShipAgentServPrice.Measure::"Longest Dimension" :
+              BEGIN
+                RoundedMeasure := ROUND(Item."Longest Dimension",0.01);
+                IF (RoundedMeasure >= ShipAgentServPrice."Lower Limit") AND
+                   (RoundedMeasure <= ShipAgentServPrice."Upper Limit") THEN
+                  InsertItemShipPrice;
+              END;
+            ShipAgentServPrice.Measure::"Unit Volume" :
+              BEGIN
+                RoundedMeasure := ROUND(Item."Unit Volume",0.01);
+                IF (RoundedMeasure >= ShipAgentServPrice."Lower Limit") AND
+                   (RoundedMeasure <= ShipAgentServPrice."Upper Limit") THEN
+                  InsertItemShipPrice;
+              END;
+            END;
+          END;
+          ShipAgentServPrice1 := ShipAgentServPrice;
+          ShipAgentServPrice1."Item Ship Prices OK" := TRUE;
+          ShipAgentServPrice1.MODIFY;
+        UNTIL ShipAgentServPrice.NEXT = 0;
+      UNTIL Item.NEXT = 0;
+
+      IF FromServAgentServ = FALSE THEN
+        //DOC EC2013.3.40 CheckShipAgentServPrice(LabelCodeIn,ShipAgentCodeIn,ShipServCodeIn,1);
+        CheckShipAgentServPrice(LabelCodeIn,ShipAgentCodeIn,ShipServCodeIn,1,UserContextCodeIn);  //DOC EC2013.3.40
+
+      Window.CLOSE;
+    END;
+
+    PROCEDURE InsertItemShipPrice@1000000008();
+    BEGIN
+      ItemShipPrice.RESET;
+      ItemShipPrice.INIT;
+      ItemShipPrice."Item No." := Item."No.";
+      ItemShipPrice."Label Code" := ShipAgentServPrice."Label Code";
+      ItemShipPrice."Shipping Service Code" := ShipAgentServPrice."Shipping Service Code";
+      ItemShipPrice."Shipping Agent Code" := ShipAgentServPrice."Shipping Agent Code";
+      ItemShipPrice."User Context Code" := ShipAgentServPrice."User Context Code";  //DOC EC2013.3.40
+      ItemShipPrice.Measure := ShipAgentServPrice.Measure;
+      ItemShipPrice."Upper Limit" := ShipAgentServPrice."Upper Limit";
+      ItemShipPrice."Lower Limit" := ShipAgentServPrice."Lower Limit";
+      ItemShipPrice."Destination Country" := ShipAgentServPrice."Destination Country";
+      ItemShipPrice."Destination Web Location" := ShipAgentServPrice."Destination Web Location";
+      ItemShipPrice.Price := ShipAgentServPrice.Price;
+      ItemShipPrice.DateTimeInsertedModified := CURRENTDATETIME;
+      ItemShipPrice.INSERT;
+    END;
+
+    PROCEDURE SetPriceLowerLimits@1000000001(LabelCodeIn@1000000008 : Code[10];ShipAgentCodeIn@1000000007 : Code[10];ShipServCodeIn@1000000006 : Code[10];MeasureIn@1000000005 : ' ,Weight,Longest Dimension,Unit Volume,Order Value';CountryIn@1000000004 : Code[10];WebLocIn@1000000003 : Code[10];FromServAgentServ@1000000001 : Boolean;UserContextCodeIn@1000000000 : Code[20]);
+    BEGIN
+      i := 0;
+
+      ShipAgentServPrice.RESET;
+      //DOC EC2013.3.40 -
+      //ShipAgentServPrice.SETCURRENTKEY("Label Code","Shipping Agent Code","Shipping Service Code",
+      //                                 "Destination Country","Destination Web Location",Measure,"Upper Limit");
+      ShipAgentServPrice.SETCURRENTKEY("Label Code","Shipping Agent Code","Shipping Service Code",
+                         "User Context Code","Destination Country","Destination Web Location",Measure,"Upper Limit");
+      //DOC EC2013.3.40 +
+
+      IF LabelCodeIn <> '' THEN
+        ShipAgentServPrice.SETRANGE("Label Code",LabelCodeIn);
+      IF ShipAgentCodeIn <> '' THEN
+        ShipAgentServPrice.SETRANGE("Shipping Agent Code",ShipAgentCodeIn);
+      IF ShipServCodeIn <> '' THEN
+        ShipAgentServPrice.SETRANGE("Shipping Service Code",ShipServCodeIn);
+      //DOC EC2013.3.40 -
+      IF UserContextCodeIn <> '' THEN
+        ShipAgentServPrice.SETRANGE("User Context Code",UserContextCodeIn);
+      //DOC EC2013.3.40 +
+      IF CountryIn <> '' THEN
+        ShipAgentServPrice.SETRANGE("Destination Country",CountryIn);
+      IF WebLocIn <> '' THEN
+        ShipAgentServPrice.SETRANGE("Destination Web Location",WebLocIn);
+      IF MeasureIn <> MeasureIn::" " THEN
+        ShipAgentServPrice.SETRANGE(Measure,MeasureIn);
+
+      IF ShipAgentServPrice.FIND('-') THEN
+      REPEAT
+        ShipAgentServPrice.TESTFIELD("Destination Country");
+        IF ShipAgentServPrice."Upper Limit" < 0 THEN
+          ERROR(Text001);
+        IF (MeasureOption <> ShipAgentServPrice.Measure) OR
+           (CountryCode <> ShipAgentServPrice."Destination Country") OR
+           (WebLocationCode <> ShipAgentServPrice."Destination Web Location") THEN BEGIN
+          MeasureOption := ShipAgentServPrice.Measure;
+          CountryCode := ShipAgentServPrice."Destination Country";
+          WebLocationCode := ShipAgentServPrice."Destination Web Location";
+          i := 0;
+        END;
+        i := i + 1;
+        ShipAgentServPrice1 := ShipAgentServPrice;
+        IF i = 1 THEN
+          ShipAgentServPrice1."Lower Limit" := 0
+        ELSE
+          ShipAgentServPrice1."Lower Limit" := PrevUpperLimit + 0.01;
+        ShipAgentServPrice1.Verified := TRUE;
+        ShipAgentServPrice1.DateTimeInsertedModified := CURRENTDATETIME;
+        ShipAgentServPrice1.MODIFY;
+        PrevUpperLimit := ShipAgentServPrice."Upper Limit"
+      UNTIL ShipAgentServPrice.NEXT = 0
+      //GW 101119 -
+      ELSE
+        ERROR(Text000);
+      //GW 101119 +
+
+      IF FromServAgentServ = FALSE THEN
+      CheckShipAgentServPrice(LabelCodeIn,ShipAgentCodeIn,ShipServCodeIn,0,UserContextCodeIn);
+    END;
+
+    PROCEDURE ShippingAgentServiceExists@1000000002(ShipAgentServIn@1000000000 : Record 5790) : Boolean;
+    BEGIN
+      ShipAgentServPrice.RESET;
+
+      //DOC EC2013.3.40 -
+      //ShipAgentServPrice.SETCURRENTKEY("Label Code","Shipping Agent Code","Shipping Service Code",
+      //                                 "Destination Country","Destination Web Location",Measure,"Upper Limit");
+      ShipAgentServPrice.SETCURRENTKEY("Label Code","Shipping Agent Code","Shipping Service Code",
+                         "User Context Code","Destination Country","Destination Web Location",Measure,"Upper Limit");
+      //DOC EC2013.3.40 +
+
+      ShipAgentServPrice.SETRANGE("Label Code",ShipAgentServIn."Label Code");
+      ShipAgentServPrice.SETRANGE("Shipping Agent Code",ShipAgentServIn."Shipping Agent Code");
+      ShipAgentServPrice.SETRANGE("Shipping Service Code",ShipAgentServIn.Code);
+      IF ShipAgentServPrice.FINDFIRST THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckShipAgentServPrice@1000000003(LabelIn@1000000000 : Code[10];AgentIn@1000000001 : Code[10];ServiceIn@1000000002 : Code[10];CheckVerifyOrShipPrice@1000000003 : 'Verify,Ship Price';UserContextIn@1000000004 : Code[20]);
+    BEGIN
+      //DOC EC2009.2.69 IF ShipAgentServ.GET(LabelIn,AgentIn,ServiceIn) THEN BEGIN
+      IF ShipAgentServ.GET(AgentIn,ServiceIn) THEN BEGIN  //DOC EC2009.2.69
+
+        ShipAgentServPrice1.RESET;
+
+        //DOC EC2013.3.40 -
+        //ShipAgentServPrice1.SETCURRENTKEY("Label Code","Shipping Agent Code","Shipping Service Code",
+        //                                 "Destination Country","Destination Web Location",Measure,"Upper Limit");
+        ShipAgentServPrice1.SETCURRENTKEY("Label Code","Shipping Agent Code","Shipping Service Code",
+                           "User Context Code","Destination Country","Destination Web Location",Measure,"Upper Limit");
+        //DOC EC2013.3.40 +
+
+
+        ShipAgentServPrice1.SETRANGE("Label Code",LabelIn);
+        ShipAgentServPrice1.SETRANGE("Shipping Agent Code",AgentIn);
+        ShipAgentServPrice1.SETRANGE("Shipping Service Code",ServiceIn);
+        ShipAgentServPrice1.SETRANGE("User Context Code",UserContextIn);  //DOC EC2013.3.40
+        ShipAgentServPrice1.SETRANGE(Verified,TRUE);
+        IF CheckVerifyOrShipPrice = CheckVerifyOrShipPrice::Verify THEN BEGIN
+          //Verify
+          ShipAgentServPrice1.SETRANGE(Verified,FALSE);
+        END ELSE BEGIN
+          //Ship Price
+          ShipAgentServPrice1.SETRANGE("Combine Items",FALSE);
+          ShipAgentServPrice1.SETRANGE("Item Ship Prices OK",FALSE);
+        END;
+        IF NOT ShipAgentServPrice1.FINDFIRST THEN BEGIN
+          IF CheckVerifyOrShipPrice = CheckVerifyOrShipPrice::Verify THEN BEGIN
+            ShipAgentServ."Price Lower Limits Set" := TRUE;
+            ShipAgentServ.DateTimeInsertedModified := CURRENTDATETIME;
+            ShipAgentServ.MODIFY;
+          END ELSE BEGIN
+            ShipAgentServ."Item Ship Prices OK" := TRUE;
+            ShipAgentServ.DateTimeInsertedModified := CURRENTDATETIME;
+            ShipAgentServ.MODIFY;
+          END;
+        END;
+      END;
+    END;
+
+    BEGIN
+    {
+      //DOC EC2009.2    GW 19/11/2010 - Added ShipAgentServPrice.setcurrentkey("Label Code","Shipping Agent Code","Shipping Service Code", "Destination Country","Destination Web Location",Measure,"Upper Limit");
+      //DOC EC2009.2.69 MQ 14/09/2011 - GW110914 Shipping Agent Services primary key returned to std.
+      //DOC EC2013.3.40 MQ 09/01/2013 - GW130109 Deal with addition of field User Context Code
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

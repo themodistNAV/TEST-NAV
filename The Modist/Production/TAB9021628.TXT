@@ -1,0 +1,1243 @@
+OBJECT Table 9021628 ePage
+{
+  OBJECT-PROPERTIES
+  {
+    Date=13/07/16;
+    Time=[ 1:50:02 PM];
+    Version List=EC2016.6;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               LabelRec.GET("Label Code");
+               IF LabelRec."Used-in Company" <> COMPANYNAME THEN
+                 ERROR(Text001);
+
+               IF "Page GUID" = 0 THEN BEGIN
+                 LabelRec.LOCKTABLE;
+                 LabelRec."Last ePage Entry GroupGuid" := LabelRec."Last ePage Entry GroupGuid" + 1;
+                 "Page GUID" := LabelRec."Last ePage Entry GroupGuid";
+               END;
+
+               IF "Template Page Entry" THEN
+                 "Template Page GroupGuID" := "Page GUID";
+
+               IF "System Entry" = FALSE THEN BEGIN
+                 LabelRec."Configuration OK" := FALSE;
+                 LabelRec."Reorder Required" := TRUE;
+               END;
+               LabelRec.MODIFY;
+
+               CycleSyncAttributes;
+
+               "DateTime Created":=CURRENTDATETIME;
+               "DateTime Last Modified":=CURRENTDATETIME;
+               LabelAttTransRec.SyncAttributes('NAME',"Menu Name",FORMAT("Page GUID"),
+                                               "Label Code",'PAGE');
+
+               //DOC EC2013.3.80 EC2013.3.50 -
+               {
+               IF "Label Code" IN ['TN','BC','BONZER'] THEN BEGIN
+                 IF NOT CSetup.GET("Label Code") THEN BEGIN
+                   CSetup.INIT;
+                   CSetup."Label Code" := "Label Code";
+                   CSetup.INSERT;
+                 END;
+                 CSetup."ePage Changed" := TRUE;
+                 CSetup.MODIFY;
+               END;
+               }
+               //DOC EC2013.3.80 EC2013.3.50 +
+             END;
+
+    OnModify=BEGIN
+               LabelRec.GET("Label Code");
+               IF LabelRec."Used-in Company" <> COMPANYNAME THEN
+                 ERROR(Text001,"Label Code",COMPANYNAME);
+
+               IF ("System Entry" = TRUE)  AND ("Template Page Entry" = FALSE) THEN
+                 ERROR(Text013);
+
+               IF "System Entry" = FALSE THEN BEGIN
+                 SetLabelConfigurationOK("Label Code",FALSE);
+                 MODIFY;  //needed to ensure we do not get "Another user has modified the database" error
+               END;
+
+               "DateTime Last Modified":=CURRENTDATETIME;
+
+               //DOC EC2013.3.80 -
+               {
+               //<SyncAction>
+               //record modify for data sync...
+               SyncActionPkString:=SyncAction.GeneratePkString(9021628,"Label Code",FORMAT("Page GUID"),'','','','','','','');
+               IF NOT SyncAction.LogEntry(9021628,'','UPDATE',SyncActionPkString,'') THEN
+                 ERROR(SyncActionLogEntryError,SyncAction.TABLENAME,TABLENAME,SyncActionPkString);
+               //</SyncAction>
+               }
+               //DOC EC2013.3.80 +
+
+               //DOC EC2013.3.80 EC2013.3.50 -
+               {
+               IF "Label Code" IN ['TN','BC','BONZER'] THEN BEGIN
+                 IF NOT CSetup.GET("Label Code") THEN BEGIN
+                   CSetup.INIT;
+                   CSetup."Label Code" := "Label Code";
+                   CSetup.INSERT;
+                 END;
+                 CSetup."ePage Changed" := TRUE;
+                 CSetup.MODIFY;
+               END;
+               }
+               //DOC EC2013.3.80 EC2013.3.50 +
+             END;
+
+    OnDelete=BEGIN
+               LabelRec.GET("Label Code");
+               IF LabelRec."Used-in Company" <> COMPANYNAME THEN
+                 ERROR(Text001,"Label Code",COMPANYNAME);
+               IF "System Entry" = FALSE THEN BEGIN
+                 LabelRec."Configuration OK" := FALSE;
+                 LabelRec."Reorder Required" := TRUE;
+                 LabelRec.MODIFY;
+               END;
+
+               CALCFIELDS("No. of Page Items");
+               IF "No. of Page Items" > 0 THEN BEGIN
+                 IF CONFIRM(Text002) THEN BEGIN
+                   PageItemRec.RESET;
+                   PageItemRec1.RESET;
+                   PageItemRec.SETRANGE("Label Code","Label Code");
+                   PageItemRec.SETRANGE("Page GroupGuid","Page GUID");
+                   //DOC EC2013.3.60 -
+                   {
+                   IF PageItemRec.FIND('-') THEN
+                   REPEAT
+                     PageItemRec1.SETRANGE("Label Code","Label Code");
+                     PageItemRec1.SETRANGE("Page Item Guid",PageItemRec."Page Item Guid");
+                     IF PageItemRec1.COUNT = 1 THEN BEGIN
+                       PageRec.RESET;
+                       IF PageRec.GET("Label Code",PageItemRec."Page Item Guid") THEN BEGIN
+                         PageRec.DELETE(TRUE);   //DOC EC2013.3.50 added TRUE
+                         PageItemRec1.RESET;
+                         PageItemRec1.SETRANGE("Label Code","Label Code");
+                         PageItemRec1.SETRANGE("Page GroupGuid",PageItemRec."Page Item Guid");
+                         PageItemRec1.DELETEALL(TRUE); //DOC EC2013.3.50 added TRUE
+                       END;
+                     END;
+                   UNTIL PageItemRec.NEXT = 0;
+                   }
+                   //DOC EC2013.3.60 +
+                   PageItemRec.DELETEALL(TRUE);
+                 END ELSE
+                   ERROR(Text019);
+               END;
+
+               LabelAttributeRec.RESET;
+               LabelAttributeRec.SETRANGE("Label Code","Label Code");
+               LabelAttributeRec.SETRANGE("Attribute Type",'PAGE');
+               LabelAttributeRec.SETRANGE("Attribute Owner Reference",FORMAT("Page GUID"));
+               IF LabelAttributeRec.FIND('-') THEN
+               REPEAT
+                 LabelAttributeRec.DELETE(TRUE);
+               UNTIL LabelAttributeRec.NEXT = 0;
+
+               IF "Template Page Entry" THEN BEGIN
+                 PageRec.RESET;
+                 PageRec.SETRANGE("Label Code","Label Code");
+                 PageRec.SETRANGE("Template Page GroupGuID","Page GUID");
+                 PageRec.SETRANGE("Template Page Entry",FALSE);
+                 IF PageRec.FINDFIRST THEN
+                   ERROR(Text015);
+                 //DOC EC2013.3.60 - Removed field "Template Page GroupGuID from Page Item
+                 {
+                 PageItemRec.RESET;
+                 PageItemRec.SETRANGE("Label Code","Label Code");
+                 PageItemRec.SETRANGE("Template Page GroupGuID","Page GUID");
+                 IF PageItemRec.FINDFIRST THEN
+                   ERROR(Text016);
+                 Text016 You cannot delete the Template Page as it is being used by Page Item. (16)
+                 }
+                 //DOC EC2013.3.60 +
+                 LayoutCptRec.RESET;
+                 LayoutCptRec.SETRANGE("Label Code","Label Code");
+                 LayoutCptRec.SETRANGE("Template Page GroupGuID","Page GUID");
+                 LayoutCptRec.DELETEALL;
+               END;
+
+               //DOC EC2013.3.50 -
+               WebAttributeValue.RESET;
+               WebAttributeValue.SETCURRENTKEY("Label Code","Table ID","Key Field String 1");
+               WebAttributeValue.SETRANGE("Label Code","Label Code");
+               WebAttributeValue.SETRANGE("Table ID",9021628);
+               WebAttributeValue.SETRANGE("Key Field String 1",FORMAT("Page GUID"));
+               WebAttributeValue.DELETEALL(TRUE);
+               //DOC EC2013.3.50 +
+
+               DeletePageContentAndValue;
+
+               CatalogueBuildData.RESET;
+               CatalogueBuildData.SETRANGE("Label Code","Label Code");
+               CatalogueBuildData.SETRANGE("ePage GuID","Page GUID");
+               CatalogueBuildData.DELETEALL;
+
+               IF "System Entry" = FALSE THEN
+                 SetLabelConfigurationOK("Label Code",FALSE);
+
+               //DOC EC2013.3.80 -
+               {
+               //<SyncAction>
+               //record delete for data sync...
+               SyncActionPkString:=SyncAction.GeneratePkString(9021628,"Label Code",FORMAT("Page GUID"),'','','','','','','');
+               IF NOT SyncAction.LogEntry(9021628,'','DELETE',SyncActionPkString,'') THEN
+                 ERROR(SyncActionLogEntryError,SyncAction.TABLENAME,TABLENAME,SyncActionPkString);
+               //</SyncAction>
+               }
+               //DOC EC2013.3.80 +
+
+               //DOC EC2013.3.80 EC2013.3.50 -
+               {
+               IF "Label Code" IN ['TN','BC','BONZER'] THEN BEGIN
+                 IF NOT CSetup.GET("Label Code") THEN BEGIN
+                   CSetup.INIT;
+                   CSetup."Label Code" := "Label Code";
+                   CSetup.INSERT;
+                 END;
+                 CSetup."ePage Changed" := TRUE;
+                 CSetup.MODIFY;
+                 CePage.RESET;
+                 CePage.SETRANGE("Label Code","Label Code");
+                 CePage.SETRANGE("Page GUID","Page GUID");
+                 IF CePage.FINDLAST THEN BEGIN
+                   VersionNo := CePage.Version;
+                   CePage.DELETE;
+                   CePage.INIT;
+                   CePage.TRANSFERFIELDS(Rec);
+                   CePage.Version := VersionNo;
+                   CePage.Changed := TRUE;
+                   CePage.Deleted := TRUE;
+                   CePage."Manually Deleted By" := USERID;
+                   CePage.DateTimeVersionInserted := CURRENTDATETIME;
+                   CePage."DateTime Manually Deleted" := CURRENTDATETIME;
+                   CePage.INSERT;
+                 END;
+               END;
+               }
+               //DOC EC2013.3.80 EC2013.3.50 +
+             END;
+
+    OnRename=BEGIN
+               ERROR(Text010);
+
+               //DOC EC2013.3.80 -
+               {
+               //<SyncAction>
+               //record rename for data sync (in case preceding error is removed later!)...
+               SyncActionPkString:=SyncAction.GeneratePkString(9021628,xRec."Label Code",FORMAT(xRec."Page GUID"),'','','','','','','');
+               SyncActionRenamedPkString:=SyncAction.GeneratePkString(9021628,"Label Code",FORMAT("Page GUID"),'','','','','','','');
+               IF NOT SyncAction.LogEntry(9021628,'','RENAME',SyncActionPkString,SyncActionRenamedPkString) THEN
+                 ERROR(SyncActionLogEntryError,SyncAction.TABLENAME,TABLENAME,SyncActionPkString);
+               //</SyncAction>
+               }
+               //DOC EC2013.3.80 +
+             END;
+
+    CaptionML=[ENU=ePage;
+               ENG=ePage];
+    LookupPageID=Page9021640;
+    DrillDownPageID=Page9021640;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Label Code          ;Code10        ;TableRelation=Label;
+                                                   CaptionML=[ENU=Label Code;
+                                                              ENG=Label Code];
+                                                   NotBlank=Yes;
+                                                   Editable=No }
+    { 2   ;   ;Page GUID           ;Integer       ;CaptionML=[ENU=Page GUID;
+                                                              ENG=Page GUID];
+                                                   Editable=No }
+    { 5   ;   ;Hidden on Big Screen;Boolean       ;CaptionML=[ENU=Hidden on Big Screen;
+                                                              ENG=Hidden on Big Screen];
+                                                   Description=MQ 21/11/2013 - GW131121 was Hidden }
+    { 6   ;   ;Hidden on Mobile    ;Boolean       ;CaptionML=[ENU=Hidden on Mobile;
+                                                              ENG=Hidden on Mobile];
+                                                   Description=MQ 21/11/2013 - GW131121 added }
+    { 8   ;   ;Verified            ;Boolean       ;CaptionML=[ENU=Verified;
+                                                              ENG=Verified];
+                                                   Editable=No }
+    { 10  ;   ;Menu Name           ;Text50        ;OnValidate=BEGIN
+                                                                LabelRec.GET("Label Code");
+                                                                IF LabelRec."ePage Menu Name Max Length" = 0 THEN BEGIN
+                                                                  IF STRLEN("Menu Name") > 30 THEN
+                                                                    ERROR(Text022,30);
+                                                                END ELSE BEGIN
+                                                                  IF STRLEN("Menu Name") > LabelRec."ePage Menu Name Max Length" THEN
+                                                                    ERROR(Text022,LabelRec."ePage Menu Name Max Length");
+                                                                END;
+
+                                                                IF "Page GUID" <> 0 THEN
+                                                                  LabelAttTransRec.SyncAttributes('NAME',"Menu Name",FORMAT("Page GUID"),
+                                                                                                  "Label Code",'PAGE');
+                                                                //DOC EC2013.3.50 -
+                                                                IF ("Label Code" = 'SKS') AND
+                                                                  (Blocked = FALSE) THEN BEGIN
+                                                                  CALCFIELDS("No. of Page Items");
+                                                                  IF "No. of Page Items" > 0 THEN BEGIN
+                                                                    PageItemRec.RESET;
+                                                                    PageItemRec.SETRANGE("Label Code","Label Code");
+                                                                    PageItemRec.SETRANGE("Page GroupGuid","Page GUID");
+                                                                    PageItemRec.SETFILTER(Type,'<>%1',PageItemRec.Type::Content);
+                                                                    IF PageItemRec.FIND('-') THEN
+                                                                    REPEAT
+                                                                      WebAttMgt.ControlWebAttributes(PageItemRec."No.",FORMAT("Page GUID"),0,27,
+                                                                         "Label Code",'EPAGENAME',0,"Menu Name",'',0,FALSE,0D,0T);
+                                                                    UNTIL PageItemRec.NEXT = 0;
+                                                                  END;
+                                                                END;
+                                                                //DOC EC2013.3.50 +
+                                                              END;
+
+                                                   CaptionML=[ENU=Menu Name;
+                                                              ENG=Menu Name] }
+    { 11  ;   ;Page Title          ;Text250       ;OnValidate=BEGIN
+                                                                LabelAttTransRec.SyncAttributes('META-TITLE',"Page Title",FORMAT("Page GUID"),
+                                                                                                "Label Code",'PAGE');
+                                                              END;
+
+                                                   CaptionML=[ENU=Page Title;
+                                                              ENG=Page Title] }
+    { 12  ;   ;Description         ;Text250       ;OnValidate=BEGIN
+                                                                LabelAttTransRec.SyncAttributes('DESCRIPTION',Description,FORMAT("Page GUID"),
+                                                                                                "Label Code",'PAGE');
+                                                                IF "Elevator Pitch" = '' THEN BEGIN
+                                                                    "Elevator Pitch" := Description;
+                                                                    VALIDATE("Elevator Pitch")
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Description;
+                                                              ENG=Description] }
+    { 13  ;   ;Elevator Pitch      ;Text250       ;OnValidate=BEGIN
+                                                                LabelAttTransRec.SyncAttributes('ELEVATOR',"Elevator Pitch",FORMAT("Page GUID"),
+                                                                                                "Label Code",'PAGE');
+                                                              END;
+
+                                                   CaptionML=[ENU=Elevator Pitch;
+                                                              ENG=Elevator Pitch] }
+    { 14  ;   ;System Entry        ;Boolean       ;CaptionML=[ENU=System Entry;
+                                                              ENG=System Entry];
+                                                   Editable=No }
+    { 15  ;   ;Blocked             ;Boolean       ;OnValidate=BEGIN
+                                                                CycleBlocked("Label Code","Page GUID",Blocked);
+
+                                                                //Error if you try to make the blocked status different from the Parent
+                                                                IF ParentGuID <> 0 THEN BEGIN
+                                                                  PageRec1.GET("Label Code",ParentGuID);
+                                                                  IF PageRec1.Blocked THEN
+                                                                    ERROR(Text004);
+                                                                END;
+
+                                                                //DOC EC2013.3.50 -
+                                                                IF ("Label Code" = 'SKS') THEN BEGIN
+                                                                  CALCFIELDS("No. of Page Items");
+                                                                  IF "No. of Page Items" > 0 THEN BEGIN
+                                                                    PageItemRec.RESET;
+                                                                    PageItemRec.SETRANGE("Label Code","Label Code");
+                                                                    PageItemRec.SETRANGE("Page GroupGuid","Page GUID");
+                                                                    //DOC EC2013.3.80 PageItemRec.SETFILTER(Type,'<>%1',PageItemRec.Type::Content);
+                                                                    PageItemRec.SETRANGE(Type,PageItemRec.Type::Item); //DOC EC2013.3.80
+                                                                    IF PageItemRec.FIND('-') THEN
+                                                                    REPEAT
+                                                                      IF Blocked THEN BEGIN
+                                                                        WebAttMgt.ControlWebAttributes(PageItemRec."No.",FORMAT("Page GUID"),0,27,
+                                                                           "Label Code",'EPAGENAME',0,'','',0,FALSE,0D,0T);
+                                                                        //DOC EC2013.3.80 -
+                                                                        WebAttMgt.ControlWebAttributes(FORMAT("Page GUID"),PageItemRec."No.",0,9021628,
+                                                                           'SKS','EPAGESEARCH',0,'','',0,FALSE,0D,0T);
+                                                                        //DOC EC2013.3.80 +
+                                                                      END ELSE BEGIN
+                                                                        WebAttMgt.ControlWebAttributes(PageItemRec."No.",FORMAT("Page GUID"),0,27,
+                                                                           "Label Code",'EPAGENAME',0,"Menu Name",'',0,FALSE,0D,0T);
+                                                                      END;
+                                                                    UNTIL PageItemRec.NEXT = 0;
+                                                                  END;
+                                                                END;
+                                                                //DOC EC2013.3.50 +
+                                                              END;
+
+                                                   CaptionML=[ENU=Blocked;
+                                                              ENG=Blocked] }
+    { 18  ;   ;Configuration OK    ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Label."Configuration OK" WHERE (Code=FIELD(Label Code)));
+                                                   CaptionML=[ENU=Configuration OK;
+                                                              ENG=Configuration OK];
+                                                   Description=flowfield;
+                                                   Editable=No }
+    { 20  ;   ;Level               ;Integer       ;CaptionML=[ENU=Level;
+                                                              ENG=Level];
+                                                   MinValue=0;
+                                                   MaxValue=20;
+                                                   Editable=No }
+    { 22  ;   ;Main Image          ;Text100       ;OnValidate=BEGIN
+                                                                LabelAttTransRec.SyncAttributes('IMAGE-PRIMARY',"Main Image",FORMAT("Page GUID"),
+                                                                                                "Label Code",'PAGE');
+                                                              END;
+
+                                                   CaptionML=[ENU=Main Image;
+                                                              ENG=Main Image] }
+    { 23  ;   ;Thumbnail Image     ;Text100       ;OnValidate=BEGIN
+                                                                LabelAttTransRec.SyncAttributes('IMAGE-THUMBNAIL',"Thumbnail Image",FORMAT("Page GUID"),
+                                                                                                "Label Code",'PAGE');
+                                                              END;
+
+                                                   CaptionML=[ENU=Thumbnail Image;
+                                                              ENG=Thumbnail Image] }
+    { 24  ;   ;Icon Image          ;Text100       ;OnValidate=BEGIN
+                                                                LabelAttTransRec.SyncAttributes('IMAGE-ICON',"Icon Image",FORMAT("Page GUID"),
+                                                                                                "Label Code",'PAGE');
+                                                              END;
+
+                                                   CaptionML=[ENU=Icon Image;
+                                                              ENG=Icon Image] }
+    { 26  ;   ;Page Item Sort Code ;Code20        ;TableRelation="Page Item Sort Setup".Code WHERE (Label Code=FIELD(Label Code));
+                                                   CaptionML=[ENU=Page Item Sort Code;
+                                                              ENG=Page Item Sort Code] }
+    { 30  ;   ;No. of Page Items   ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Page Item" WHERE (Label Code=FIELD(Label Code),
+                                                                                        Page GroupGuid=FIELD(Page GUID)));
+                                                   CaptionML=[ENU=No. of Page Items;
+                                                              ENG=No. of Page Items];
+                                                   Description=flowfield;
+                                                   Editable=No }
+    { 32  ;   ;Template Page Entry ;Boolean       ;CaptionML=[ENU=Template Page Entry;
+                                                              ENG=Template Page Entry];
+                                                   Editable=No }
+    { 33  ;   ;Template Usage Count;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count(ePage WHERE (Label Code=FIELD(Label Code),
+                                                                                  Template Page GroupGuID=FIELD(Page GUID),
+                                                                                  Template Page Entry=FILTER(No)));
+                                                   CaptionML=[ENU=Template Usage Count;
+                                                              ENG=Template Usage Count];
+                                                   Description=flowfield;
+                                                   Editable=No }
+    { 34  ;   ;Locked for Template Resets;Boolean ;CaptionML=[ENU=Locked for Template Resets;
+                                                              ENG=Locked for Template Resets];
+                                                   Description=EC2009.2.73: if Yes, page will be excluded from Template Page "Reset Child Pages" Functioni }
+    { 35  ;   ;Page File           ;Text250       ;OnValidate=BEGIN
+                                                                IF NOT "Template Page Entry" THEN
+                                                                  ERROR(Text006);
+                                                              END;
+
+                                                   CaptionML=[ENU=Page File;
+                                                              ENG=Page File] }
+    { 36  ;   ;Template Page File  ;Text250       ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(ePage."Page File" WHERE (Label Code=FIELD(Label Code),
+                                                                                               Page GUID=FIELD(Template Page GroupGuID)));
+                                                   CaptionML=[ENU=Template Page File;
+                                                              ENG=Template Page File];
+                                                   Description=flowfield }
+    { 40  ;   ;Template Page GroupGuID;Integer    ;TableRelation=ePage."Page GUID" WHERE (Label Code=FIELD(Label Code),
+                                                                                          System Entry=CONST(Yes),
+                                                                                          Template Page Entry=CONST(Yes));
+                                                   OnValidate=BEGIN
+                                                                IF "Template Page Entry" THEN
+                                                                  ERROR(Text014);
+
+                                                                //DOC EC2013.3.20 take out cos xRec can be a problem
+                                                                //IF "Template Page GroupGuID" = xRec."Template Page GroupGuID" THEN
+                                                                //  EXIT;
+
+                                                                LabelRec.GET("Label Code");
+                                                                IF "Template Page GroupGuID" = 0 THEN BEGIN
+                                                                  IF NOT CONFIRM(Text017,FALSE,FIELDCAPTION("Template Page GroupGuID"),"Page GUID") THEN
+                                                                    ERROR(Text019);
+                                                                  DeletePageContentAndValue;
+                                                                  LabelAttTransRec.SyncAttributes('TEMPLATE',LabelRec."Website Page Address",
+                                                                                             FORMAT("Page GUID"),"Label Code",'PAGE');
+                                                                  Verified := FALSE;
+                                                                  IF "Error Message" <> Text012 THEN
+                                                                    "Error Message" := AddToErrorText("Error Message",Text011);
+
+                                                                  //Updating Label
+                                                                  IF LabelRec."Configuration OK" THEN BEGIN
+                                                                    LabelRec."Configuration OK" := FALSE;
+                                                                    LabelRec.MODIFY;
+                                                                  END;
+                                                                  "Page Link" := '';
+
+                                                                END ELSE BEGIN
+                                                                  IF xRec."Template Page GroupGuID" = 0 THEN BEGIN
+                                                                    IF "Error Message" = Text011 THEN BEGIN
+                                                                      Verified := TRUE;
+                                                                      "Error Message" := '';
+                                                                    END ELSE BEGIN
+                                                                      "Error Message" := Text012;
+                                                                    END;
+                                                                  END ELSE BEGIN
+                                                                    IF NOT CONFIRM(Text018) THEN
+                                                                      ERROR(Text019);
+                                                                    DeletePageContentAndValue;
+                                                                  END;
+                                                                  PopulatePageContentAndValue("Label Code","Template Page GroupGuID","Page GUID");
+                                                                  PageRec2.GET("Label Code","Template Page GroupGuID");
+                                                                  LabelAttTransRec.SyncAttributes('TEMPLATE',LabelRec."Website Page Address",
+                                                                                             FORMAT("Page GUID"),"Label Code",'PAGE');
+                                                                  LabelRec.TESTFIELD("Website Page Address");
+                                                                  "Page Link" := LabelRec."Website Page Address" + '?GroupGuid=' + FORMAT("Page GUID");
+                                                                  LabelAttributeRec.RESET;
+                                                                  LabelAttributeRec.SETCURRENTKEY("Label Code","Attribute Type","Attribute Owner Reference",
+                                                                                                  "Type Code");
+                                                                  LabelAttributeRec.SETRANGE("Label Code","Label Code");
+                                                                  LabelAttributeRec.SETRANGE("Attribute Type",'PAGE');
+                                                                  LabelAttributeRec.SETRANGE("Attribute Owner Reference",FORMAT("Template Page GroupGuID"));
+                                                                  LabelAttributeRec.SETRANGE("Transfer Template Value",TRUE);
+                                                                  LabelAttTransRec.RESET;
+                                                                  LabelAttTransRec.SETRANGE("Label Code","Label Code");
+                                                                  IF LabelAttributeRec.FIND('-') THEN
+                                                                  REPEAT
+                                                                    LabelAttTransRec.SETRANGE("Label Attribute Entry No.",LabelAttributeRec."Entry No.");
+                                                                    IF LabelAttTransRec.FIND('-') THEN
+                                                                    REPEAT
+                                                                      //Warning this does not handle HTML Entry No.
+                                                                      LabelAttTransRec.SyncAttributes(LabelAttributeRec."Type Code",LabelAttTransRec.Value,
+                                                                                       FORMAT("Page GUID"),"Label Code",'PAGE');
+                                                                    UNTIL LabelAttTransRec.NEXT = 0;
+                                                                  UNTIL LabelAttributeRec.NEXT = 0;
+                                                                END;
+                                                              END;
+
+                                                   OnLookup=VAR
+                                                              PageGuID@1000000000 : Integer;
+                                                              VersionCalls@1000000001 : Codeunit 9021662;
+                                                            BEGIN
+                                                              IF "Template Page Entry" THEN
+                                                                ERROR(Text014);
+
+                                                              //DOC EC2013.4.00 -
+                                                              {
+                                                              CLEAR(TemplatePageList);
+                                                              PageRec.RESET;
+                                                              PageRec.SETRANGE("Label Code","Label Code");
+                                                              IF "Template Page GroupGuID" <> 0 THEN
+                                                                PageRec.SETRANGE("Page GUID","Template Page GroupGuID");
+                                                              PageRec.SETRANGE("System Entry",TRUE);
+                                                              PageRec.SETRANGE("Template Page Entry");
+                                                              TemplatePageList.SETTABLEVIEW(PageRec);
+                                                              TemplatePageList.LOOKUPMODE(TRUE);
+                                                              IF TemplatePageList.RUNMODAL = ACTION::LookupOK THEN BEGIN
+                                                                TemplatePageList.GETRECORD(PageRec1);
+                                                                VALIDATE("Template Page GroupGuID",PageRec1."Page GUID");
+                                                              END;
+                                                              }
+                                                              PageGuID := 0;
+                                                              PageGuID :=
+                                                                VersionCalls.ePageTempPageGGuIDLookup("Label Code","Template Page GroupGuID");
+                                                              IF PageGuID <> 0 THEN
+                                                                VALIDATE("Template Page GroupGuID",PageGuID);
+                                                              //DOC EC2013.4.00 +
+                                                            END;
+
+                                                   CaptionML=[ENU=Template Page GroupGuID;
+                                                              ENG=Template Page GroupGuID] }
+    { 41  ;   ;Specified Link Page ;Boolean       ;OnValidate=BEGIN
+                                                                IF "Template Page GroupGuID" <> 0 THEN
+                                                                  ERROR(Text020);
+                                                                IF "Specified Link Page" = TRUE THEN BEGIN
+                                                                  IF "Error Message" = Text011 THEN BEGIN
+                                                                    Verified := TRUE;
+                                                                    "Error Message" := '';
+                                                                  END ELSE BEGIN
+                                                                    "Error Message" := Text012;
+                                                                  END;
+                                                                END ELSE BEGIN
+                                                                  Verified := FALSE;
+                                                                  IF "Error Message" <> Text011 THEN BEGIN
+                                                                    IF "Error Message" = '' THEN
+                                                                      "Error Message" := Text011
+                                                                    ELSE
+                                                                      "Error Message" := Text012;
+                                                                  END;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Specified Link Page;
+                                                              ENG=Specified Link Page] }
+    { 42  ;   ;Page Link           ;Text100       ;OnValidate=BEGIN
+                                                                IF "Specified Link Page" THEN
+                                                                  LabelAttTransRec.SyncAttributes('TEMPLATE',"Page Link",FORMAT("Page GUID"),
+                                                                                                  "Label Code",'PAGE');
+                                                              END;
+
+                                                   CaptionML=[ENU=Page Link;
+                                                              ENG=Page Link] }
+    { 44  ;   ;No. of Layout Components;Integer   ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Layout Component" WHERE (Label Code=FIELD(Label Code),
+                                                                                               Template Page GroupGuID=FIELD(Page GUID)));
+                                                   CaptionML=[ENU=No. of Layout Components;
+                                                              ENG=No. of Layout Components];
+                                                   Description=flowfield;
+                                                   Editable=No }
+    { 50  ;   ;Link File           ;Text100       ;OnValidate=BEGIN
+                                                                LabelAttTransRec.SyncAttributes('ATTACHMENT',"Link File",FORMAT("Page GUID"),
+                                                                                                "Label Code",'PAGE');
+                                                              END;
+
+                                                   CaptionML=[ENU=Link File;
+                                                              ENG=Link File] }
+    { 55  ;   ;Style Suffix        ;Text10        ;OnValidate=BEGIN
+                                                                LabelAttTransRec.SyncAttributes('CSS_SUFFIX',"Style Suffix",FORMAT("Page GUID"),
+                                                                                                "Label Code",'PAGE');
+                                                              END;
+
+                                                   CaptionML=[ENU=Style Suffix;
+                                                              ENG=Style Suffix] }
+    { 70  ;   ;Internal Name       ;Text100       ;CaptionML=[ENU=Internal Name;
+                                                              ENG=Internal Name];
+                                                   Description=MA20110617 }
+    { 100 ;   ;Order               ;Integer       ;CaptionML=[ENU=Order;
+                                                              ENG=Order];
+                                                   Editable=No }
+    { 101 ;   ;New Order           ;Integer       ;CaptionML=[ENU=New Order;
+                                                              ENG=New Order];
+                                                   Editable=No }
+    { 120 ;   ;DateTime Created    ;DateTime      ;CaptionML=[ENU=DateTime Created;
+                                                              ENG=DateTime Created] }
+    { 121 ;   ;DateTime Last Modified;DateTime    ;OnValidate=VAR
+                                                                Label@1000000000 : Record 9021618;
+                                                              BEGIN
+                                                                IF Label.GET("Label Code") THEN BEGIN
+                                                                  Label."DateTime Pages Last Modified":=CURRENTDATETIME;
+                                                                  Label.MODIFY;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=DateTime Last Modified;
+                                                              ENG=DateTime Last Modified] }
+    { 125 ;   ;Change Frequency    ;Option        ;InitValue=weekly;
+                                                   CaptionML=[ENU=Change Frequency;
+                                                              ENG=Change Frequency];
+                                                   OptionCaptionML=[ENU=always,hourly,daily,weekly,monthly,yearly,never;
+                                                                    ENG=always,hourly,daily,weekly,monthly,yearly,never];
+                                                   OptionString=always,hourly,daily,weekly,monthly,yearly,never;
+                                                   Description="always" describes documents that change each time they are accessed. "never" describes archived pages }
+    { 126 ;   ;Priority in Search Results;Decimal ;InitValue=0.5;
+                                                   CaptionML=[ENU=Priority in Search Results;
+                                                              ENG=Priority in Search Results];
+                                                   DecimalPlaces=1:1;
+                                                   MinValue=0;
+                                                   MaxValue=1;
+                                                   Description=Lets the search engines know which pages you deem most important for the crawlers }
+    { 149 ;   ;Excluded Security Role;Code20      ;TableRelation="Web Security Role".Code WHERE (Label Code=FIELD(Label Code),
+                                                                                                 Excluded Role=FILTER(<>''));
+                                                   OnValidate=BEGIN
+                                                                //DOC EC2013.4.60 -
+                                                                IF "Excluded Security Role" = '' THEN BEGIN
+                                                                  "Security Role" := '';
+                                                                  "Is Secured" := FALSE;
+                                                                END ELSE BEGIN
+                                                                  WebSecurityRole.GET("Label Code","Excluded Security Role");
+                                                                  WebSecurityRole.TESTFIELD("Excluded Role");
+                                                                  "Security Role" := WebSecurityRole."Excluded Role";
+                                                                  "Is Secured" := TRUE;
+                                                                END;
+                                                                //DOC EC2013.4.60 +
+                                                              END;
+
+                                                   CaptionML=[ENU=Excluded Security Role;
+                                                              ENG=Excluded Security Role];
+                                                   Description=GW add 140311 }
+    { 150 ;   ;Security Role       ;Code20        ;TableRelation="Web Security Role".Code WHERE (Label Code=FIELD(Label Code));
+                                                   OnValidate=BEGIN
+                                                                //DOC EC2013.4.60 -
+                                                                IF "Excluded Security Role" <> '' THEN
+                                                                  ERROR(Text027);
+                                                                //DOC EC2013.4.60 +
+                                                                IF "Security Role"='' THEN
+                                                                  "Is Secured":=FALSE
+                                                                ELSE
+                                                                  "Is Secured":=TRUE;
+                                                              END;
+
+                                                   CaptionML=[ENU=Security Role;
+                                                              ENG=Security Role];
+                                                   Description=MA110424 }
+    { 151 ;   ;Is Secured          ;Boolean       ;CaptionML=[ENU=Is Secured;
+                                                              ENG=Is Secured];
+                                                   Editable=No }
+    { 154 ;   ;Page Type           ;Option        ;CaptionML=[ENU=Page Type;
+                                                              ENG=Page Type];
+                                                   OptionCaptionML=[ENU=" ,Product Family";
+                                                                    ENG=" ,Product Family"];
+                                                   OptionString=[ ,Product Family];
+                                                   Description=GW add 130314 }
+    { 180 ;   ;Error Message       ;Text250       ;CaptionML=[ENU=Error Message;
+                                                              ENG=Error Message];
+                                                   Editable=No }
+    { 190 ;   ;Auto Build          ;Boolean       ;CaptionML=[ENU=Auto Build;
+                                                              ENG=Auto Build];
+                                                   Description=MQ 28/03/2011 - GW110328 for Derm but could be used by others }
+    { 200 ;   ;ParentGuID          ;Integer       ;CaptionML=[ENU=ParentGuID;
+                                                              ENG=ParentGuID];
+                                                   Editable=No }
+    { 1000;   ;Mapped Page GuID    ;Integer       ;CaptionML=[ENU=Mapped Page GuID;
+                                                              ENG=Mapped Page GuID];
+                                                   Description=Temp field for mapping Biocare data takeon }
+  }
+  KEYS
+  {
+    {    ;Label Code,Page GUID                    ;Clustered=Yes }
+    {    ;Label Code,System Entry,Order            }
+    {    ;Label Code,System Entry,ParentGuID       }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      GlobalFuncs@1190000006 : Codeunit 9021624;
+      PageItemRec@1000000008 : Record 9021629;
+      PageItemRec1@1040012 : Record 9021629;
+      LabelRec@1000000004 : Record 9021618;
+      PageRec@1040006 : Record 9021628;
+      PageRec1@1000000001 : Record 9021628;
+      PageRec2@1000000002 : Record 9021628;
+      LabelAttTransRec@1040007 : Record 9021624;
+      LabelAttributeRec@1040005 : Record 9021623;
+      PageContentRec@1040008 : Record 9021630;
+      PageContentRec1@1000000018 : Record 9021630;
+      PageContentValueRec@1000000011 : Record 9021635;
+      PageContentValueRec1@1000000019 : Record 9021635;
+      LayoutCptRec@1000000014 : Record 9021631;
+      CatalogueBuildData@1190000007 : Record 9021602;
+      SyncActionLogEntryErrorx@1000000024 : TextConst 'ENU=The system failed when trying to log a %1 entry for table ''%2'' with primary key ''%3''.;ENG=The system failed when trying to log a %1 entry for table ''%2'' with primary key ''%3''.';
+      Text001@1000000005 : TextConst 'ENU=This Label is for a different company, select a different Label. (1);ENG=This Label is for a different company, select a different Label. (1)';
+      Text002@1000000006 : TextConst 'ENU=Page Content is associated with this Configuration Entry.\\\Are you sure you want to delete it? (2);ENG=Page Content is associated with this Configuration Entry.\\\Are you sure you want to delete it? (2)';
+      Text004@1000000009 : TextConst 'ENU=You cannot unblock this as its parent is blocked. (4);ENG=You cannot unblock this as its parent is blocked. (4)';
+      Text005@1000000020 : TextConst 'ENU=You can only specify the position on the page if the level is 0. (5);ENG=You can only specify the position on the page if the level is 0. (5)';
+      Text006@1000000003 : TextConst 'ENU=You can only change the Master Page File on a Master Page (6);ENG=You can only change the Master Page File on a Master Page (6)';
+      Text007@1040001 : TextConst 'ENU=Has no parent;ENG=Has no parent';
+      Text008@1040002 : TextConst 'ENU=No items allowed cos got children;ENG=No items allowed cos got children';
+      Text009@1040003 : TextConst 'ENU=Needs items;ENG=Needs items';
+      Text010@1040004 : TextConst 'ENU=You can not rename a Configuration Entry.;ENG=You can not rename a Configuration Entry.';
+      Text011@1040009 : TextConst 'ENU=Needs Template Page GroupGuID;ENG=Needs Template Page GroupGuID';
+      Text012@1040010 : TextConst 'ENU=Please run "Verify";ENG=Please run "Verify"';
+      Text013@1040011 : TextConst 'ENU=You cannot modify a system created entry. (13);ENG=You cannot modify a system created entry. (13)';
+      WebAttributeValue@1000000007 : Record 9021702;
+      Text014@1000000010 : TextConst 'ENU=You cannot specify at Template Page GroupGuID on a Template Page. (14);ENG=You cannot specify at Template Page GroupGuID on a Template Page. (14)';
+      Text015@1000000012 : TextConst 'ENU=You cannot delete the Template Page as it is being used by a Page. (15);ENG=You cannot delete the Template Page as it is being used by a Page. (15)';
+      Text017@1000000015 : TextConst 'ENU=Changing the %1 to zero will delete all Page Content on ePage %2.\\Are you sure you want to continue? (17);ENG=Changing the %1 to zero will delete all Page Content on ePage %2.\\Are you sure you want to continue? (17)';
+      Text018@1000000016 : TextConst 'ENU=This page has content based on a different Template Page.\\If you continue all existing content will be deleted and new content inserted based on the new Template Page.\\Are you sure you want to continue? (18);ENG=This page has content based on a different Template Page.\\If you continue all existing content will be deleted and new content inserted based on the new Template Page.\\Are you sure you want to continue? (18)';
+      Text019@1000000017 : TextConst 'ENU=Change Abandoned. (19);ENG=Change Abandoned. (19)';
+      Text020@1000000021 : TextConst 'ENU=You cannot set the page to be External Link Page unless the Template Page GroupGuID is 0. (20);ENG=You cannot set the page to be External Link Page unless the Template Page GroupGuID is 0. (20)';
+      Text021@1190000005 : TextConst 'ENU=%1 child pages have been found for %2 %3 and %4 %5 that are %6.\\These pages will not be affected by this process.\\Continue?;ENG=%1 child pages have been found for %2 %3 and %4 %5 that are %6.\\These pages will not be affected by this process.\\Continue?';
+      WebSecurityRole@1000000013 : Record 9021730;
+      MoveChangedParent@1190000008 : Boolean;
+      Text022@1190000009 : TextConst 'ENU=The Menu Name entered exceeds the Maximum Length specified (%1 characters) in the Label setup.;ENG=The Menu Name entered exceeds the Maximum Length specified (%1 characters) in the Label setup.';
+      Text023@1190000010 : TextConst 'ENU=No ePages use this template.\\%1: %2\%3: %4;ENG=No ePages use this template.\\%1: %2\%3: %4';
+      Text024@1190000011 : TextConst 'ENU=%1 pages have been found with %2 %3 and %4 %5.\\Are you sure you want to reset these pages to the current template (the %4 will be set to zero and then reassigned as %5)?\\All customisations made to these pages will be lost.\\Continue?;ENG=%1 pages have been found with %2 %3 and %4 %5.\\Are you sure you want to reset these pages to the current template (the %4 will be set to zero and then reassigned as %5)?\\All customisations made to these pages will be lost.\\Continue?';
+      Text025@1190000012 : TextConst 'ENU=Template refresh cancelled;ENG=Template refresh cancelled';
+      Text026@1190000013 : TextConst 'ENU=The template referenced is not a valid template page.\\%1: %2\%3: %4;ENG=The template referenced is not a valid template page.\\%1: %2\%3: %4';
+      Window@1190000014 : Dialog;
+      WebAttMgt@1000000026 : Codeunit 9021620;
+      Text027@1000000000 : TextConst 'ENU=You cannot change the Security Role if there is an Excluded Security Role.  Please clear the Excluded Security Role first. (27);ENG=You cannot change the Security Role if there is an Excluded Security Role.  Please clear the Excluded Security Role first. (27)';
+
+    PROCEDURE Reorder@1000000000(LabelCode@1000000000 : Code[10]);
+    VAR
+      i1@1000000001 : Integer;
+      i2@1000000002 : Integer;
+      ModifyRequired@1190000005 : Boolean;
+    BEGIN
+      ModifyRequired := FALSE;
+      PageRec1.RESET;
+      PageRec1.SETRANGE("Label Code",LabelCode);
+      PageRec1.SETRANGE("System Entry",FALSE);
+      PageRec1.SETCURRENTKEY("Label Code","System Entry",Order);
+      i1 := 1;
+      IF PageRec1.FIND('-') THEN
+      REPEAT
+        IF PageRec1."New Order" <> i1 THEN BEGIN
+          ModifyRequired := TRUE;
+          PageRec2 := PageRec1;
+          PageRec2."New Order" := i1;
+          PageRec2.MODIFY;
+        END;
+        i1 := i1 + 1;
+      UNTIL PageRec1.NEXT = 0;
+
+      IF ModifyRequired THEN BEGIN
+        PageRec1.RESET;
+        PageRec1.SETRANGE("Label Code",LabelCode);
+        PageRec1.SETRANGE("System Entry",FALSE);
+        PageRec1.SETCURRENTKEY("Label Code","System Entry",Order);
+        IF PageRec1.FIND('-') THEN
+        REPEAT
+          IF PageRec1.Order <> PageRec1."New Order" THEN BEGIN
+            PageRec2 := PageRec1;
+            PageRec2.Order := PageRec2."New Order";
+            PageRec2.MODIFY;
+          END;
+        UNTIL PageRec1.NEXT = 0;
+      END;
+
+      LabelRec.GET("Label Code");
+      IF LabelRec."Reorder Required" THEN BEGIN
+        LabelRec."Reorder Required" := FALSE;
+        LabelRec.MODIFY;
+      END;
+    END;
+
+    PROCEDURE MoveUp@1000000001(LocalRec@1000000000 : Record 9021628);
+    VAR
+      LocalGuid1@1190000005 : Integer;
+      LocalGuid2@1190000006 : Integer;
+    BEGIN
+      IF LocalRec.Order = 1 THEN
+        EXIT;
+      LocalGuid1 := LocalRec."Page GUID";
+
+      IF LocalRec.Order = LocalRec."New Order" THEN BEGIN
+        PageRec1.RESET;
+        PageRec1.SETRANGE("Label Code",LocalRec."Label Code");
+        PageRec1.SETRANGE("System Entry",FALSE);
+        PageRec1.SETFILTER(Order,'<=%1',LocalRec.Order);
+        PageRec1.SETFILTER("Page GUID",'<>%1',LocalGuid1);
+        PageRec1.SETCURRENTKEY("Label Code","System Entry",Order);
+        IF PageRec1.FINDLAST THEN BEGIN
+          IF (PageRec1.Order <> (LocalRec.Order - 1)) OR
+             (PageRec1.Order <> PageRec1."New Order") THEN
+             Reorder(LocalRec."Label Code");
+        END ELSE
+          Reorder(LocalRec."Label Code");
+      END ELSE
+        Reorder(LocalRec."Label Code");
+
+      PageRec.RESET;
+      PageRec.GET(LocalRec."Label Code",LocalGuid1);
+      IF PageRec.Order = 1 THEN
+        EXIT;
+
+      MoveChangedParent := FALSE;
+      PageRec1.RESET;
+      PageRec1.SETRANGE("Label Code",LocalRec."Label Code");
+      PageRec1.SETRANGE("System Entry",FALSE);
+      PageRec1.SETRANGE(Order,(PageRec.Order - 1));
+      PageRec1.SETCURRENTKEY("Label Code","System Entry",Order);
+      IF PageRec1.FINDFIRST THEN BEGIN
+        IF (PageRec.ParentGuID <> PageRec1.ParentGuID) OR
+           (PageRec.Level <> PageRec1.Level) THEN BEGIN
+          MoveChangedParent := TRUE;
+          PageRec.Verified := FALSE;
+          PageRec1.Verified := FALSE;
+        END;
+        PageRec1.Order := PageRec.Order;
+        PageRec1."New Order" := PageRec.Order;
+        PageRec.Order := PageRec.Order - 1;
+        PageRec."New Order" := PageRec.Order;
+        PageRec1.MODIFY;
+        PageRec.MODIFY;
+      END ELSE
+        EXIT;
+
+      IF MoveChangedParent THEN BEGIN
+        IF SetLabelConfigurationOK(LocalRec."Label Code",FALSE) = FALSE THEN
+          ParentAndBlockRelations(LocalRec."Label Code");
+      END;
+    END;
+
+    PROCEDURE MoveDown@1000000002(LocalRec@1000000000 : Record 9021628);
+    VAR
+      LocalGuid1@1190000005 : Integer;
+    BEGIN
+      LocalGuid1 := LocalRec."Page GUID";
+
+      IF LocalRec.Order = LocalRec."New Order" THEN BEGIN
+        PageRec1.RESET;
+        PageRec1.SETRANGE("Label Code",LocalRec."Label Code");
+        PageRec1.SETRANGE("System Entry",FALSE);
+        PageRec1.SETFILTER(Order,'>=%1',LocalRec.Order);
+        PageRec1.SETFILTER("Page GUID",'<>%1',LocalGuid1);
+        PageRec1.SETCURRENTKEY("Label Code","System Entry",Order);
+        IF PageRec1.FINDFIRST THEN BEGIN
+          IF (PageRec1.Order <> (LocalRec.Order + 1)) OR
+             (PageRec1.Order <> PageRec1."New Order") THEN
+            Reorder(LocalRec."Label Code");
+        END ELSE
+          EXIT;
+      END ELSE
+        Reorder(LocalRec."Label Code");
+
+      PageRec.RESET;
+      PageRec.GET(LocalRec."Label Code",LocalGuid1);
+      IF PageRec.Order = 1 THEN
+        EXIT;
+
+      MoveChangedParent := FALSE;
+      PageRec1.RESET;
+      PageRec1.SETRANGE("Label Code",LocalRec."Label Code");
+      PageRec1.SETRANGE("System Entry",FALSE);
+      PageRec1.SETRANGE(Order,(PageRec.Order + 1));
+      PageRec1.SETCURRENTKEY("Label Code","System Entry",Order);
+      IF PageRec1.FINDFIRST THEN BEGIN
+        IF (PageRec.ParentGuID <> PageRec1.ParentGuID) OR
+           (PageRec.Level <> PageRec1.Level) THEN BEGIN
+          MoveChangedParent := TRUE;
+          PageRec.Verified := FALSE;
+          PageRec1.Verified := FALSE;
+        END;
+        PageRec1.Order := PageRec.Order;
+        PageRec1."New Order" := PageRec.Order;
+        PageRec.Order := PageRec.Order + 1;
+        PageRec."New Order" := PageRec.Order;
+        PageRec1.MODIFY;
+        PageRec.MODIFY;
+      END ELSE
+        EXIT;
+
+      IF MoveChangedParent THEN BEGIN
+        IF SetLabelConfigurationOK(LocalRec."Label Code",FALSE) = FALSE THEN
+          ParentAndBlockRelations(LocalRec."Label Code");
+      END;
+    END;
+
+    PROCEDURE Demote@1000000004(LocalRec@1000000000 : Record 9021628);
+    BEGIN
+      LabelRec.GET(LocalRec."Label Code");
+      IF LabelRec."Reorder Required" THEN
+        Reorder(LocalRec."Label Code");
+
+      PageRec1.RESET;
+      PageRec1.GET(LocalRec."Label Code",LocalRec."Page GUID");
+      PageRec1.Level := PageRec1.Level + 1;
+
+      IF SetLabelConfigurationOK(PageRec1."Label Code",FALSE) THEN BEGIN
+        PageRec1.Verified := FALSE;
+        PageRec1.MODIFY;
+      END ELSE BEGIN
+        PageRec1.MODIFY;
+        ParentAndBlockRelations(PageRec1."Label Code");
+      END;
+    END;
+
+    PROCEDURE Promote@1000000003(LocalRec@1000000000 : Record 9021628);
+    BEGIN
+      LabelRec.GET(LocalRec."Label Code");
+      IF LabelRec."Reorder Required" THEN
+        Reorder(LocalRec."Label Code");
+
+      PageRec1.RESET;
+      PageRec1.GET(LocalRec."Label Code",LocalRec."Page GUID");
+
+      IF PageRec1.Level > 0 THEN BEGIN
+        PageRec1.Level := PageRec1.Level - 1;
+        IF SetLabelConfigurationOK(PageRec1."Label Code",FALSE) THEN BEGIN
+          PageRec1.Verified := FALSE;
+          PageRec1.MODIFY;
+        END ELSE BEGIN
+          PageRec1.MODIFY;
+          ParentAndBlockRelations(PageRec1."Label Code");
+        END;
+      END;
+    END;
+
+    PROCEDURE ParentAndBlockRelations@1040002(LabelCodeR@1040003 : Code[10]);
+    VAR
+      LocalLabelRecR1@1040008 : Record 9021618;
+      LocalPageRecR1@1040000 : Record 9021628;
+      LocalPageRecR2@1040001 : Record 9021628;
+      LocalPageRecR3@1040002 : Record 9021628;
+      ErrorText@1040004 : Text[250];
+      ResortParentGuID@1040005 : Integer;
+      FoundErrorR@1040006 : Boolean;
+      NeedToModify@1040007 : Boolean;
+    BEGIN
+      //After Move Up or Down, Promote or Demote, Insert or Delete run this code
+      //It first tries to rebuild the ParentGuIDs and marks with errors where
+      //appropriate errors then sets the blocked flag.
+
+      //Rebuilding the ParentGuIDs
+      FoundErrorR := FALSE;
+      LocalPageRecR1.RESET;
+      LocalPageRecR1.SETRANGE("Label Code",LabelCodeR);
+      LocalPageRecR1.SETRANGE("System Entry",FALSE);
+      LocalPageRecR1.SETCURRENTKEY("Label Code","System Entry",Order);
+      IF LocalPageRecR1.FIND('-') THEN
+      REPEAT
+        ErrorText := '';
+        LocalPageRecR2 := LocalPageRecR1;
+        LocalPageRecR2.Verified := TRUE;
+        IF LocalPageRecR1.Level = 0 THEN BEGIN
+          LocalPageRecR2.ParentGuID := 0
+        END ELSE BEGIN
+          ResortParentGuID:= FindParent(LabelCodeR,LocalPageRecR1.Order,LocalPageRecR1.Level);
+          IF ResortParentGuID = 0 THEN
+            ErrorText := AddToErrorText(ErrorText,Text007);
+          LocalPageRecR2.ParentGuID := ResortParentGuID;
+        END;
+        IF (LocalPageRecR1."Template Page GroupGuID" = 0) AND
+           (LocalPageRecR1."Specified Link Page" = FALSE) THEN
+          ErrorText := AddToErrorText(ErrorText,Text011);
+        LocalPageRecR2."Error Message" := ErrorText;
+        IF ErrorText <> '' THEN BEGIN
+          FoundErrorR := TRUE;
+          LocalPageRecR2.Verified := FALSE;
+        END;
+        LocalPageRecR2.MODIFY;
+      UNTIL LocalPageRecR1.NEXT = 0;
+
+      //Updating Label
+      IF FoundErrorR THEN
+        SetLabelConfigurationOK(LabelCodeR,FALSE)
+      ELSE
+        SetLabelConfigurationOK(LabelCodeR,TRUE);
+
+      //Handling blocked
+      LocalPageRecR3.RESET;
+      LocalPageRecR3.SETRANGE("Label Code",LabelCodeR);
+      LocalPageRecR3.SETRANGE("System Entry",FALSE);
+      LocalPageRecR3.SETCURRENTKEY("Label Code","System Entry",ParentGuID);
+
+      LocalPageRecR2.RESET;
+      LocalPageRecR2.SETRANGE(Blocked,TRUE);
+      LocalPageRecR2.SETRANGE("Label Code",LabelCodeR);
+      IF LocalPageRecR2.FIND('-') THEN
+      REPEAT
+        LocalPageRecR3.SETRANGE(ParentGuID,LocalPageRecR2."Page GUID");
+        IF LocalPageRecR3.FIND('-') THEN
+        REPEAT
+          IF LocalPageRecR3.Blocked <> LocalPageRecR2.Blocked THEN BEGIN
+            LocalPageRecR3.Blocked := LocalPageRecR2.Blocked;
+            LocalPageRecR3.MODIFY;
+          END;
+        UNTIL LocalPageRecR3.NEXT = 0;
+      UNTIL LocalPageRecR2.NEXT = 0;
+      //End handling blocked
+    END;
+
+    PROCEDURE FindParent@1040000(LabelCodeFP@1040000 : Code[10];VAR OrderFP@1040001 : Integer;VAR LevelFP@1040003 : Integer) ParentGuIDNo : Integer;
+    VAR
+      LocalPageRecFP1@1040002 : Record 9021628;
+    BEGIN
+      LocalPageRecFP1.RESET;
+      LocalPageRecFP1.SETRANGE("Label Code",LabelCodeFP);
+      LocalPageRecFP1.SETFILTER(Order,'<%1',OrderFP);
+      LocalPageRecFP1.SETFILTER(Level,'<%1',LevelFP);
+      LocalPageRecFP1.SETRANGE("System Entry",FALSE);
+      LocalPageRecFP1.SETCURRENTKEY("Label Code","System Entry",Order);
+      IF LocalPageRecFP1.FINDLAST THEN BEGIN
+        IF LocalPageRecFP1.Level = (LevelFP - 1) THEN
+          ParentGuIDNo := LocalPageRecFP1."Page GUID"
+        ELSE
+          ParentGuIDNo := 0;
+      END ELSE
+        //If do not find a record then no suitable parent exists.
+        ParentGuIDNo := 0;
+    END;
+
+    PROCEDURE AddToErrorText@1040003(CurrentErrorText@1040000 : Text[250];ErrorNo@1040001 : Text[250]) NewErrorText : Text[250];
+    BEGIN
+      IF CurrentErrorText = '' THEN
+        NewErrorText := ErrorNo
+      ELSE
+        NewErrorText := CurrentErrorText + ', ' + ErrorNo;
+    END;
+
+    PROCEDURE CycleBlocked@1040001(LabelCode@1040002 : Code[10];ID@1040001 : Integer;FeedBlocked@1040003 : Boolean);
+    VAR
+      LocalePage1@1040000 : Record 9021628;
+      LocalePage2@1040004 : Record 9021628;
+    BEGIN
+      LocalePage1.RESET;
+      LocalePage1.SETRANGE("Label Code",LabelCode);
+      LocalePage1.SETRANGE(ParentGuID,ID);
+      LocalePage1.SETRANGE("System Entry",FALSE);
+      LocalePage1.SETCURRENTKEY("Label Code","System Entry",ParentGuID);
+      IF LocalePage1.FIND('-') THEN
+      REPEAT
+        LocalePage2 := LocalePage1;
+        LocalePage2.Blocked := FeedBlocked;
+        LocalePage2.MODIFY;
+        CycleBlocked(LabelCode,LocalePage1."Page GUID",FeedBlocked);
+      UNTIL LocalePage1.NEXT = 0;
+    END;
+
+    PROCEDURE CycleSyncAttributes@1040011();
+    BEGIN
+      IF "Main Image" <> '' THEN
+        LabelAttTransRec.SyncAttributes('IMAGE-PRIMARY',"Main Image",FORMAT("Page GUID"),
+                                        "Label Code",'PRODUCT');
+      IF "Thumbnail Image" <> '' THEN
+        LabelAttTransRec.SyncAttributes('IMAGE-THUMBNAIL',"Thumbnail Image",FORMAT("Page GUID"),
+                                        "Label Code",'PRODUCT');
+      IF "Menu Name" <> '' THEN
+        LabelAttTransRec.SyncAttributes('NAME',"Menu Name",FORMAT("Page GUID"),
+                                        "Label Code",'PRODUCT');
+      IF Description <> '' THEN
+        LabelAttTransRec.SyncAttributes('DESCRIPTION',Description,FORMAT("Page GUID"),
+                                        "Label Code",'PRODUCT');
+      IF "Template Page GroupGuID" <> 0 THEN
+        LabelAttTransRec.SyncAttributes('TEMPLATE',FORMAT("Template Page GroupGuID"),FORMAT("Page GUID"),
+                                        "Label Code",'PRODUCT');
+      IF "Icon Image" <> '' THEN
+        LabelAttTransRec.SyncAttributes('IMAGE-ICON',"Icon Image",FORMAT("Page GUID"),
+                                        "Label Code",'PRODUCT');
+    END;
+
+    PROCEDURE PopulatePageContentAndValue@1000000005(LabelCode@1000000000 : Code[10];MasterGroupGuID@1000000001 : Integer;TargetGroupGuID@1000000002 : Integer);
+    BEGIN
+      PageContentRec.RESET;
+      PageContentRec.SETRANGE("Label Code",LabelCode);
+      PageContentRec.SETRANGE("Page GroupGuid",MasterGroupGuID);
+      PageContentValueRec.RESET;
+      PageContentValueRec.SETRANGE("Label Code",LabelCode);
+      PageContentValueRec.SETRANGE("Page GroupGuID",MasterGroupGuID);
+      IF PageContentRec.FIND('-') THEN
+      REPEAT
+
+        PageContentRec1.INIT;
+        PageContentRec1 := PageContentRec;
+        PageContentRec1."Page GroupGuid" := TargetGroupGuID;
+        PageContentRec1."Is Master Data" := FALSE;
+        PageContentRec1.INSERT;
+        PageContentValueRec.SETRANGE(PlaceholderID,PageContentRec.PlaceholderID);
+        PageContentValueRec.SETRANGE("Content Line No.",PageContentRec."Line No.");
+        IF PageContentValueRec.FIND('-') THEN
+        REPEAT
+          PageContentValueRec1.INIT;
+          PageContentValueRec1 := PageContentValueRec;
+          PageContentValueRec1."Page GroupGuID" :=  TargetGroupGuID;
+          IF NOT PageContentValueRec."Shared Html" THEN
+            PageContentValueRec1."Html Entry No." := 0;
+          PageContentValueRec1.INSERT;
+        UNTIL PageContentValueRec.NEXT = 0;
+      UNTIL PageContentRec.NEXT = 0;
+    END;
+
+    PROCEDURE DeletePageContentAndValue@1000000006();
+    BEGIN
+      PageContentRec.RESET;
+      PageContentRec.SETRANGE("Label Code","Label Code");
+      PageContentRec.SETRANGE("Page GroupGuid","Page GUID");
+      PageContentRec.DELETEALL;
+
+      PageContentValueRec.RESET;
+      PageContentValueRec.SETRANGE("Label Code","Label Code");
+      PageContentValueRec.SETRANGE("Page GroupGuID","Page GUID");
+      PageContentValueRec.DELETEALL;
+    END;
+
+    PROCEDURE ResetChildPagesOfTemplate@1190000006(LabelCode@1190000006 : Code[10];TemplatePageGuid@1190000005 : Integer);
+    VAR
+      localEpage@1190000007 : Record 9021628;
+      TxtDialog@1000000000 : TextConst 'ENU=Reapplying %1;ENG=Reapplying %1';
+    BEGIN
+      //this function re-validates the "Template Page Group GUID" on every ePage that references the TemplatePageGuid specified...
+
+      //check that a valid template page has been referenced...
+      localEpage.GET(LabelCode,TemplatePageGuid);
+      IF localEpage."Template Page Entry"=FALSE THEN
+        ERROR(Text026,localEpage.FIELDCAPTION("Label Code"),LabelCode,
+              localEpage.FIELDCAPTION("Template Page GroupGuID"),TemplatePageGuid);
+      localEpage.RESET;
+
+      //check for locked pages...
+      localEpage.SETRANGE("Label Code",LabelCode);
+      localEpage.SETRANGE("Template Page GroupGuID",TemplatePageGuid);
+      localEpage.SETFILTER("Template Page Entry",'No');
+      localEpage.SETFILTER("Locked for Template Resets",'Yes');
+      IF localEpage.FIND('-') THEN
+        IF NOT CONFIRM(Text021,FALSE,localEpage.COUNT,localEpage.FIELDCAPTION("Label Code"),LabelCode,
+        localEpage.FIELDCAPTION("Template Page GroupGuID"),TemplatePageGuid,localEpage.FIELDCAPTION("Locked for Template Resets")) THEN
+          ERROR(Text025);
+      localEpage.RESET;
+
+      //get all unlocked child pages...
+      localEpage.SETRANGE("Label Code",LabelCode);
+      localEpage.SETRANGE("Template Page GroupGuID",TemplatePageGuid);
+      localEpage.SETFILTER("Template Page Entry",'No');
+      localEpage.SETFILTER("Locked for Template Resets",'No');
+
+      //exit if there are no child pages to update...
+      IF NOT localEpage.FIND('-') THEN
+        ERROR(Text023,localEpage.FIELDCAPTION("Label Code"),LabelCode,
+              localEpage.FIELDCAPTION("Template Page GroupGuID"),TemplatePageGuid);
+
+      //exit if the user isn't certain!
+      IF NOT CONFIRM(Text024,FALSE,localEpage.COUNT,localEpage.FIELDCAPTION("Label Code"),LabelCode,
+                     localEpage.FIELDCAPTION("Template Page GroupGuID"),TemplatePageGuid) THEN
+        ERROR(Text025);
+      LabelRec.GET(LabelCode); //DOC EC2013.3.20
+      IF GUIALLOWED THEN
+        Window.OPEN(STRSUBSTNO(TxtDialog, PADSTR('#1', 20, '#'))); //DOC EC2013.3.20
+      REPEAT
+        //set the template to zero to delete all page content...
+
+        //MQ 3.20 -
+        //instead of calling Validate localEpage.VALIDATE("Template Page GroupGuID",0);
+        //put in code but miss out IF CONFIRM
+        IF GUIALLOWED THEN
+          Window.UPDATE(1,localEpage."Page GUID");   //DOC EC2013.3.20
+        PageRec1 := localEpage;
+        PageRec1."Template Page GroupGuID" := 0;
+        PageRec1.DeletePageContentAndValue;
+        LabelAttTransRec.SyncAttributes('TEMPLATE',LabelRec."Website Page Address",
+                                   FORMAT(PageRec1."Page GUID"),LabelCode,'PAGE');
+        PageRec1.Verified := FALSE;
+        PageRec1."Page Link" := '';
+        //DOC EC2013.3.20 +
+
+        //reassign the template page guid...
+        PageRec1.VALIDATE("Template Page GroupGuID",TemplatePageGuid);
+        PageRec1.MODIFY;  //DOC EC2013.3.20
+      UNTIL localEpage.NEXT=0;
+
+      LabelRec."Configuration OK" := FALSE;  //DOC EC2013.3.20
+      LabelRec.MODIFY;  //DOC EC2013.3.20
+
+      IF GUIALLOWED THEN
+        Window.CLOSE;  //DOC EC2013.3.20
+    END;
+
+    PROCEDURE SetLabelConfigurationOK@1190000005(LabelCode@1190000005 : Code[10];SetTrue@1190000006 : Boolean) ManualRunParentBlocked : Boolean;
+    VAR
+      LocalLabel@1190000007 : Record 9021618;
+    BEGIN
+      LocalLabel.GET(LabelCode);
+      IF SetTrue THEN BEGIN
+        IF (LocalLabel."Configuration OK" = FALSE) AND
+           (LocalLabel."Reorder Required" = FALSE) THEN BEGIN
+          LocalLabel."Configuration OK" := TRUE;
+          LocalLabel.MODIFY;
+        END;
+      END ELSE BEGIN
+        IF LocalLabel."Configuration OK" = TRUE THEN BEGIN
+          LocalLabel."Configuration OK" := FALSE;
+          LocalLabel.MODIFY;
+        END;
+      END;
+      IF LocalLabel."Manual Run ePage ParentBlocked" THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    BEGIN
+    {
+      //DOC EC2013.3.20 MQ 30/10/2012 - GW121030 changed code in ResetChildPagesOfTemplate so does not ask CONFIRM question in Template Guid.
+      //DOC EC2013.3.30 MQ 08/11/2012 - GW121108 remove field 81, HTML Entry No. and function HTML Entry.
+      //DOC EC2013.3.30 MQ 21/12/2012 - GW121221 Code in OnInsert to ensure Label Attributes for NAME
+      //DOC EC2013.3.50 MQ 27/02/2013 - GW130227 Delete Web Attributes Values on delete; Code in Menu Name and Blocked
+      //DOC EC2013.3.50 MQ 14/03/2013 - GW130314 Add TRUE to Deletes to see if can catch NH Page Deletes.; Add field Page Type
+      //DOC EC2013.3.50 MQ 27/03/2013 - GW130327 Modify CSetup
+      //DOC EC2013.3.60 MQ 26/04/2013 - GW130426 Handle fields deleted from Page Item table
+      //DOC EC2013.3.80 MQ 30/09/2013 - GW130930 Removed code to populate CSetup tables; Removed call to SyncActions and Globals
+      //DOC EC2013.3.80 MQ 31/10/2013 - GW131031 Add SKS code in Blocked
+      //DOC EC2013.4.00 MQ 04/11/2013 - GW131104 RTC functionality
+      //DOC EC2013.4.00 MQ 21/11/2013 - GW131121 Add field 6 and renamed 5 from Hidden to Hidden On Big Screen
+      //DOC EC2013.4.60 MQ 18/03/2014 - GW140318 Add field 149 Exclude Security Role ELL; Add code in Description OnValidate
+      //DOC EC2016.6    JH 05/10/2016 - ECom 2016
+    }
+    END.
+  }
+}
+

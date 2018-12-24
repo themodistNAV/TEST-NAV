@@ -1,0 +1,1431 @@
+OBJECT Codeunit 11102074 OM - Renumber Elements
+{
+  OBJECT-PROPERTIES
+  {
+    Date=19/11/15;
+    Time=12:00:00 PM;
+    Version List=OMA10.00;
+  }
+  PROPERTIES
+  {
+    TableNo=11102076;
+    OnRun=VAR
+            OriginalElementToRenumber@1000 : Record 11102076;
+          BEGIN
+            OriginalElementToRenumber := Rec;
+            RenumberElements(Rec);
+            Rec := OriginalElementToRenumber;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ExportFileName@1000 : Text;
+      SourceFileName@1001 : Text;
+      NoOfObjects@1002 : Integer;
+      RunType@1003 : 'Update,Export,Update File';
+      SetModifyFlag@1004 : Boolean;
+      UpdateReferencingObjects@1005 : Boolean;
+
+    LOCAL PROCEDURE RenumberElements@1(VAR ElementToRenumber@1000 : Record 11102076);
+    VAR
+      TmpSourceObject@1001 : TEMPORARY Record 11102052;
+      TmpCALHistoryLine@1002 : TEMPORARY Record 11102053;
+      TmpExtraCALHistoryLine@1003 : TEMPORARY Record 11102053;
+      TmpSourceLine@1004 : TEMPORARY Record 11102053;
+      TmpElementToRenumber@1005 : TEMPORARY Record 11102076;
+      Object@1006 : Record 2000000001;
+      TmpObject@1007 : TEMPORARY Record 2000000001;
+      TmpObjectToRenumber@1008 : TEMPORARY Record 2000000001;
+      Progressbar@1009 : Codeunit 11102044;
+      WhereUsedMgt@1010 : Codeunit 11102045;
+      SourceControl@1011 : Codeunit 11102050;
+      CheckCALHistory@1012 : Codeunit 11102063;
+      oFile@1013 : File;
+      oSourceFile@1014 : File;
+      StartDate@1015 : Date;
+      StartTime@1016 : Time;
+      ctCALNotUpToDate@1017 : TextConst 'DEU=The where used objects are not up to date.\Update now?;ENU=The where used objects are not up to date.\Update now?;ESP=The where used objects are not up to date.\Update now?;FRA=The where used objects are not up to date.\Update now?;NLD=De waar-gebruikt objecten zijn niet bijgewerkt.\Nu bijwerken?;DEA=The where used objects are not up to date.\Update now?';
+      ctExportingObjects@1018 : TextConst 'DEU=Exporting objects...;ENU=Exporting objects...;ESP=Exporting objects...;FRA=Exporting objects...;NLD=Objecten exporteren...;DEA=Exporting objects...';
+      ctIsDouble@1019 : TextConst 'DEU=is double;ENU=is double;ESP=is double;FRA=is double;NLD=is dubbel;DEA=is double';
+      ctNoFileNameSpecified@1020 : TextConst 'DEU=No file name specified.;ENU=No file name specified.;ESP=No file name specified.;FRA=No file name specified.;NLD=Geen bestandsnaam opgegeven.;DEA=No file name specified.';
+      ctRenumberingElements@1021 : TextConst 'DEU=Renumbering elements...;ENU=Renumbering elements...;ESP=Renumbering elements...;FRA=Renumbering elements...;NLD=Elementen omnummeren...;DEA=Renumbering elements...';
+      ctUpdatingObjects@1022 : TextConst 'DEU=Updating objects...;ENU=Updating objects...;ESP=Updating objects...;FRA=Updating objects...;NLD=Objecten bijwerken...;DEA=Updating objects...';
+    BEGIN
+      StartDate := TODAY;
+      StartTime := TIME;
+
+      GetInvolvedObjects(ElementToRenumber, TmpObject, RunType <> RunType::Update, UpdateReferencingObjects);
+
+      IF RunType <> RunType::"Update File" THEN BEGIN
+        IF NOT CheckCALHistory.RunWithObjectRange(TmpObject) THEN BEGIN
+          IF NOT CONFIRM(ctCALNotUpToDate, TRUE) THEN
+            EXIT;
+          COMMIT;
+          WhereUsedMgt.UpdateObjects;
+        END;
+
+        CheckNoOMObjects(ElementToRenumber);
+      END;
+
+      IF ElementToRenumber.FINDSET THEN
+        REPEAT
+
+          ElementToRenumber.TESTFIELD("New Number");
+
+          IF ElementToRenumber.NewNumberDouble THEN
+            ElementToRenumber.FIELDERROR("New Number", ctIsDouble);
+
+          TmpElementToRenumber := ElementToRenumber;
+          TmpElementToRenumber.INSERT;
+
+          IF NOT TmpObjectToRenumber.GET(TmpObjectToRenumber.Type, '', ElementToRenumber."Object No.") THEN BEGIN
+            TmpObjectToRenumber.Type := TmpObjectToRenumber.Type;
+            TmpObjectToRenumber.ID := ElementToRenumber."Object No.";
+            TmpObjectToRenumber.INSERT;
+          END;
+
+        UNTIL ElementToRenumber.NEXT = 0;
+
+      CASE RunType OF
+
+        RunType::Update :
+          BEGIN
+
+            Progressbar.Open(ctUpdatingObjects, 2);
+            Progressbar.BarSize := TmpObject.COUNT * 11;
+
+            CheckingObjects(Progressbar, TmpObject, FALSE);
+            UpdatingObjects(Progressbar, TmpObject, TmpElementToRenumber, FALSE, FALSE);
+            CompilingObjects(Progressbar, TmpObject);
+            IF SetModifyFlag THEN
+              SetDatetimeStamp(Progressbar, TmpObject, StartDate, StartTime);
+            UpdatingOMData(Progressbar, TmpElementToRenumber);
+            UpdatingCALHistory(Progressbar, TmpObject);
+            UpdatingWhereUsedObjects(Progressbar, TmpObject);
+            UpdatingWhereUsedIn(Progressbar, TmpObject);
+
+            Progressbar.Close;
+
+          END;
+
+        RunType::Export :
+          BEGIN
+            IF ExportFileName = '' THEN
+              ERROR(ctNoFileNameSpecified);
+
+            oFile.TEXTMODE(TRUE);
+            oFile.CREATE(ExportFileName);
+
+            Progressbar.Open(ctExportingObjects, 2);
+            Progressbar.Text1 := ctRenumberingElements;
+            Progressbar.BarSize := TmpObject.COUNT;
+
+            IF TmpObject.FINDSET THEN
+              REPEAT
+
+                Progressbar.Text2Object := TmpObject;
+                Progressbar.AddToBar(1);
+
+                IF NOT SourceControl.ConfirmObjectLock(Object) THEN
+                  EXIT;
+
+                IF SourceControl.LatestHistoryIsOutdated(TmpObject) THEN
+                  SourceControl.AddObject(TmpObject, 0, FALSE, FALSE, 1, FALSE);
+
+                SourceControl.FillCALLineBufferWithLatest(TmpCALHistoryLine, TmpObject.Type, TmpObject.ID);
+
+                TmpExtraCALHistoryLine.RESET;
+                TmpExtraCALHistoryLine.DELETEALL;
+
+                IF RenumberObject(TmpObject, TmpCALHistoryLine, TmpExtraCALHistoryLine, TmpElementToRenumber) THEN
+                  NoOfObjects += 1;
+
+                TmpCALHistoryLine.RESET;
+                TmpExtraCALHistoryLine.SETRANGE("Entry No.", TmpCALHistoryLine."Entry No.");
+                SourceControl.MergeExtraHistoryLines(TmpCALHistoryLine, TmpExtraCALHistoryLine);
+                IF SetModifyFlag THEN
+                  SourceControl.SetModifyFlagInHistoryLines(TmpCALHistoryLine, StartDate, StartTime);
+                SourceControl.AppendHistoryLinesToFile(oFile, TmpCALHistoryLine);
+
+              UNTIL TmpObject.NEXT = 0;
+            Progressbar.Close;
+            oFile.CLOSE;
+
+          END;
+
+        RunType::"Update File" :
+          BEGIN
+            IF SourceFileName = '' THEN
+              ERROR(ctNoFileNameSpecified);
+
+            IF ExportFileName = '' THEN
+              ERROR(ctNoFileNameSpecified);
+
+            oFile.TEXTMODE(TRUE);
+            oFile.CREATE(ExportFileName);
+
+            Progressbar.Open(ctRenumberingElements, 1);
+
+            oSourceFile.OPEN(SourceFileName);
+            Progressbar.BarSize := oSourceFile.LEN * 2;
+            oSourceFile.CLOSE;
+
+            SourceControl.ImportTextFile2(SourceFileName, 1, Progressbar, 0, TmpSourceObject, TmpSourceLine, TRUE);
+
+            Progressbar.BarSize := TmpSourceObject.COUNT * 2;
+            Progressbar.BarPosition := TmpSourceObject.COUNT;
+
+            IF TmpSourceObject.FINDSET THEN
+              REPEAT
+
+                Object.Type := TmpSourceObject."Object Type";
+                Object.ID := TmpSourceObject."Object No.";
+                IF Object.FIND('=') THEN
+                  ;
+
+                Progressbar.Text1Object := Object;
+                Progressbar.AddToBar(1);
+
+                TmpCALHistoryLine.RESET;
+                TmpCALHistoryLine.DELETEALL;
+
+                TmpExtraCALHistoryLine.RESET;
+                TmpExtraCALHistoryLine.DELETEALL;
+
+                TmpSourceLine.SETRANGE("Entry No.", TmpSourceObject."Entry No.");
+                IF TmpSourceLine.FINDSET THEN
+                  REPEAT
+                    TmpCALHistoryLine := TmpSourceLine;
+                    TmpCALHistoryLine.INSERT;
+                  UNTIL TmpSourceLine.NEXT = 0;
+
+                IF RenumberObject(Object, TmpCALHistoryLine, TmpExtraCALHistoryLine, TmpElementToRenumber) THEN
+                  NoOfObjects += 1;
+
+                TmpCALHistoryLine.RESET;
+                TmpExtraCALHistoryLine.SETRANGE("Entry No.", TmpCALHistoryLine."Entry No.");
+                SourceControl.MergeExtraHistoryLines(TmpCALHistoryLine, TmpExtraCALHistoryLine);
+                IF SetModifyFlag THEN
+                  SourceControl.SetModifyFlagInHistoryLines(TmpCALHistoryLine, StartDate, StartTime);
+                SourceControl.AppendHistoryLinesToFile(oFile, TmpCALHistoryLine);
+
+              UNTIL TmpSourceObject.NEXT = 0;
+
+            Progressbar.Close;
+            oFile.CLOSE;
+
+          END;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE RenumberObject@2(VAR Object@1000 : Record 2000000001;VAR CALHistoryLine@1001 : Record 11102053;VAR ExtraCALHistoryLine@1002 : Record 11102053;VAR ElementToRenumber@1003 : Record 11102076) : Boolean;
+    VAR
+      Mgt@1004 : Codeunit 11102035;
+      BeginCode@1005 : Text;
+      CodeLine@1006 : Text;
+      CompleteCodeLine@1007 : Text;
+      ControlParentName@1008 : Text;
+      EndCode@1009 : Text;
+      EventIdString@1010 : Text;
+      OpenSection@1011 : Text;
+      ParameterName@1012 : ARRAY [100] OF Text[1024];
+      ParentName@1013 : Text;
+      ProcedureName@1014 : Text;
+      PropertyName@1015 : Text;
+      PropertyValue@1016 : Text;
+      Split@1017 : ARRAY [100] OF Text[1024];
+      VariableName@1018 : Text;
+      ControlId@1019 : Integer;
+      EventId@1020 : Integer;
+      i@1021 : Integer;
+      NoOfParameters@1022 : Integer;
+      ParameterId@1023 : ARRAY [100] OF Integer;
+      ProcedureId@1024 : Integer;
+      SplitPos@1025 : Integer;
+      StartSectionPos@1026 : Integer;
+      SubLineNo@1027 : Integer;
+      VariableId@1028 : Integer;
+      ProcedureType@1029 : ' ,Global,Local,Event';
+      StopLoop@1030 : Boolean;
+      VarSectionOpen@1031 : Boolean;
+    BEGIN
+      IF Object.Type = Object.Type::MenuSuite THEN
+        EXIT;
+
+      CALHistoryLine.SETRANGE("Sub Line No.", 1);
+      IF CALHistoryLine.FINDSET THEN
+        REPEAT
+          IF STRLEN(CALHistoryLine.Code) > 3 THEN
+            IF CALHistoryLine.Code[4] <> ' ' THEN BEGIN
+              OpenSection := DELCHR(CALHistoryLine.Code, '<>', ' ');
+              StartSectionPos := 3;
+            END;
+
+          CASE DELCHR(CALHistoryLine.Code, '<>', ' ') OF
+            'ActionList=ACTIONS' :
+              BEGIN
+                OpenSection := 'ACTIONS';
+                StartSectionPos := STRPOS(CALHistoryLine.Code, 'ActionList');
+              END;
+            'CONTROLS' :
+              BEGIN
+                OpenSection := 'CONTROLS';
+                StartSectionPos := STRPOS(CALHistoryLine.Code, 'CONTROLS');
+              END;
+            'DATASET' :
+              BEGIN
+                OpenSection := 'DATASET';
+                StartSectionPos := STRPOS(CALHistoryLine.Code, 'DATASET');
+              END;
+            'REQUESTFORM' :
+              ControlParentName := 'RequestForm';
+            'REQUESTPAGE' :
+              ControlParentName := 'RequestPage';
+          END;
+
+          CASE OpenSection OF
+
+            'PROPERTIES' :
+              BEGIN
+                GetPropertyName(COPYSTR(CALHistoryLine.Code, 5), PropertyName);
+                GetPropertyValue(COPYSTR(CALHistoryLine.Code, 5), PropertyValue);
+                IF PropertyName IN ['ActiveControlOnOpen', 'TableBoxID'] THEN
+                  IF EVALUATE(ControlId, PropertyValue) THEN
+                    IF Renumber(ElementToRenumber, Object.Type, Object.ID, '', ElementToRenumber.Type::Control, ControlId) THEN
+                      CALHistoryLine.Code :=
+                        Replace(
+                          CALHistoryLine.Code,
+                          PropertyName + '=' + FORMAT(ControlId),
+                          PropertyName + '=' + FORMAT(ElementToRenumber."New Number"));
+              END;
+
+            'ACTIONS', 'DATASET' :
+              IF CALHistoryLine.Code[StartSectionPos + 2] = '{' THEN
+                IF STRPOS(CALHistoryLine.Code, ';') > 0 THEN BEGIN
+                  SplitPos := STRPOS(CALHistoryLine.Code, ';');
+                  IF EVALUATE(ControlId, COPYSTR(CALHistoryLine.Code, StartSectionPos + 4, SplitPos - StartSectionPos - 4)) THEN
+                    IF Renumber(
+                         ElementToRenumber, Object.Type, Object.ID, ControlParentName,
+                         ElementToRenumber.Type::Control, ControlId)
+                    THEN
+                      CALHistoryLine.Code :=
+                        PADSTR('', StartSectionPos + 2) + '{ ' + FORMAT(ElementToRenumber."New Number") +
+                        COPYSTR(CALHistoryLine.Code, SplitPos);
+
+                END;
+
+            'CONTROLS' :
+              IF STRLEN(CALHistoryLine.Code) > 14 + StartSectionPos THEN BEGIN
+                IF STRLEN(CALHistoryLine.Code) > 14 + StartSectionPos THEN
+                  IF CALHistoryLine.Code[14 + StartSectionPos] <> ' ' THEN BEGIN
+                    GetPropertyName(COPYSTR(CALHistoryLine.Code, 14 + StartSectionPos), PropertyName);
+                    GetPropertyValue(COPYSTR(CALHistoryLine.Code, 14 + StartSectionPos), PropertyValue);
+                    IF PropertyName = 'ProviderID' THEN
+                      IF EVALUATE(ControlId, PropertyValue) THEN
+                        IF Renumber(
+                             ElementToRenumber, Object.Type, Object.ID, ControlParentName,
+                             ElementToRenumber.Type::Control, ControlId)
+                        THEN
+                          CALHistoryLine.Code :=
+                            Replace(
+                              CALHistoryLine.Code,
+                              PropertyName + '=' + FORMAT(ControlId),
+                              PropertyName + '=' + FORMAT(ElementToRenumber."New Number"));
+
+                  END;
+
+                IF CALHistoryLine.Code[4 + StartSectionPos] <> ' ' THEN BEGIN
+                  Mgt.Split(CALHistoryLine.Code, ';', Split);
+
+                  IF EVALUATE(ControlId, DELCHR(Split[1], '<>', '{ ')) THEN
+                    IF Renumber(
+                         ElementToRenumber, Object.Type, Object.ID, ControlParentName,
+                         ElementToRenumber.Type::Control, ControlId)
+                    THEN
+                      CALHistoryLine.Code :=
+                        Replace(
+                          CALHistoryLine.Code,
+                          '{ ' + FORMAT(ControlId),
+                          '{ ' + FORMAT(ElementToRenumber."New Number"));
+                END;
+
+                IF COPYSTR(CALHistoryLine.Code, 49 + StartSectionPos, 5) = '{ ID=' THEN
+                  IF EVALUATE(ControlId, DELCHR(COPYSTR(CALHistoryLine.Code, 54 + StartSectionPos), '>', ';')) THEN
+                    IF Renumber(
+                         ElementToRenumber, Object.Type, Object.ID, ControlParentName,
+                         ElementToRenumber.Type::Control, ControlId)
+                    THEN
+                      CALHistoryLine.Code :=
+                        Replace(
+                          CALHistoryLine.Code,
+                          'ID=' + FORMAT(ControlId),
+                          'ID=' + FORMAT(ElementToRenumber."New Number"));
+
+              END;
+
+            'CODE' :
+              BEGIN
+
+                IF AnalyseFunction(CALHistoryLine, ProcedureType, ProcedureName, ProcedureId) THEN BEGIN
+                  IF ProcedureType = ProcedureType::"Event" THEN BEGIN
+                    IF STRPOS(CALHistoryLine.Code, '::') > 0 THEN BEGIN
+                      EventIdString := DELSTR(CALHistoryLine.Code, STRPOS(CALHistoryLine.Code, '::'));
+                      IF STRPOS(EventIdString, '@') > 0 THEN BEGIN
+                        EventIdString := COPYSTR(EventIdString, STRPOS(EventIdString, '@') + 1);
+                        IF EVALUATE(EventId, EventIdString) THEN
+                          IF Renumber(ElementToRenumber, Object.Type, Object.ID, '', ElementToRenumber.Type::Variable, EventId)
+                          THEN BEGIN
+                            CALHistoryLine.Code :=
+                              Replace(CALHistoryLine.Code,
+                                '@' + FORMAT(EventId) + '::',
+                                '@' + FORMAT(ElementToRenumber."New Number") + '::');
+                            CALHistoryLine.MODIFY;
+
+                          END;
+                      END;
+                    END;
+                  END ELSE
+                    IF Renumber(ElementToRenumber, Object.Type, Object.ID, '', ElementToRenumber.Type::"Function", ProcedureId)
+                    THEN BEGIN
+                      CALHistoryLine.Code :=
+                        Replace(CALHistoryLine.Code,
+                          '@' + FORMAT(ProcedureId),
+                          '@' + FORMAT(ElementToRenumber."New Number"));
+                      CALHistoryLine.MODIFY;
+
+                    END;
+
+                  RemoveIdOfExitValue(CALHistoryLine);
+                  GetVariablesFromParameters(CALHistoryLine, ParameterName, ParameterId, NoOfParameters);
+                  IF NoOfParameters > 0 THEN BEGIN
+
+                    CALHistoryLine.SETRANGE("Line No.", CALHistoryLine."Line No.");
+                    CALHistoryLine.SETRANGE("Sub Line No.");
+
+                    CompleteCodeLine := '';
+                    IF CALHistoryLine.FINDSET THEN
+                      REPEAT
+                        IF STRLEN(CompleteCodeLine + CALHistoryLine.Code) < 1024 THEN
+                          CompleteCodeLine += CALHistoryLine.Code;
+                      UNTIL CALHistoryLine.NEXT = 0;
+
+                    CALHistoryLine.DELETEALL;
+
+                    CALHistoryLine.SETRANGE("Line No.");
+                    CALHistoryLine.SETRANGE("Sub Line No.", 1);
+
+                    FOR i := 1 TO NoOfParameters DO
+                      IF Renumber(
+                           ElementToRenumber, Object.Type, Object.ID,
+                           ProcedureName, ElementToRenumber.Type::Variable, ParameterId[i])
+                      THEN BEGIN
+                        CompleteCodeLine :=
+                          Replace(CompleteCodeLine,
+                            ParameterName[i] + '@' + FORMAT(ParameterId[i]),
+                            ParameterName[i] + '@' + FORMAT(ElementToRenumber."New Number"));
+                        CompleteCodeLine :=
+                          Replace(CompleteCodeLine,
+                            '"' + ParameterName[i] + '"@' + FORMAT(ParameterId[i]),
+                            '"' + ParameterName[i] + '"@' + FORMAT(ElementToRenumber."New Number"));
+                      END;
+                    SubLineNo := 0;
+                    WHILE CompleteCodeLine <> '' DO BEGIN
+                      SubLineNo += 1;
+                      CALHistoryLine."Sub Line No." := SubLineNo;
+                      CALHistoryLine.Code := DELSTR(CompleteCodeLine, 246);
+                      CALHistoryLine.INSERT;
+
+                      CompleteCodeLine := COPYSTR(CompleteCodeLine, 246);
+
+                    END;
+
+                    CALHistoryLine.GET(CALHistoryLine."Entry No.", CALHistoryLine."Line No.", 1);
+
+                  END;
+                END;
+
+                IF CALHistoryLine.Code = '    VAR' THEN BEGIN
+                  VarSectionOpen := TRUE;
+                  CALHistoryLine.NEXT;
+                END;
+
+                IF VarSectionOpen THEN
+                  IF COPYSTR(CALHistoryLine.Code, 1, 6) = '      ' THEN BEGIN
+                    CodeLine := CALHistoryLine.Code;
+                    AnalyseVariableLine(CodeLine, VariableName, VariableId);
+                    IF Renumber(ElementToRenumber, Object.Type, Object.ID, ProcedureName, ElementToRenumber.Type::Variable, VariableId)
+                    THEN
+                      CALHistoryLine.Code :=
+                        Replace(CALHistoryLine.Code,
+                          '@' + FORMAT(VariableId),
+                          '@' + FORMAT(ElementToRenumber."New Number"));
+                  END;
+                IF (CALHistoryLine.Code = '') OR (CALHistoryLine.Code[6] <> ' ') THEN
+                  VarSectionOpen := FALSE;
+
+              END;
+
+          END;
+
+          IF STRLEN(CALHistoryLine.Code) > 5 THEN BEGIN
+            IF COPYSTR(CALHistoryLine.Code, STRLEN(CALHistoryLine.Code) - 3) = '=VAR' THEN BEGIN
+
+              ParentName :=
+                DELCHR(COPYSTR(CALHistoryLine.Code, 1, STRPOS(CALHistoryLine.Code, '=VAR') - 1), '<>') + '-' +
+                FORMAT(CALHistoryLine."Line No.");
+
+              WHILE STRPOS(ParentName, ';') > 0 DO
+                ParentName := COPYSTR(ParentName, STRPOS(ParentName, ';') + 1);
+
+              BeginCode := PADSTR('', STRPOS(CALHistoryLine.Code, '=VAR')) + 'BEGIN';
+              EndCode := PADSTR('', STRPOS(CALHistoryLine.Code, '=VAR')) + 'END;';
+
+              CALHistoryLine.NEXT;
+              VarSectionOpen := TRUE;
+              REPEAT
+                IF CALHistoryLine.Code = BeginCode THEN
+                  VarSectionOpen := FALSE;
+
+                IF VarSectionOpen THEN BEGIN
+                  CodeLine := CALHistoryLine.Code;
+                  AnalyseVariableLine(CodeLine, VariableName, VariableId);
+                  IF Renumber(ElementToRenumber, Object.Type, Object.ID, ParentName, ElementToRenumber.Type::Variable, VariableId)
+                  THEN BEGIN
+                    CALHistoryLine.Code :=
+                      Replace(CALHistoryLine.Code,
+                        '@' + FORMAT(VariableId),
+                        '@' + FORMAT(ElementToRenumber."New Number"));
+                    CALHistoryLine.MODIFY;
+                  END;
+                END;
+
+                StopLoop := CALHistoryLine.NEXT = 0;
+              UNTIL (CALHistoryLine.Code = EndCode) OR StopLoop;
+            END;
+
+            IF COPYSTR(CALHistoryLine.Code, STRLEN(CALHistoryLine.Code) - 5) = '=BEGIN' THEN BEGIN
+              EndCode := PADSTR('', STRPOS(CALHistoryLine.Code, '=BEGIN')) + 'END;';
+              REPEAT
+                StopLoop := CALHistoryLine.NEXT = 0;
+              UNTIL (CALHistoryLine.Code = EndCode) OR StopLoop;
+            END;
+          END;
+
+          CALHistoryLine.MODIFY;
+
+        UNTIL CALHistoryLine.NEXT = 0;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE Renumber@3(VAR ElementToRenumber@1000 : Record 11102076;ObjectType2@1001 : Integer;ObjectId@1002 : Integer;ParentName@1003 : Text;Type@1004 : Integer;No@1005 : Integer) : Boolean;
+    BEGIN
+      ElementToRenumber.SETCURRENTKEY("Object Type", "Object No.", "Parent Name", Type, "No.");
+      ElementToRenumber.SETRANGE("Object Type", ObjectType2);
+      ElementToRenumber.SETRANGE("Object No.", ObjectId);
+      ElementToRenumber.SETRANGE("Parent Name", ParentName);
+      ElementToRenumber.SETRANGE(Type, Type);
+      ElementToRenumber.SETRANGE("No.", No);
+      IF ElementToRenumber.FINDFIRST THEN
+        EXIT(ElementToRenumber."New Number" <> ElementToRenumber."No.");
+    END;
+
+    PROCEDURE AddElements@4(Object@1000 : Record 2000000001;VAR CALHistoryLine@1001 : Record 11102053;AddFunctions@1002 : Boolean;AddVariables@1003 : Boolean;AddElements2@1004 : Boolean;Delta@1005 : Integer);
+    VAR
+      ElementToRenumber@1006 : Record 11102076;
+      Mgt@1007 : Codeunit 11102035;
+      RenumberElements@1008 : Codeunit 11102074;
+      BeginCode@1009 : Text;
+      CodeLine@1010 : Text;
+      ControlName@1011 : Text;
+      ControlParentName@1012 : Text;
+      EndCode@1013 : Text;
+      OpenSection@1014 : Text;
+      ParameterName@1015 : ARRAY [100] OF Text[1024];
+      ParentName@1016 : Text;
+      ProcedureName@1017 : Text;
+      Split@1018 : ARRAY [100] OF Text[1024];
+      VariableName@1019 : Text;
+      ControlId@1020 : Integer;
+      i@1021 : Integer;
+      NoOfParameters@1022 : Integer;
+      ParameterId@1023 : ARRAY [100] OF Integer;
+      ProcedureId@1024 : Integer;
+      StartSectionPos@1025 : Integer;
+      VariableId@1026 : Integer;
+      ProcedureType@1027 : ' ,Global,Local,Event';
+      StopLoop@1028 : Boolean;
+      VarSectionOpen@1029 : Boolean;
+    BEGIN
+      ElementToRenumber.SETRANGE("Object Type", Object.Type);
+      ElementToRenumber.SETRANGE("Object No.", Object.ID);
+      ElementToRenumber.DELETEALL;
+
+      CALHistoryLine.SETRANGE("Sub Line No.", 1);
+      IF CALHistoryLine.FINDSET THEN
+        REPEAT
+          IF STRLEN(CALHistoryLine.Code) > 3 THEN
+            IF CALHistoryLine.Code[4] <> ' ' THEN BEGIN
+              OpenSection := DELCHR(CALHistoryLine.Code, '<>', ' ');
+              StartSectionPos := 3;
+            END;
+
+          CASE DELCHR(CALHistoryLine.Code, '<>', ' ') OF
+            'ActionList=ACTIONS' :
+              BEGIN
+                OpenSection := 'ACTIONS';
+                StartSectionPos := STRPOS(CALHistoryLine.Code, 'ActionList');
+              END;
+            'CONTROLS' :
+              BEGIN
+                OpenSection := 'CONTROLS';
+                StartSectionPos := STRPOS(CALHistoryLine.Code, 'CONTROLS');
+              END;
+            'DATASET' :
+              BEGIN
+                OpenSection := 'DATASET';
+                StartSectionPos := STRPOS(CALHistoryLine.Code, 'DATASET');
+              END;
+            'REQUESTFORM' :
+              ControlParentName := 'RequestForm';
+            'REQUESTPAGE' :
+              ControlParentName := 'RequestPage';
+          END;
+
+          CASE OpenSection OF
+
+            'ACTIONS' :
+              IF AddElements2 THEN
+                IF STRLEN(CALHistoryLine.Code) > StartSectionPos + 2 THEN
+                  IF CALHistoryLine.Code[StartSectionPos + 2] = '{' THEN BEGIN
+                    Mgt.Split(CALHistoryLine.Code, ';', Split);
+
+                    IF EVALUATE(ControlId, DELCHR(Split[1], '<>', '{ ')) THEN
+                      AddElement(Object, ControlParentName, ElementToRenumber.Type::Control, ControlId, Split[2], Delta);
+
+                  END;
+
+            'DATASET' :
+              IF AddElements2 THEN
+                IF STRLEN(CALHistoryLine.Code) > StartSectionPos + 2 THEN
+                  IF CALHistoryLine.Code[StartSectionPos + 2] = '{' THEN BEGIN
+                    Mgt.Split(CALHistoryLine.Code, ';', Split);
+
+                    IF EVALUATE(ControlId, DELCHR(Split[1], '<>', '{ ')) THEN BEGIN
+                      IF DELCHR(Split[4]) = '' THEN
+                        ControlName := Split[3]
+                      ELSE
+                        ControlName := Split[4];
+                      AddElement(Object, ControlParentName, ElementToRenumber.Type::Control, ControlId, ControlName, Delta);
+                    END;
+                  END;
+
+            'CONTROLS' :
+              IF AddElements2 THEN
+                IF STRLEN(CALHistoryLine.Code) > 4 + StartSectionPos THEN BEGIN
+                  IF CALHistoryLine.Code[4 + StartSectionPos] <> ' ' THEN BEGIN
+                    Mgt.Split(CALHistoryLine.Code, ';', Split);
+
+                    IF EVALUATE(ControlId, DELCHR(Split[1], '<>', '{ ')) THEN
+                      AddElement(Object, ControlParentName, ElementToRenumber.Type::Control, ControlId, Split[2], Delta);
+                  END;
+                  IF COPYSTR(CALHistoryLine.Code, 49 + StartSectionPos, 5) = '{ ID=' THEN
+                    IF EVALUATE(ControlId, DELCHR(COPYSTR(CALHistoryLine.Code, 54 + StartSectionPos), '>', ';')) THEN
+                      AddElement(Object, ControlParentName, ElementToRenumber.Type::Control, ControlId, 'MenuItem', Delta);
+                END;
+
+            'CODE' :
+              BEGIN
+                IF RenumberElements.AnalyseFunction(CALHistoryLine, ProcedureType, ProcedureName, ProcedureId) THEN BEGIN
+                  IF ProcedureId <> 0 THEN
+                    IF AddFunctions THEN
+                      AddElement(Object, '', ElementToRenumber.Type::"Function", ProcedureId, ProcedureName, Delta);
+                  RenumberElements.GetVariablesFromParameters(CALHistoryLine, ParameterName, ParameterId, NoOfParameters);
+                  IF AddVariables THEN
+                    FOR i := 1 TO NoOfParameters DO
+                      AddElement(Object, ProcedureName, ElementToRenumber.Type::Variable, ParameterId[i], ParameterName[i], Delta);
+                END;
+
+                IF CALHistoryLine.Code = '    VAR' THEN BEGIN
+                  VarSectionOpen := TRUE;
+                  CALHistoryLine.NEXT;
+                END;
+
+                IF AddVariables THEN
+                  IF VarSectionOpen THEN
+                    IF COPYSTR(CALHistoryLine.Code, 1, 6) = '      ' THEN BEGIN
+                      CodeLine := CALHistoryLine.Code;
+                      RenumberElements.AnalyseVariableLine(CodeLine, VariableName, VariableId);
+                      AddElement(Object, ProcedureName, ElementToRenumber.Type::Variable, VariableId, VariableName, Delta);
+                    END;
+                IF (CALHistoryLine.Code = '') OR (CALHistoryLine.Code[6] <> ' ') THEN
+                  VarSectionOpen := FALSE;
+
+              END;
+
+          END;
+
+          IF STRLEN(CALHistoryLine.Code) > 5 THEN BEGIN
+            IF COPYSTR(CALHistoryLine.Code, STRLEN(CALHistoryLine.Code) - 3) = '=VAR' THEN BEGIN
+
+              ParentName :=
+                DELCHR(COPYSTR(CALHistoryLine.Code, 1, STRPOS(CALHistoryLine.Code, '=VAR') - 1), '<>') + '-' +
+                FORMAT(CALHistoryLine."Line No.");
+
+              WHILE STRPOS(ParentName, ';') > 0 DO
+                ParentName := COPYSTR(ParentName, STRPOS(ParentName, ';') + 1);
+
+              BeginCode := PADSTR('', STRPOS(CALHistoryLine.Code, '=VAR')) + 'BEGIN';
+              EndCode := PADSTR('', STRPOS(CALHistoryLine.Code, '=VAR')) + 'END;';
+
+              CALHistoryLine.NEXT;
+              VarSectionOpen := TRUE;
+              REPEAT
+                IF CALHistoryLine.Code = BeginCode THEN
+                  VarSectionOpen := FALSE;
+
+                IF AddVariables THEN
+                  IF VarSectionOpen THEN BEGIN
+                    CodeLine := CALHistoryLine.Code;
+                    RenumberElements.AnalyseVariableLine(CodeLine, VariableName, VariableId);
+                    AddElement(Object, ParentName, ElementToRenumber.Type::Variable, VariableId, VariableName, Delta);
+                  END;
+
+                StopLoop := CALHistoryLine.NEXT = 0;
+              UNTIL (CALHistoryLine.Code = EndCode) OR StopLoop;
+            END;
+
+            IF COPYSTR(CALHistoryLine.Code, STRLEN(CALHistoryLine.Code) - 5) = '=BEGIN' THEN BEGIN
+              EndCode := PADSTR('', STRPOS(CALHistoryLine.Code, '=BEGIN')) + 'END;';
+              REPEAT
+                StopLoop := CALHistoryLine.NEXT = 0;
+              UNTIL (CALHistoryLine.Code = EndCode) OR StopLoop;
+            END;
+          END;
+
+        UNTIL CALHistoryLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE AddElement@5(Object@1000 : Record 2000000001;ParentName@1001 : Text;Type@1002 : Integer;No@1003 : Integer;Name@1004 : Text;Delta@1005 : Integer);
+    VAR
+      ElementToRenumber@1006 : Record 11102076;
+    BEGIN
+      IF No = 0 THEN
+        EXIT;
+
+      ElementToRenumber.SETRANGE("Object Type", Object.Type);
+      ElementToRenumber.SETRANGE("Object No.", Object.ID);
+      ElementToRenumber.SETRANGE("Parent Name", ParentName);
+      ElementToRenumber.SETRANGE(Type, Type);
+      ElementToRenumber.SETRANGE("No.", No);
+      IF NOT ElementToRenumber.ISEMPTY THEN
+        EXIT;
+
+      ElementToRenumber."Entry No." := 0;
+      ElementToRenumber."Object Type" := Object.Type;
+      ElementToRenumber."Object No." := Object.ID;
+      ElementToRenumber."Parent Name" := COPYSTR(ParentName, 1, MAXSTRLEN(ElementToRenumber."Parent Name"));
+      ElementToRenumber.Type := Type;
+      ElementToRenumber."No." := No;
+      ElementToRenumber.Name := COPYSTR(Name, 1, MAXSTRLEN(ElementToRenumber.Name));
+      ElementToRenumber.VALIDATE("New Number", No + Delta);
+      ElementToRenumber.INSERT(TRUE);
+    END;
+
+    PROCEDURE AnalyseFunction@6(VAR CALHistoryLine@1000 : Record 11102053;VAR Type@1001 : ' ,Global,Local,Event';VAR ProcedureName@1002 : Text;VAR ProcedureId@1003 : Integer) : Boolean;
+    VAR
+      Mgt@1004 : Codeunit 11102035;
+      ProcedureIdString@1005 : Text;
+      Position@1006 : Integer;
+      SplitPos@1007 : Integer;
+    BEGIN
+      ProcedureId := 0;
+      Type := Type::" ";
+
+      IF COPYSTR(CALHistoryLine.Code, 5, 9) = 'PROCEDURE' THEN BEGIN
+        Position := 15;
+        Type := Type::Global;
+      END;
+
+      IF COPYSTR(CALHistoryLine.Code, 5, 15) = 'LOCAL PROCEDURE' THEN BEGIN
+        Position := 21;
+        Type := Type::"Local";
+      END;
+
+      IF Type IN [Type::Global, Type::"Local"] THEN BEGIN
+        Mgt.NextValue(CALHistoryLine.Code, Position, '@', '"', '"', ProcedureName);
+        ProcedureIdString := COPYSTR(CALHistoryLine.Code, Position);
+        IF ProcedureIdString = '' THEN BEGIN
+          ProcedureName := DELSTR(ProcedureName, STRPOS(ProcedureName, '('));
+          ProcedureIdString := '0';
+        END ELSE
+          ProcedureIdString := DELSTR(ProcedureIdString, STRPOS(ProcedureIdString, '('));
+        IF EVALUATE(ProcedureId, ProcedureIdString) THEN
+          EXIT(TRUE);
+      END;
+
+      IF COPYSTR(CALHistoryLine.Code, 5, 5) = 'EVENT' THEN BEGIN
+        Position := STRPOS(CALHistoryLine.Code, '::');
+        ProcedureName := COPYSTR(CALHistoryLine.Code, 11, Position - 11);
+        SplitPos := STRPOS(ProcedureName, '@');
+        IF SplitPos > 0 THEN
+          ProcedureName := DELSTR(ProcedureName, STRPOS(ProcedureName, '@'));
+        ProcedureIdString := COPYSTR(CALHistoryLine.Code, Position + 2);
+        IF STRPOS(ProcedureIdString, '@') = 0 THEN
+          ProcedureIdString := ''
+        ELSE
+          ProcedureIdString := DELSTR(ProcedureIdString, STRPOS(ProcedureIdString, '@'));
+        ProcedureName := ProcedureName + '::' + ProcedureIdString;
+        Type := Type::"Event";
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE AnalyseVariableLine@7(VAR CodeLine@1000 : Text;VAR Name@1001 : Text;VAR Id@1002 : Integer);
+    VAR
+      Object3@1003 : Record 2000000001;
+      CodeLine2@1004 : Text;
+      IdString@1005 : Text;
+      NameId@1006 : Text;
+      ObjectNoString@1007 : Text;
+      ObjectTypeString@1008 : Text;
+      Type@1009 : Text;
+      SplitPos@1010 : Integer;
+      SplitPos2@1011 : Integer;
+      Advanced@1012 : Boolean;
+    BEGIN
+      CodeLine := DELCHR(CodeLine, '<>');
+
+      IF (CodeLine[1] IN ['''', ';']) OR (CodeLine = '') THEN
+        EXIT;
+
+      Advanced := CodeLine[1] = '"';
+      IF Advanced THEN BEGIN
+        SplitPos := STRPOS(CodeLine, ' : ');
+        IF STRPOS(CodeLine, '@') > SplitPos THEN BEGIN
+          CodeLine2 := COPYSTR(CodeLine, STRPOS(CodeLine, '@'));
+          SplitPos := STRPOS(CodeLine, '@') + STRPOS(CodeLine2, ' : ');
+        END;
+      END ELSE
+        SplitPos := STRPOS(CodeLine, ' : ');
+
+      IF SplitPos = 0 THEN
+        EXIT;
+
+      NameId := DELSTR(CodeLine, SplitPos);
+      Type := COPYSTR(CodeLine, SplitPos + 3);
+
+      IF DELSTR(Type, 8) = 'ARRAY [' THEN BEGIN
+        SplitPos := STRPOS(Type, ' OF ');
+        IF SplitPos > 0 THEN
+          Type := COPYSTR(Type, STRPOS(Type, ' OF ') + 4);
+      END;
+
+      SplitPos := STRPOS(Type, ' ');
+      IF SplitPos > 0 THEN
+        ObjectTypeString := DELSTR(Type, SplitPos);
+
+      IF ObjectTypeString = 'TEMPORARY' THEN BEGIN
+        Type := COPYSTR(Type, SplitPos + 1);
+        ObjectTypeString := '';
+        SplitPos := STRPOS(Type, ' ');
+        IF SplitPos > 0 THEN
+          ObjectTypeString := DELSTR(Type, SplitPos);
+      END;
+
+      IF ObjectTypeString <> '' THEN BEGIN
+        IF ObjectTypeString = 'Record' THEN
+          Object3.Type := Object3.Type::Table
+        ELSE
+          IF EVALUATE(Object3.Type, ObjectTypeString) THEN
+            ;
+        IF Object3.Type <> Object3.Type::TableData THEN BEGIN
+          ObjectNoString := COPYSTR(Type, STRLEN(ObjectTypeString) + 1);
+          ObjectNoString := DELSTR(ObjectNoString, STRLEN(ObjectNoString));
+        END;
+      END;
+
+      IF Advanced THEN BEGIN
+        SplitPos2 := STRLEN(NameId) - 1;
+        WHILE NameId[SplitPos2] <> '@' DO
+          SplitPos2 -= 1;
+      END ELSE
+        SplitPos2 := STRPOS(NameId, '@');
+
+      IF SplitPos2 > 0 THEN BEGIN
+        Name := DELSTR(NameId, SplitPos2);
+        IdString := COPYSTR(NameId, SplitPos2 + 1);
+        EVALUATE(Id, IdString);
+      END;
+
+      IF Advanced THEN
+        Name := DELCHR(Name, '<>', '"');
+    END;
+
+    LOCAL PROCEDURE RemoveIdOfExitValue@8(VAR CALHistoryLine@1000 : Record 11102053);
+    VAR
+      CodeLine@1001 : Text;
+      Char@1002 : Char;
+      ExitValueIdPos@1003 : Integer;
+      ExitValueIdStopPos@1004 : Integer;
+      Position@1005 : Integer;
+      SubLineNo@1006 : Integer;
+      ParametersClosed@1007 : Boolean;
+      ParametersStart@1008 : Boolean;
+      StringOpen@1009 : Boolean;
+      VariableOpen@1010 : Boolean;
+    BEGIN
+      CALHistoryLine.SETRANGE("Line No.", CALHistoryLine."Line No.");
+      CALHistoryLine.SETRANGE("Sub Line No.");
+
+      IF CALHistoryLine.FINDSET THEN
+        REPEAT
+          IF STRLEN(CodeLine + CALHistoryLine.Code) < 1024 THEN
+            CodeLine += CALHistoryLine.Code;
+        UNTIL CALHistoryLine.NEXT = 0;
+
+      Position := 1;
+
+      WHILE Position < STRLEN(CodeLine) DO BEGIN
+        Char := CodeLine[Position];
+
+        CASE TRUE OF
+
+          VariableOpen :
+            IF Char = '"' THEN
+              VariableOpen := FALSE;
+
+          Char = '"' :
+            VariableOpen := TRUE;
+
+          StringOpen :
+            IF Char = '''' THEN
+              StringOpen := FALSE;
+
+          Char = '''' :
+            StringOpen := TRUE;
+
+          NOT ParametersStart AND (Char = '(') :
+            ParametersStart := TRUE;
+
+          ParametersClosed AND (Char = '@') :
+            ExitValueIdPos := Position;
+
+          ParametersClosed AND (Char = ':') :
+            ExitValueIdStopPos := Position;
+
+          Char = ')' :
+            ParametersClosed := TRUE;
+
+        END;
+        Position += 1;
+
+      END;
+
+      IF (ExitValueIdPos <> 0) AND (ExitValueIdStopPos <> 0) THEN BEGIN
+        CodeLine := DELSTR(CodeLine, ExitValueIdPos, ExitValueIdStopPos - ExitValueIdPos - 1);
+
+        CALHistoryLine.DELETEALL;
+
+        WHILE CodeLine <> '' DO BEGIN
+          SubLineNo += 1;
+          CALHistoryLine."Sub Line No." := SubLineNo;
+          CALHistoryLine.Code := DELSTR(CodeLine, 246);
+          CALHistoryLine.INSERT;
+
+          CodeLine := COPYSTR(CodeLine, 246);
+
+        END;
+
+      END;
+
+      CALHistoryLine.SETRANGE("Line No.");
+      CALHistoryLine.SETRANGE("Sub Line No.", 1);
+    END;
+
+    PROCEDURE GetVariablesFromParameters@9(VAR CALHistoryLine@1000 : Record 11102053;VAR VariableName@1001 : ARRAY [100] OF Text[1024];VAR VariableId@1002 : ARRAY [100] OF Integer;VAR NoOfVariables@1003 : Integer);
+    VAR
+      CodeLine@1004 : Text;
+      ParameterCode@1005 : Text;
+      Char@1006 : Char;
+      i@1007 : Integer;
+      NoOfParameters@1008 : Integer;
+      ParameterStart@1009 : ARRAY [100] OF Integer;
+      Position@1010 : Integer;
+      ParametersStart@1011 : Boolean;
+      VariableOpen@1012 : Boolean;
+    BEGIN
+      CALHistoryLine.SETRANGE("Line No.", CALHistoryLine."Line No.");
+      CALHistoryLine.SETRANGE("Sub Line No.");
+
+      IF CALHistoryLine.FINDSET THEN
+        REPEAT
+          IF STRLEN(CodeLine + CALHistoryLine.Code) < 1024 THEN
+            CodeLine += CALHistoryLine.Code;
+        UNTIL CALHistoryLine.NEXT = 0;
+
+      CALHistoryLine.SETRANGE("Line No.");
+      CALHistoryLine.SETRANGE("Sub Line No.", 1);
+
+      Position := 1;
+
+      WHILE Position < STRLEN(CodeLine) DO BEGIN
+        Char := CodeLine[Position];
+
+        CASE TRUE OF
+
+          VariableOpen :
+            IF Char = '"' THEN
+              VariableOpen := FALSE;
+
+          NOT ParametersStart AND (Char = '(') :
+            BEGIN
+              ParametersStart := TRUE;
+              NoOfParameters += 1;
+              ParameterStart[NoOfParameters] := Position + 1;
+            END;
+
+          Char = '"' :
+            VariableOpen := TRUE;
+
+          Char = ';' :
+            BEGIN
+              NoOfParameters += 1;
+              ParameterStart[NoOfParameters] := Position + 1;
+            END;
+
+          Char = ')' :
+            CodeLine := DELSTR(CodeLine, Position + 1);
+
+        END;
+        Position += 1;
+
+      END;
+
+      NoOfVariables := 0;
+
+      FOR i := 1 TO NoOfParameters DO BEGIN
+        IF i = NoOfParameters THEN
+          ParameterCode := COPYSTR(CodeLine, ParameterStart[i])
+        ELSE
+          ParameterCode := COPYSTR(CodeLine, ParameterStart[i], ParameterStart[i + 1] - ParameterStart[i]);
+
+        IF DELSTR(ParameterCode, 5) = 'VAR ' THEN
+          ParameterCode := COPYSTR(ParameterCode, 5);
+
+        IF ParameterCode <> ')' THEN BEGIN
+          NoOfVariables += 1;
+          AnalyseVariableLine(ParameterCode, VariableName[NoOfVariables], VariableId[NoOfVariables]);
+        END;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE GetPropertyName@12(Code@1000 : Text;VAR Name@1001 : Text);
+    VAR
+      Position@1002 : Integer;
+    BEGIN
+      Name := '';
+
+      Position := STRPOS(Code, '=');
+      IF Position <> 0 THEN BEGIN
+        Name := DELSTR(Code, Position);
+        Name := DELCHR(Name, '<>');
+      END;
+    END;
+
+    LOCAL PROCEDURE GetPropertyValue@13(Code@1000 : Text;VAR Value@1001 : Text);
+    VAR
+      Position@1002 : Integer;
+    BEGIN
+      Value := '';
+
+      Position := STRPOS(Code, '=');
+      IF Position <> 0 THEN BEGIN
+        Value := COPYSTR(Code, Position + 1);
+        Value := DELCHR(Value, '<>', ' ;}');
+      END;
+    END;
+
+    PROCEDURE SetRunType@14(NewValue@1000 : Integer);
+    BEGIN
+      RunType := NewValue;
+    END;
+
+    PROCEDURE SetSourceFileName@15(NewValue@1000 : Text);
+    BEGIN
+      SourceFileName := NewValue;
+    END;
+
+    PROCEDURE SetExportFileName@16(NewValue@1000 : Text);
+    BEGIN
+      ExportFileName := NewValue;
+    END;
+
+    PROCEDURE SetUpdateReferencingObjects@32(NewValue@1000 : Boolean);
+    BEGIN
+      UpdateReferencingObjects := NewValue;
+    END;
+
+    PROCEDURE SetSetModifyFlag@31(NewValue@1000 : Boolean);
+    BEGIN
+      SetModifyFlag := NewValue;
+    END;
+
+    PROCEDURE NoOfInvolvedObjects@17(VAR ElementToRenumber@1000 : Record 11102076;UpdateReferencingObjects2@1001 : Boolean) : Integer;
+    VAR
+      TmpObject@1002 : TEMPORARY Record 2000000001;
+    BEGIN
+      GetInvolvedObjects(ElementToRenumber, TmpObject, TRUE, UpdateReferencingObjects2);
+      EXIT(TmpObject.COUNT);
+    END;
+
+    PROCEDURE DrillDownNoOfInvolvedObjects@18(VAR ElementToRenumber@1000 : Record 11102076;UpdateReferencingObjects2@1001 : Boolean);
+    VAR
+      TmpObject@1002 : TEMPORARY Record 2000000001;
+    BEGIN
+      GetInvolvedObjects(ElementToRenumber, TmpObject, TRUE, UpdateReferencingObjects2);
+
+      IF TmpObject.FINDFIRST THEN
+        ;
+      PAGE.RUNMODAL(PAGE::"OM - Object List", TmpObject);
+    END;
+
+    LOCAL PROCEDURE GetInvolvedObjects@19(VAR ElementToRenumber@1000 : Record 11102076;VAR Object@1001 : Record 2000000001;UpdateAllObjects@1002 : Boolean;UpdateReferencingObjects2@1003 : Boolean);
+    VAR
+      WhereUsedObjectLine@1004 : Record 11102058;
+      WhereUsedCrossTable@1005 : Record 11102061;
+      OriginalElementToRenumber@1006 : Record 11102076;
+      Object2@1007 : Record 2000000001;
+      Progressbar@1008 : Codeunit 11102044;
+      NoOfRecords@1009 : Integer;
+    BEGIN
+      OriginalElementToRenumber := ElementToRenumber;
+
+      NoOfRecords := ElementToRenumber.COUNT;
+      IF NoOfRecords > 250 THEN BEGIN
+        Progressbar.ShowRemainingTime(FALSE);
+        Progressbar.Open('', 0);
+        Progressbar.BarSize := NoOfRecords;
+      END;
+
+      IF ElementToRenumber.FINDSET THEN
+        REPEAT
+
+          IF NoOfRecords > 250 THEN
+            Progressbar.AddToBar(1);
+
+          IF UpdateReferencingObjects2 THEN
+            IF (ElementToRenumber."No." <> ElementToRenumber."New Number") AND
+               (ElementToRenumber.Type = ElementToRenumber.Type::"Function")
+            THEN BEGIN
+              WhereUsedObjectLine.SETCURRENTKEY("Object Type", "Object No.", Type, Id);
+              WhereUsedObjectLine.SETRANGE("Object Type", ElementToRenumber."Object Type");
+              WhereUsedObjectLine.SETRANGE("Object No.", ElementToRenumber."Object No.");
+              WhereUsedObjectLine.SETRANGE(Type, WhereUsedObjectLine.Type::"Global Function");
+              WhereUsedObjectLine.SETRANGE(Id, ElementToRenumber."No.");
+
+              IF WhereUsedObjectLine.FINDFIRST THEN BEGIN
+                WhereUsedCrossTable.SETCURRENTKEY("Object Entry No.");
+                WhereUsedCrossTable.SETRANGE("Object Entry No.", WhereUsedObjectLine."Entry No.");
+                IF WhereUsedCrossTable.FINDSET THEN
+                  REPEAT
+                    WhereUsedCrossTable.CALCFIELDS("Object Type", "Object No.");
+                    IF NOT Object.GET(WhereUsedCrossTable."Object Type", '', WhereUsedCrossTable."Object No.") THEN
+                      IF Object2.GET(WhereUsedCrossTable."Object Type", '', WhereUsedCrossTable."Object No.") THEN BEGIN
+                        Object := Object2;
+                        Object.INSERT;
+                      END;
+
+                  UNTIL WhereUsedCrossTable.NEXT = 0;
+              END;
+            END;
+
+          IF UpdateAllObjects OR (ElementToRenumber."No." <> ElementToRenumber."New Number") THEN
+            IF NOT Object.GET(ElementToRenumber."Object Type", '', ElementToRenumber."Object No.") THEN
+              IF Object2.GET(ElementToRenumber."Object Type", '', ElementToRenumber."Object No.") THEN BEGIN
+                Object := Object2;
+                Object.INSERT;
+              END;
+
+        UNTIL ElementToRenumber.NEXT = 0;
+
+      IF NoOfRecords > 250 THEN
+        Progressbar.Close;
+
+      ElementToRenumber := OriginalElementToRenumber;
+    END;
+
+    LOCAL PROCEDURE CheckNoOMObjects@20(VAR ElementToRenumber@1000 : Record 11102076);
+    VAR
+      Mgt@1001 : Codeunit 11102035;
+      ctOMObjectsError@1002 : TextConst 'DEU=The Object Manager elements cannot be renumbered.;ENU=The Object Manager elements cannot be renumbered.;ESP=The Object Manager elements cannot be renumbered.;FRA=The Object Manager elements cannot be renumbered.;NLD=De Object Manager elementen kunnen niet worden omgenummerd.;DEA=The Object Manager elements cannot be renumbered.';
+    BEGIN
+      IF Mgt.ShortUserId <> 'REIJER' THEN BEGIN
+        ElementToRenumber.SETFILTER("Object Name", 'OM - *');
+        IF NOT ElementToRenumber.ISEMPTY THEN
+          ERROR(ctOMObjectsError);
+
+        ElementToRenumber.SETRANGE("Object Name");
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckingObjects@21(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpObject@1001 : TEMPORARY Record 2000000001;SeperatedFiles@1002 : Boolean);
+    VAR
+      Setup@1003 : Record 11102035;
+      ObjectLock@1004 : Record 11102054;
+      Object@1005 : Record 2000000001;
+      SourceControl@1006 : Codeunit 11102050;
+      FileHandler@1007 : Codeunit 11102097;
+      Directory@1008 : Text;
+      FileName@1009 : Text;
+      ctCheckingObjects@1010 : TextConst 'DEU=Checking objects...;ENU=Checking objects...;ESP=Checking objects...;FRA=Checking objects...;NLD=Objecten controleren...;DEA=Checking objects...';
+      ctUpdateFileName@1011 : TextConst 'DEU=RenumberElements.txt;ENU=RenumberElements.txt;ESP=RenumberElements.txt;FRA=RenumberElements.txt;NLD=RenumberElements.txt;DEA=RenumberElements.txt';
+    BEGIN
+      Setup.CustomGet;
+
+      Directory := FileHandler.TempDirectory;
+      FileName := Directory + ctUpdateFileName;
+
+      Progressbar.Text1 := ctCheckingObjects;
+      IF TmpObject.FINDSET THEN
+        REPEAT
+
+          IF SeperatedFiles THEN
+            FileName := Directory + 'Renumbering-CheckObject-' + FORMAT(TmpObject.Type) + '-' + FORMAT(TmpObject.ID) + '.txt';
+
+          Object.GET(TmpObject.Type, '', TmpObject.ID);
+          IF NOT SourceControl.CheckObjectBeforeChanging(Object, Progressbar) THEN
+            EXIT;
+
+          IF Setup."Lock Object at Design" THEN
+            ObjectLock.InsertLock(Object);
+
+        UNTIL TmpObject.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE UpdatingObjects@22(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpObject@1001 : TEMPORARY Record 2000000001;VAR TmpElementToRenumber@1002 : TEMPORARY Record 11102076;WithCommit@1003 : Boolean;SeperatedFiles@1004 : Boolean);
+    VAR
+      TmpCALHistoryLine@1005 : TEMPORARY Record 11102053;
+      TmpExtraCALHistoryLine@1006 : TEMPORARY Record 11102053;
+      ObjectMgt@1007 : Codeunit 11102046;
+      SourceControl@1008 : Codeunit 11102050;
+      FileHandler@1009 : Codeunit 11102097;
+      oFile@1010 : File;
+      Directory@1011 : Text;
+      FileName@1012 : Text;
+      ctUpdateFileName@1013 : TextConst 'DEU=RenumberElements.txt;ENU=RenumberElements.txt;ESP=RenumberElements.txt;FRA=RenumberElements.txt;NLD=RenumberElements.txt;DEA=RenumberElements.txt';
+      ctUpdatingObjects@1014 : TextConst 'DEU=Updating objects...;ENU=Updating objects...;ESP=Updating objects...;FRA=Updating objects...;NLD=Objecten bijwerken...;DEA=Updating objects...';
+    BEGIN
+      Directory := FileHandler.TempDirectory;
+      FileName := Directory + ctUpdateFileName;
+
+      Progressbar.Text1 := ctUpdatingObjects;
+      IF TmpObject.FINDSET THEN
+        REPEAT
+
+          IF SeperatedFiles THEN
+            FileName := Directory + 'Renumbering-Updating-' + FORMAT(TmpObject.Type) + '-' + FORMAT(TmpObject.ID) + '.txt';
+
+          Progressbar.AddToBar(1);
+          Progressbar.Text2Object := TmpObject;
+
+          SourceControl.FillCALLineBufferWithLatest(TmpCALHistoryLine, TmpObject.Type, TmpObject.ID);
+
+          TmpExtraCALHistoryLine.RESET;
+          TmpExtraCALHistoryLine.DELETEALL;
+
+          IF RenumberObject(TmpObject, TmpCALHistoryLine, TmpExtraCALHistoryLine, TmpElementToRenumber) THEN
+            NoOfObjects += 1;
+
+          IF EXISTS(FileName) THEN
+            ERASE(FileName);
+          oFile.TEXTMODE(TRUE);
+          oFile.CREATE(FileName);
+
+          TmpCALHistoryLine.RESET;
+
+          TmpExtraCALHistoryLine.SETRANGE("Entry No.", TmpCALHistoryLine."Entry No.");
+          SourceControl.MergeExtraHistoryLines(TmpCALHistoryLine, TmpExtraCALHistoryLine);
+          SourceControl.AppendHistoryLinesToFile(oFile, TmpCALHistoryLine);
+
+          oFile.CLOSE;
+
+          IF WithCommit THEN
+            COMMIT;
+
+          ObjectMgt.ImportObject(FileName);
+        UNTIL TmpObject.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CompilingObjects@23(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpObject@1001 : TEMPORARY Record 2000000001);
+    VAR
+      ObjectMgt@1002 : Codeunit 11102046;
+      ctCompilingObjects@1003 : TextConst 'DEU=Compiling objects...;ENU=Compiling objects...;ESP=Compiling objects...;FRA=Compiling objects...;NLD=Objecten compileren...;DEA=Compiling objects...';
+    BEGIN
+      Progressbar.Text1 := ctCompilingObjects;
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+          Progressbar.Text2Object := TmpObject;
+          ObjectMgt.CompileObject(TmpObject);
+        UNTIL TmpObject.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE SetDatetimeStamp@24(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpObject@1001 : TEMPORARY Record 2000000001;StartDate@1002 : Date;StartTime@1003 : Time);
+    VAR
+      Object@1004 : Record 2000000001;
+      ObjectMgt@1005 : Codeunit 11102046;
+      ctSettingTimestamps@1006 : TextConst 'DEU=Setting timestamps...;ENU=Setting timestamps...;ESP=Setting timestamps...;FRA=Setting timestamps...;NLD=Tijdstempels zetten...;DEA=Setting timestamps...';
+    BEGIN
+      Progressbar.Text1 := ctSettingTimestamps;
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+          Progressbar.Text2Object := TmpObject;
+          Object.GET(TmpObject.Type, '', TmpObject.ID);
+          Object.Modified := TRUE;
+          Object.Date := StartDate;
+          Object.Time := StartTime;
+
+          ObjectMgt.UpdateObject(Object, FALSE);
+
+        UNTIL TmpObject.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE UpdatingOMData@25(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpElementToRenumber@1001 : TEMPORARY Record 11102076);
+    VAR
+      WhereUsedObjectLine@1002 : Record 11102058;
+      ElementToRenumber2@1003 : Record 11102076;
+      ctUpdatingOMData@1004 : TextConst 'DEU=Updating OM data...;ENU=Updating OM data...;ESP=Updating OM data...;FRA=Updating OM data...;NLD=OM data bijwerken...;DEA=Updating OM data...';
+    BEGIN
+      Progressbar.Text1 := ctUpdatingOMData;
+      Progressbar.AddToBar(1);
+
+      TmpElementToRenumber.RESET;
+      IF TmpElementToRenumber.FINDSET THEN
+        REPEAT
+
+          TmpElementToRenumber.CALCFIELDS("Object Name");
+          Progressbar.Text2 := FORMAT(TmpElementToRenumber."Object Name") + ' ' + TmpElementToRenumber.Name;
+
+          IF TmpElementToRenumber."No." <> TmpElementToRenumber."New Number" THEN BEGIN
+
+            ElementToRenumber2 := TmpElementToRenumber;
+            ElementToRenumber2.DELETE;
+            ElementToRenumber2."No." := TmpElementToRenumber."New Number";
+            ElementToRenumber2.INSERT;
+
+            IF ElementToRenumber2.Type = ElementToRenumber2.Type::Variable THEN BEGIN
+              WhereUsedObjectLine.SETCURRENTKEY("Object Type", "Object No.", Type, Id);
+              WhereUsedObjectLine.SETRANGE("Object Type", WhereUsedObjectLine."Object Type"::Table);
+              WhereUsedObjectLine.SETRANGE("Object No.", TmpElementToRenumber."Object No.");
+              WhereUsedObjectLine.SETRANGE(Type, WhereUsedObjectLine.Type::"Global Function");
+              WhereUsedObjectLine.SETRANGE(Id, TmpElementToRenumber."No.");
+
+              IF WhereUsedObjectLine.FINDFIRST THEN BEGIN
+                WhereUsedObjectLine.Id := TmpElementToRenumber."New Number";
+                WhereUsedObjectLine.MODIFY;
+              END;
+            END;
+          END;
+
+        UNTIL TmpElementToRenumber.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE UpdatingCALHistory@26(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpObject@1001 : TEMPORARY Record 2000000001);
+    VAR
+      Object@1002 : Record 2000000001;
+      SourceControl@1003 : Codeunit 11102050;
+      ctUpdatingCALHistory@1004 : TextConst 'DEU=Updating C/AL history...;ENU=Updating C/AL history...;ESP=Updating C/AL history...;FRA=Updating C/AL history...;NLD=C/AL Historie bijwerken...;DEA=Updating C/AL history...';
+    BEGIN
+      Progressbar.Text1 := ctUpdatingCALHistory;
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+          Progressbar.Text2Object := TmpObject;
+          Object.GET(TmpObject.Type, '', TmpObject.ID);
+          SourceControl.AddObject(Object, 0, FALSE, FALSE, 1, FALSE);
+        UNTIL TmpObject.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE UpdatingWhereUsedObjects@27(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpObject@1001 : TEMPORARY Record 2000000001);
+    VAR
+      Object@1002 : Record 2000000001;
+      WhereUsedMgt@1003 : Codeunit 11102045;
+      ctUpdatingWhereUsedObjects@1004 : TextConst 'DEU=Updating Where Used objects...;ENU=Updating Where Used objects...;ESP=Updating Where Used objects...;FRA=Updating Where Used objects...;NLD=Waar-gebruikt objecten bijwerken...;DEA=Updating Where Used objects...';
+    BEGIN
+      Progressbar.Text1 := ctUpdatingWhereUsedObjects;
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+          Progressbar.Text2Object := TmpObject;
+          WhereUsedMgt.FillEntryNos;
+          Object.GET(TmpObject.Type, '', TmpObject.ID);
+          WhereUsedMgt.UpdateObjectLines(Object);
+        UNTIL TmpObject.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE UpdatingWhereUsedIn@28(VAR Progressbar@1000 : Codeunit 11102044;VAR TmpObject@1001 : TEMPORARY Record 2000000001);
+    VAR
+      Object@1002 : Record 2000000001;
+      WhereUsedMgt@1003 : Codeunit 11102045;
+      ctUpdatingWhereUsedIn@1004 : TextConst 'DEU=Updating Where Used in...;ENU=Updating Where Used in...;ESP=Updating Where Used in...;FRA=Updating Where Used in...;NLD=Waar-gebruikt in bijwerken...;DEA=Updating Where Used in...';
+    BEGIN
+      Progressbar.Text1 := ctUpdatingWhereUsedIn;
+      IF TmpObject.FINDSET THEN
+        REPEAT
+          Progressbar.AddToBar(1);
+          Progressbar.Text2Object := TmpObject;
+          Object.GET(TmpObject.Type, '', TmpObject.ID);
+          WhereUsedMgt.FillEntryNos;
+          WhereUsedMgt.UpdateWhereInOfObject(Object);
+        UNTIL TmpObject.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE Replace@29(String1@1000 : Text;String2@1001 : Text;String3@1002 : Text) RetValue : Text;
+    VAR
+      StringPosition@1003 : Integer;
+    BEGIN
+      RetValue := String1;
+
+      StringPosition := STRPOS(RetValue, String2);
+      IF StringPosition > 0 THEN
+        RetValue := DELSTR(RetValue, StringPosition) + String3 + COPYSTR(RetValue, StringPosition + STRLEN(String2));
+    END;
+
+    PROCEDURE ShowSucceedMessage@30();
+    VAR
+      ObjectText@1000 : Text;
+      ctObject@1001 : TextConst 'DEU=object;ENU=object;ESP=object;FRA=object;NLD=object;DEA=object';
+      ctObjects@1002 : TextConst 'DEU=objects;ENU=objects;ESP=objects;FRA=objects;NLD=objecten;DEA=objects';
+      ctObjectsExported@1003 : TextConst 'DEU=%1 %2 exported.;ENU=%1 %2 exported.;ESP=%1 %2 exported.;FRA=%1 %2 exported.;NLD=%1 %2 ge‰xporteerd.;DEA=%1 %2 exported.';
+      ctObjectsUpdated@1004 : TextConst 'DEU=%1 %2 updated.;ENU=%1 %2 updated.;ESP=%1 %2 updated.;FRA=%1 %2 updated.;NLD=%1 %2 bijgewerkt.;DEA=%1 %2 updated.';
+      ctTextFileRenumbered@1005 : TextConst 'DEU=Text file is renumbered.;ENU=Text file is renumbered.;ESP=Text file is renumbered.;FRA=Text file is renumbered.;NLD=Tekstbestand is omgenummerd.;DEA=Text file is renumbered.';
+    BEGIN
+      IF NoOfObjects = 1 THEN
+        ObjectText := ctObject
+      ELSE
+        ObjectText := ctObjects;
+
+      CASE RunType OF
+
+        RunType::Update :
+          MESSAGE(ctObjectsUpdated, NoOfObjects, ObjectText);
+
+        RunType::Export :
+          MESSAGE(ctObjectsExported, NoOfObjects, ObjectText);
+
+        RunType::"Update File" :
+          MESSAGE(ctTextFileRenumbered);
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+
